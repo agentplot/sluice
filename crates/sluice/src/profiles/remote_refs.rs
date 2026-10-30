@@ -85,6 +85,17 @@ impl SignerKey {
         })
     }
 
+    /// Whether `key` is among those listed: a signature it makes verifies
+    /// (78, 87).
+    pub fn lists(&self, key: &ssh_key::PublicKey) -> bool {
+        match self {
+            SignerKey::Ssh { allowed, .. } => {
+                allowed.iter().any(|a| a.key.key_data() == key.key_data())
+            }
+            SignerKey::Keyless => false,
+        }
+    }
+
     /// What names this key among every key a signer is listed with.
     fn digest(&self) -> &str {
         match self {
@@ -1045,6 +1056,12 @@ impl State for RemoteRefs {
     /// [`RemoteRefs::results_with`] and its own policy's list (78).
     fn results(&self, _: &str) -> Result<Vec<u8>> {
         self.results_with(&BTreeMap::new())
+    }
+
+    /// Nothing this host signs counts: with no list, no signed run is
+    /// verified here (78, 87).
+    fn verifies_own(&self, _: &str, _: &Rev) -> Result<bool> {
+        Ok(false)
     }
 
     /// Could-not-run-1 116: every result set aside on the remote, one file

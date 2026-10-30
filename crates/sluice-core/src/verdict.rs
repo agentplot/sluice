@@ -15,6 +15,10 @@ pub struct Verdict {
     /// 108: the tasks the run replayed with no trusted pass recorded for
     /// their key, which count for nothing.
     pub unproven: Vec<String>,
+    /// 87, 28, S18: on a branch whose records are on its remote, the tasks
+    /// the run ran with no result the gate counts for their key, the run's
+    /// own signed result among none: missing, never failed.
+    pub missing: Vec<String>,
 }
 
 /// The gate read over one finished run. `results` is the repository's
@@ -33,7 +37,11 @@ pub struct Verdict {
 /// recorded executor. A replay is an observation of no one (core.9): it
 /// counts only when a trusted ran pass is recorded for its key (108),
 /// and otherwise is unproven, for the round to run again with no
-/// replay. A check left with no trusted result reads as missing.
+/// replay. A check left with no trusted result reads as missing: on a
+/// branch whose records are on its remote, a check this run ran whose own
+/// result does not count there, signed with a key the branch's policy
+/// does not list, is missing until a result the gate counts settles it
+/// (87, S18), and no pass.
 ///
 /// Only results on the run's `system` are read, a pass on one system
 /// never standing for another (85, 69); a line that names no system is
@@ -61,6 +69,7 @@ pub fn read(
     };
     let mut failed = Vec::new();
     let mut unproven = Vec::new();
+    let mut missing = Vec::new();
     let (mut ran, mut replayed) = (0, 0);
     for t in &report.tasks {
         let recorded: Vec<&ResultLine> = results
@@ -72,6 +81,10 @@ pub fn read(
         let this = match t.source {
             Source::Ran { .. } => {
                 ran += 1;
+                if rules.signed && recorded.is_empty() {
+                    missing.push(t.task.clone());
+                    continue;
+                }
                 !rules.signed && trusted(&report.executor)
             }
             Source::Replayed { .. } => {
@@ -144,12 +157,13 @@ pub fn read(
         });
     }
     Verdict {
-        passed: failed.is_empty() && unproven.is_empty() && !report.timed_out,
+        passed: failed.is_empty() && unproven.is_empty() && missing.is_empty() && !report.timed_out,
         timed_out: report.timed_out,
         failed,
         ran,
         replayed,
         unproven,
+        missing,
     }
 }
 
@@ -482,5 +496,33 @@ mod tests {
         };
         let v = super::read(&fail, &[], &r, Some("linux-arm64"), None);
         assert_eq!(v.failed[0].system.as_deref(), Some("linux-arm64"));
+    }
+
+    /// 87, 28; S18: on a branch whose records are on its remote, a check
+    /// this run ran whose own result does not count, signed with a key the
+    /// branch does not list, is missing and no pass, never failed; a
+    /// result the gate counts settles it.
+    #[test]
+    fn a_check_with_no_counted_result_is_missing_never_failed() {
+        let r = Rules {
+            trust: vec!["box".into()],
+            signed: true,
+            claims: [("box".to_string(), (false, None))].into_iter().collect(),
+            ..Rules::default()
+        };
+        let ran = report(Source::Ran { host: "h".into() }, enforced("open", false));
+        let v = read(&ran, &[], &r);
+        assert!(!v.passed);
+        assert!(v.failed.is_empty());
+        assert_eq!(v.missing, ["a:test"]);
+        let mut by_box = recorded(
+            ResultKind::Ran,
+            Some(enforced("open", false)),
+            Outcome::Pass,
+        );
+        by_box.signer = Some("box".into());
+        let v = read(&ran, &[by_box], &r);
+        assert!(v.passed);
+        assert!(v.missing.is_empty());
     }
 }

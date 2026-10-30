@@ -1462,6 +1462,17 @@ pub trait State {
     /// names, never another branch's (78; rule core.22).
     fn results(&self, branch: &str) -> Result<Vec<u8>>;
 
+    /// 78, 87: whether `branch`'s gate at `at`, the revision a round read
+    /// it at, would count a run this host signs: the host signs as a signer
+    /// the branch's own policy there names, with a key that policy lists
+    /// for it, as [`State::results`] verifies the branch's runs. The
+    /// signer's name alone, which another branch may give another key, is
+    /// not enough (rule core.22). A profile that verifies no signed run
+    /// leaves the name to the gate.
+    fn verifies_own(&self, _branch: &str, _at: &Rev) -> Result<bool> {
+        Ok(true)
+    }
+
     /// 69: append to the repository's results log.
     fn record_results(&self, lines: &[u8]) -> Result<()>;
 

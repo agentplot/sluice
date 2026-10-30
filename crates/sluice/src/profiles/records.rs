@@ -77,6 +77,8 @@ pub struct Records {
     lists: RefCell<BTreeMap<String, (Option<Rev>, Signers)>>,
     /// How many times a branch's policy was read whole for its signers.
     lists_read: Cell<u64>,
+    /// The public half of the key this host signs with, once read.
+    own_key: RefCell<Option<ssh_key::PublicKey>>,
 }
 
 /// A branch's signers and the keys its runs are verified with (78).
@@ -97,6 +99,7 @@ impl Records {
             guarding: false,
             lists: RefCell::default(),
             lists_read: Cell::new(0),
+            own_key: RefCell::default(),
         }
     }
 
@@ -241,6 +244,14 @@ impl Records {
                 .filter(|(_, policy)| !policy.signers.is_empty())
                 .map(|(at, _)| at),
         };
+        self.signers_at(branch, routed, rev)
+    }
+
+    /// `branch`'s signers as its policy at `rev` names them, none where
+    /// there is no revision: the list kept for the branch while `rev` is
+    /// the revision it was read at, otherwise read whole there and kept in
+    /// its place (rule core.31).
+    fn signers_at(&self, branch: &str, routed: Option<&str>, rev: Option<Rev>) -> Result<Signers> {
         if let Some((at, list)) = self.lists.borrow().get(branch) {
             if *at == rev {
                 return Ok(list.clone());
@@ -273,6 +284,16 @@ impl Records {
             }
         }
         p.held(branch)
+    }
+
+    /// The public half of the key `signing` names, read once.
+    fn own_key(&self, signing: &instance::Signing) -> Result<ssh_key::PublicKey> {
+        if let Some(k) = self.own_key.borrow().as_ref() {
+            return Ok(k.clone());
+        }
+        let k = ssh::private_key(&signing.key)?.public_key().clone();
+        *self.own_key.borrow_mut() = Some(k.clone());
+        Ok(k)
     }
 
     /// The keys of the signers the policy at `rev`, read whole, names for
@@ -675,6 +696,27 @@ impl State for Records {
             bytes.extend(r.results_with(&signers)?);
         }
         Ok(bytes)
+    }
+
+    /// 78, 87: whether `branch`'s own policy at `at`, the list its runs are
+    /// verified with there ([`Records::signers_at`]), lists the key this
+    /// host signs with for the signer it signs as; read with no fetch, at
+    /// the revision the round read. A host that signs nothing, or a
+    /// binding for guarding, has no run that counts.
+    fn verifies_own(&self, branch: &str, at: &Rev) -> Result<bool> {
+        let Some(signing) = self.signing.as_ref().filter(|_| !self.guarding) else {
+            return Ok(false);
+        };
+        let routed = self.route(branch)?;
+        let signers = self.signers_at(
+            branch,
+            routed.as_ref().map(|r| r.remote()),
+            Some(at.clone()),
+        )?;
+        let Some(listed) = signers.get(&signing.signer) else {
+            return Ok(false);
+        };
+        Ok(listed.lists(&self.own_key(signing)?))
     }
 
     fn record_results(&self, lines: &[u8]) -> Result<()> {

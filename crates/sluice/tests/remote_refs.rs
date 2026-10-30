@@ -981,6 +981,36 @@ fn each_branch_reads_runs_with_its_own_key_whichever_is_read_first() {
     }
 }
 
+/// 78, 87, rule core.22: a host signing as `box` with key A has runs that
+/// count for `main`, whose policy lists A, and none for `release`, whose
+/// policy lists B for `box`; a host that signs nothing has none.
+#[test]
+fn a_hosts_runs_count_only_where_the_branch_lists_its_key() {
+    let (ka, kb) = (key(), key());
+    let (a, _bare) = branches_on_origin("rr-own-claims", &[("box", &[&ka])], &[("box", &[&kb])]);
+    let keys = Scratch::new("rr-own-claims-key");
+    let path = keys.path().join("signing");
+    ka.write_openssh_file(&path, ssh_key::LineEnding::LF)
+        .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let r = sluice::profiles::records::Records::new(
+        &a.dir().join(".git"),
+        sluice::profiles::branches::Branches::open_as(a.dir(), None, recorded()).unwrap(),
+        Some(sluice::instance::Signing {
+            signer: "box".into(),
+            key: path,
+        }),
+    );
+    let (main, release) = (Rev::new(a.rev("main")), Rev::new(a.rev("release")));
+    assert!(r.verifies_own("main", &main).unwrap());
+    assert!(!r.verifies_own("release", &release).unwrap());
+    assert!(!records(&a).verifies_own("main", &main).unwrap());
+    assert_eq!(r.lists_read(), 2, "no read again at a revision read");
+    assert!(r.verifies_own("main", &main).unwrap());
+    assert_eq!(r.lists_read(), 2);
+}
+
 /// 78, 56, rule core.31: a signer only the second branch names counts for
 /// it; a key added to `main` on origin while a process runs counts once
 /// that process fetched the revision, its policy read again once for the

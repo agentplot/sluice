@@ -854,6 +854,14 @@ pub enum Event {
         combination: Rev,
         tasks: Vec<String>,
     },
+    /// 87, S18: checks a host ran whose results its gate does not count,
+    /// signed with a key the branch's policy does not list: missing, never
+    /// failed. The run is open again for a host whose results count.
+    Uncounted {
+        combination: Rev,
+        tasks: Vec<String>,
+        host: String,
+    },
     /// Clause 119: what a run's runner said of it beyond
     /// its results, and the required checks it keeps out of its CI mode.
     /// Shown; nothing reads a verdict from it.
