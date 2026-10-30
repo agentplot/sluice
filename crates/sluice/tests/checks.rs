@@ -740,7 +740,7 @@ fn a_failing_ready_before_the_run_runs_the_tests() {
 /// 84, could-not-run-1 114: nor after a run in which a check did not
 /// pass, so its fail is recorded under its key.
 #[test]
-fn a_failing_ready_after_a_fail_leaves_the_fail() {
+fn a_failing_ready_once_a_check_failed_leaves_the_fail() {
     let repo = Repo::new("checks-ready-after");
     let c = checks(&repo);
     std::fs::write(repo.dir().join("ready"), "").unwrap();
