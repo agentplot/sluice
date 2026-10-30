@@ -118,7 +118,7 @@ impl LocalFiles {
     }
 
     /// 69: the results log as written, one JSON document per line.
-    fn results_log(&self) -> Result<Vec<u8>> {
+    pub(crate) fn results_log(&self) -> Result<Vec<u8>> {
         match std::fs::read(self.root.join(RESULTS)) {
             Ok(b) => Ok(b),
             Err(e) if e.kind() == ErrorKind::NotFound => Ok(Vec::new()),

@@ -4,7 +4,7 @@
 //! results and the next id, goes to the remote once a branch has been
 //! routed there, so ids are numbered once across every host.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -70,7 +70,17 @@ pub struct Records {
     /// 124: whether it is bound for branch protection, which verifies and
     /// signs no run.
     guarding: bool,
+    /// 78: each branch's signers and their keys, as its own policy names
+    /// them, with the revision they were read at, or none where no
+    /// revision was there to read; read again only once the branch's
+    /// revision moves (56; rule core.31).
+    lists: RefCell<BTreeMap<String, (Option<Rev>, Signers)>>,
+    /// How many times a branch's policy was read whole for its signers.
+    lists_read: Cell<u64>,
 }
+
+/// A branch's signers and the keys its runs are verified with (78).
+type Signers = Rc<BTreeMap<String, SignerKey>>;
 
 impl Records {
     pub fn new(common: &Path, branches: Branches, signing: Option<instance::Signing>) -> Self {
@@ -85,7 +95,16 @@ impl Records {
             listed: RefCell::default(),
             asked: RefCell::default(),
             guarding: false,
+            lists: RefCell::default(),
+            lists_read: Cell::new(0),
         }
+    }
+
+    /// How many times this binding read a branch's policy whole for the
+    /// signers its runs are verified with: once a revision the branch
+    /// moves to, never again while it stands (rule core.31).
+    pub fn lists_read(&self) -> u64 {
+        self.lists_read.get()
     }
 
     /// The same binding, for branch protection: a remote's profile is
@@ -112,10 +131,12 @@ impl Records {
 
     /// The `remote refs` profile `branch` is routed to, or `None` for
     /// local files: its remote's when the policy the routing reads names
-    /// signers and a remote for it (C.6), each revision's policy read only
-    /// as far as that needs (124; record 0069). The signers its runs are
-    /// verified by are read from its revision on the remote, never from
-    /// the host's own copy ([`Records::open`]; 27).
+    /// signers and a remote for it (C.6; 27), each revision's policy read
+    /// only as far as that needs (124; record 0069). The signers its runs
+    /// are verified by are not the routing's: they are the branch's own,
+    /// read from its revision on the remote, never from the host's own
+    /// copy nor from another branch's policy ([`Records::signers_of`]; 56,
+    /// 78, 124; rule core.22).
     pub fn route(&self, branch: &str) -> Result<Option<Rc<RemoteRefs>>> {
         if let Some(known) = self.routes.borrow().get(branch) {
             return Ok(known.as_ref().map(|r| self.remotes.borrow()[r].clone()));
@@ -123,7 +144,7 @@ impl Records {
         let routed = match self.branches.policy_of(branch)? {
             Some((_, policy)) if !policy.signers.is_empty() => {
                 match policy.rules_for(branch)?.and_then(|r| r.remote.clone()) {
-                    Some(remote) => Some(self.open(&remote, branch)?),
+                    Some(remote) => Some(self.open(&remote)?),
                     None => None,
                 }
             }
@@ -166,24 +187,13 @@ impl Records {
         Ok(out)
     }
 
-    /// `remote`'s profile, opened once, verifying the signers named by the
-    /// policy, read whole, at `branch`'s revision on `remote` (78; 27,
-    /// 124; record 0069): fetched, as every read of a branch on its remote
-    /// is (C.7), or as the tick's ask of the remote brought it, where this
-    /// process has asked it, which fetches no branch on its own (129); as
-    /// last fetched when the remote can't be read; and, when
-    /// the remote holds no such branch and the host no tracking ref of it,
-    /// the revision the routing chose, which it is being made at. The
-    /// host's own copy is never read for them. A policy refused there
-    /// fails, naming the branch, the remote and the revision, and opens no
-    /// profile. Bound for guarding, it reads no key and fetches nothing.
-    fn open(&self, remote: &str, branch: &str) -> Result<Rc<RemoteRefs>> {
+    /// `remote`'s profile, opened once for every branch routed there. It
+    /// reads no signer: each branch's runs on it are verified with the
+    /// signers that branch's own policy names ([`Records::signers_of`]; 27,
+    /// 78; rule core.22). Bound for guarding, it is given no signing.
+    fn open(&self, remote: &str) -> Result<Rc<RemoteRefs>> {
         if let Some(r) = self.remotes.borrow().get(remote) {
             return Ok(r.clone());
-        }
-        let mut signers = BTreeMap::new();
-        if !self.guarding {
-            self.signers(remote, branch, &mut signers)?;
         }
         let signing = match self.signing.as_ref().filter(|_| !self.guarding) {
             Some(s) => Some(Signing {
@@ -195,68 +205,111 @@ impl Records {
         let r = Rc::new(RemoteRefs::new(
             &self.common,
             self.branches.pushed_refs(remote)?,
-            signers,
             signing,
         ));
         self.remotes.borrow_mut().insert(remote.into(), r.clone());
         Ok(r)
     }
 
-    /// The keys of the signers [`Records::open`] verifies `branch`'s
-    /// records on `remote` by, into `signers`.
-    fn signers(
-        &self,
-        remote: &str,
-        branch: &str,
-        signers: &mut BTreeMap<String, SignerKey>,
-    ) -> Result<()> {
+    /// The signers `branch`'s runs are verified with, and their keys: those
+    /// its own policy names, read whole, at its revision (78; 27, 56;
+    /// rule core.22), never another branch's, whichever was read first.
+    ///
+    /// For a branch on its remote, the revision is its remote's (124;
+    /// record 0069): its tracking ref as last fetched, or, the first time
+    /// this process reads it and only where no tick of this process asked
+    /// the remote, fetched as every read of a branch on its remote is
+    /// (C.7; 129), as last fetched when the remote can't be read. Where the
+    /// remote holds no revision of it and the host no tracking ref, it has
+    /// no signer: the host's own copy is never read for one. A branch in
+    /// the host's own files reads them at the revision its routing read
+    /// (C.6), only where that names signers.
+    ///
+    /// Read again only once that revision moves, never while it stands
+    /// (rule core.31). A policy refused there fails, naming the branch, the
+    /// remote and the revision. Bound for guarding, it reads no key and
+    /// fetches nothing.
+    fn signers_of(&self, branch: &str, routed: Option<&str>) -> Result<Signers> {
+        if self.guarding {
+            return Ok(Signers::default());
+        }
+        let rev = match routed {
+            Some(remote) => self.revision_on(remote, branch)?,
+            None => self
+                .branches
+                .policy_of(branch)?
+                .filter(|(_, policy)| !policy.signers.is_empty())
+                .map(|(at, _)| at),
+        };
+        if let Some((at, list)) = self.lists.borrow().get(branch) {
+            if *at == rev {
+                return Ok(list.clone());
+            }
+        }
+        let list = match &rev {
+            Some(at) => Rc::new(self.read_signers(branch, routed, at)?),
+            None => Signers::default(),
+        };
+        self.lists
+            .borrow_mut()
+            .insert(branch.into(), (rev, list.clone()));
+        Ok(list)
+    }
+
+    /// 124: `branch`'s revision on `remote` as [`Records::signers_of`]
+    /// reads it: fetched the first time, where no tick asked the remote,
+    /// and as last fetched otherwise; `None` when the host holds none.
+    fn revision_on(&self, remote: &str, branch: &str) -> Result<Option<Rev>> {
         let p = self.branches.pushed_refs(remote)?;
+        let first = !self.lists.borrow().contains_key(branch);
         // 129: the tick's one ask of the remote brought every branch on it,
         // so its tracking ref is the branch's revision there.
-        let fetched = if self.asked.borrow().contains(remote) {
-            None
-        } else {
+        if first && !self.asked.borrow().contains(remote) {
             match p.read(branch) {
-                Ok(at) => at,
-                Err(e) if read_refused(&e).is_some() => None,
+                Ok(Some(at)) => return Ok(Some(at)),
+                Ok(None) => {}
+                Err(e) if read_refused(&e).is_some() => {}
                 Err(e) => return Err(e),
             }
+        }
+        p.held(branch)
+    }
+
+    /// The keys of the signers the policy at `rev`, read whole, names for
+    /// `branch`'s runs on `remote`, or in the host's own files.
+    fn read_signers(
+        &self,
+        branch: &str,
+        remote: Option<&str>,
+        rev: &Rev,
+    ) -> Result<BTreeMap<String, SignerKey>> {
+        let mut signers = BTreeMap::new();
+        let Some(bytes) = self.branches.file_at(rev, POLICY_PATH)? else {
+            return Ok(signers);
         };
-        let rev = match fetched {
-            Some(at) => at,
-            None => match p.read_ref(&format!("refs/remotes/{remote}/{branch}"))? {
-                Some(at) => at,
-                None => match self.branches.policy_of(branch)? {
-                    Some((at, _)) => at,
-                    None => return Ok(()),
-                },
-            },
-        };
-        let Some(bytes) = self.branches.file_at(&rev, POLICY_PATH)? else {
-            return Ok(());
-        };
-        let policy = Policy::parse(std::str::from_utf8(&bytes)?)
-            .with_context(|| format!("{branch}'s policy on {remote} at {rev}"))?;
+        self.lists_read.set(self.lists_read.get() + 1);
+        let policy = Policy::parse(std::str::from_utf8(&bytes)?).with_context(|| match remote {
+            Some(remote) => format!("{branch}'s policy on {remote} at {rev}"),
+            None => format!("{branch}'s policy at {rev}"),
+        })?;
         for (name, s) in &policy.signers {
             let key = match (&s.identity.0[..], &s.identity.1) {
                 ("ssh", Setting::Text(v)) => {
                     let text = if v.split_whitespace().count() >= 2 {
                         v.clone()
                     } else {
-                        let bytes = self.branches.file_at(&rev, v)?.with_context(|| {
+                        let bytes = self.branches.file_at(rev, v)?.with_context(|| {
                             format!("[signers.{name}] ssh names {v}, which {rev} does not hold")
                         })?;
                         String::from_utf8(bytes)?
                     };
-                    SignerKey::Ssh(
-                        ssh::allowed(&text).with_context(|| format!("[signers.{name}] ssh"))?,
-                    )
+                    SignerKey::ssh(&text).with_context(|| format!("[signers.{name}] ssh"))?
                 }
                 _ => SignerKey::Keyless,
             };
             signers.insert(name.clone(), key);
         }
-        Ok(())
+        Ok(signers)
     }
 
     /// Where this host notes that `branch`'s own records moved to its
@@ -606,11 +659,20 @@ impl State for Records {
         }
     }
 
+    /// This host's own results, and the runs on every remote opened, each
+    /// signer's verified with the key `branch`'s own policy lists for it
+    /// at its revision and read for no signer it does not name
+    /// ([`Records::signers_of`]; 78; rule core.22).
     fn results(&self, branch: &str) -> Result<Vec<u8>> {
         let mut bytes = self.local.results(branch)?;
+        let routed = self.route(branch)?;
         let remotes: Vec<Rc<RemoteRefs>> = self.remotes.borrow().values().cloned().collect();
+        if remotes.is_empty() {
+            return Ok(bytes);
+        }
+        let signers = self.signers_of(branch, routed.as_ref().map(|r| r.remote()))?;
         for r in remotes {
-            bytes.extend(r.results(branch)?);
+            bytes.extend(r.results_with(&signers)?);
         }
         Ok(bytes)
     }
