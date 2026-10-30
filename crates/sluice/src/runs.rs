@@ -656,62 +656,6 @@ pub fn supervise(dir: &Path) -> Result<()> {
 }
 
 /// The last lines of a log, for an error.
-/// Run `argv` in `cwd` with exactly `env`, as one process group held to
-/// `limit`, its output in `log`: `Err` with how it ended and the end of
-/// what it printed when it could not be started, failed or ran past the
-/// limit. For `[tests] ready` (could-not-run-1 114).
-pub fn run_to_end(
-    argv: &[String],
-    cwd: &Path,
-    env: &BTreeMap<String, String>,
-    log: &Path,
-    limit: Duration,
-) -> std::result::Result<(), String> {
-    let (program, args) = argv.split_first().ok_or("names no command")?;
-    let out = File::create(log).map_err(|e| format!("creating {}: {e}", log.display()))?;
-    let err = out.try_clone().map_err(|e| e.to_string())?;
-    let mut child = Command::new(program)
-        .args(args)
-        .current_dir(cwd)
-        .env_clear()
-        .envs(env)
-        .stdin(Stdio::null())
-        .stdout(out)
-        .stderr(err)
-        .process_group(0)
-        .spawn()
-        .map_err(|e| format!("could not be started: {e}"))?;
-    let pgid = child.id() as i32;
-    let deadline = Instant::now() + limit;
-    let mut status = None;
-    while status.is_none() && Instant::now() < deadline {
-        status = child.try_wait().map_err(|e| e.to_string())?;
-        if status.is_none() {
-            std::thread::sleep(Duration::from_millis(50));
-        }
-    }
-    let ran_out = status.is_none();
-    let mut reap = || {
-        if status.is_none() {
-            status = child.try_wait().ok().flatten();
-        }
-        status.is_some()
-    };
-    end_group(pgid, Duration::from_secs(5), &mut reap);
-    let tail = log_end(log);
-    let how = match status {
-        _ if ran_out => format!("ran past {}s", limit.as_secs()),
-        Some(s) if s.success() => return Ok(()),
-        Some(s) => format!("ended {s}"),
-        None => "never ended".into(),
-    };
-    Err(if tail.is_empty() {
-        how
-    } else {
-        format!("{how}: {tail}")
-    })
-}
-
 fn log_end(path: &Path) -> String {
     let text = std::fs::read(path).unwrap_or_default();
     let text = String::from_utf8_lossy(&text[text.len().saturating_sub(2000)..]).into_owned();
