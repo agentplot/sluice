@@ -4,7 +4,7 @@
 //! (ADR 0028); it decides nothing and writes nothing (rules core.11,
 //! core.14).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -56,8 +56,9 @@ pub fn own(view: &BranchView, id: u64) -> Option<&CandidateView> {
 }
 
 /// What a waiting command prints a line again for: the combination, how
-/// many of its tasks have ended and which are running; never its times.
-pub fn moved(c: &CandidateView) -> (Vec<u64>, usize, Vec<String>) {
+/// many of its tasks have ended, which are running and what it waits for;
+/// never its times.
+pub fn moved(c: &CandidateView) -> Moved {
     let tasks = c.tasks.as_deref().unwrap_or_default();
     (
         c.submissions.clone(),
@@ -67,7 +68,42 @@ pub fn moved(c: &CandidateView) -> (Vec<u64>, usize, Vec<String>) {
             .filter(|t| t.state == TaskState::Running)
             .map(|t| t.target.clone())
             .collect(),
+        c.waiting.clone(),
     )
+}
+
+/// What [`moved`] reads of a combination.
+pub type Moved = (Vec<u64>, usize, Vec<String>, BTreeMap<String, String>);
+
+/// 84, record 0074: `waiting for a host whose container engine answers:
+/// mac-studio: no socket at /var/run/docker.sock`, for a combination with
+/// a run some host turned down for its engine and none has taken; `None`
+/// for one that waits for nothing.
+pub fn waiting(c: &CandidateView) -> Option<String> {
+    if c.waiting.is_empty() {
+        return None;
+    }
+    let hosts: Vec<String> = c.waiting.iter().map(|(h, w)| format!("{h}: {w}")).collect();
+    Some(format!(
+        "waiting for a host whose container engine answers: {}",
+        hosts.join("; ")
+    ))
+}
+
+/// 84, record 0074: what each combination of `view` under test waits for,
+/// for `--json`: its submissions, its revision and the hosts that turned
+/// its run down, each with why.
+pub fn waiting_json(view: &BranchView) -> serde_json::Value {
+    under_test(view)
+        .filter(|c| !c.waiting.is_empty())
+        .map(|c| {
+            serde_json::json!({
+                "submissions": c.submissions,
+                "combination": c.revision,
+                "waiting": c.waiting,
+            })
+        })
+        .collect()
 }
 
 /// `testing <combination>`, and its progress where there is any; the
@@ -80,7 +116,13 @@ pub fn testing_line(
     names: Option<&Names>,
 ) -> String {
     let named = combination(branch, &c.submissions, names, &mut BTreeSet::new());
-    match line(c, now) {
+    let p = [Some(line(c, now)), waiting(c)]
+        .into_iter()
+        .flatten()
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join(" · ");
+    match p {
         p if p.is_empty() => format!("testing {named}"),
         p => format!("testing {named} · {p}"),
     }
@@ -187,6 +229,7 @@ mod tests {
             replayed: 0,
             failed: Vec::new(),
             tasks,
+            waiting: BTreeMap::new(),
         }
     }
 
@@ -239,6 +282,36 @@ mod tests {
         c.started = None;
         assert_eq!(line(&c, now()), "");
         assert_eq!(testing_line("main", &c, now(), None), "testing main + #12");
+    }
+
+    /// 84, record 0074: a combination whose run a host turned down for
+    /// its engine says what it waits for, after its time.
+    #[test]
+    fn a_run_turned_down_for_its_engine_says_what_it_waits_for() {
+        let mut c = candidate(None, Some(1800));
+        c.waiting = BTreeMap::from([
+            (
+                "box".into(),
+                "/var/run/docker.sock refused the connection".into(),
+            ),
+            (
+                "mac-studio".into(),
+                "no socket at /var/run/docker.sock".into(),
+            ),
+        ]);
+        assert_eq!(
+            testing_line("main", &c, now(), None),
+            "testing main + #12 · 26m10s of 30m · waiting for a host whose container engine \
+             answers: box: /var/run/docker.sock refused the connection; mac-studio: no socket at \
+             /var/run/docker.sock"
+        );
+        c.started = None;
+        assert_eq!(
+            testing_line("main", &c, now(), None),
+            "testing main + #12 · waiting for a host whose container engine answers: box: \
+             /var/run/docker.sock refused the connection; mac-studio: no socket at \
+             /var/run/docker.sock"
+        );
     }
 
     #[test]
