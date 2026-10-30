@@ -25,8 +25,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{anyhow, bail, Result};
 use sluice_seams::{
     read_refused, AtBound, Contested, Delivery, Formed, HostCopy, LandingCommit, Limits, Moved,
-    Notification, Progress, ReadRefused, Rev, RunHandle, RunRequest, Source, Submitter, TaskLog,
-    Written,
+    NotRun, Notification, Outcome, Progress, ReadRefused, Rev, RunHandle, RunReport, RunRequest,
+    Source, Submitter, TaskLog, Written,
 };
 use tracing::{info, info_span, warn};
 
@@ -831,7 +831,7 @@ impl Sluice<'_> {
         for head in &gone {
             self.seams.state.unpublish_head(branch, head)?;
         }
-        self.poll(&mut line, &rules, home.as_deref(), &now)?;
+        self.poll(&mut line, &rules, &unmet.limits, home.as_deref(), &now)?;
         let chain = loop {
             let (chain, removed) = self.arrange(&mut line, &rules, &now)?;
             if !removed {
@@ -951,7 +951,14 @@ impl Sluice<'_> {
     /// alike, before the verdict is read from the records (16, 69; rules
     /// core.7, core.9). A candidate has its verdict once every run of it
     /// has one, over every check on every system its gate names (86).
-    fn poll(&self, line: &mut Line, rules: &Rules, home: Option<&str>, now: &str) -> Result<()> {
+    fn poll(
+        &self,
+        line: &mut Line,
+        rules: &Rules,
+        limits: &Limits,
+        home: Option<&str>,
+        now: &str,
+    ) -> Result<()> {
         let pools = match &line.doc.base {
             Some(base) if rules.signed => {
                 self.policy_at(base)?.map(|p| p.pools).unwrap_or_default()
@@ -1013,6 +1020,7 @@ impl Sluice<'_> {
                         );
                     }
                     Progress::Finished(report) => {
+                        let report = self.after_run(limits, report)?;
                         self.finish_run(line, &c, i, &run, report, rules, home, now)?;
                     }
                 }
@@ -1053,6 +1061,47 @@ impl Sluice<'_> {
             self.judge(line, &c.id, rules, now)?;
         }
         Ok(())
+    }
+
+    /// Design D5 (114, 139; record 0074): a finished run under `limits`,
+    /// read with what the host lacks after it. Where a check did not pass
+    /// in a run its time limit did not end, the host is looked at again,
+    /// once, as the report is first taken; where what the run asked of it
+    /// has gone, every check that failed or was left without a result has
+    /// no outcome, with why, and a check that passed keeps its pass. A run
+    /// that asks nothing of the host is never looked at, and a required
+    /// check the runner keeps out of its CI mode stays missing.
+    pub(crate) fn after_run(&self, limits: &Limits, mut report: RunReport) -> Result<RunReport> {
+        let unpassed = report.tasks.iter().any(|t| t.outcome == Outcome::Fail)
+            || report.missing.iter().any(|m| !report.kept_out.contains(m));
+        if !limits.asks_of_host() || report.timed_out || !unpassed {
+            return Ok(report);
+        }
+        let Some(why) = self.seams.tests.unmet(limits)? else {
+            return Ok(report);
+        };
+        let reason = format!("the container engine no longer answers after the run: {why}");
+        let (failed, passed) = std::mem::take(&mut report.tasks)
+            .into_iter()
+            .partition(|t| t.outcome == Outcome::Fail);
+        let failed: Vec<sluice_seams::TaskResult> = failed;
+        report.tasks = passed;
+        let (kept_out, missing) = std::mem::take(&mut report.missing)
+            .into_iter()
+            .partition(|m| report.kept_out.contains(m));
+        let missing: Vec<String> = missing;
+        report.missing = kept_out;
+        report.not_run.extend(
+            failed
+                .into_iter()
+                .map(|t| t.task)
+                .chain(missing)
+                .map(|task| NotRun {
+                    task,
+                    reason: reason.clone(),
+                }),
+        );
+        Ok(report)
     }
 
     /// One run's report: its results recorded, then its own verdict read.
@@ -2419,6 +2468,7 @@ impl Sluice<'_> {
                     }
                 }
                 Progress::Finished(report) => {
+                    let report = self.after_run(&unmet.limits, report)?;
                     self.update(branch, |l| {
                         let now = self.now();
                         let Some(x) = l.candidate(&c.id).cloned() else {
