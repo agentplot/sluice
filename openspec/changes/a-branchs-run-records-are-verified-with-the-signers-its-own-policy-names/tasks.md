@@ -21,7 +21,7 @@
 
 ## 4. The decision on record
 
-- [ ] 4.1 Add the ADR (next free number under `docs/adr/`, MADR as the others): a branch's signed runs are verified with the signers and keys its own policy names at its revision on its remote, re-read when that revision moves, and the records seam reads results for a branch; the considered options are design D1's. Sources: clauses 27, 28, 56, 78, 124; core.22; ADRs 0032, 0037, 0069; batch 44's reviewer reading of 2026-10-28. Verify: `sluice exec main -- moon run root:format` passes.
+- [x] 4.1 Add the ADR (next free number under `docs/adr/`, MADR as the others): a branch's signed runs are verified with the signers and keys its own policy names at its revision on its remote, re-read when that revision moves, and the records seam reads results for a branch; the considered options are design D1's. Sources: clauses 27, 28, 56, 78, 124; core.22; ADRs 0032, 0037, 0069; batch 44's reviewer reading of 2026-10-28. Verify: `sluice exec main -- moon run root:format` passes.
 - [ ] 4.2 Add to core.22's details in `docs/architecture/core.md` a "Rules out" line: a branch's runs verified with the signers or keys another branch on its remote names, whichever was read first (batch 44's reading, 2026-10-28: `Records::open` built a remote's signers from the first routed branch's policy), or with a list read at a revision the branch has left; and the new ADR among its sources. The rule's one-line statement, and so the site's rules page, is unchanged. Verify: `sluice exec main -- moon run root:format` passes.
 
 ## 5. The gate
