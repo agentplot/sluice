@@ -285,6 +285,20 @@ impl Exec<'_> {
                 return Ok(CONFLICT);
             }
         };
+        // 84, record 0074 (design D6): the branch's tests on a host that
+        // lacks what they ask of it are refused, nothing run or recorded;
+        // a command after `--` is the session's own.
+        if self.command.is_empty() {
+            if let Some(why) = s.session_unmet(&plan)? {
+                let text = format!(
+                    "refused: this host's container engine does not answer: {why}; {}'s tests \
+                     ask for one ([executor] docker = true)",
+                    self.branch
+                );
+                told::tell(out, json, Kind::Refused, &text, &[])?;
+                return Ok(CONFLICT);
+            }
+        }
         // 97: a session's place whose worktree is gone is released by the
         // next run on the host, before this one counts.
         tell_abandoned(out, json, &s.release_abandoned()?)?;
@@ -447,12 +461,15 @@ impl Exec<'_> {
 
         // 92: recorded only when the worktree holds exactly its head, and
         // only a run of the checks; never a run that hit its time limit.
-        self.summary(out, &report, command.is_some())?;
+        // Design D5: told as the core read it, a check that did not pass
+        // after which the host lost what the run asked of it not run.
         let started = SessionStart {
             place: place.clone(),
             run: run.clone(),
         };
         let finished = s.finish_session(&plan, &session, &started, command.is_some(), &report)?;
+        let report = finished.report;
+        self.summary(out, &report, command.is_some())?;
         unkept(finished.unkept.map_or(Ok(()), |e| Err(anyhow::anyhow!(e))));
         let recorded = match finished.recorded {
             Recorded::Written(n) => {

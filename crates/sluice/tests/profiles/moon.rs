@@ -14,8 +14,8 @@ use std::time::{Duration, Instant};
 use sluice::instance::{HostCache, Instance};
 use sluice::profiles::checks::Checks;
 use sluice_seams::{
-    Limits, Network, Outcome, Place, Progress, Rev, RunHandle, RunReport, RunRequest, Setting,
-    Settings, Source, TaskState, Tests,
+    Limits, Network, Outcome, Place, Progress, Reading, Reads, Rev, RunHandle, RunReport,
+    RunRequest, Setting, Settings, Source, TaskState, Tests,
 };
 use support::Repo;
 
@@ -629,6 +629,67 @@ fn a_task_kept_out_of_ci_is_not_run() {
     assert!(r.tasks[0].took_ms.is_some());
     assert_eq!(r.tasks[0].attempts, Some(1));
     assert!(r.detail.as_ref().is_some_and(|d| d.took_ms.is_some()));
+}
+
+/// 140: the affected reading, asked outside any run: a file no task
+/// reads reads no check, an input reads its task and its dependents, and
+/// moon's own configuration every check; the worktree it read in is gone
+/// once it has answered.
+#[test]
+fn the_reading_names_the_checks_a_change_reads() {
+    let repo = workspace("moon-reads");
+    let c = checks(&repo);
+    let base = Rev::new(repo.rev("HEAD"));
+    let docs = Rev::new(change(&repo, &[("README.md", "docs\n")]));
+    let input = Rev::new(change(&repo, &[("alpha/notes.md", "read\n")]));
+    let ws = std::fs::read_to_string(repo.dir().join(".moon/workspace.yml")).unwrap();
+    let config = Rev::new(change(
+        &repo,
+        &[(".moon/workspace.yml", &format!("{ws}# changed\n"))],
+    ));
+    let reads = c
+        .reads(&Reading {
+            required: vec!["#check-fast".into()],
+            tests: moon(),
+            pairs: vec![(base, docs.clone()), (docs, input.clone()), (input, config)],
+        })
+        .unwrap();
+    assert_eq!(
+        reads,
+        [
+            Reads::Checks(Vec::new()),
+            Reads::Checks(vec!["alpha:test".into(), "beta:test".into()]),
+            Reads::Every,
+        ]
+    );
+    let runs = repo.dir().join(".git/sluice/.runs");
+    let left: Vec<_> = std::fs::read_dir(&runs)
+        .map(|d| d.flatten().map(|e| e.file_name()).collect())
+        .unwrap_or_default();
+    assert!(left.is_empty(), "{left:?}");
+    let list = repo.git(&["worktree", "list", "--porcelain"]);
+    assert_eq!(list.matches("worktree ").count(), 1, "{list}");
+}
+
+/// 140: the command runner's one check reads every change.
+#[test]
+fn the_command_runner_reads_every_check() {
+    let repo = workspace("command-reads");
+    let c = checks(&repo);
+    let base = Rev::new(repo.rev("HEAD"));
+    let docs = Rev::new(change(&repo, &[("README.md", "docs\n")]));
+    let tests = Settings::from([
+        ("runner".into(), Setting::Text("command".into())),
+        ("command".into(), Setting::Text("true".into())),
+    ]);
+    let reads = c
+        .reads(&Reading {
+            required: vec!["true".into()],
+            tests,
+            pairs: vec![(base, docs)],
+        })
+        .unwrap();
+    assert_eq!(reads, [Reads::Every]);
 }
 
 /// Run in a child of this test binary, with moon's options set in

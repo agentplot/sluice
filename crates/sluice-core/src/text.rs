@@ -10,6 +10,43 @@ use crate::records::{Candidate, Submission};
 /// subject is filled in one pass, so a submitter's words are carried as
 /// written, whatever braces they hold.
 pub fn landing_message(subject: &str, to: &str, sub: &Submission, verdict: &Candidate) -> String {
+    format!(
+        "{first}\n\
+         \n\
+         Sluice-Submission: {id}\n\
+         Sluice-From: {agent} ({worktree})\n\
+         Sluice-Tested: {tested}\n\
+         Sluice-Result: {result} ({ran} run, {replayed} replayed)\n",
+        first = first_line(subject, to, sub),
+        id = sub.id,
+        worktree = sub.from.worktree,
+        agent = sub.from.agent,
+        tested = verdict.revision,
+        result = verdict.result_word(),
+        ran = verdict.ran,
+        replayed = verdict.replayed,
+    )
+}
+
+/// 140, 23: the message of a landing beside the chain: the policy's
+/// subject as [`landing_message`] fills it, and in place of a verdict the
+/// word that no required check reads its changes, so nothing was run.
+pub fn beside_message(subject: &str, to: &str, sub: &Submission) -> String {
+    format!(
+        "{first}\n\
+         \n\
+         Sluice-Submission: {id}\n\
+         Sluice-From: {agent} ({worktree})\n\
+         Sluice-Result: landed beside the queue (no required check reads its changes)\n",
+        first = first_line(subject, to, sub),
+        id = sub.id,
+        worktree = sub.from.worktree,
+        agent = sub.from.agent,
+    )
+}
+
+/// The policy's subject with the submission filled in, in one pass.
+fn first_line(subject: &str, to: &str, sub: &Submission) -> String {
     let id = sub.id.to_string();
     let from = sub.subject.as_deref().unwrap_or(&sub.from.worktree);
     let fills = [
@@ -32,21 +69,7 @@ pub fn landing_message(subject: &str, to: &str, sub: &Submission, verdict: &Cand
         rest = &rest[name.len()..];
     }
     first.push_str(rest);
-    format!(
-        "{first}\n\
-         \n\
-         Sluice-Submission: {id}\n\
-         Sluice-From: {agent} ({worktree})\n\
-         Sluice-Tested: {tested}\n\
-         Sluice-Result: {result} ({ran} run, {replayed} replayed)\n",
-        id = sub.id,
-        worktree = sub.from.worktree,
-        agent = sub.from.agent,
-        tested = verdict.revision,
-        result = verdict.result_word(),
-        ran = verdict.ran,
-        replayed = verdict.replayed,
-    )
+    first
 }
 
 /// A submission's name as a line shows it (26): each run of line breaks
@@ -98,6 +121,25 @@ mod tests {
     fn first_line(subject: &str, s: &Submission) -> String {
         let m = landing_message(subject, "bolt/x", s, &passed());
         m.lines().next().unwrap().to_string()
+    }
+
+    /// 140: a landing beside the chain names its work as any landing does,
+    /// and in place of a verdict says no required check reads it.
+    #[test]
+    fn a_landing_beside_names_no_verdict() {
+        let s = sub(Some("Guide the reader"));
+        let m = beside_message(crate::policy::LANDING_SUBJECT, "bolt/x", &s);
+        assert!(
+            m.starts_with(&first_line(crate::policy::LANDING_SUBJECT, &s)),
+            "{m}"
+        );
+        assert!(!m.contains("Sluice-Tested"), "{m}");
+        assert!(
+            m.ends_with(
+                "Sluice-Result: landed beside the queue (no required check reads its changes)\n"
+            ),
+            "{m}"
+        );
     }
 
     /// 23: the default subject names the work by the submit's subject, and

@@ -19,15 +19,11 @@
 //! environment, the place's ports included, and removes what the checks
 //! handed to another process, a container engine's containers above all.
 //!
-//! `[tests] ready`, when set, says the host can run the checks (a
-//! container engine that answers, a service up): a list, the command
-//! first, or a string run by `sh -c`, run in the place under the run's
-//! executor, toolchain and environment. It runs before the run, and a host
-//! that fails it is refused the run (84); and again after a run in which a
-//! check did not pass, when its failing leaves those checks not run, with
-//! no result (could-not-run-1 114). `[tests] not_run`, a number or a list
-//! of them, names the exits by which a check says it could not run here.
-//! sluice names no tool either reads: they are the repository's.
+//! `[tests] not_run`, a number or a list of them, names the exits by which
+//! a check says it could not run here (could-not-run-1 114): a check that
+//! needs something of the host brings it up and waits for it within its
+//! own limit (66, 84), and exits so when it could not. sluice names no tool
+//! it reads: they are the repository's.
 //!
 //! The policy's `[tests] runner` picks the runner, read from the branch's
 //! revision with the rest of `[tests]` (56):
@@ -42,6 +38,12 @@
 //! --export`): sluice keeps what it prints and sources it before every
 //! command the runner runs, opaque to it. Whatever needs the network or
 //! the user's home to set up happens there, outside the executor.
+//!
+//! A run whose policy says `[executor] docker = true` asks the host for a
+//! container engine that answers (84; record 0074): [`Tests::unmet`] looks
+//! for one at the sockets the sandbox opens for such a run, by the Docker
+//! Engine API's `GET /_ping`, running nothing and reading nothing of the
+//! repository's (rules core.37, core.38).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -50,17 +52,14 @@ use anyhow::{anyhow, bail, Context as _, Result};
 use serde::{Deserialize, Serialize};
 use sluice_seams::{
     log_tail, AtBound, Enforced, HostRun, KeptOutTask, Limits, Network, NotRun, Outcome, Place,
-    Progress, RunHandle, RunReport, RunRequest, Running, Setting, Settings, Source, TaskLog,
-    TaskProgress, TaskResult, Tests,
+    Progress, Reading, Reads, Rev, RunHandle, RunReport, RunRequest, Running, Setting, Settings,
+    Source, TaskLog, TaskProgress, TaskResult, Tests,
 };
 
 use super::moon::Moon;
 use crate::host_count::{self, HostCount};
 use crate::instance::{HostCache, Instance};
-use crate::runs::{run_to_end, Ended, Request, RunState, Runs};
-
-/// How long `[tests] ready` may take.
-const READY_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
+use crate::runs::{Ended, Request, RunState, Runs};
 use crate::sessions::Sessions;
 
 /// What a run's place, environment and toolchain are, for a runner.
@@ -165,10 +164,6 @@ struct Meta {
     /// record from before it is no end of this run's (ADR 0028).
     #[serde(default)]
     started_ms: Option<i64>,
-    /// `[tests] ready` as it runs, under the executor, and as the policy
-    /// says it, to run again after the run (could-not-run-1 114).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    ready: Option<Ready>,
     /// `[tests] not_run`: exits by which a check says it could not run.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     not_run: Vec<i32>,
@@ -180,12 +175,6 @@ struct Meta {
     /// `.moon/cache`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     store: Option<PathBuf>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct Ready {
-    argv: Vec<String>,
-    shown: String,
 }
 
 /// A pool the binding hands this profile, to start runs on (88; ADR 0034).
@@ -213,6 +202,9 @@ pub struct Checks {
     sessions: Option<Sessions>,
     /// The host's running checks, when not the host's own directory.
     running: Option<HostCount>,
+    /// Where the container engine is looked for, when not the sockets the
+    /// sandbox opens.
+    engine_sockets: Option<Vec<PathBuf>>,
 }
 
 impl Checks {
@@ -225,6 +217,7 @@ impl Checks {
             sessions: None,
             running: None,
             pool: None,
+            engine_sockets: None,
         }
     }
 
@@ -244,6 +237,23 @@ impl Checks {
     pub fn with_running(mut self, dir: PathBuf) -> Self {
         self.running = Some(HostCount::new(dir));
         self
+    }
+
+    /// The same profile, looking for the container engine at `sockets`
+    /// in place of those the sandbox opens (design D2).
+    pub fn with_engine_sockets(mut self, sockets: Vec<PathBuf>) -> Self {
+        self.engine_sockets = Some(sockets);
+        self
+    }
+
+    /// Where the container engine is looked for: the sockets this profile
+    /// was given, else those the sandbox opens for a run that may reach
+    /// the engine (design D2).
+    fn engine_sockets(&self) -> Vec<PathBuf> {
+        match &self.engine_sockets {
+            Some(s) => s.clone(),
+            None => docker_sockets(),
+        }
     }
 
     /// The host's session runs, with what each `sluice exec` keeps of its
@@ -300,29 +310,6 @@ impl Checks {
             admitted: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         };
         self.host_count()?.admit(&entry, limit)
-    }
-
-    /// `[tests] ready` after run `name`, run once and kept in the run's
-    /// directory, since a finished run's progress is read more than once.
-    fn ready_after(
-        &self,
-        name: &str,
-        ready: &Ready,
-        request: &Request,
-    ) -> std::result::Result<(), String> {
-        let kept = self.runs.dir(name).join("ready-after");
-        if let Ok(why) = std::fs::read_to_string(&kept) {
-            return if why.is_empty() { Ok(()) } else { Err(why) };
-        }
-        let got = run_to_end(
-            &ready.argv,
-            &request.cwd,
-            &request.env,
-            &self.runs.dir(name).join("ready-after.log"),
-            READY_LIMIT,
-        );
-        let _ = std::fs::write(&kept, got.as_ref().err().map_or("", String::as_str));
-        got
     }
 }
 
@@ -635,25 +622,31 @@ fn resolved(path: &Path) -> PathBuf {
     }
 }
 
-/// The container engine's sockets a run with `docker = true` may reach:
-/// `DOCKER_HOST`'s, and the usual places engines on macOS put theirs, by
-/// the path given and the path it resolves to.
+/// The container engine's sockets a run with `docker = true` may reach,
+/// and the ones the engine is looked for at (design D2): those
+/// [`ENGINE_SOCKETS_VAR`] names where it is set, else `DOCKER_HOST`'s and
+/// the usual places engines on macOS put theirs; each by the path given
+/// and the path it resolves to.
 fn docker_sockets() -> Vec<PathBuf> {
     let mut paths = Vec::new();
-    if let Some(p) = std::env::var("DOCKER_HOST")
-        .ok()
-        .and_then(|h| h.strip_prefix("unix://").map(PathBuf::from))
-    {
-        paths.push(p);
-    }
-    paths.push("/var/run/docker.sock".into());
-    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
-        for p in [
-            ".docker/run/docker.sock",
-            ".orbstack/run/docker.sock",
-            ".colima/default/docker.sock",
-        ] {
-            paths.push(home.join(p));
+    if let Some(v) = std::env::var_os(ENGINE_SOCKETS_VAR) {
+        paths.extend(std::env::split_paths(&v));
+    } else {
+        if let Some(p) = std::env::var("DOCKER_HOST")
+            .ok()
+            .and_then(|h| h.strip_prefix("unix://").map(PathBuf::from))
+        {
+            paths.push(p);
+        }
+        paths.push("/var/run/docker.sock".into());
+        if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+            for p in [
+                ".docker/run/docker.sock",
+                ".orbstack/run/docker.sock",
+                ".colima/default/docker.sock",
+            ] {
+                paths.push(home.join(p));
+            }
         }
     }
     let mut all = Vec::new();
@@ -666,6 +659,99 @@ fn docker_sockets() -> Vec<PathBuf> {
     all.sort();
     all.dedup();
     all
+}
+
+/// The tests' way to name where a fake container engine listens, as a
+/// list of paths: where set, these replace the host's sockets both where
+/// the engine is looked for and where the sandbox lets a run reach it, so
+/// the look finds only what the run would reach (design D2). A host names
+/// its engine by `DOCKER_HOST`.
+pub const ENGINE_SOCKETS_VAR: &str = "SLUICE_ENGINE_SOCKETS";
+
+/// How long the engine look waits for a socket to take its connection,
+/// and again for its answer (design D2).
+const ENGINE_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// 84, record 0074 (design D2): `None` when a container engine answers at
+/// one of `sockets`, by the Docker Engine API's `GET /_ping` over each
+/// that exists, the first answering `200` ending the look; otherwise why
+/// not: each socket that exists with what it said, or, where none exists,
+/// the paths looked at. It runs as the process that would run the checks,
+/// so it finds what their run would reach.
+pub fn engine_unmet(sockets: &[PathBuf]) -> Option<String> {
+    let mut said = Vec::new();
+    let mut looked = std::collections::BTreeSet::new();
+    for socket in sockets.iter().filter(|s| s.exists()) {
+        // A path and the path it resolves to are one socket.
+        let real = std::fs::canonicalize(socket).unwrap_or_else(|_| socket.clone());
+        if !looked.insert(real) {
+            continue;
+        }
+        match ping(socket) {
+            Ok(()) => return None,
+            Err(why) => said.push(format!("{} {why}", socket.display())),
+        }
+    }
+    if said.is_empty() {
+        let paths: Vec<String> = sockets.iter().map(|s| s.display().to_string()).collect();
+        return Some(match paths.is_empty() {
+            true => "no socket to look at".into(),
+            false => format!("no socket at {}", paths.join(", ")),
+        });
+    }
+    Some(said.join("; "))
+}
+
+/// `GET /_ping` over the unix socket `socket`: `Ok` when it answers `200`,
+/// else what it did, in words. The connection is made on a thread of its
+/// own, so a socket that never takes it holds the look no longer than
+/// [`ENGINE_WAIT`].
+fn ping(socket: &Path) -> Result<(), String> {
+    use std::io::{BufRead, BufReader, Read, Write};
+    enum Step {
+        Connected,
+        Said(std::io::Result<String>),
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    let path = socket.to_path_buf();
+    std::thread::spawn(move || {
+        let said = (|| {
+            let mut s = std::os::unix::net::UnixStream::connect(&path)?;
+            let _ = tx.send(Step::Connected);
+            s.set_read_timeout(Some(ENGINE_WAIT))?;
+            s.set_write_timeout(Some(ENGINE_WAIT))?;
+            s.write_all(b"GET /_ping HTTP/1.0\r\nHost: docker\r\n\r\n")?;
+            let mut status = String::new();
+            BufReader::new(s.take(512)).read_line(&mut status)?;
+            Ok(status)
+        })();
+        let _ = tx.send(Step::Said(said));
+    });
+    let wait = format!("{}s", ENGINE_WAIT.as_secs());
+    let said = match rx.recv_timeout(ENGINE_WAIT) {
+        Ok(Step::Connected) => match rx.recv_timeout(ENGINE_WAIT * 2) {
+            Ok(Step::Said(said)) => said,
+            _ => return Err(format!("gave no answer within {wait}")),
+        },
+        Ok(Step::Said(said)) => said,
+        Err(_) => return Err(format!("took no connection within {wait}")),
+    };
+    match said {
+        Ok(status) => match status.split_whitespace().nth(1) {
+            Some("200") => Ok(()),
+            Some(_) => Err(format!("answered {}", status.trim())),
+            None if status.trim().is_empty() => Err("closed the connection unanswered".into()),
+            None => Err(format!("answered {:?}", status.trim())),
+        },
+        Err(e) => Err(match e.kind() {
+            std::io::ErrorKind::ConnectionRefused => "refused the connection".into(),
+            std::io::ErrorKind::PermissionDenied => "refused this user".into(),
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => {
+                format!("gave no answer within {wait}")
+            }
+            _ => e.to_string(),
+        }),
+    }
 }
 
 /// A path by the path given and, where it resolves, the path it resolves
@@ -826,6 +912,67 @@ impl Drop for Scratch {
     }
 }
 
+/// 140: a detached worktree of the repository whose common directory is
+/// `common`, made with no hook run, for the runner's affected reading
+/// alone, and removed when it is dropped. No place: nothing runs in it but
+/// the runner's query.
+struct ReadingTree {
+    common: PathBuf,
+    path: PathBuf,
+}
+
+impl ReadingTree {
+    fn make(common: &Path, path: &Path, rev: &Rev) -> Result<ReadingTree> {
+        let tree = ReadingTree {
+            common: common.to_path_buf(),
+            path: path.to_path_buf(),
+        };
+        let at = path
+            .to_str()
+            .ok_or_else(|| anyhow!("{} is not UTF-8", path.display()))?;
+        let out = tree.git(&[
+            "-c",
+            "core.hooksPath=/dev/null",
+            "worktree",
+            "add",
+            "--detach",
+            at,
+            rev.as_str(),
+        ])?;
+        if !out.status.success() {
+            bail!(
+                "git worktree add {at}: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        Ok(tree)
+    }
+
+    fn git(&self, args: &[&str]) -> Result<std::process::Output> {
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(&self.common)
+            .args(args)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE")
+            .env_remove("GIT_COMMON_DIR")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .context("running git")
+    }
+}
+
+impl Drop for ReadingTree {
+    fn drop(&mut self) {
+        if let Some(at) = self.path.to_str() {
+            let _ = self.git(&["worktree", "remove", "--force", at]);
+        }
+        let _ = std::fs::remove_dir_all(&self.path);
+        let _ = self.git(&["worktree", "prune"]);
+    }
+}
+
 pub fn hostname() -> String {
     nix::unistd::gethostname()
         .map(|h| h.to_string_lossy().into_owned())
@@ -892,49 +1039,6 @@ impl Tests for Checks {
             jobs,
         };
         let not_run = not_run_exits(&request.tests)?;
-        // 84, could-not-run-1 114: a host that is not ready is refused the
-        // run before the runner does anything.
-        let ready = match command_setting(&request.tests, "ready")? {
-            None => None,
-            Some(r) => {
-                let shown = match request.tests.get("ready") {
-                    Some(Setting::Text(t)) => t.clone(),
-                    _ => r.join(" "),
-                };
-                let r: Vec<&str> = r.iter().map(String::as_str).collect();
-                let mut argv = cx.argv(&r);
-                if kind == Kind::Sandbox {
-                    let profile = dir.join("ready.sb");
-                    std::fs::write(
-                        &profile,
-                        sandbox_profile(
-                            &request.place,
-                            &request.limits,
-                            &[],
-                            &self.instance.caches,
-                        ),
-                    )?;
-                    argv.splice(
-                        0..0,
-                        [
-                            "/usr/bin/sandbox-exec".to_string(),
-                            "-f".into(),
-                            profile.to_string_lossy().into_owned(),
-                        ],
-                    );
-                }
-                if let Err(why) = run_to_end(
-                    &argv,
-                    &request.place.path,
-                    &env,
-                    &dir.join("ready.log"),
-                    READY_LIMIT,
-                ) {
-                    bail!("the host is not ready to run the checks: [tests] ready `{shown}` {why}");
-                }
-                Some(Ready { argv, shown })
-            }
-        };
         let plan = match runner.as_str() {
             "moon" => Moon.plan(&cx)?,
             "command" => {
@@ -966,9 +1070,8 @@ impl Tests for Checks {
             cx.argv(&r)
         });
         // 35: a run holding a cold test, and its release, are given none of
-        // the host's caches. What ran to set it up, the toolchain, `ready`
-        // and the runner's own queries, had them and ran no test (design
-        // D5).
+        // the host's caches. What ran to set it up, the toolchain and the
+        // runner's own queries, had them and ran no test (design D5).
         let caches: &[HostCache] = if plan.cold {
             &[]
         } else {
@@ -1039,7 +1142,6 @@ impl Tests for Checks {
             executor,
             host: hostname(),
             started_ms: Some(chrono::Utc::now().timestamp_millis()),
-            ready,
             not_run,
             kept_out: plan.kept_out,
             store,
@@ -1062,6 +1164,15 @@ impl Tests for Checks {
         Ok(RunHandle(name.clone()))
     }
 
+    /// 84, record 0074: a run that may reach the container engine asks
+    /// the host for one that answers where the run would reach it.
+    fn unmet(&self, limits: &Limits) -> Result<Option<String>> {
+        if !limits.asks_of_host() {
+            return Ok(None);
+        }
+        Ok(engine_unmet(&self.engine_sockets()))
+    }
+
     fn progress(&self, run: &RunHandle) -> Result<Progress> {
         let ended = match self.runs.state(&run.0)? {
             RunState::Running => return Ok(Progress::Running),
@@ -1073,7 +1184,7 @@ impl Tests for Checks {
             .with_context(|| format!("reading run {}", run.0))?;
         // Could-not-run-1 114: a runner that never started judged nothing.
         let mut detail = None;
-        let (mut tasks, mut not_run) = match &ended.error {
+        let (mut tasks, not_run) = match &ended.error {
             Some(e) => (
                 Vec::new(),
                 meta.targets
@@ -1094,7 +1205,7 @@ impl Tests for Checks {
                 _ => command_result(&meta, &ended),
             },
         };
-        let mut missing: Vec<String> = if ended.timed_out {
+        let missing: Vec<String> = if ended.timed_out {
             // Time-limit-1 66: what ended before the limit keeps its
             // outcome; a task the limit cut off has none, and is named as
             // left without one. One never started is not named.
@@ -1127,31 +1238,6 @@ impl Tests for Checks {
                 .cloned()
                 .collect()
         };
-        // Could-not-run-1 114: a host that stopped being ready leaves what
-        // did not pass unjudged; what passed stands.
-        let unpassed = !missing.is_empty() || tasks.iter().any(|t| t.outcome == Outcome::Fail);
-        let ready = meta.ready.as_ref().filter(|_| unpassed && !ended.timed_out);
-        if let Some(ready) = ready {
-            if let Err(why) = self.ready_after(&run.0, ready, &request) {
-                let reason = format!(
-                    "the host failed [tests] ready `{}` after the run: {why}",
-                    ready.shown
-                );
-                let (fails, passes): (Vec<_>, Vec<_>) =
-                    tasks.into_iter().partition(|t| t.outcome == Outcome::Fail);
-                tasks = passes;
-                not_run.extend(
-                    fails
-                        .into_iter()
-                        .map(|t| t.task)
-                        .chain(missing.drain(..))
-                        .map(|task| NotRun {
-                            task,
-                            reason: reason.clone(),
-                        }),
-                );
-            }
-        }
         Ok(Progress::Finished(RunReport {
             detail,
             kept_out: meta.kept_out,
@@ -1325,6 +1411,59 @@ impl Tests for Checks {
             jobs,
         };
         Moon.kept_out(&cx)
+    }
+
+    /// 140: the moon runner's affected reading, in a worktree of the first
+    /// change's second revision made for it under the check seam's own
+    /// directory and removed once moon has answered, with the run's
+    /// environment and `[tests] toolchain` set up as `kept_out` sets them
+    /// up, outside any executor. It takes no place and is admitted against
+    /// no bound: it runs no check. The command runner's one check reads
+    /// everything.
+    fn reads(&self, reading: &Reading) -> Result<Vec<Reads>> {
+        if text(&reading.tests, "runner")? != Some("moon") || reading.pairs.is_empty() {
+            return Ok(vec![Reads::Every; reading.pairs.len()]);
+        }
+        let tool_argv = match reading.tests.get("toolchain") {
+            None => None,
+            Some(Setting::List(xs)) if !xs.is_empty() => Some(xs.clone()),
+            Some(_) => bail!("[tests] toolchain must be a list of strings, the command first"),
+        };
+        let scratch = Scratch(self.runs.dir(&format!("reading-{}", std::process::id())));
+        let _ = std::fs::remove_dir_all(&scratch.0);
+        let tmp = scratch.0.join("tmp");
+        std::fs::create_dir_all(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
+        let at = reading.pairs[0].1.clone();
+        let tree = ReadingTree::make(&self.common, &scratch.0.join("tree"), &at)?;
+        let request = RunRequest {
+            place: Place {
+                name: "reading".into(),
+                path: tree.path.clone(),
+                tmp,
+                env: BTreeMap::new(),
+            },
+            revision: at,
+            required: reading.required.clone(),
+            since: None,
+            limit: None,
+            limits: Limits::default(),
+            tests: reading.tests.clone(),
+            replay: false,
+            system: None,
+        };
+        let jobs = self.instance.jobs();
+        let env = environment(&request, jobs, &self.instance.caches);
+        let script = scratch.0.join("toolchain.sh");
+        if let Some(argv) = &tool_argv {
+            toolchain(argv, &tree.path, &env, &script)?;
+        }
+        let cx = Context {
+            request: &request,
+            env: &env,
+            toolchain: tool_argv.is_some().then_some(script.as_path()),
+            jobs,
+        };
+        Moon.reads(&cx, &reading.pairs)
     }
 
     /// ADR 0028: the moon runner's tasks while the run goes; the command

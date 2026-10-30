@@ -20,8 +20,8 @@ use sluice_seams::{Rev, Snapshot, Submitter, TaskProgress};
 use crate::line::Line;
 use crate::policy::{Policy, Rules};
 use crate::records::{
-    parse_lines, BranchHold, CandidateState, Event, FailedRelease, FailedTask, LogLine, Submission,
-    LOG_FILE,
+    parse_lines, BranchHold, CandidateState, Event, FailedRelease, FailedTask, LogLine, RunState,
+    Submission, LOG_FILE,
 };
 use crate::Sluice;
 
@@ -201,6 +201,11 @@ pub struct CandidateView {
     /// its runner says (ADR 0028). Never a result.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tasks: Option<Vec<TaskProgress>>,
+    /// 84, record 0074: each host that turned down a run of it still
+    /// open, for what it lacks of what the run asks of it, with why: what
+    /// the combination waits for.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub waiting: BTreeMap<String, String>,
 }
 
 /// One branch's part of the overview, from what was read of it.
@@ -246,6 +251,12 @@ pub fn branch_view(read: BranchRead) -> Result<BranchView> {
             tasks: matches!(c.state, CandidateState::Starting | CandidateState::Testing)
                 .then(|| progress.remove(&c.id))
                 .flatten(),
+            waiting: c
+                .runs
+                .iter()
+                .filter(|r| r.state == RunState::Open && r.host.is_none())
+                .flat_map(|r| r.declined.clone())
+                .collect(),
         })
         .collect();
     let submissions: Vec<Submission> = in_queue(line.subs.values()).cloned().collect();

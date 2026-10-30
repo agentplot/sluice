@@ -2,18 +2,23 @@
 
 ## Purpose
 What a run records when it did not judge its test: a test that could
-not start, one that says it could not run here, or a host that stopped
-being ready. Such a test has no result, so nothing is recorded under its
-key, and a key reads only what tests observed.
+not start, one that says it could not run here, or one that did not pass
+in a run after which the container engine its policy asks for no longer
+answers (the `host-requirements` spec). Such a test has no result, so
+nothing is recorded under its key, and a key reads only what tests
+observed.
 
 ## Requirements
 
 ### Requirement: A test that could not run records no result
 
-When a test's program could not be started, or when it exits with a code
-that the branch's `[tests] not_run` lists, sluice SHALL record no result
-for it under its key. It SHALL list the test as not run, with the reason,
-and read every other test of the run as before.
+When a test's program could not be started, when it exits with a code
+that the branch's `[tests] not_run` lists, or when it did not pass in a
+run after which the host finds that the container engine the branch's
+policy asks for no longer answers (114; the `host-requirements` spec),
+sluice SHALL record no result for it under its key. It SHALL list the
+test as not run, with the reason, and read every other test of the run
+as before.
 
 #### Scenario: An exit the policy names
 
@@ -32,37 +37,15 @@ and read every other test of the run as before.
 - **THEN** every test of the run is listed as not run with the error,
   and none has a result
 
-### Requirement: A host that is not ready is refused the run
+#### Scenario: An engine gone after the run
 
-When the branch's policy sets `[tests] ready`, sluice SHALL run that
-command in the checkout, under the run's executor, before each run of
-the tests, and SHALL refuse the run when it fails, naming the command
-and its output. A command given to `sluice exec` after `--` SHALL run
-without it.
-
-#### Scenario: Not ready before
-
-- **WHEN** `ready = "test -e ready"` and the checkout has no `ready`
-- **THEN** `sluice exec main` runs nothing, records nothing, and says
-  that `test -e ready` failed
-
-#### Scenario: A command
-
-- **WHEN** `sluice exec main -- true` runs in a checkout without `ready`
-- **THEN** the command runs and passes
-
-### Requirement: A host that stops being ready leaves its fails not run
-
-When a run's test did not pass and `[tests] ready` is set, sluice SHALL
-run `ready` again after the run. When it fails, each test that did not
-pass SHALL be not run, with no result, and the tests that passed SHALL
-keep their results.
-
-#### Scenario: Not ready after
-
-- **WHEN** a test removes `ready` and fails, beside one that passes
-- **THEN** the passing test's result is recorded, and the failing test
-  is not run, with no result
+- **WHEN** `main`'s policy says `docker = true`, a test passes and
+  another fails, and the container engine no longer answers when the
+  host looks after the run
+- **THEN** `results.jsonl` gains the pass and no line for the failed
+  test, and the run lists it as not run, saying the container engine no
+  longer answers; when the host looks, and where, is the
+  `host-requirements` spec's
 
 ### Requirement: A combination whose tests could not run is tested again
 
@@ -184,3 +167,39 @@ slow host, and a test that never ends needs a fix.
 - **WHEN** a submission timed out while `b:test` ran
 - **THEN** the output says `b:test` was running when the time limit ended
   the run, gives its log, and says nothing was recorded for it
+
+### Requirement: sluice runs no readiness command
+
+sluice SHALL run no command the repository writes to ask whether the
+host can run the tests, before a run or after one (84, 114; record 0066
+as amended 2026-10-30). A policy that names `[tests] ready` SHALL have
+its tests run exactly as one that does not: the command is never run,
+no run is refused for it, and no test is read as not run because of it.
+
+#### Scenario: A failing ready command before the run
+
+- **WHEN** a branch's policy says `ready = "false"` and its required test
+  passes
+- **THEN** `sluice exec main` runs the test, records its pass under its
+  key, and runs no `false`
+
+#### Scenario: A failing ready command after a fail
+
+- **WHEN** a branch's policy says `ready = "test -e ready"`, the checkout
+  holds `ready`, and a test removes it and exits 1
+- **THEN** the test's fail is recorded under its key, and the run lists
+  no test as not run
+
+#### Scenario: Nothing of it is run at all
+
+- **WHEN** a branch's policy says `ready = "touch asked"` and a test
+  fails
+- **THEN** no file `asked` exists in the checkout or its scratch after
+  the run
+
+#### Scenario: A combination on a host without what a test needs
+
+- **WHEN** a branch's policy names `ready` that would fail on the host,
+  and a combination's tests pass
+- **THEN** the combination is tested once, passes and lands, and no
+  checkout is opened and released for it without a run

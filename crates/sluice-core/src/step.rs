@@ -24,9 +24,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{anyhow, bail, Result};
 use sluice_seams::{
-    read_refused, AtBound, Contested, Delivery, Formed, HostCopy, LandingCommit, Moved,
-    Notification, Progress, ReadRefused, Rev, RunHandle, RunRequest, Source, Submitter, TaskLog,
-    Written,
+    read_refused, AtBound, Contested, Delivery, Formed, HostCopy, LandingCommit, Limits, Moved,
+    NotRun, Notification, Outcome, Progress, ReadRefused, Reading, Rev, RunHandle, RunReport,
+    RunRequest, Source, Submitter, TaskLog, Written,
 };
 use tracing::{info, info_span, warn};
 
@@ -35,13 +35,13 @@ use crate::order::{self, Entry};
 use crate::overview::Room;
 use crate::policy::{Rules, POLICY_PATH};
 use crate::records::{
-    BranchHold, Candidate, CandidateState, ConflictRecord, CopyBehind, DecidedRecord, Event,
-    FailedTask, Held, LandingCommitRecord, LandingIntent, OutboxItem, Recorded, ResultKind,
-    ResultLine, RunState, State, SystemRun, Tested,
+    Beside, BesideWhy, BranchHold, Candidate, CandidateState, ConflictRecord, CopyBehind,
+    DecidedRecord, Event, FailedTask, Held, LandingCommitRecord, LandingIntent, OutboxItem,
+    Recorded, ResultKind, ResultLine, RunState, State, SystemRun, Tested,
 };
 use crate::refused::Refusal;
 use crate::release::{ReleaseOutcome, Releasing};
-use crate::text::landing_message;
+use crate::text::{beside_message, landing_message};
 use crate::{verdict, Serves, Sluice, OUTPUT};
 
 /// Could-not-run-1 115: the deployment's bound on a candidate's runs in a
@@ -92,6 +92,41 @@ enum Levelled {
     Holds,
     /// The copy is left at `at`, for `why`.
     Behind { at: Option<Rev>, why: String },
+}
+
+/// Design D3 (84; record 0074): what this host lacks of what a branch's
+/// runs ask of it, looked at once a round, the first time one of them
+/// would be claimed, and kept for that round alone.
+struct Unmet {
+    limits: Limits,
+    looked: std::cell::OnceCell<Option<String>>,
+}
+
+impl Unmet {
+    fn of(limits: Limits) -> Unmet {
+        Unmet {
+            limits,
+            looked: std::cell::OnceCell::new(),
+        }
+    }
+
+    /// What the round's look found the host lacks; `None` where it has
+    /// not looked or found nothing lacking.
+    fn found(&self) -> Option<&str> {
+        self.looked.get().and_then(|w| w.as_deref())
+    }
+}
+
+/// 140: how a queued entry's work was read beside the chain.
+enum Read {
+    /// Some required check reads it at the branch's revision, or it
+    /// cannot be read: it takes the chain as any submission.
+    Chain,
+    /// It takes the chain, waiting behind that entry, for that.
+    Behind(u64, BesideWhy),
+    /// It lands beside the chain: `formed` is the branch's revision with
+    /// it, `merged` each formed candidate as it would land with it.
+    Beside { formed: Rev, merged: Vec<Rev> },
 }
 
 /// What a round's decide step did.
@@ -392,15 +427,21 @@ impl Sluice<'_> {
                         return Ok(false);
                     }
                     l.doc.landing = None;
+                    let mut heads = Vec::new();
                     for c in &intent.commits {
                         let s = l.sub_mut(c.id);
                         s.state = State::Landed;
                         s.landed_as = Some(c.commit.clone());
+                        if intent.beside {
+                            s.beside = Some(Beside::Landed);
+                            heads.push(s.head.clone());
+                        }
                         let item = OutboxItem {
                             id: format!("{}:landed", c.id),
                             submission: c.id,
                             outcome: DecidedRecord::Landed {
                                 landed_as: c.commit.clone(),
+                                beside: intent.beside,
                             },
                         };
                         l.doc.outbox.push(item);
@@ -410,8 +451,20 @@ impl Sluice<'_> {
                         Event::Landed {
                             ids: intent.ids.clone(),
                             to: intent.to.clone(),
+                            beside: intent.beside,
                         },
                     );
+                    // 140, 10: every candidate formed before a landing
+                    // beside is the same candidate on the revision it made,
+                    // carrying its work; its runs and verdict stand (17).
+                    if intent.beside {
+                        for c in &mut l.doc.candidates {
+                            if c.on == intent.from {
+                                c.on = intent.to.clone();
+                                c.carries.extend(heads.iter().cloned());
+                            }
+                        }
+                    }
                     // The candidates behind what landed hold exactly the tree
                     // they held: they now extend the new revision (10). One
                     // that landed whole while under test, on a deeper
@@ -781,6 +834,7 @@ impl Sluice<'_> {
         let rules = self.gate(branch, &tip)?;
         let home = self.home_system(&tip)?;
         let listed = self.key_listed(branch, &tip, &rules)?;
+        let unmet = Unmet::of(self.policy_at(&tip)?.map(|p| p.limits).unwrap_or_default());
         // A new branch starts at its widest window (13).
         if line.doc.window == 0 {
             line.doc.window = rules.parallel;
@@ -808,18 +862,49 @@ impl Sluice<'_> {
         for head in &gone {
             self.seams.state.unpublish_head(branch, head)?;
         }
-        self.poll(&mut line, &rules, home.as_deref(), listed, &now)?;
-        let chain = loop {
-            let (chain, removed) = self.arrange(&mut line, &rules, &now)?;
-            if !removed {
-                break chain;
+        self.poll(
+            &mut line,
+            &rules,
+            &unmet.limits,
+            home.as_deref(),
+            listed,
+            &now,
+        )?;
+        // 140: work no required check reads lands beside the chain, before
+        // anything is formed; a round that lands so does nothing else, and
+        // the next forms on the revision it made.
+        let beside = info_span!("sluice.beside")
+            .in_scope(|| self.choose_beside(&mut line, &rules, &tip, &now))?;
+        if !beside {
+            let chain = loop {
+                let (chain, removed) = self.arrange(&mut line, &rules, &now)?;
+                if !removed {
+                    break chain;
+                }
+            };
+            if !self.choose_landing(&mut line, &rules, &chain, &now)? {
+                self.choose_starts(
+                    &mut line,
+                    &rules,
+                    home.as_deref(),
+                    listed,
+                    &unmet,
+                    &chain,
+                    &now,
+                )?;
+                self.launch_on_pools(
+                    &mut line,
+                    &rules,
+                    home.as_deref(),
+                    listed,
+                    &unmet,
+                    &chain,
+                    &now,
+                )?;
+                self.note_declined(&mut line, &rules, home.as_deref(), listed, &unmet, &now);
             }
-        };
-        if !self.choose_landing(&mut line, &rules, &chain, &now)? {
-            self.choose_starts(&mut line, &rules, home.as_deref(), listed, &chain, &now)?;
-            self.launch_on_pools(&mut line, &rules, home.as_deref(), listed, &chain, &now)?;
+            derive_states(&mut line, &chain);
         }
-        derive_states(&mut line, &chain);
         self.keep_tasks(&line)?;
         let queued = line.subs.values().filter(|s| !s.state.is_out()).count() as u64;
         let written = matches!(self.write(&line)?, Written::Written(_));
@@ -931,6 +1016,7 @@ impl Sluice<'_> {
         &self,
         line: &mut Line,
         rules: &Rules,
+        limits: &Limits,
         home: Option<&str>,
         listed: bool,
         now: &str,
@@ -996,22 +1082,28 @@ impl Sluice<'_> {
                         );
                     }
                     Progress::Finished(report) => {
+                        let report = self.after_run(limits, report)?;
                         self.finish_run(line, &c, i, &run, report, rules, home, now)?;
                     }
                 }
             }
             // 66, 87: a run no executor here takes, for a system this host
-            // is not or, on a branch whose records are on its remote, one
-            // whose result signed here the gate would not count, is read as
-            // not passed once the time limit has gone.
+            // is not, one it turned down for what it lacks (record 0074) or,
+            // on a branch whose records are on its remote, one whose result
+            // signed here the gate would not count, is read as not passed
+            // once the time limit has gone; each of its checks says who
+            // turned it down and why, where any did.
             let x = line.candidate(&c.id).expect("polled candidate").clone();
             if let (Some(limit), Some(opened)) = (rules.timeout, x.opened.as_deref()) {
                 let over = seconds_between(opened, now).is_some_and(|s| s >= limit.as_secs_f64());
                 if over {
+                    let me = self.peer.name.clone();
                     let x = line.candidate_mut(&c.id).expect("polled candidate");
                     for r in x.runs.iter_mut() {
                         if r.state == RunState::Open
-                            && (!ours(r, home) || !self.counts_here(r, home, rules, listed))
+                            && (!ours(r, home)
+                                || r.declined.contains_key(&me)
+                                || !self.counts_here(r, home, rules, listed))
                         {
                             r.state = RunState::TimedOut;
                             let checks = if r.checks.is_empty() {
@@ -1019,13 +1111,14 @@ impl Sluice<'_> {
                             } else {
                                 r.checks.clone()
                             };
+                            let waited = (!r.declined.is_empty()).then(|| waited_for(&r.declined));
                             x.failed.extend(checks.into_iter().map(|task| FailedTask {
                                 task,
                                 hash: String::new(),
                                 log: None,
                                 flaky: None,
                                 system: r.system.clone(),
-                                not_run: None,
+                                not_run: waited.clone(),
                             }));
                         }
                     }
@@ -1034,6 +1127,47 @@ impl Sluice<'_> {
             self.judge(line, &c.id, rules, now)?;
         }
         Ok(())
+    }
+
+    /// Design D5 (114, 139; record 0074): a finished run under `limits`,
+    /// read with what the host lacks after it. Where a check did not pass
+    /// in a run its time limit did not end, the host is looked at again,
+    /// once, as the report is first taken; where what the run asked of it
+    /// has gone, every check that failed or was left without a result has
+    /// no outcome, with why, and a check that passed keeps its pass. A run
+    /// that asks nothing of the host is never looked at, and a required
+    /// check the runner keeps out of its CI mode stays missing.
+    pub(crate) fn after_run(&self, limits: &Limits, mut report: RunReport) -> Result<RunReport> {
+        let unpassed = report.tasks.iter().any(|t| t.outcome == Outcome::Fail)
+            || report.missing.iter().any(|m| !report.kept_out.contains(m));
+        if !limits.asks_of_host() || report.timed_out || !unpassed {
+            return Ok(report);
+        }
+        let Some(why) = self.seams.tests.unmet(limits)? else {
+            return Ok(report);
+        };
+        let reason = format!("the container engine no longer answers after the run: {why}");
+        let (failed, passed) = std::mem::take(&mut report.tasks)
+            .into_iter()
+            .partition(|t| t.outcome == Outcome::Fail);
+        let failed: Vec<sluice_seams::TaskResult> = failed;
+        report.tasks = passed;
+        let (kept_out, missing) = std::mem::take(&mut report.missing)
+            .into_iter()
+            .partition(|m| report.kept_out.contains(m));
+        let missing: Vec<String> = missing;
+        report.missing = kept_out;
+        report.not_run.extend(
+            failed
+                .into_iter()
+                .map(|t| t.task)
+                .chain(missing)
+                .map(|task| NotRun {
+                    task,
+                    reason: reason.clone(),
+                }),
+        );
+        Ok(report)
     }
 
     /// One run's report: its results recorded, then its own verdict read.
@@ -1432,12 +1566,18 @@ impl Sluice<'_> {
         let mut ids: Vec<String> = Vec::new();
         for &id in &ord.chain {
             prefix.push(id);
-            if let Some(c) = line
+            let reused = line
                 .doc
                 .candidates
                 .iter()
-                .find(|c| c.on == base && c.submissions == prefix)
-            {
+                .find(|c| c.on == base && c.submissions == prefix);
+            // 140: one whose carried work no longer forms on it is
+            // obsolete, formed again and never landed without that work.
+            let reused = match reused {
+                Some(c) if self.carried(c)?.is_none() => None,
+                found => found,
+            };
+            if let Some(c) = reused {
                 prev = c.revision.clone();
                 ids.push(c.id.clone());
                 ahead.push((id, prev.clone()));
@@ -1463,6 +1603,7 @@ impl Sluice<'_> {
                         replayed: 0,
                         not_run_runs: 0,
                         passed_at: None,
+                        carries: Vec::new(),
                     });
                     prev = rev.clone();
                     ids.push(cid);
@@ -1670,6 +1811,239 @@ impl Sluice<'_> {
         line.doc.window = (line.doc.window / 2).clamp(1, rules.parallel);
     }
 
+    /// 140, 23: the revision whose tree `c` lands as: its tested revision
+    /// with the work landed beside it since it was formed, in order; `None`
+    /// when that work no longer forms on it.
+    fn carried(&self, c: &Candidate) -> Result<Option<Rev>> {
+        let mut tree = c.revision.clone();
+        for head in &c.carries {
+            match self.seams.branch.form(&tree, head)? {
+                Formed::Revision(r) => tree = r,
+                Formed::Conflict { .. } => return Ok(None),
+            }
+        }
+        Ok(Some(tree))
+    }
+
+    /// 140: land beside the chain each queued entry in no candidate whose
+    /// work no required check reads, at the branch's revision `base`,
+    /// covered by a verdict (70), or at any candidate formed on it as it
+    /// would land now; in submission order, each landed one standing as
+    /// landed for those after it, so a group's leading heads that qualify
+    /// land in the act's order (125). Each entry read and not landed so
+    /// for a candidate's checks or a conflict with an entry ahead is told
+    /// which entry it waits behind. Returns whether a landing beside was
+    /// written; nothing is run, and no place or room taken (13, 71).
+    fn choose_beside(&self, line: &mut Line, rules: &Rules, base: &Rev, now: &str) -> Result<bool> {
+        // Only an entry in no candidate, never read so, is read.
+        let unread = line.subs.values().any(|s| {
+            !s.state.is_out()
+                && s.state != State::Landing
+                && s.beside.is_none()
+                && !line
+                    .doc
+                    .candidates
+                    .iter()
+                    .any(|c| c.on == *base && c.submissions.contains(&s.id))
+        });
+        if !line.doc.verified || !unread {
+            return Ok(false);
+        }
+        let Some(policy) = self.policy_at(base)? else {
+            return Ok(false);
+        };
+        let formed: Vec<&Candidate> = {
+            let mut c: Vec<&Candidate> = line
+                .doc
+                .candidates
+                .iter()
+                .filter(|c| c.on == *base)
+                .collect();
+            c.sort_by_key(|c| c.submissions.len());
+            c
+        };
+        let in_candidate: BTreeSet<u64> = formed
+            .iter()
+            .flat_map(|c| c.submissions.iter().copied())
+            .collect();
+        let mut reading: Vec<(u64, Rev)> = Vec::new();
+        for c in &formed {
+            match self.carried(c)? {
+                Some(tree) => reading.push((c.newest(), tree)),
+                // Formed again before anything lands beside it.
+                None => return Ok(false),
+            }
+        }
+        let landed = line.landed();
+        let live: Vec<crate::records::Submission> = line
+            .subs
+            .values()
+            .filter(|s| !s.state.is_out() && s.state != State::Landing)
+            .cloned()
+            .collect();
+        let mut tip = base.clone();
+        let mut chosen: Vec<(u64, Rev, Rev)> = Vec::new();
+        for sub in &live {
+            if in_candidate.contains(&sub.id) || sub.beside.is_some() {
+                continue;
+            }
+            let chosen_ids: BTreeSet<u64> = chosen.iter().map(|c| c.0).collect();
+            // 6, 7: an entry whose after-entries have not landed waits; and
+            // 125, of an act's heads only the leading ones land beside, each
+            // after the one before it.
+            let before: Vec<u64> = line
+                .subs
+                .values()
+                .filter(|o| sub.act.is_some() && o.act == sub.act && o.id < sub.id)
+                .map(|o| o.id)
+                .collect();
+            if !sub
+                .after
+                .iter()
+                .chain(&before)
+                .all(|a| landed.contains(a) || chosen_ids.contains(a))
+            {
+                continue;
+            }
+            let ahead: Vec<&crate::records::Submission> = live
+                .iter()
+                .filter(|a| a.id != sub.id && !chosen_ids.contains(&a.id))
+                .filter(|a| {
+                    a.priority > sub.priority || (a.priority == sub.priority && a.id < sub.id)
+                })
+                .collect();
+            let read = self.read_beside(sub, &tip, &reading, &ahead, rules, &policy.tests)?;
+            match read {
+                Read::Chain => {}
+                Read::Behind(behind, why) => {
+                    line.sub_mut(sub.id).beside = Some(Beside::Behind { behind, why });
+                    info!(
+                        sluice.branch = %line.branch,
+                        sluice.submission = sub.id,
+                        "waits behind #{behind} ({why:?}) beside the queue"
+                    );
+                }
+                Read::Beside { formed, merged } => {
+                    let commit = self.seams.branch.commit(&LandingCommit {
+                        tree_of: formed.clone(),
+                        parent: tip.clone(),
+                        head: sub.head.clone(),
+                        message: beside_message(&policy.landing_subject, &line.branch, sub),
+                    })?;
+                    for (r, m) in reading.iter_mut().zip(merged) {
+                        r.1 = m;
+                    }
+                    chosen.push((sub.id, commit.clone(), formed));
+                    tip = commit;
+                }
+            }
+        }
+        if chosen.is_empty() {
+            return Ok(false);
+        }
+        let ids: Vec<u64> = chosen.iter().map(|c| c.0).collect();
+        let mut commits = Vec::new();
+        for (id, commit, formed) in chosen {
+            let s = line.sub_mut(id);
+            s.state = State::Landing;
+            s.tested = None;
+            s.result = None;
+            commits.push(LandingCommitRecord {
+                id,
+                commit,
+                tested: formed,
+            });
+        }
+        line.log(
+            now,
+            Event::Landing {
+                ids: ids.clone(),
+                from: base.clone(),
+                to: tip.clone(),
+            },
+        );
+        line.doc.landing = Some(LandingIntent {
+            ids,
+            from: base.clone(),
+            to: tip,
+            commits,
+            beside: true,
+        });
+        Ok(true)
+    }
+
+    /// 140: how `sub`'s work is read on the branch's revision as it would
+    /// be now, `tip`, and on each formed candidate as it would land now,
+    /// `formed` (each by its newest entry, in chain order), with the work
+    /// of each entry `ahead` of it. A reading that fails takes the chain.
+    fn read_beside(
+        &self,
+        sub: &crate::records::Submission,
+        tip: &Rev,
+        formed: &[(u64, Rev)],
+        ahead: &[&crate::records::Submission],
+        rules: &Rules,
+        tests: &sluice_seams::Settings,
+    ) -> Result<Read> {
+        let branch = &self.seams.branch;
+        // A conflict on the branch itself is found at forming (12).
+        let Formed::Revision(on_tip) = branch.form(tip, &sub.head)? else {
+            return Ok(Read::Chain);
+        };
+        // 56: the policy changes the gate; it takes the chain.
+        if branch.read_file(tip, POLICY_PATH)? != branch.read_file(&on_tip, POLICY_PATH)? {
+            return Ok(Read::Chain);
+        }
+        for a in ahead {
+            if let Formed::Revision(alone) = branch.form(tip, &a.head)? {
+                if let Formed::Conflict { .. } = branch.form(&alone, &sub.head)? {
+                    return Ok(Read::Behind(a.id, BesideWhy::Conflict));
+                }
+            }
+        }
+        let mut merged = Vec::new();
+        for (newest, tree) in formed {
+            match branch.form(tree, &sub.head)? {
+                Formed::Revision(m) => merged.push(m),
+                Formed::Conflict { .. } => {
+                    return Ok(Read::Behind(*newest, BesideWhy::Conflict));
+                }
+            }
+        }
+        let mut pairs = vec![(tip.clone(), on_tip.clone())];
+        pairs.extend(
+            formed
+                .iter()
+                .zip(&merged)
+                .map(|((_, t), m)| (t.clone(), m.clone())),
+        );
+        let reads = match self.seams.tests.reads(&Reading {
+            required: rules.required.clone(),
+            tests: tests.clone(),
+            pairs,
+        }) {
+            Ok(r) if r.len() == formed.len() + 1 => r,
+            Ok(_) => return Ok(Read::Chain),
+            Err(e) => {
+                warn!(
+                    sluice.submission = sub.id,
+                    "the affected reading failed; the work takes the queue: {e:#}"
+                );
+                return Ok(Read::Chain);
+            }
+        };
+        if !reads[0].none() {
+            return Ok(Read::Chain);
+        }
+        if let Some(((newest, _), _)) = formed.iter().zip(&reads[1..]).find(|(_, r)| !r.none()) {
+            return Ok(Read::Behind(*newest, BesideWhy::Read));
+        }
+        Ok(Read::Beside {
+            formed: on_tip,
+            merged,
+        })
+    }
+
     /// 22, 23: land the longest prefix of the chain whose verdicts allow it,
     /// one commit per submission, writing the intent before the branch
     /// moves (24). Returns whether a landing was chosen.
@@ -1752,8 +2126,15 @@ impl Sluice<'_> {
                     deepest
                 };
                 let sub = line.sub(c.newest())?.clone();
+                // 140, 23: the tested tree with the work landed beside it.
+                let tree_of = self.carried(c)?.ok_or_else(|| {
+                    anyhow!(
+                        "{} no longer forms with the work landed beside it",
+                        c.revision
+                    )
+                })?;
                 let commit = self.seams.branch.commit(&LandingCommit {
-                    tree_of: c.revision.clone(),
+                    tree_of,
                     parent: parent.clone(),
                     head: sub.head.clone(),
                     message: landing_message(&subject, &line.branch, &sub, verdict),
@@ -1788,6 +2169,7 @@ impl Sluice<'_> {
                 from: base,
                 to: parent,
                 commits,
+                beside: false,
             });
             Ok(true)
         }
@@ -1841,12 +2223,14 @@ impl Sluice<'_> {
     /// 13, 14, 71: start candidates up to the window, and their runs this
     /// host takes up to what the instance takes; first the runs of
     /// candidates under test opened again (60, 108).
+    #[allow(clippy::too_many_arguments)]
     fn choose_starts(
         &self,
         line: &mut Line,
         rules: &Rules,
         home: Option<&str>,
         listed: bool,
+        unmet: &Unmet,
         chain: &[String],
         now: &str,
     ) -> Result<()> {
@@ -1859,7 +2243,7 @@ impl Sluice<'_> {
                 c.runs
                     .iter()
                     .enumerate()
-                    .filter(|(_, r)| self.claimable(r, home, rules, listed))
+                    .filter(|(_, r)| self.claimable(r, home, rules, listed, unmet))
                     .map(|(i, _)| (c.id.clone(), i))
                     .collect::<Vec<_>>()
             })
@@ -1875,6 +2259,7 @@ impl Sluice<'_> {
             c.runs[i].state = RunState::Starting;
             c.runs[i].place = Some(place.clone());
             c.runs[i].host = host;
+            c.runs[i].declined.remove(&self.peer.name);
             let c = c.clone();
             line.log(
                 now,
@@ -1938,7 +2323,7 @@ impl Sluice<'_> {
             let mut runs = open_runs(rules, home);
             let mine = runs
                 .iter()
-                .position(|r| self.claimable(r, home, rules, listed));
+                .position(|r| self.claimable(r, home, rules, listed, unmet));
             // A candidate this host would run starts only with room for it.
             if mine.is_some() && room == 0 {
                 break;
@@ -2005,10 +2390,84 @@ impl Sluice<'_> {
             .count()
     }
 
+    /// 75, 79, 87, 107, 84: whether this instance takes `run`: one it may
+    /// take, on a host that meets what the branch's runs ask of it
+    /// (record 0074), which is looked at only here, once a round.
+    fn claimable(
+        &self,
+        run: &SystemRun,
+        home: Option<&str>,
+        rules: &Rules,
+        listed: bool,
+        unmet: &Unmet,
+    ) -> bool {
+        self.may_claim(run, home, rules, listed) && self.meets(unmet)
+    }
+
+    /// Design D3: whether this host meets what `unmet`'s limits ask of it,
+    /// read from the host once a round, and never for limits that ask it
+    /// nothing. A look that fails says so as what it lacks: the host could
+    /// not show it meets them.
+    fn meets(&self, unmet: &Unmet) -> bool {
+        if !unmet.limits.asks_of_host() {
+            return true;
+        }
+        unmet
+            .looked
+            .get_or_init(|| match self.seams.tests.unmet(&unmet.limits) {
+                Ok(why) => why,
+                Err(e) => Some(format!("looking at the host failed: {e:#}")),
+            })
+            .is_none()
+    }
+
+    /// Design D4: name this host, with what the round's look found it
+    /// lacks, on each open run it may take, where it has not said so for
+    /// that reason already, logging each once.
+    fn note_declined(
+        &self,
+        line: &mut Line,
+        rules: &Rules,
+        home: Option<&str>,
+        listed: bool,
+        unmet: &Unmet,
+        now: &str,
+    ) {
+        let Some(why) = unmet.found() else {
+            return;
+        };
+        let me = &self.peer.name;
+        let mut said = Vec::new();
+        for c in line
+            .doc
+            .candidates
+            .iter_mut()
+            .filter(|c| c.state.under_test())
+        {
+            for r in &mut c.runs {
+                if !self.may_claim(r, home, rules, listed)
+                    || r.declined.get(me).is_some_and(|w| w == why)
+                {
+                    continue;
+                }
+                r.declined.insert(me.clone(), why.to_string());
+                said.push(Event::Declined {
+                    combination: c.revision.clone(),
+                    system: r.system.clone(),
+                    host: me.clone(),
+                    why: why.to_string(),
+                });
+            }
+        }
+        for e in said {
+            line.log(now, e);
+        }
+    }
+
     /// 75, 79, 87, 107: whether this instance may take `run`: open and
     /// unclaimed, of the system it is, and one whose result signed here
     /// the gate would count ([`Sluice::counts_here`]).
-    fn claimable(&self, run: &SystemRun, home: Option<&str>, rules: &Rules, listed: bool) -> bool {
+    fn may_claim(&self, run: &SystemRun, home: Option<&str>, rules: &Rules, listed: bool) -> bool {
         run.state == RunState::Open
             && run.host.is_none()
             && self.runs_system(run, home)
@@ -2107,12 +2566,14 @@ impl Sluice<'_> {
     /// that no live instance able to take it has room for by its last sign
     /// of life, the policy's pools tried in order; the job's start is its
     /// claim.
+    #[allow(clippy::too_many_arguments)]
     fn launch_on_pools(
         &self,
         line: &mut Line,
         rules: &Rules,
         home: Option<&str>,
         listed: bool,
+        unmet: &Unmet,
         chain: &[String],
         now: &str,
     ) -> Result<()> {
@@ -2170,7 +2631,7 @@ impl Sluice<'_> {
         for (id, i) in open {
             let run = line.candidate(&id).expect("a chain's candidate").runs[i].clone();
             // 107: a live instance that may take it, with room, comes first.
-            if self.claimable(&run, home, rules, listed) && lead_room > 0 {
+            if self.claimable(&run, home, rules, listed, unmet) && lead_room > 0 {
                 lead_room -= 1;
                 continue;
             }
@@ -2299,6 +2760,7 @@ impl Sluice<'_> {
         }
         let home = self.home_system(&tip)?;
         let listed = self.key_listed(branch, &tip, &rules)?;
+        let unmet = Unmet::of(self.policy_at(&tip)?.map(|p| p.limits).unwrap_or_default());
         let me = self.peer.name.clone();
         let line = self.read_line(branch)?;
         // 107, 71: the room a lead reads is the host's, every repository's
@@ -2403,6 +2865,7 @@ impl Sluice<'_> {
                     }
                 }
                 Progress::Finished(report) => {
+                    let report = self.after_run(&unmet.limits, report)?;
                     self.update(branch, |l| {
                         let now = self.now();
                         let Some(x) = l.candidate(&c.id).cloned() else {
@@ -2457,7 +2920,9 @@ impl Sluice<'_> {
                         c.runs
                             .iter()
                             .enumerate()
-                            .find(|(_, r)| self.claimable(r, home.as_deref(), &rules, listed))
+                            .find(|(_, r)| {
+                                self.claimable(r, home.as_deref(), &rules, listed, &unmet)
+                            })
                             .map(|(i, _)| (c.id.clone(), i))
                     })
                     .next();
@@ -2470,6 +2935,7 @@ impl Sluice<'_> {
                 r.state = RunState::Starting;
                 r.host = Some(me.clone());
                 r.place = Some(place);
+                r.declined.remove(&me);
                 let system = r.system.clone();
                 let combination = c.revision.clone();
                 l.log(
@@ -2487,6 +2953,14 @@ impl Sluice<'_> {
                 break;
             }
             room -= 1;
+        }
+        // Design D4: the runs it turned down for what it lacks say so.
+        if unmet.found().is_some() {
+            self.update(branch, |l| {
+                let now = self.now();
+                self.note_declined(l, &rules, home.as_deref(), listed, &unmet, &now);
+                Ok(())
+            })?;
         }
         self.perform_starts(branch, releases)
     }
@@ -2658,6 +3132,16 @@ impl Sluice<'_> {
     }
 }
 
+/// Record 0074: what a run no host took before its time limit waited for,
+/// each host that turned it down named with why (66, 87).
+fn waited_for(declined: &BTreeMap<String, String>) -> String {
+    let hosts: Vec<String> = declined.iter().map(|(h, w)| format!("{h}: {w}")).collect();
+    format!(
+        "no host whose container engine answers took its tests: {}",
+        hosts.join("; ")
+    )
+}
+
 /// Whether this host's executor takes `run`: one for any system, or for
 /// the system it is (87).
 fn ours(run: &SystemRun, home: Option<&str>) -> bool {
@@ -2692,6 +3176,7 @@ fn open_runs(rules: &Rules, home: Option<&str>) -> Vec<SystemRun> {
         run: None,
         no_replay: false,
         host: None,
+        declined: BTreeMap::new(),
     };
     if by.is_empty() {
         return vec![run(None, any)];

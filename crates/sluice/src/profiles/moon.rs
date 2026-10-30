@@ -21,7 +21,8 @@ use std::process::{Command, Stdio};
 use anyhow::{anyhow, bail, Context as _, Result};
 use serde_json::Value;
 use sluice_seams::{
-    KeptOutTask, NotRun, Outcome, RunDetail, Source, TaskProgress, TaskResult, TaskState,
+    KeptOutTask, NotRun, Outcome, Reads, Rev, RunDetail, Source, TaskProgress, TaskResult,
+    TaskState,
 };
 
 use super::checks::{cold_tests, not_run_reason, Context, Plan};
@@ -152,6 +153,56 @@ impl Moon {
         self.check_version(cx)?;
         let tasks = self.tasks(cx, &[])?;
         Ok(kept_out(&tasks, &cx.request.required))
+    }
+
+    /// 140: for each change of `pairs`, the required tasks it affects,
+    /// dependents included, read by `moon query tasks --affected` in the
+    /// place, which holds the first change's second revision; every task
+    /// for a change to a setting of moon's own, and for a change whose
+    /// first revision differs from the place's in one, since the graph
+    /// the place holds is then not that change's. Runs no task.
+    pub fn reads(&self, cx: &Context, pairs: &[(Rev, Rev)]) -> Result<Vec<Reads>> {
+        let place = &cx.request.place.path;
+        let at = cx.request.revision.as_str();
+        self.install(cx)?;
+        self.check_version(cx)?;
+        let tasks = self.tasks(cx, &[])?;
+        let mut wanted = BTreeSet::new();
+        for r in &cx.request.required {
+            match r.strip_prefix('#') {
+                Some(tag) => wanted.extend(
+                    tasks
+                        .iter()
+                        .filter(|(_, task)| task.tags.iter().any(|t| t == tag))
+                        .map(|(t, _)| t.clone()),
+                ),
+                None => {
+                    wanted.insert(r.clone());
+                }
+            }
+        }
+        let mut reads = Vec::new();
+        for (from, to) in pairs {
+            let own = |a: &str, b: &str| -> Result<bool> {
+                Ok(changed_files(place, a, b)?.iter().any(|p| own_setting(p)))
+            };
+            if own(from.as_str(), to.as_str())? || own(from.as_str(), at)? {
+                reads.push(Reads::Every);
+                continue;
+            }
+            let affected = self.tasks(
+                cx,
+                &[("MOON_BASE", from.as_str()), ("MOON_HEAD", to.as_str())],
+            )?;
+            reads.push(Reads::Checks(
+                wanted
+                    .iter()
+                    .filter(|t| affected.contains_key(*t))
+                    .cloned()
+                    .collect(),
+            ));
+        }
+        Ok(reads)
     }
 
     /// What a task printed, as moon keeps it in the place: `stdout.log`
@@ -422,6 +473,31 @@ fn holds_cold(tasks: &BTreeMap<String, Task>, targets: &[String], cold: &[String
             None => c == target,
         })
     })
+}
+
+/// 140: whether `path` is a setting of the runner's own: moon's
+/// configuration, the versions proto installs, or a file the toolchain a
+/// place enters is set up from, at the repository's root. A change to one
+/// changes what every check runs with, so it reads every check.
+fn own_setting(path: &str) -> bool {
+    const TOOLCHAIN: [&str; 11] = [
+        ".prototools",
+        "devenv.nix",
+        "devenv.yaml",
+        "devenv.lock",
+        "flake.nix",
+        "flake.lock",
+        ".envrc",
+        ".tool-versions",
+        "mise.toml",
+        "rust-toolchain",
+        "rust-toolchain.toml",
+    ];
+    path.starts_with(".moon/")
+        || path == "moon.yml"
+        || path.ends_with("/moon.yml")
+        || path.ends_with("/.prototools")
+        || TOOLCHAIN.contains(&path)
 }
 
 /// `moon 2.6.1` → `(2, 6)`.

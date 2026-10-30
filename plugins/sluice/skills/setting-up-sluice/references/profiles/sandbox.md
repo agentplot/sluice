@@ -27,6 +27,13 @@ trust = ["confined", "sandbox"]   # which results satisfy the branch
 - `docker = true` means a container may mount any path, so such a run never
   counts as confined. A branch that trusts only `"confined"` then starts
   nothing and says why: trust `"sandbox"` too.
+- `docker = true` also asks the host for a container engine that answers, at
+  `DOCKER_HOST`'s socket or the usual ones, as the user sluice runs as. A
+  host whose engine does not answer runs none of the branch's tests and
+  leaves them for a host whose engine does, and `sluice exec <branch>` there
+  refuses the tests, saying where it looked. A test that did not pass, after
+  which the engine no longer answers, has no result: nothing is recorded and
+  nobody is blamed.
 - An executor that cannot enforce a stated limit refuses the run; it never
   runs without it.
 

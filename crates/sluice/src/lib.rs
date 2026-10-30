@@ -35,7 +35,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use reader::{Driver, Drives, Reader};
 use sluice_core::overview::{in_queue, BranchView, Held};
-use sluice_core::records::{BranchHold, CopyBehind, Event, FailedTask, State, Submission};
+use sluice_core::records::{Beside, BranchHold, CopyBehind, Event, FailedTask, State, Submission};
 use sluice_core::{
     Accepted, AmendRefusal, Clock, CopyDiffers, Forecast, Forecasted, GroupRequest, Lookup,
     Pending, Requester, Seams, Serves, Sluice, Status, Step, SubmitRefusal, SubmitRequest, Unread,
@@ -1361,7 +1361,8 @@ pub fn run(
                 }
                 Lookup::Unfound(unread) => unfound(id, &unread, json, out),
                 Lookup::Found(sub) if json => {
-                    writeln!(out, "{}", serde_json::to_string_pretty(&sub)?)?;
+                    let doc = with_waiting(&s, &sub, serde_json::to_value(&sub)?);
+                    writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
                     Ok(0)
                 }
                 Lookup::Found(sub) => {
@@ -1419,11 +1420,10 @@ pub fn run(
                     in_queue(&status.submissions).cloned().collect()
                 };
                 if json {
-                    writeln!(
-                        out,
-                        "{}",
-                        serde_json::to_string_pretty(&status_json(&status, &shown))?
-                    )?;
+                    let mut doc = status_json(&status, &shown);
+                    // 84, record 0074: what each combination waits for.
+                    doc["waiting"] = progress::waiting_json(&s.branch_view_of(&target)?);
+                    writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
                 } else {
                     let pusher = pushers.pusher(&target)?;
                     let room = s.room(host.reserved())?;
@@ -2233,7 +2233,7 @@ fn submit_group(
                 after.extend(e);
                 subs.push(sub);
             }
-            Waited::Undecided(sub, code) => {
+            Waited::Undecided(sub, code, _) => {
                 stopped = Some(code);
                 subs.push(sub);
             }
@@ -2449,7 +2449,7 @@ fn await_submission(
     said: Option<State>,
     out: &mut dyn Write,
 ) -> Result<i32> {
-    let (sub, code) = match wait_on(s, waiting, sub, said, out)? {
+    let (sub, code, waits) = match wait_on(s, waiting, sub, said, out)? {
         Waited::Decided(sub, after) => {
             let branch = sub.branch.clone();
             let names = BTreeMap::new();
@@ -2472,14 +2472,33 @@ fn await_submission(
             let again = format!("sluice wait {}", sub.id);
             return could_not_read(&e, &format!("#{}", sub.id), &again, waiting.json, out);
         }
-        Waited::Undecided(sub, code) => (sub, code),
+        Waited::Undecided(sub, code, waits) => (sub, code, waits),
     };
     if waiting.json {
-        writeln!(out, "{}", record_json(&sub, waiting.copy)?)?;
+        let mut doc = with_copy(serde_json::to_value(&sub)?, waiting.copy)?;
+        // 84, record 0074: what its combination waits for, as the view
+        // the wait followed has it (rule core.25).
+        if !waits.is_empty() {
+            doc["waiting"] = serde_json::json!(waits);
+        }
+        writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
     } else {
         writeln!(out, "still waiting: sluice wait {}", sub.id)?;
     }
     Ok(code)
+}
+
+/// 84, record 0074: `doc`, `sub`'s record, with what its combination under
+/// test waits for, the hosts that turned its run down each with why, where
+/// any did. It decides nothing, so a read that fails adds nothing.
+fn with_waiting(s: &Sluice<'_>, sub: &Submission, mut doc: serde_json::Value) -> serde_json::Value {
+    let view = s.branch_view_of(&sub.branch).ok();
+    if let Some(c) = view.as_ref().and_then(|v| progress::own(v, sub.id)) {
+        if !c.waiting.is_empty() {
+            doc["waiting"] = serde_json::json!(c.waiting);
+        }
+    }
+    doc
 }
 
 /// 51: report `sub`, decided, as [`report`] does; when it is the waiting
@@ -2522,8 +2541,9 @@ enum Waited {
     /// that then failed, what failed after the landing (122).
     Decided(Submission, Option<anyhow::Error>),
     /// As it stands when the wait's time ran out ([`WAITING`]) or it was
-    /// stopped ([`STOPPED`]).
-    Undecided(Submission, i32),
+    /// stopped ([`STOPPED`]), with what its combination waits for as last
+    /// read (84, record 0074).
+    Undecided(Submission, i32, BTreeMap<String, String>),
     /// As last read, when a round failed as the forge could not answer
     /// for the retry policy's time.
     Unread(Submission, anyhow::Error),
@@ -2595,7 +2615,7 @@ fn wait_on(
     out: &mut dyn Write,
 ) -> Result<Waited> {
     let (id, branch) = (sub.id, sub.branch.clone());
-    type Moved = (State, Option<(Vec<u64>, usize, Vec<String>)>);
+    type Moved = (State, Option<progress::Moved>);
     let mut said: Option<Moved> = said_before.map(|t| (t, None));
     // 121: the branch's hold as last said, so each is said once.
     let mut said_hold = None;
@@ -2635,10 +2655,10 @@ fn wait_on(
             }
         }
         if waiting.deadline.is_some_and(|d| waiting.clock.now() >= d) {
-            return Ok(Waited::Undecided(sub, WAITING));
+            return Ok(Waited::Undecided(sub, WAITING, reading.waits(id)));
         }
         if !first && !waiting.pause.pause() {
-            return Ok(Waited::Undecided(sub, STOPPED));
+            return Ok(Waited::Undecided(sub, STOPPED, reading.waits(id)));
         }
         first = false;
         // 129: what the last read kept by revision and this one does not
@@ -2664,7 +2684,7 @@ fn wait_on(
                         true => STOPPED,
                         false => WAITING,
                     };
-                    return Ok(Waited::Undecided(sub, code));
+                    return Ok(Waited::Undecided(sub, code, reading.waits(id)));
                 }
             }
             // 137: another host takes the branch's pull requests in; this
@@ -2683,7 +2703,7 @@ fn wait_on(
                 Some(Err(e)) => {
                     // Ctrl-C reaches the tools a round runs in the foreground.
                     if INTERRUPTED.load(Ordering::SeqCst) {
-                        return Ok(Waited::Undecided(sub, STOPPED));
+                        return Ok(Waited::Undecided(sub, STOPPED, reading.waits(id)));
                     }
                     if let Some(sub) = landed(s, id) {
                         return Ok(Waited::Decided(sub, Some(e)));
@@ -2728,6 +2748,17 @@ struct Reading {
 }
 
 impl Reading {
+    /// 84, record 0074: what submission `id`'s combination under test
+    /// waits for, as last read: each host that turned its run down, with
+    /// why.
+    fn waits(&self, id: u64) -> BTreeMap<String, String> {
+        self.view
+            .as_ref()
+            .and_then(|v| progress::own(v, id))
+            .map(|c| c.waiting.clone())
+            .unwrap_or_default()
+    }
+
     fn take(host: &dyn exec::Host) -> Result<Reading> {
         let (readers, repository) = (host.readers()?, host.repository()?);
         Ok(Reading {
@@ -2931,7 +2962,11 @@ fn report(
     match sub.state {
         State::Landed => {
             let to = sub.landed_as.clone().expect("a landed submission");
-            writeln!(out, "passed · landed as {}", to.short())?;
+            match sub.beside {
+                // 140: nothing was run, so nothing passed.
+                Some(Beside::Landed) => writeln!(out, "{}", words::landed_beside(&to))?,
+                _ => writeln!(out, "passed · landed as {}", to.short())?,
+            }
         }
         State::Failed => {
             let t = sub.tested.clone().expect("a blamed submission was tested");
@@ -4031,6 +4066,28 @@ fn failed_name(f: &sluice_core::records::FailedTask) -> String {
 /// What a row says of `s` after its columns, naming the submissions it
 /// names as `names` and `said` do.
 fn detail(branch: &str, s: &Submission, names: Option<&Names>, said: &mut BTreeSet<u64>) -> String {
+    let shown = detail_of_state(branch, s, names, said);
+    // 140: what work no check reads at the branch's revision waits behind,
+    // until it lands.
+    match &s.beside {
+        Some(Beside::Behind { behind, why }) if !s.state.is_out() => {
+            let waits = words::waits_beside(*behind, *why);
+            match shown.is_empty() {
+                true => waits,
+                false => format!("{shown} · {waits}"),
+            }
+        }
+        _ => shown,
+    }
+}
+
+/// What `detail` says of a submission in its state alone.
+fn detail_of_state(
+    branch: &str,
+    s: &Submission,
+    names: Option<&Names>,
+    said: &mut BTreeSet<u64>,
+) -> String {
     match s.state {
         State::Failed => {
             // 19: as a waiting submit names it.

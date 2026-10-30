@@ -2300,6 +2300,8 @@ fn queue_shown(
 enum Outcome {
     Landed {
         landed_as: Rev,
+        /// 140: beside the queue, with no check run.
+        beside: bool,
     },
     Failed {
         tasks: Vec<String>,
@@ -2319,6 +2321,7 @@ impl Outcome {
         Ok(match sub.state {
             State::Landed => Outcome::Landed {
                 landed_as: sub.landed_as.clone().unwrap_or_else(|| sub.head.clone()),
+                beside: sub.beside == Some(sluice_core::records::Beside::Landed),
             },
             State::Failed => {
                 let t = sub
@@ -2353,7 +2356,7 @@ impl Outcome {
 
     fn decided(decided: &Decided) -> Outcome {
         match decided.clone() {
-            Decided::Landed { landed_as } => Outcome::Landed { landed_as },
+            Decided::Landed { landed_as, beside } => Outcome::Landed { landed_as, beside },
             Decided::Failed {
                 failed,
                 combination,
@@ -2377,10 +2380,26 @@ impl Outcome {
 
 fn outcome_shown(branch: &str, o: &Outcome, names: &BTreeMap<u64, String>) -> Shown {
     let (status, title, summary) = match o {
-        Outcome::Landed { landed_as } => (
+        Outcome::Landed {
+            landed_as,
+            beside: false,
+        } => (
             Status::Success,
             format!("landed as {}", landed_as.short()),
             format!("Landed on {branch} as `{}`.", landed_as.short()),
+        ),
+        // 140: no required check reads its changes.
+        Outcome::Landed {
+            landed_as,
+            beside: true,
+        } => (
+            Status::Success,
+            format!("landed as {} beside the queue", landed_as.short()),
+            format!(
+                "Landed on {branch} as `{}` beside the queue, with no check run: no required \
+                 check reads its changes.",
+                landed_as.short()
+            ),
         ),
         Outcome::Failed {
             tasks,
@@ -3715,12 +3734,33 @@ mod tests {
         assert!(comment(
             "main",
             &Outcome::Landed {
-                landed_as: Rev::new("l1")
+                landed_as: Rev::new("l1"),
+                beside: false,
             },
             &names,
             Some("unit/review")
         )
         .is_none());
+    }
+
+    /// 140: the `sluice` check of a request landed beside the queue says
+    /// so, and that no check ran.
+    #[test]
+    fn a_landing_beside_the_queue_says_no_check_ran() {
+        let shown = outcome_shown(
+            "main",
+            &Outcome::Landed {
+                landed_as: Rev::new("l1abcdef0"),
+                beside: true,
+            },
+            &BTreeMap::new(),
+        );
+        assert_eq!(shown.posting.title, "landed as l1abcde beside the queue");
+        assert_eq!(
+            shown.posting.summary,
+            "Landed on main as `l1abcde` beside the queue, with no check run: no required \
+             check reads its changes."
+        );
     }
 
     /// A submit's ready mark: a draft first unless it is one, read back,
