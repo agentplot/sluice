@@ -169,7 +169,9 @@ impl Records {
     /// `remote`'s profile, opened once, verifying the signers named by the
     /// policy, read whole, at `branch`'s revision on `remote` (78; 27,
     /// 124; record 0069): fetched, as every read of a branch on its remote
-    /// is (C.7); as last fetched when the remote can't be read; and, when
+    /// is (C.7), or as the tick's ask of the remote brought it, where this
+    /// process has asked it, which fetches no branch on its own (129); as
+    /// last fetched when the remote can't be read; and, when
     /// the remote holds no such branch and the host no tracking ref of it,
     /// the revision the routing chose, which it is being made at. The
     /// host's own copy is never read for them. A policy refused there
@@ -209,10 +211,16 @@ impl Records {
         signers: &mut BTreeMap<String, SignerKey>,
     ) -> Result<()> {
         let p = self.branches.pushed_refs(remote)?;
-        let fetched = match p.read(branch) {
-            Ok(at) => at,
-            Err(e) if read_refused(&e).is_some() => None,
-            Err(e) => return Err(e),
+        // 129: the tick's one ask of the remote brought every branch on it,
+        // so its tracking ref is the branch's revision there.
+        let fetched = if self.asked.borrow().contains(remote) {
+            None
+        } else {
+            match p.read(branch) {
+                Ok(at) => at,
+                Err(e) if read_refused(&e).is_some() => None,
+                Err(e) => return Err(e),
+            }
         };
         let rev = match fetched {
             Some(at) => at,

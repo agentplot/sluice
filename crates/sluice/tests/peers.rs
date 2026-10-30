@@ -497,3 +497,55 @@ fn a_refused_ask_shows_both_branches_as_last_fetched() {
     }
     assert!(asks(&again) >= 1, "the next tick asks again: {again:?}");
 }
+
+/// Every line of `starts` that asks a remote anything.
+fn remote_calls(starts: &[String]) -> Vec<String> {
+    starts
+        .iter()
+        .filter(|l| {
+            [" fetch ", " ls-remote ", " push ", "upload-pack"]
+                .iter()
+                .any(|c| l.contains(c))
+        })
+        .cloned()
+        .collect()
+}
+
+/// 129, 64: with `main` and `release` on origin, a submission queued on
+/// `main` and a commit pushed to origin's `release` by hand, a one-shot
+/// overview with no reader asks origin once, that one fetch bringing every
+/// ref the host reads from it: `release` at the revision pushed, and
+/// `main`'s queue, with no branch fetched on its own.
+#[test]
+fn an_overview_asks_origin_once_for_every_branch_and_its_queue() {
+    let (host, origin) = two_branches_landed("overview-once");
+    host.submit("queued");
+    let other = Repo::clone_of(origin.path(), "overview-once-elsewhere");
+    other.git(&["checkout", "-q", "release"]);
+    other.write("by-hand.txt", "pushed by hand\n");
+    other.git(&["add", "-A"]);
+    other.git(&["commit", "-q", "-m", "by hand"]);
+    other.git(&["push", "-q", "origin", "HEAD:release"]);
+    let pushed = other.rev("HEAD");
+
+    let before = host.git.count();
+    let out = host.sluice(&["overview", "--json"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let starts = host.git.starts()[before..].to_vec();
+    let calls = remote_calls(&starts);
+    assert_eq!(calls.len(), 1, "{calls:?}");
+    assert_eq!(asks(&calls), 1, "{calls:?}");
+
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let part = |name: &str| {
+        v["branches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|b| b["branch"] == name)
+            .cloned()
+            .unwrap_or_else(|| panic!("{name} in {v}"))
+    };
+    assert_eq!(part("release")["revision"], pushed.as_str(), "{v}");
+    assert_eq!(part("main")["depth"], 1, "{v}");
+}
