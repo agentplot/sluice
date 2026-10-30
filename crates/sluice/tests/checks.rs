@@ -619,6 +619,94 @@ fn the_sandbox_opens_the_hosts_caches() {
     assert!(!gone.exists() && !quiet.exists());
 }
 
+/// A fake container engine listening at `e.sock` in `dir`, answering a
+/// `GET /_ping` with `status` and anything else with a 404; its socket's
+/// path. `dir` is kept short: a socket's path is at most 104 bytes on
+/// macOS.
+fn engine(dir: &std::path::Path, status: &'static str) -> PathBuf {
+    use std::io::{Read, Write};
+    let path = dir.join("e.sock");
+    let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+    std::thread::spawn(move || {
+        for conn in listener.incoming() {
+            let Ok(mut c) = conn else { continue };
+            let mut asked = Vec::new();
+            let mut buf = [0u8; 512];
+            while !asked.windows(4).any(|w| w == b"\r\n\r\n") {
+                match c.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => asked.extend_from_slice(&buf[..n]),
+                }
+            }
+            let status = match asked.starts_with(b"GET /_ping ") {
+                true => status,
+                false => "HTTP/1.0 404 Not Found",
+            };
+            let _ = write!(c, "{status}\r\nApi-Version: 1.47\r\n\r\nOK");
+        }
+    });
+    path
+}
+
+/// The limits of a run that may reach the container engine.
+fn docker() -> Limits {
+    Limits {
+        docker: true,
+        ..Limits::default()
+    }
+}
+
+/// 84, record 0074 (design D2): an engine that answers `200` to `GET
+/// /_ping` at a socket the run would reach meets a run that asks for one;
+/// a path with no socket beside it is passed over.
+#[test]
+fn an_engine_that_answers_meets_a_run_that_asks_for_one() {
+    let repo = Repo::new("checks-engine");
+    let dir = Scratch::new("e");
+    let socket = engine(dir.path(), "HTTP/1.0 200 OK");
+    let c = checks(&repo).with_engine_sockets(vec![dir.path().join("none.sock"), socket]);
+    assert_eq!(c.unmet(&docker()).unwrap(), None);
+}
+
+/// 84, record 0074 (design D2): a socket that answers anything but `200`,
+/// one nothing listens on, and none at all each leave a run that asks for
+/// an engine unmet, saying where the look found none and what it found.
+#[test]
+fn a_host_whose_engine_does_not_answer_does_not_meet_it() {
+    let repo = Repo::new("checks-no-engine");
+
+    let dir = Scratch::new("e");
+    let socket = engine(dir.path(), "HTTP/1.0 500 Internal Server Error");
+    let c = checks(&repo).with_engine_sockets(vec![socket.clone()]);
+    let why = c.unmet(&docker()).unwrap().expect("unmet");
+    assert!(why.contains(&socket.display().to_string()), "{why}");
+    assert!(why.contains("500"), "{why}");
+
+    let dir = Scratch::new("e");
+    let socket = dir.path().join("e.sock");
+    drop(std::os::unix::net::UnixListener::bind(&socket).unwrap());
+    assert!(socket.exists(), "the socket nothing listens on stays");
+    let c = checks(&repo).with_engine_sockets(vec![socket.clone()]);
+    let why = c.unmet(&docker()).unwrap().expect("unmet");
+    assert!(why.contains(&socket.display().to_string()), "{why}");
+    assert!(why.contains("refused"), "{why}");
+
+    let dir = Scratch::new("e");
+    let socket = dir.path().join("e.sock");
+    let c = checks(&repo).with_engine_sockets(vec![socket.clone()]);
+    let why = c.unmet(&docker()).unwrap().expect("unmet");
+    assert_eq!(why, format!("no socket at {}", socket.display()));
+}
+
+/// 84: a run that asks for no engine is met, with no socket looked at.
+#[test]
+fn a_run_that_asks_for_no_engine_is_met_with_none() {
+    let repo = Repo::new("checks-engine-unasked");
+    let dir = Scratch::new("e");
+    let c = checks(&repo).with_engine_sockets(vec![dir.path().join("e.sock")]);
+    assert_eq!(c.unmet(&Limits::default()).unwrap(), None);
+}
+
 /// `tests` with `key` set to `value`.
 fn with(mut tests: Settings, key: &str, value: Setting) -> Settings {
     tests.insert(key.into(), value);
