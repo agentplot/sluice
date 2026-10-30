@@ -141,6 +141,7 @@ fn standing(sub: &Submission, ahead: &[u64], log: &[LogLine]) -> Standing {
         State::Landing => Standing::Landing,
         State::Landed => Standing::Landed {
             landed_as: sub.landed_as.clone().unwrap_or_else(|| sub.head.clone()),
+            beside: sub.beside == Some(crate::records::Beside::Landed),
         },
         State::Failed => Standing::Blamed {
             timed_out: sub.result.as_deref() == Some("timed out"),

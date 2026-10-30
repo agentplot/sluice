@@ -52,6 +52,45 @@ Under batch, `parallel` is the largest batch. With `parallel = 4`,
 sluice tests at most the first four queued submissions together, and
 the rest wait for the next batch.
 
+## Work no check reads lands at once
+
+A submission whose changes no required check reads, such as a fix to a
+guide, never waits behind code under test. sluice asks the task runner
+which required checks the change reads: against `main` as it is, and
+against each combination already formed, as that combination would land
+now. The answer may be none every time, and the change may merge
+without conflict onto all of them and the work of every submission
+ahead of it. Then the next round lands it beside the queue, ahead of
+everything queued, with nothing run. It takes no checkout and no room in `parallel` or the
+host's bound.
+
+The combinations under test keep their runs and their results. Say
+`main + A` and `main + A + B` are under test when the guide fix lands.
+They aren't tested again: what they lack is a file none of their
+checks reads. When they pass, A and B land on top of the guide fix,
+each landing holding the tree that was tested plus the guide.
+
+A change that touches anything a required check reads takes the queue
+whole, even when most of it is docs. So does a change to
+`.config/sluice.toml`, to the task runner's own configuration or to the
+tools the checks run with. So does any change to a branch that sluice
+didn't last land, since nothing has tested what is on it. A runner that
+can't say what a change reads, such as `runner = "command"`, lands
+nothing this way.
+
+When a combination's own changes make one of its checks read the
+change, or the change conflicts with a submission ahead of it, it takes
+the queue and says which submission it waits behind:
+
+```console
+$ sluice status 15
+#15 queued · waits behind #13: its checks read this change
+```
+
+Of several worktrees submitted as one act, the leading ones whose
+changes no check reads land this way, in the act's order; from the
+first that a check reads, the rest take the queue.
+
 ## When something fails
 
 ![A, B and C queued together, a 20-minute gate, B breaks the build. With batch false, B is blamed at minute 20, the run with B in it is thrown away, and C lands at minute 40. With batch true, the batch fails at minute 20, the two shorter combinations run to find the cause, B is blamed at minute 40 and C lands at minute 60.](../../../../../docs/diagrams/failure.svg)

@@ -19,10 +19,10 @@ use sluice_core::{Clock, Seams, Sluice};
 use sluice_seams::{
     Adopted, AtBound, Branch, Changes, CheckedOut, Checkout, Delivery, Driver, Enforced, Formed,
     GoneRelease, Guard, HostCopy, HostRun, KeptOutTask, LandingCommit, LastResult, Moved, Network,
-    NotRun, Notification, Outcome, Place, PreviewPlace, Progress, ReadRefused, ReleaseFailure,
-    ReleasePolicy, Released, Rev, RunHandle, RunReport, RunRequest, Running, Session, SessionPlace,
-    Settings, Snapshot, Source, State, Submitter, TaskLog, TaskProgress, TaskResult, Tests,
-    Unanswered, Written,
+    NotRun, Notification, Outcome, Place, PreviewPlace, Progress, ReadRefused, Reading, Reads,
+    ReleaseFailure, ReleasePolicy, Released, Rev, RunHandle, RunReport, RunRequest, Running,
+    Session, SessionPlace, Settings, Snapshot, Source, State, Submitter, TaskLog, TaskProgress,
+    TaskResult, Tests, Unanswered, Written,
 };
 
 /// A tree: path to content.
@@ -167,6 +167,13 @@ struct Inner {
     kept_out_fails: Option<String>,
     /// Every worktree the runner was asked in, in order (ADR 0050).
     asked_kept_out: Vec<PathBuf>,
+    /// 140: the runner reads every check as affected, as the command
+    /// runner does.
+    reads_every: bool,
+    /// 140: asking the runner's affected reading fails, with why.
+    reads_fail: Option<String>,
+    /// 140: every change the runner's affected reading was asked of.
+    read_pairs: Vec<(Rev, Rev)>,
     /// Every head published for its submission, in order (82).
     published: Vec<Rev>,
     took: BTreeMap<String, (u64, u32)>,
@@ -694,6 +701,24 @@ impl World {
     /// keeps out of CI, in order.
     pub fn asked_kept_out(&self) -> Vec<PathBuf> {
         self.0.borrow().asked_kept_out.clone()
+    }
+
+    /// 140: the runner reads every check as affected from now, as the
+    /// command runner does; `false` lets it narrow again.
+    pub fn reads_every(&self, every: bool) {
+        self.0.borrow_mut().reads_every = every;
+    }
+
+    /// 140: asking the runner's affected reading fails from now, for
+    /// `why`; `None` lets it answer again.
+    pub fn reads_fail(&self, why: Option<&str>) {
+        self.0.borrow_mut().reads_fail = why.map(String::from);
+    }
+
+    /// 140: every change the runner's affected reading was asked of, in
+    /// order.
+    pub fn read_pairs(&self) -> Vec<(Rev, Rev)> {
+        self.0.borrow().read_pairs.clone()
     }
 
     /// Every head published for its submission, in order (82).
@@ -2036,6 +2061,60 @@ impl Tests for FakeTests {
             })
             .collect())
     }
+
+    /// 140: each pair's required checks whose prefix holds a path the
+    /// change alters, as a run's narrowing reads them.
+    fn reads(&self, reading: &Reading) -> Result<Vec<Reads>> {
+        let mut inner = self.0 .0.borrow_mut();
+        inner.read_pairs.extend(reading.pairs.iter().cloned());
+        if let Some(why) = &inner.reads_fail {
+            bail!("{why}");
+        }
+        if inner.reads_every {
+            return Ok(vec![Reads::Every; reading.pairs.len()]);
+        }
+        reading
+            .pairs
+            .iter()
+            .map(|(from, to)| {
+                let tree = |r: &Rev| {
+                    inner
+                        .commits
+                        .get(r)
+                        .map(|c| c.tree.clone())
+                        .ok_or_else(|| anyhow!("no commit {r}"))
+                };
+                let (old, new) = (tree(from)?, tree(to)?);
+                let read = inner
+                    .tasks
+                    .iter()
+                    .filter(|t| {
+                        reading.required.iter().any(|q| match q.strip_prefix('#') {
+                            Some(tag) => t.tags.contains(tag),
+                            None => *q == t.name,
+                        })
+                    })
+                    .filter(|t| {
+                        // A project's `reads` file, one prefix a line, names
+                        // more paths its check reads in that tree, as a
+                        // submission that widens a check's inputs does.
+                        let more = new
+                            .get(&format!("{}reads", t.prefix))
+                            .map(|r| r.lines().map(String::from).collect::<Vec<_>>())
+                            .unwrap_or_default();
+                        new.keys()
+                            .chain(old.keys())
+                            .filter(|p| {
+                                p.starts_with(&t.prefix) || more.iter().any(|m| p.starts_with(m))
+                            })
+                            .any(|p| new.get(p) != old.get(p))
+                    })
+                    .map(|t| t.name.clone())
+                    .collect();
+                Ok(Reads::Checks(read))
+            })
+            .collect()
+    }
 }
 
 impl FakeCheckout {
@@ -2890,6 +2969,7 @@ mod tests {
             to: f.driver.session(worktree).unwrap().from,
             decided: Decided::Landed {
                 landed_as: head.clone(),
+                beside: false,
             },
             report: None,
         };

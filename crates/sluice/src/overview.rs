@@ -545,9 +545,15 @@ fn recent_line(r: &serde_json::Value, names: &Names) -> String {
     let id = |v: &serde_json::Value| named(&[v.as_u64().unwrap_or(0)]);
     match r["event"].as_str() {
         Some("landed") => format!(
-            "{at}  landed {} as {}",
+            "{at}  landed {} as {}{}",
             named(&ids(&r["ids"])),
-            short(&r["to"])
+            short(&r["to"]),
+            // 140: with no check run.
+            if r["beside"] == true {
+                " beside the queue"
+            } else {
+                ""
+            }
         ),
         Some("blamed") => format!(
             "{at}  blamed {} on {}",

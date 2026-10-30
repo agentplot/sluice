@@ -232,6 +232,15 @@ conflict: plugin/lib/plan.py
 the agent working in forecast merges or rebases onto feature/concurrent-units there and submits again
 ```
 
+A change no required check reads lands at once, even while #12 and #13
+are under test, and they land after it without being tested again:
+
+```console
+$ sluice submit feature/concurrent-units
+submission 15 to feature/concurrent-units · 2 queued ahead (#12, #13)
+landed as 4e1a07c beside the queue: no required check reads its changes
+```
+
 And before submitting, an agent can ask whether its work would conflict:
 
 ```console
