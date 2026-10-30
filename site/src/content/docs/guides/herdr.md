@@ -35,7 +35,7 @@ herdr plugin action invoke agentplot.sluice.setup
 ```
 
 It shows the snippets to add to herdr's `config.toml`, with your paths
-filled in. They bind `prefix+s` to the status popup and a key to the jump.
+filled in. They bind `prefix+m` to the status popup and a key to the jump.
 They add a row under each agent in the sidebar, the queue on each
 workspace's row and the queue in the tab bar, and turn `[ui.toast]` on for
 toasts. Then run `herdr server reload-config`.
@@ -57,7 +57,7 @@ default. The setup action prints the command for the host it runs on.
 
 ## The status popup
 
-`prefix+s` opens the queue of the focused pane's repository. Under TESTING
+`prefix+m` opens the queue of the focused pane's repository. Under TESTING
 are each branch's combinations under test with their tests and elapsed
 time; under QUEUED, the submissions with their states; under RECENT, the
 latest landings, blames and conflicts. The words are those of the Claude

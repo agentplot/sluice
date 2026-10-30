@@ -1240,7 +1240,7 @@ fresh 'status: setup shows, never edits'
 before=$(find "$HERDR_PLUGIN_CONFIG_DIR" "$scratch/home" -type f | sort)
 # A state directory outside the home directory is named whole.
 out=$(HOME=$scratch/home sh "$plugin/bin/setup.sh" </dev/null)
-for want in 'key = "prefix+s"' 'command = "agentplot.sluice.status"' '"$sluice"' '"$sluice_q"' \
+for want in 'key = "prefix+m"' 'command = "agentplot.sluice.status"' '"$sluice"' '"$sluice_q"' \
   "sh '$HERDR_PLUGIN_STATE_DIR/segment/bin/segment.sh'" 'interval_seconds = 5, timeout_seconds = 30 }'; do
   printf '%s' "$out" | grep -qF -- "$want" || fail "setup does not show $want"
 done

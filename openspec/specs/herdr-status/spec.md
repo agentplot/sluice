@@ -172,7 +172,7 @@ absolute path only when the state directory is not under `$HOME`.
 #### Scenario: Setup
 
 - **WHEN** the user runs `setup`
-- **THEN** a popup shows a `[[keys.command]]` binding `prefix+s` to
+- **THEN** a popup shows a `[[keys.command]]` binding `prefix+m` to
   `agentplot.sluice.status`, the sidebar rows, and the segment, and herdr's
   config is unchanged
 
