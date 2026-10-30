@@ -172,8 +172,6 @@ struct Inner {
     took: BTreeMap<String, (u64, u32)>,
     /// Checks a run leaves not run, with why (could-not-run-1 114).
     cannot_run: BTreeMap<String, String>,
-    /// A run whose policy sets `[tests] ready` is refused (84).
-    not_ready: bool,
     cache: BTreeMap<(String, String), String>,
     runs: Vec<RunState>,
     /// What each run says of its tasks while it goes, by run.
@@ -712,12 +710,6 @@ impl World {
             Some(r) => inner.cannot_run.insert(task.into(), r.into()),
             None => inner.cannot_run.remove(task),
         };
-    }
-
-    /// The host fails a policy's `[tests] ready` from now: a run whose
-    /// request sets it is refused before anything of it runs (84).
-    pub fn not_ready(&self, not_ready: bool) {
-        self.0.borrow_mut().not_ready = not_ready;
     }
 
     /// The next start finds its place made and stops before starting.
@@ -1790,9 +1782,6 @@ impl Tests for FakeTests {
             || std::mem::take(&mut inner.refuse_start)
         {
             return Err(AtBound.into());
-        }
-        if inner.not_ready && request.tests.contains_key("ready") {
-            bail!("the host is not ready: [tests] ready failed");
         }
         if std::mem::take(&mut inner.crash_start) {
             bail!("crashed before starting a run in {}", request.place.name);

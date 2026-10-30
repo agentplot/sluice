@@ -2,7 +2,7 @@
 //! key, and the check runs again (60; could-not-run-1 in agentplot/
 //! blueprints, 114 to 116, amended 84, S43, S44).
 
-use sluice_conformance::{policy, Harness, Rig, BRANCH};
+use sluice_conformance::{policy, Harness, Rig};
 use sluice_core::records::{Event, ResultLine, State};
 use sluice_seams::{Decided, Outcome, RunOutcome};
 
@@ -23,13 +23,16 @@ fn not_run_events(h: &Harness) -> Vec<Vec<(String, String)>> {
         .collect()
 }
 
-/// The bolt policy with `[tests] ready` set.
-fn with_ready() -> String {
+/// The bolt policy with `[tests]` holding `line`.
+fn with_tests(line: &str) -> String {
     policy(false, "fail", 4).replace(
         "runner = \"fake\"\n",
-        "runner = \"fake\"\nready = \"true\"\n",
+        &format!("runner = \"fake\"\n{line}\n"),
     )
 }
+
+/// What a `[tests] not_run` exit says of a check that could not run.
+const NOT_RUN: &str = "exited 77, which [tests] not_run names: it could not run here";
 
 /// satisfies: could-not-run-1 114, 60, 18
 #[test]
@@ -109,30 +112,6 @@ fn a_check_that_failed_beside_one_that_could_not_run_fails_as_before() {
     assert!(results(&h).iter().all(|r| r.task != "b:test"));
 }
 
-/// satisfies: could-not-run-1 84 (amended), 59
-#[test]
-fn a_host_that_is_not_ready_records_nothing_and_holds_the_queue() {
-    let h = Harness::new(&with_ready());
-    h.w().not_ready(true);
-    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
-    let one = h.submit("unit/a");
-    let mut refused = 0;
-    for _ in 0..4 {
-        if let Err(e) = h.sluice().step(BRANCH) {
-            assert!(format!("{e:#}").contains("ready"), "{e:#}");
-            refused += 1;
-        }
-    }
-    assert!(refused > 0, "the start was refused");
-    assert!(results(&h).is_empty());
-    assert!(h.w().delivered().is_empty());
-    assert_ne!(h.sub(one).state, State::Failed);
-
-    h.w().not_ready(false);
-    h.settle();
-    assert_eq!(h.sub(one).state, State::Landed);
-}
-
 /// satisfies: could-not-run-1 114, S43, session-runs-1 92
 #[test]
 fn s43_a_session_run_whose_check_could_not_run_records_only_what_ran() {
@@ -142,8 +121,7 @@ fn s43_a_session_run_whose_check_could_not_run_records_only_what_ran() {
         "agent-a",
         &[("a/lib", Some("a2")), ("b/lib", Some("b2"))],
     );
-    h.w()
-        .cannot_run("b:test", Some("the host failed [tests] ready"));
+    h.w().cannot_run("b:test", Some(NOT_RUN));
     let (report, _) = h.session_run("unit/a");
     assert_eq!(report.not_run.len(), 1);
     assert_eq!(report.not_run[0].task, "b:test");
@@ -173,15 +151,25 @@ fn s43_a_session_run_whose_check_could_not_run_records_only_what_ran() {
 
 /// satisfies: could-not-run-1 114, session-runs-1 89
 #[test]
-fn a_command_run_is_held_to_neither_readiness_nor_not_run() {
-    let h = Harness::new(&with_ready());
-    h.w().not_ready(true);
+fn a_command_run_is_held_to_no_not_run_exit() {
+    let h = Harness::new(&with_tests("not_run = [77]"));
     h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
     let (report, _) = h.session_exec("unit/a", Some("true"));
     assert!(report.not_run.is_empty());
     let asked = h.requests().pop().expect("the command ran");
-    assert!(!asked.tests.contains_key("ready"));
     assert!(!asked.tests.contains_key("not_run"));
+}
+
+/// satisfies: could-not-run-1 84 (amended 2026-10-30), 114; run-outcome
+/// "A combination on a host without what a test needs"
+#[test]
+fn a_policy_naming_ready_is_tested_once_and_lands() {
+    let h = Harness::new(&with_tests("ready = \"false\""));
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let one = h.submit("unit/a");
+    h.settle();
+    assert_eq!(h.sub(one).state, State::Landed);
+    assert_eq!(h.w().started().len(), 1, "no start was refused");
 }
 
 /// satisfies: could-not-run-1 116, S44, 19, 69; rule core.7
