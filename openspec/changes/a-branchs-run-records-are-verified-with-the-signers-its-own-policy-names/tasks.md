@@ -26,4 +26,4 @@
 
 ## 5. The gate
 
-- [ ] 5.1 With the work committed, run the gate's checks. Verify: `sluice exec main` passes every required check.
+- [x] 5.1 With the work committed, run the gate's checks. Verify: `sluice exec main` passes every required check.
