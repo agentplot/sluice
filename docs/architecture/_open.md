@@ -11,3 +11,12 @@ when its code lands, and the file is deleted when it is empty.
   another, and a check that failed because the sandbox refused it
   something is recorded as a fail. Built by the change
   `a-checks-key-holds-its-executor`.
+
+## Proposed
+
+- **core.36 and record 0073** (clause 84 as amended 2026-10-30): today
+  `ready_after` runs the probe in the run's place at the candidate's
+  tree, so a candidate that removes what the probe runs is read as the
+  host not ready. Proposed 2026-10-30, on the user's card; a unit on
+  their yes brings the place to the branch's revision before the
+  probe.
