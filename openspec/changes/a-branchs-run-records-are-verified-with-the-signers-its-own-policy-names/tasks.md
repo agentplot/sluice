@@ -17,7 +17,7 @@
 
 ## 3. Two hosts, end to end
 
-- [ ] 3.1 In `crates/sluice/tests/peers.rs`, beside `a_host_whose_own_main_is_refused_counts_the_remotes_signers`: two hosts share origin; `main`'s policy lists host a's key for `box` and `release`'s lists host b's; host a submits to both. A `sluice step main` then `sluice step release` on host b, signing as `box` with b's key, lands `release`'s submission and leaves `main`'s queued with its check missing, and host a's steps the reverse. Verify: `sluice exec main -- cargo test -p sluice --features tools --test peers`.
+- [x] 3.1 In `crates/sluice/tests/peers.rs`, beside `a_host_whose_own_main_is_refused_counts_the_remotes_signers`: two hosts share origin; `main`'s policy lists host a's key for `box` and `release`'s lists host b's; host a submits to both. A `sluice step main` then `sluice step release` on host b, signing as `box` with b's key, lands `release`'s submission and leaves `main`'s queued with its check missing, and host a's steps the reverse. Verify: `sluice exec main -- cargo test -p sluice --features tools --test peers`.
 
 ## 4. The decision on record
 

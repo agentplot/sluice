@@ -334,6 +334,113 @@ fn a_host_whose_own_main_is_refused_counts_the_remotes_signers() {
     assert!(String::from_utf8_lossy(&landed.stdout).contains(&format!("#{id}")));
 }
 
+/// Two hosts over one bare remote, both signing as `box`: `main`'s policy
+/// lists the first host's key for `box`, `release`'s the second's. The
+/// first host's and the second's, and the remote.
+fn own_keys(name: &str) -> (Host, Host, Scratch) {
+    let (ka, kb) = (
+        PrivateKey::random(&mut rand_core::OsRng, Algorithm::Ed25519).unwrap(),
+        PrivateKey::random(&mut rand_core::OsRng, Algorithm::Ed25519).unwrap(),
+    );
+    let policy = |k: &PrivateKey| {
+        format!(
+            "[tests]\nrunner = \"command\"\ncommand = \"true\"\n\n\
+             [signers.box]\nssh = \"{}\"\n\n\
+             [branches.main]\ntimeout = \"10m\"\nremote = \"origin\"\ntrust = [\"box\"]\n\n\
+             [branches.release]\ntimeout = \"10m\"\nremote = \"origin\"\ntrust = [\"box\"]\n",
+            line("box", k)
+        )
+    };
+    let a = Repo::new(&format!("{name}-a"));
+    a.write(".config/sluice.toml", &policy(&ka));
+    a.git(&["add", "-A"]);
+    a.git(&["commit", "-q", "-m", "sluice's policy"]);
+    a.git(&["checkout", "-q", "-b", "release"]);
+    a.write(".config/sluice.toml", &policy(&kb));
+    a.git(&["add", "-A"]);
+    a.git(&["commit", "-q", "-m", "release's key"]);
+    a.git(&["checkout", "-q", "main"]);
+    let origin = a.bare_origin();
+    let b = Repo::clone_of(origin.path(), &format!("{name}-b"));
+    (
+        Host::new(a, &format!("{name}-a"), "box", &ka),
+        Host::new(b, &format!("{name}-b"), "box", &kb),
+        origin,
+    )
+}
+
+/// Steps `hosts` take, `main` then `release` each, until `id` lands.
+fn land(hosts: &[&Host], id: u64) {
+    let deadline = Instant::now() + Duration::from_secs(90);
+    while hosts[0].state_of(id) != "landed" {
+        for h in hosts {
+            for branch in ["main", "release"] {
+                let out = h.sluice(&["step", branch]);
+                assert!(out.status.success(), "{}", text(&out));
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "never landed: {}",
+            hosts[0].state_of(id)
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+/// `id` on `branch` waits with its check missing: not failed, and no run
+/// of it was taken, its log on `origin` holding no claim and no result.
+fn missing(host: &Host, origin: &Scratch, id: u64, branch: &str) {
+    let state = host.state_of(id);
+    assert!(state == "queued" || state == "testing", "{id} is {state}");
+    let out = host.sluice(&["status", &id.to_string(), "--json"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(
+        v["failed"].as_array().is_none_or(|f| f.is_empty()),
+        "{id} read a fail: {v:#}"
+    );
+    let log = support::git_command()
+        .arg("--git-dir")
+        .arg(origin.path())
+        .args(["show", &format!("refs/sluice/state/{branch}:log.jsonl")])
+        .output()
+        .unwrap();
+    let log = String::from_utf8_lossy(&log.stdout);
+    for event in ["\"claimed\"", "\"ran\"", "\"uncounted\""] {
+        assert!(!log.contains(event), "{branch}'s log holds {event}:\n{log}");
+    }
+}
+
+/// 78, 87, 28, S18; rule core.22: two hosts share origin and both sign as
+/// `box`; `main`'s policy lists host a's key for `box` and `release`'s
+/// lists host b's; host a submits to both. A host takes a branch's run
+/// only where the branch's own policy lists the key it signs with: host
+/// b's steps land `release`'s submission and leave `main`'s queued, its
+/// check missing, until host a's steps run it.
+#[test]
+fn a_host_runs_a_branch_only_where_its_policy_lists_the_hosts_key() {
+    let (host_a, host_b, origin) = own_keys("own-key");
+    let x = host_a.submit_to("x", "main");
+    let y = host_a.submit_to("y", "release");
+    land(&[&host_b], y);
+    missing(&host_b, &origin, x, "main");
+    land(&[&host_a, &host_b], x);
+}
+
+/// 78, 87; rule core.22: the same two hosts, host a stepping first: its
+/// steps land `main`'s submission and leave `release`'s queued, its check
+/// missing, until host b's steps run it.
+#[test]
+fn the_other_host_runs_the_other_branch() {
+    let (host_a, host_b, origin) = own_keys("other-key");
+    let x = host_a.submit_to("x", "main");
+    let y = host_a.submit_to("y", "release");
+    land(&[&host_a], x);
+    missing(&host_a, &origin, y, "release");
+    land(&[&host_b, &host_a], y);
+}
+
 /// One host whose `main` and `release` keep their records on origin, each
 /// with one submission landed, and the remote.
 fn two_branches_landed(name: &str) -> (Host, Scratch) {
