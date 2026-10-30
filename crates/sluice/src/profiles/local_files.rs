@@ -117,6 +117,15 @@ impl LocalFiles {
         Ok(self.root.join(branch))
     }
 
+    /// 69: the results log as written, one JSON document per line.
+    fn results_log(&self) -> Result<Vec<u8>> {
+        match std::fs::read(self.root.join(RESULTS)) {
+            Ok(b) => Ok(b),
+            Err(e) if e.kind() == ErrorKind::NotFound => Ok(Vec::new()),
+            Err(e) => Err(e).context("reading the results log"),
+        }
+    }
+
     /// Refuse a branch whose directory passes through another branch's:
     /// records outlive their branch, so `a`'s may still exist when `a/b`
     /// is written.
@@ -501,12 +510,10 @@ impl State for LocalFiles {
         Ok(id)
     }
 
-    fn results(&self) -> Result<Vec<u8>> {
-        match std::fs::read(self.root.join(RESULTS)) {
-            Ok(b) => Ok(b),
-            Err(e) if e.kind() == ErrorKind::NotFound => Ok(Vec::new()),
-            Err(e) => Err(e).context("reading the results log"),
-        }
+    /// Every result this host recorded, whichever branch reads them: none
+    /// is signed, so no signer's key is read.
+    fn results(&self, _: &str) -> Result<Vec<u8>> {
+        self.results_log()
     }
 
     fn keep_logs(&self, branch: &str, candidate: &str, logs: &[TaskLog]) -> Result<Vec<TaskLog>> {
@@ -630,7 +637,7 @@ impl State for LocalFiles {
     fn record_results(&self, lines: &[u8]) -> Result<()> {
         let lock = open_lock(&self.root.join(".lock"))?;
         lock.lock().context("locking the repository's records")?;
-        let mut have = self.results()?;
+        let mut have = self.results_log()?;
         // A line a crash cut short is no record: it is dropped before
         // anything is appended after it.
         if let Some(end) = have

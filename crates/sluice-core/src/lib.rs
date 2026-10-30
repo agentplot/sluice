@@ -399,16 +399,34 @@ impl<'a> Sluice<'a> {
         })
     }
 
-    /// 69: the results log less every result set aside (could-not-run-1
-    /// 116), which is what every gate reads; the lines themselves stay
-    /// (rule core.7).
-    fn results(&self) -> Result<Vec<ResultLine>> {
-        let all: Vec<ResultLine> = parse_lines(&self.seams.state.results()?)?;
+    /// 69: the results log as `branch`'s gate reads it, its signed runs
+    /// verified with the signers `branch`'s own policy names (78; rule
+    /// core.22), less every result set aside (could-not-run-1 116); the
+    /// lines themselves stay (rule core.7).
+    fn results(&self, branch: &str) -> Result<Vec<ResultLine>> {
+        let all: Vec<ResultLine> = parse_lines(&self.seams.state.results(branch)?)?;
         let aside: Vec<SetAside> = parse_lines(&self.seams.state.set_asides()?)?;
         Ok(all
             .into_iter()
             .filter(|r| !aside.iter().any(|a| r.set_aside_by(a)))
             .collect())
+    }
+
+    /// Every result any gate could count: each branch with records' results,
+    /// joined, a line two branches read kept once. A branch whose results
+    /// cannot be read is passed by into the unread list with its words
+    /// (26; rule core.11).
+    fn every_result(&self) -> Result<(Vec<ResultLine>, Vec<Unread>)> {
+        let mut seen = std::collections::BTreeSet::new();
+        let mut all = Vec::new();
+        let mut unread = Vec::new();
+        for b in self.seams.state.branches()? {
+            match self.results(&b) {
+                Ok(lines) => all.extend(lines.into_iter().filter(|r| seen.insert(to_line(r)))),
+                Err(e) => unread.push(Unread::of(&b, &e)),
+            }
+        }
+        Ok((all, unread))
     }
 
     /// Could-not-run-1 116: set aside the one result of `task` recorded at
@@ -426,8 +444,8 @@ impl<'a> Sluice<'a> {
         if reason.trim().is_empty() {
             bail!("a result is set aside with why: give a reason");
         }
-        let found: Vec<ResultLine> = self
-            .results()?
+        let (every, unread) = self.every_result()?;
+        let found: Vec<ResultLine> = every
             .into_iter()
             .filter(|r| r.task == task && r.at == at)
             .filter(|r| match hash {
@@ -436,7 +454,18 @@ impl<'a> Sluice<'a> {
             })
             .collect();
         let r = match found.as_slice() {
-            [] => bail!("no result of {task} recorded at {at} that is not already set aside"),
+            [] if unread.is_empty() => {
+                bail!("no result of {task} recorded at {at} that is not already set aside")
+            }
+            [] => bail!(
+                "no result of {task} recorded at {at} that is not already set aside, \
+                 where these branches' results could be read; these could not:\n{}",
+                unread
+                    .iter()
+                    .map(|u| format!("  {}: {}", u.branch, u.error))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ),
             [r] => r.clone(),
             many => bail!(
                 "{} results of {task} were recorded at {at}; name one by its key:\n{}",

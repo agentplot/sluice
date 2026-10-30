@@ -998,8 +998,8 @@ impl State for RemoteRefs {
 
     /// The results every signer the policy names signed, verified, and
     /// this host's own replays (core.9).
-    fn results(&self) -> Result<Vec<u8>> {
-        let mut bytes = self.own.results()?;
+    fn results(&self, branch: &str) -> Result<Vec<u8>> {
+        let mut bytes = self.own.results(branch)?;
         for (signer, key) in &self.signers {
             for l in self.signed(signer, key)? {
                 bytes.extend(to_line(&l));

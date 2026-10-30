@@ -1455,8 +1455,12 @@ pub trait State {
     /// The next submission id, numbered in order across the repository.
     fn allocate_id(&self) -> Result<u64>;
 
-    /// 69: the repository's results log, one JSON document per line.
-    fn results(&self) -> Result<Vec<u8>>;
+    /// 69: the repository's results log, one JSON document per line, as
+    /// `branch`'s gate reads it: the branch is the one whose gate, session
+    /// run or verdict reads the log, and a profile that reads signed runs
+    /// verifies them with the signers and keys that branch's own policy
+    /// names, never another branch's (78; rule core.22).
+    fn results(&self, branch: &str) -> Result<Vec<u8>>;
 
     /// 69: append to the repository's results log.
     fn record_results(&self, lines: &[u8]) -> Result<()>;

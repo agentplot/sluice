@@ -2715,7 +2715,7 @@ impl State for FakeState {
         Ok(id)
     }
 
-    fn results(&self) -> Result<Vec<u8>> {
+    fn results(&self, _: &str) -> Result<Vec<u8>> {
         Ok(self.0 .0.borrow().results.clone())
     }
 

@@ -323,7 +323,7 @@ fn signed_runs_are_read_verified_on_another_host() {
         BTreeMap::from([("box".into(), allowed("exec@build-1", &box_key))]),
         None,
     );
-    let all: Vec<ResultLine> = parse_lines(&hb.results().unwrap()).unwrap();
+    let all: Vec<ResultLine> = parse_lines(&hb.results("main").unwrap()).unwrap();
     // The replay is signed with its run, as a replay (108; core.9).
     assert!(all.iter().any(|l| l.kind == ResultKind::Replayed
         && l.task == "c:test"
@@ -345,7 +345,7 @@ fn signed_runs_are_read_verified_on_another_host() {
         BTreeMap::from([("box".into(), allowed("other", &stranger))]),
         None,
     );
-    assert!(parse_lines::<ResultLine>(&hc.results().unwrap())
+    assert!(parse_lines::<ResultLine>(&hc.results("main").unwrap())
         .unwrap()
         .is_empty());
 }
@@ -387,7 +387,7 @@ fn two_hosts_of_one_signer_keep_both_adds() {
         .unwrap(),
     );
     let reader = host(&a, BTreeMap::from([("sessions".into(), both)]), None);
-    let mut tasks: Vec<String> = parse_lines::<ResultLine>(&reader.results().unwrap())
+    let mut tasks: Vec<String> = parse_lines::<ResultLine>(&reader.results("main").unwrap())
         .unwrap()
         .into_iter()
         .map(|l| l.task)

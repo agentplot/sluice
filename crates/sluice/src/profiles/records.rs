@@ -606,11 +606,11 @@ impl State for Records {
         }
     }
 
-    fn results(&self) -> Result<Vec<u8>> {
-        let mut bytes = self.local.results()?;
+    fn results(&self, branch: &str) -> Result<Vec<u8>> {
+        let mut bytes = self.local.results(branch)?;
         let remotes: Vec<Rc<RemoteRefs>> = self.remotes.borrow().values().cloned().collect();
         for r in remotes {
-            bytes.extend(r.results()?);
+            bytes.extend(r.results(branch)?);
         }
         Ok(bytes)
     }

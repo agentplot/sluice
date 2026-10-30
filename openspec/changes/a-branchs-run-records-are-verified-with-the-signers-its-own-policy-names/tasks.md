@@ -2,10 +2,10 @@
 
 ## 1. The results log is read for a branch
 
-- [ ] 1.1 Change `State::results` in `crates/sluice-seams/src/lib.rs` to `results(&self, branch: &str)`, its doc comment saying the branch is the one whose gate reads it and the profile verifies signed runs with that branch's own signers (78; design D1). Follow it in every implementor: `LocalFiles` (ignores the branch), `Records`, `RemoteRefs`, `sluice-fakes`, the test fakes in `sluice-core/src/ops.rs` and `crates/sluice/tests/exec.rs`. Verify: `cargo check --workspace --all-targets`.
-- [ ] 1.2 Pass the branch from every core caller: `Sluice::results` in `sluice-core/src/lib.rs` takes it, and `step.rs` (a round's run and its landing), `session.rs` (`record_session`) and `verdict_view.rs` give theirs. Verify: `sluice exec main -- cargo test -p sluice-core`.
-- [ ] 1.3 `Sluice::set_aside` finds its result among the results of every branch `State::branches` lists, joined without duplicates (design D1). Verify: the existing set-aside tests in `sluice-core` and `sluice-conformance` (`could_not_run`) pass, with a new unit test where the result is only on a second branch's list.
-- [ ] 1.4 The conformance harness's `results()` (`crates/sluice-conformance/src/lib.rs`) reads for its own branch, and `shared.rs`'s direct calls name theirs. Verify: `sluice exec main -- cargo test -p sluice-conformance`.
+- [x] 1.1 Change `State::results` in `crates/sluice-seams/src/lib.rs` to `results(&self, branch: &str)`, its doc comment saying the branch is the one whose gate reads it and the profile verifies signed runs with that branch's own signers (78; design D1). Follow it in every implementor: `LocalFiles` (ignores the branch), `Records`, `RemoteRefs`, `sluice-fakes`, the test fakes in `sluice-core/src/ops.rs` and `crates/sluice/tests/exec.rs`. Verify: `cargo check --workspace --all-targets`.
+- [x] 1.2 Pass the branch from every core caller: `Sluice::results` in `sluice-core/src/lib.rs` takes it, and `step.rs` (a round's run and its landing), `session.rs` (`record_session`) and `verdict_view.rs` give theirs. Verify: `sluice exec main -- cargo test -p sluice-core`.
+- [x] 1.3 `Sluice::set_aside` finds its result among the results of every branch `State::branches` lists, joined without duplicates (design D1). Verify: the existing set-aside tests in `sluice-core` and `sluice-conformance` (`could_not_run`) pass, with a new unit test where the result is only on a second branch's list.
+- [x] 1.4 The conformance harness's `results()` (`crates/sluice-conformance/src/lib.rs`) reads for its own branch, and `shared.rs`'s direct calls name theirs. Verify: `sluice exec main -- cargo test -p sluice-conformance`.
 
 ## 2. Each branch's own signers, by its revision
 
