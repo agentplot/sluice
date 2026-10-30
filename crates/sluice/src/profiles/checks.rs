@@ -42,6 +42,12 @@
 //! --export`): sluice keeps what it prints and sources it before every
 //! command the runner runs, opaque to it. Whatever needs the network or
 //! the user's home to set up happens there, outside the executor.
+//!
+//! A run whose policy says `[executor] docker = true` asks the host for a
+//! container engine that answers (84; record 0074): [`Tests::unmet`] looks
+//! for one at the sockets the sandbox opens for such a run, by the Docker
+//! Engine API's `GET /_ping`, running nothing and reading nothing of the
+//! repository's (rules core.37, core.38).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -213,6 +219,9 @@ pub struct Checks {
     sessions: Option<Sessions>,
     /// The host's running checks, when not the host's own directory.
     running: Option<HostCount>,
+    /// Where the container engine is looked for, when not the sockets the
+    /// sandbox opens.
+    engine_sockets: Option<Vec<PathBuf>>,
 }
 
 impl Checks {
@@ -225,6 +234,7 @@ impl Checks {
             sessions: None,
             running: None,
             pool: None,
+            engine_sockets: None,
         }
     }
 
@@ -244,6 +254,26 @@ impl Checks {
     pub fn with_running(mut self, dir: PathBuf) -> Self {
         self.running = Some(HostCount::new(dir));
         self
+    }
+
+    /// The same profile, looking for the container engine at `sockets`
+    /// in place of those the sandbox opens (design D2).
+    pub fn with_engine_sockets(mut self, sockets: Vec<PathBuf>) -> Self {
+        self.engine_sockets = Some(sockets);
+        self
+    }
+
+    /// Where the container engine is looked for: the sockets this profile
+    /// was given, else those [`ENGINE_SOCKETS_VAR`] names, else those the
+    /// sandbox opens for a run that may reach the engine.
+    fn engine_sockets(&self) -> Vec<PathBuf> {
+        if let Some(s) = &self.engine_sockets {
+            return s.clone();
+        }
+        match std::env::var_os(ENGINE_SOCKETS_VAR) {
+            Some(v) => std::env::split_paths(&v).collect(),
+            None => docker_sockets(),
+        }
     }
 
     /// The host's session runs, with what each `sluice exec` keeps of its
@@ -668,6 +698,96 @@ fn docker_sockets() -> Vec<PathBuf> {
     all
 }
 
+/// Where the container engine is looked for in place of the sockets the
+/// sandbox opens, as a list of paths: a fake engine, in tests.
+pub const ENGINE_SOCKETS_VAR: &str = "SLUICE_ENGINE_SOCKETS";
+
+/// How long the engine look waits for a socket to take its connection,
+/// and again for its answer (design D2).
+const ENGINE_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// 84, record 0074 (design D2): `None` when a container engine answers at
+/// one of `sockets`, by the Docker Engine API's `GET /_ping` over each
+/// that exists, the first answering `200` ending the look; otherwise why
+/// not: each socket that exists with what it said, or, where none exists,
+/// the paths looked at. It runs as the process that would run the checks,
+/// so it finds what their run would reach.
+pub fn engine_unmet(sockets: &[PathBuf]) -> Option<String> {
+    let mut said = Vec::new();
+    let mut looked = std::collections::BTreeSet::new();
+    for socket in sockets.iter().filter(|s| s.exists()) {
+        // A path and the path it resolves to are one socket.
+        let real = std::fs::canonicalize(socket).unwrap_or_else(|_| socket.clone());
+        if !looked.insert(real) {
+            continue;
+        }
+        match ping(socket) {
+            Ok(()) => return None,
+            Err(why) => said.push(format!("{} {why}", socket.display())),
+        }
+    }
+    if said.is_empty() {
+        let paths: Vec<String> = sockets.iter().map(|s| s.display().to_string()).collect();
+        return Some(match paths.is_empty() {
+            true => "no socket to look at".into(),
+            false => format!("no socket at {}", paths.join(", ")),
+        });
+    }
+    Some(said.join("; "))
+}
+
+/// `GET /_ping` over the unix socket `socket`: `Ok` when it answers `200`,
+/// else what it did, in words. The connection is made on a thread of its
+/// own, so a socket that never takes it holds the look no longer than
+/// [`ENGINE_WAIT`].
+fn ping(socket: &Path) -> Result<(), String> {
+    use std::io::{BufRead, BufReader, Read, Write};
+    enum Step {
+        Connected,
+        Said(std::io::Result<String>),
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    let path = socket.to_path_buf();
+    std::thread::spawn(move || {
+        let said = (|| {
+            let mut s = std::os::unix::net::UnixStream::connect(&path)?;
+            let _ = tx.send(Step::Connected);
+            s.set_read_timeout(Some(ENGINE_WAIT))?;
+            s.set_write_timeout(Some(ENGINE_WAIT))?;
+            s.write_all(b"GET /_ping HTTP/1.0\r\nHost: docker\r\n\r\n")?;
+            let mut status = String::new();
+            BufReader::new(s.take(512)).read_line(&mut status)?;
+            Ok(status)
+        })();
+        let _ = tx.send(Step::Said(said));
+    });
+    let wait = format!("{}s", ENGINE_WAIT.as_secs());
+    let said = match rx.recv_timeout(ENGINE_WAIT) {
+        Ok(Step::Connected) => match rx.recv_timeout(ENGINE_WAIT * 2) {
+            Ok(Step::Said(said)) => said,
+            _ => return Err(format!("gave no answer within {wait}")),
+        },
+        Ok(Step::Said(said)) => said,
+        Err(_) => return Err(format!("took no connection within {wait}")),
+    };
+    match said {
+        Ok(status) => match status.split_whitespace().nth(1) {
+            Some("200") => Ok(()),
+            Some(_) => Err(format!("answered {}", status.trim())),
+            None if status.trim().is_empty() => Err("closed the connection unanswered".into()),
+            None => Err(format!("answered {:?}", status.trim())),
+        },
+        Err(e) => Err(match e.kind() {
+            std::io::ErrorKind::ConnectionRefused => "refused the connection".into(),
+            std::io::ErrorKind::PermissionDenied => "refused this user".into(),
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => {
+                format!("gave no answer within {wait}")
+            }
+            _ => e.to_string(),
+        }),
+    }
+}
+
 /// A path by the path given and, where it resolves, the path it resolves
 /// to: Seatbelt matches resolved paths, and `/var` is `/private/var`.
 fn given_and_resolved(path: &Path) -> Vec<PathBuf> {
@@ -1060,6 +1180,15 @@ impl Tests for Checks {
         // Its supervisor holds the run directory, which keeps it counted.
         admission.started();
         Ok(RunHandle(name.clone()))
+    }
+
+    /// 84, record 0074: a run that may reach the container engine asks
+    /// the host for one that answers where the run would reach it.
+    fn unmet(&self, limits: &Limits) -> Result<Option<String>> {
+        if !limits.asks_of_host() {
+            return Ok(None);
+        }
+        Ok(engine_unmet(&self.engine_sockets()))
     }
 
     fn progress(&self, run: &RunHandle) -> Result<Progress> {

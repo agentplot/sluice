@@ -174,6 +174,11 @@ struct Inner {
     cannot_run: BTreeMap<String, String>,
     /// A run whose policy sets `[tests] ready` is refused (84).
     not_ready: bool,
+    /// What each host lacks of what a run asks of it, by host, as the
+    /// check seam's look at the host says it (84; record 0074).
+    unmet: BTreeMap<String, String>,
+    /// Every look at what a host lacks, by the host that looked, in order.
+    looks: Vec<String>,
     cache: BTreeMap<(String, String), String>,
     runs: Vec<RunState>,
     /// What each run says of its tasks while it goes, by run.
@@ -718,6 +723,24 @@ impl World {
     /// request sets it is refused before anything of it runs (84).
     pub fn not_ready(&self, not_ready: bool) {
         self.0.borrow_mut().not_ready = not_ready;
+    }
+
+    /// From now, this world's host lacks what a run asks of it for `why`,
+    /// a container engine that answers, as its look says; with `None`, it
+    /// meets it again (84; record 0074).
+    pub fn engine_unmet(&self, why: Option<&str>) {
+        let mut inner = self.0.borrow_mut();
+        let host = inner.host.clone();
+        match why {
+            Some(w) => inner.unmet.insert(host, w.into()),
+            None => inner.unmet.remove(&host),
+        };
+    }
+
+    /// Each look at what the host lacks, by the host that looked, in
+    /// order.
+    pub fn engine_looks(&self) -> Vec<String> {
+        self.0.borrow().looks.clone()
     }
 
     /// The next start finds its place made and stops before starting.
@@ -1842,6 +1865,16 @@ impl Tests for FakeTests {
         let report = World::evaluate(&mut inner, &r.request);
         inner.runs[n].report = Some(report.clone());
         Ok(Progress::Finished(report))
+    }
+
+    fn unmet(&self, limits: &sluice_seams::Limits) -> Result<Option<String>> {
+        let mut inner = self.0 .0.borrow_mut();
+        let host = inner.host.clone();
+        inner.looks.push(host.clone());
+        if !limits.asks_of_host() {
+            return Ok(None);
+        }
+        Ok(inner.unmet.get(&host).cloned())
     }
 
     fn bound(&self) -> Result<usize> {

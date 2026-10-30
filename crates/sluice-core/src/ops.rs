@@ -2024,6 +2024,10 @@ mod tests {
             unreachable!("a submit runs nothing")
         }
 
+        fn unmet(&self, _: &sluice_seams::Limits) -> Result<Option<String>> {
+            unreachable!("a submit runs nothing")
+        }
+
         fn bound(&self) -> Result<usize> {
             unreachable!("a submit runs nothing")
         }

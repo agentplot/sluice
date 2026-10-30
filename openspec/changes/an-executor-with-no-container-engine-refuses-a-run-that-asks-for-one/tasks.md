@@ -7,7 +7,7 @@ committed. Commits cite record 0074 and rule core.38.
 
 ## 1. The seam's question and the engine look
 
-- [ ] 1.1 Add `Tests::unmet(&self, limits: &Limits) -> Result<Option<String>>` to `crates/sluice-seams/src/lib.rs`, documented with 84, 114, 139 and record 0074 (design D1); give the submit-only seam in `crates/sluice-core/src/ops.rs` its `unreachable!`, and the fake check seam in `crates/sluice-fakes` a setter for the reason it answers, `None` by default; verify with `cargo check --workspace` and the fakes' existing tests passing.
+- [x] 1.1 Add `Tests::unmet(&self, limits: &Limits) -> Result<Option<String>>` to `crates/sluice-seams/src/lib.rs`, documented with 84, 114, 139 and record 0074 (design D1); give the submit-only seam in `crates/sluice-core/src/ops.rs` its `unreachable!`, and the fake check seam in `crates/sluice-fakes` a setter for the reason it answers, `None` by default; verify with `cargo check --workspace` and the fakes' existing tests passing.
 - [ ] 1.2 In `crates/sluice/src/profiles/checks.rs`, add the engine look (design D2): `GET /_ping` over each existing path of the sockets the profile opens, two-second connect and read timeouts, `200` an engine, the reason naming each path and what it said or the paths looked at; `unmet` answers `None` at once when `limits.docker` is false; add `Checks::with_engine_sockets` for tests. Verify with tests in `crates/sluice/tests/checks.rs` using a unix-socket listener in the test's temporary directory: one answering `HTTP/1.0 200 OK` reads as met; one answering `500`, a socket file nothing listens on, and no socket at all each read as unmet with the path in the reason; `docker = false` reads as met with no socket.
 
 ## 2. Turning a run down before the claim
