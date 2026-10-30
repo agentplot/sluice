@@ -24,3 +24,26 @@ lists for a signer of the same name SHALL count for nothing on it.
 #### Scenario: A branch in the host's own files
 - **WHEN** `scratch` keeps its records in the host's own files, its policy at its revision names no signers, and `main` on origin names `[signers.box]`
 - **THEN** none of box's signed runs on origin is read for `scratch`'s gate
+
+## ADDED Requirements
+
+### Requirement: A shared branch's run is taken only by a host whose signature its gate would count
+On a branch whose records are on its remote, a run SHALL be taken only by
+a host signing as a signer the branch's policy names, with a key that
+policy lists for it at the revision the round read; the name alone SHALL
+take nothing. A run no such host takes SHALL stay open until the time
+limit reads its candidate not passed (87, 66). A result signed with an
+unlisted key SHALL be missing, never a fail, and its run open again
+(28, S18). The records seam, never the core, SHALL read the key.
+
+#### Scenario: A host whose key the branch does not list takes no run
+- **WHEN** host a signs as a signer `main`'s gate trusts, with a key `main`'s policy does not list, and a submission waits on `main`
+- **THEN** host a's rounds leave the run open and unclaimed, and host b, whose key `main` lists, claims it and the submission lands
+
+#### Scenario: A run no listed host takes is not passed at the time limit
+- **WHEN** the only live host signs with a key `main`'s policy does not list, and `main`'s time limit passes with the run still open
+- **THEN** the candidate reads as not passed, and no run of it was started
+
+#### Scenario: A result signed with a key the branch does not list is missing (S18)
+- **WHEN** host a runs `main`'s candidate, `main`'s policy stops listing host a's key before the result is read, and the run reports
+- **THEN** its checks are missing, not failed: the submission is not failed, the run is open again, the log records the checks as uncounted for host a, and once host b's rounds run it the submission lands

@@ -34,8 +34,17 @@ branch's policy names), core.15 (a gate is read from the branch's
 current revision), core.27 (routing reads each revision only as far as
 the remote and whether signers are named), core.31 (a branch's policy
 is not read again while its revision stands), core.14 (nothing decided
-is kept in a loop's memory). Clauses 27, 28, 56, 78, 124; ADRs 0032,
+is kept in a loop's memory). Clauses 27, 28, 56, 66, 78, 87 (as amended
+2026-10-30, agentplot/blueprints c078b45), 124 and S18; ADRs 0032,
 0037, 0069.
+
+Once each branch verifies with its own list, a second gap shows. A round
+claims a run on a signed branch when this host's signer name is one the
+gate trusts (`Sluice::claimable`, `step.rs`), whatever key the host
+signs with. Two hosts that both sign as `box`, `main` listing one's key
+and `release` the other's, each claim both branches' runs; the result a
+host signs for the branch that does not list its key is never read back,
+and the verdict reads its checks as failed.
 
 ## Goals / Non-Goals
 
@@ -47,6 +56,9 @@ is kept in a loop's memory). Clauses 27, 28, 56, 78, 124; ADRs 0032,
 - The list re-read when, and only when, the branch's revision moves.
 - No new fetch: the revision the list is read at is the one the
   existing reads already bring.
+- A host takes a shared branch's run only where the branch would count
+  what it signs, and a result the branch does not count is missing,
+  never failed (87).
 
 **Non-Goals:**
 
@@ -131,17 +143,80 @@ the signer's name and a digest of the key's allowed-signers lines, so a
 statement verified for one branch's key is never reused for another's.
 `SignerKey::Ssh` carries that digest, computed when the list is read.
 
-### D4. An ADR and a rule line
+### D4. A host takes a shared branch's run only where its signature counts
 
-A new ADR, the next free number under `docs/adr/`, records D1 to D3: a
+The records seam answers, and the core asks: `State::verifies_own(branch,
+at)` says whether `branch`'s own policy at `at`, the revision the round
+read, lists the key this host signs with for the signer it signs as. Its
+default answers yes, for a profile that verifies no signed run. `Records`
+answers from the branch's list at that revision (`signers_at`, D2), with
+no fetch, and reads the public half of its own signing key once a
+process; a host that signs nothing, or a binding for guarding, answers
+no. `SignerKey::lists(key)` says whether a key is among a signer's
+allowed ones. The core never reads a key (core.22).
+
+A round asks once, where it reads the gate, and carries the answer as
+`listed`:
+
+1. `Sluice::counts_here(run, home, rules, listed)` holds on a branch
+   that is not signed, and otherwise only when `listed` holds and the
+   signer may claim what the gate needs (confined, the run's system), as
+   before. `claimable` requires it, so the claims a round makes, the
+   starts it chooses and the pools it launches on (`choose_starts`,
+   `launch_on_pools`, the lead's pick) take no run whose result would
+   not count.
+2. The time limit (66) reads an open run as not passed once it is over
+   when it is of a system this host is not, as before, or when it does
+   not count here. A run no listed host is live to take therefore stays
+   open and the candidate is not passed at its limit.
+3. `verdict::read` puts a check the run ran, on a signed branch, with no
+   counted result for its key into a new `Verdict::missing`, and a run
+   with any missing check has not passed. A check whose key the tree did not
+   bear out still fails, as before (15).
+4. When a finished run leaves checks missing with none failed and no
+   time out, the round opens the run again (no run, no host, its place
+   released) and logs `Event::Uncounted { combination, tasks, host }`. A
+   host whose result counts then takes it.
+
+Alternatives considered:
+
+- *Read the key in the core.* The core would have to read keys and
+  allowed-signers files, which are the profile's (core.2, core.22).
+- *Keep claiming by name and read an uncounted result as a fail.* It
+  blames a submission for a host's key, which 28 and S18 forbid.
+- *Ask per run.* The answer depends only on the branch and the revision
+  the round read, so once a round is enough, and reads no policy while
+  the revision stands (core.31).
+
+### D5. An ADR and the rule's lines
+
+A new ADR, the next free number under `docs/adr/`, records D1 to D4: a
 branch's signed runs are verified with its own policy's signers at its
-revision on its remote, and the records seam reads results for a
-branch. core.22's details gain a "Rules out" line for a branch's runs
-verified with another branch's signers or keys, or with a list read at
-a revision the branch has left, citing batch 44's reading and this ADR.
+revision on its remote, the records seam reads results for a branch, and
+a host takes a shared branch's run only where the branch would count
+what it signs, a result it does not count missing, never failed. Its
+sources include clause 87 as amended 2026-10-30 and S18.
+
+core.22's details gain a "Rules out" line for a branch's runs verified
+with another branch's signers or keys, or with a list read at a revision
+the branch has left, citing batch 44's reading and this ADR. The clause-87
+lines main already holds for core.22 (sluice main 639c9424: a run claimed
+on the signer's name alone, an unverifiable result read as a fail, the
+core reading a key; and, not ruled out, the run staying open where no
+host the branch would count is live) are carried word for word, and the
+line's sources name clause 87 as amended 2026-10-30 and this ADR, so the
+bolt's details agree with main's when it lands.
 
 ## Risks / Trade-offs
 
+- [A run opened again because its result was not counted can be taken
+  again by the same host, where its key is listed but its signed write is
+  not read back] → The candidate's time limit (66) ends it; no test
+  shows it happening, and the log's uncounted lines name the host.
+- [A host that signs as a trusted signer with an unlisted key now takes
+  no run on that branch] → That is clause 87; a branch no listed host
+  serves reads its candidates not passed at the time limit, naming the
+  checks missing.
 - [A branch made on the remote by `sluice branch create` or a first
   landing reads no list until origin holds it] → No gate is read for a
   branch its remote does not hold (56, 124), so nothing that would have

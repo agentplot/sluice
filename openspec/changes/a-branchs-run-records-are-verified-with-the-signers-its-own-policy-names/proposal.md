@@ -19,6 +19,17 @@ on a remote is the remote's revision, never the host's copy (124). Rule
 core.22 holds the code to it. The list a run is checked against has to
 be the branch's own.
 
+Once the list is the branch's own, a host can sign as a signer a branch
+trusts, by name, with a key that branch does not list. Clause 87, as
+amended 2026-10-30 (agentplot/blueprints c078b45), says what happens
+then: such a host takes none of that branch's runs, a run no host the
+branch would count is live to take stays open until the candidate's time
+limit reads it not passed (66), and a result signed with a key the
+branch does not list is missing for its gate, never a fail (28, S18).
+Without it, two hosts that both sign as `box` would each take the other
+branch's runs, and the branch would read the wrong host's work as failed
+checks.
+
 ## What Changes
 
 - **Each branch checks signed runs with its own list.** The signers and
@@ -38,8 +49,20 @@ be the branch's own.
   runs it reads from a remote with the signers its own policy names at
   its own revision, as every branch does, and never with a list some
   routed branch opened.
+- **A host takes a shared branch's run only where its signature would
+  count.** On a branch whose records are on its remote, a host claims a
+  run only when it signs as a signer the branch trusts with a key the
+  branch's own policy lists for that signer, at the revision the round
+  read; the signer's name alone takes nothing. A run no such host is live
+  to take stays open, and the candidate's time limit reads it not passed.
+- **A result the branch does not count is missing, never failed.** A
+  check a run ran whose own signed result the branch does not count, its
+  key unlisted there, is missing: the run opens again for a host whose
+  result counts, and the branch's log says which host's checks went
+  uncounted.
 - The records seam's read of the results log names the branch whose gate
-  reads it. **BREAKING** for the seam's implementors (the profiles, the
+  reads it, and the seam answers whether a branch would count what this
+  host signs. **BREAKING** for the seam's implementors (the profiles, the
   fakes, the conformance harness); nothing a user runs or writes
   changes.
 
@@ -57,7 +80,9 @@ be the branch's own.
   revision of it.
 - `run-signing`: a result counts only when signed by a key the gate's
   own branch's policy lists for that signer, whatever another branch
-  names.
+  names; and a new requirement that a shared branch's run is taken only
+  by a host whose signature its gate would count, a result it does not
+  count read as missing, never failed.
 
 ## Impact
 
@@ -67,13 +92,22 @@ be the branch's own.
 - `crates/sluice/src/profiles/remote_refs.rs`: no signer list of its
   own; verifies a branch's runs with the list it is handed, and keeps
   what it verified by the run record and the key together.
-- `crates/sluice-seams/src/lib.rs`: `State::results` takes the branch.
+- `crates/sluice-seams/src/lib.rs`: `State::results` takes the branch;
+  a new `State::verifies_own(branch, at)` says whether the branch's
+  policy at that revision lists the key this host signs with.
+- `crates/sluice/src/profiles/records.rs` and `remote_refs.rs` answer it
+  from the branch's own list, with no fetch.
 - `crates/sluice-core/src/`: every read of the results log passes the
   branch whose gate or session reads it; setting a result aside finds it
-  among the results of each branch with records.
+  among the results of each branch with records. A round asks
+  `verifies_own` once and claims, launches and times out runs by it
+  (`step.rs`); the verdict reads a signed check with no counted result as
+  missing (`verdict.rs`); the round opens such a run again and logs a new
+  `Event::Uncounted` (`records.rs`).
 - `crates/sluice-fakes`, `crates/sluice-conformance`, the local-files
   profile and the test fakes that implement `State`: follow the seam.
-- A new ADR, and a "rules out" line in core.22's details.
+- A new ADR, and "rules out" lines in core.22's details, clause 87 among
+  their sources.
 
 Out of scope, each for the planner to place:
 
