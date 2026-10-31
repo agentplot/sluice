@@ -403,6 +403,34 @@ fn a_removed_worktrees_failing_release_is_freed_and_never_run_again() {
     shared::a_removed_worktrees_failing_release_is_freed_and_never_run_again(&Harness::bolt());
 }
 
+/// satisfies: 25, 32, 81, 5, 67; the obsolete-combinations spec's
+/// "Withdrawn while under test" and "Its run still going"
+#[test]
+fn a_withdrawn_combinations_run_is_ended_and_its_checkout_released() {
+    shared::a_withdrawn_combinations_run_is_ended_and_its_checkout_released(&Harness::bolt());
+}
+
+/// satisfies: 25, 81, 16; the obsolete-combinations spec's "Its run had
+/// finished"
+#[test]
+fn a_withdrawn_combinations_passed_run_is_read_for_nothing() {
+    shared::a_withdrawn_combinations_passed_run_is_read_for_nothing(&Harness::bolt());
+}
+
+/// satisfies: 17, 20, 25, 81; the obsolete-combinations spec's "Its run
+/// had failed"
+#[test]
+fn a_withdrawn_combinations_failed_run_blames_no_one() {
+    shared::a_withdrawn_combinations_failed_run_blames_no_one(&Harness::bolt());
+}
+
+/// satisfies: 123, 25; the obsolete-combinations spec's "Its release
+/// fails"
+#[test]
+fn a_withdrawn_combinations_failed_release_holds_its_checkout() {
+    shared::a_withdrawn_combinations_failed_release_holds_its_checkout(&Harness::bolt());
+}
+
 /// satisfies: S57, 121, 22, 45
 #[test]
 fn s57_a_branch_read_from_an_older_copy_is_held_until_restored_or_accepted() {
