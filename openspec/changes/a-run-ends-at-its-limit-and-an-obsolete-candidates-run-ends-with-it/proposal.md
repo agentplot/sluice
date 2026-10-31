@@ -92,6 +92,7 @@ crates/sluice-core/src/step.rs
 crates/sluice-core/src/ops.rs
 crates/sluice/src/lib.rs
 crates/sluice/src/profiles/github/pulls.rs
+crates/sluice-conformance/src/lib.rs
 crates/sluice-conformance/src/shared.rs
 crates/sluice-conformance/tests/scenarios.rs
 crates/sluice/tests/profiles/conformance.rs
