@@ -37,10 +37,15 @@ use sluice_seams::{
 use support::{Repo, Scratch};
 
 /// The check every project's test runs: it fails when a rule in the rig's
-/// rules file names it and the file the rule names holds its content.
+/// rules file names it and the file the rule names holds its content, and
+/// goes on until it is ended when a rule names it with the path `-`.
 const CHECK: &str = r#"# $1: the task.
 tab=$(printf '\t')
 while IFS="$tab" read -r task path content; do
+  if [ "$task" = "$1" ] && [ "$path" = "-" ]; then
+    echo "$1: hangs"
+    exec sleep 600
+  fi
   if [ "$task" = "$1" ] && [ -f "$path" ] && [ "$(cat "$path")" = "$content" ]; then
     echo "$1: $path holds $content"
     exit 1
@@ -649,6 +654,10 @@ impl Rig for Real {
         writeln!(f, "{task}\t{path}\t{content}").unwrap();
     }
 
+    fn hangs(&self, task: &str) {
+        self.fails_with(task, "-", "hangs");
+    }
+
     /// Step until no submission is queued, under test or landing, and
     /// every place made is released: runs finish on their own here.
     fn settle(&self) {
@@ -844,6 +853,10 @@ scenarios! {
     a_session_runs_last_result_says_whether_it_was_recorded: bolt();
     a_last_result_decides_nothing: bolt();
     a_worktree_that_changes_while_its_run_runs_records_nothing: bolt();
+    a_withdrawn_combinations_run_is_ended_and_its_checkout_released: bolt();
+    a_withdrawn_combinations_passed_run_is_read_for_nothing: bolt();
+    a_withdrawn_combinations_failed_run_blames_no_one: bolt();
+    a_withdrawn_combinations_failed_release_holds_its_checkout: releasing();
 }
 
 /// Each scenario of `shared` with the branch's records on its remote and

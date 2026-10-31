@@ -10,7 +10,8 @@ use sluice_core::records::{
 use sluice_core::session::Recorded;
 use sluice_core::{Forecast, Requester, Sluice, SubmitRefusal};
 use sluice_seams::{
-    Decided, LastResult, Outcome, ReleasePolicy, Released, Rev, RunKind, RunOutcome, SessionPlace,
+    Decided, LastResult, Outcome, Progress, ReleasePolicy, Released, Rev, RunHandle, RunKind,
+    RunOutcome, SessionPlace,
 };
 
 use crate::{Rig, BRANCH};
@@ -1461,6 +1462,195 @@ pub fn a_held_checkout_never_holds_its_branch(h: &impl Rig) {
     step_until(h, "#2's landing", || h.sub(two).state == State::Landed);
     assert!(h.live_places().contains(&first));
     assert_eq!(h.tested().last(), Some(&vec![two]));
+}
+
+/// The runs going on on the host for the queue, by the check seam's count:
+/// a run ended is no longer among them (71).
+fn running(h: &impl Rig) -> usize {
+    let s = h.sluice();
+    s.seams().tests.running().expect("the host's count").queue
+}
+
+/// Until every run of a combination under test has finished, with no
+/// round reading any: at once on the fakes, as its checks end on the real
+/// profiles.
+fn finished(h: &impl Rig) {
+    let runs: Vec<RunHandle> = h
+        .doc()
+        .candidates
+        .iter()
+        .flat_map(|c| c.runs.iter().filter_map(|r| r.run.clone()))
+        .collect();
+    assert!(!runs.is_empty(), "no run under test");
+    let s = h.sluice();
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(300);
+    for run in &runs {
+        loop {
+            match s.seams().tests.progress(run).expect("progress") {
+                Progress::Finished(_) => break,
+                Progress::Lost => panic!("the run {} was lost", run.0),
+                Progress::Running => {
+                    assert!(std::time::Instant::now() < until, "{} never ended", run.0);
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+            }
+        }
+    }
+}
+
+/// Nothing of `combination`'s runs was read: no check of it recorded and
+/// no result for it (25, 81; rule core.7).
+fn read_for_nothing(h: &impl Rig, combination: &Rev) {
+    let recorded: Vec<_> = h
+        .results()
+        .into_iter()
+        .filter(|r| r.combination == *combination)
+        .collect();
+    assert!(recorded.is_empty(), "checks of it recorded: {recorded:?}");
+    let events = h.events();
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, Event::Result { combination: c, .. } if c == combination)),
+        "a result for it: {events:?}"
+    );
+}
+
+/// `id`'s combination under test, as the records name it.
+fn under_test(h: &impl Rig, id: u64) -> Rev {
+    h.sub(id).tested.expect("under test").combination
+}
+
+/// The obsolete-combinations spec's "Withdrawn while under test" and "Its
+/// run still going" (25, 32, 81; rules core.10, core.16, core.23): the
+/// round after a withdrawal drops the combination, ends its run and
+/// releases its checkout, and starts the combination of the submission
+/// behind it; the records hold no combination with the withdrawn one, and
+/// nothing of the run is recorded.
+pub fn a_withdrawn_combinations_run_is_ended_and_its_checkout_released(h: &impl Rig) {
+    h.hangs("a:test");
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let one = h.submit("unit/a");
+    h.step();
+    let first = under_test(h, one);
+    let place = h.made_places()[0].clone();
+    assert_eq!(running(h), 1);
+    h.work("unit/b", "agent-b", &[("a/notes", Some("from b"))]);
+    let two = h.submit("unit/b");
+    h.withdraw(one, Requester::Session("agent-a".into()));
+
+    h.step();
+    assert!(!h.live_places().contains(&place), "{place} is left");
+    assert_eq!(h.releases_of(&place), 1);
+    assert!(h
+        .doc()
+        .candidates
+        .iter()
+        .all(|c| !c.submissions.contains(&one)));
+    assert_eq!(h.tested(), [vec![one], vec![two]]);
+    assert_eq!(running(h), 1, "#1's run ended, #2's goes on");
+    read_for_nothing(h, &first);
+
+    let second = under_test(h, two);
+    h.withdraw(two, Requester::Session("agent-b".into()));
+    h.step();
+    assert_eq!(running(h), 0);
+    assert!(h.live_places().is_empty(), "{:?}", h.live_places());
+    assert!(h.doc().candidates.is_empty());
+    read_for_nothing(h, &second);
+    assert_eq!(h.moves(), 0);
+}
+
+/// The obsolete-combinations spec's "Its run had finished" (25, 81; rule
+/// core.7): a run that passed every check, its submission withdrawn
+/// before any round read it, is read by no round: no check of it is
+/// recorded, no result written, nothing landed and nothing told.
+pub fn a_withdrawn_combinations_passed_run_is_read_for_nothing(h: &impl Rig) {
+    let base = h.tip();
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let one = h.submit("unit/a");
+    h.step();
+    let combination = under_test(h, one);
+    let place = h.made_places()[0].clone();
+    finished(h);
+    h.withdraw(one, Requester::Session("agent-a".into()));
+
+    h.step();
+    read_for_nothing(h, &combination);
+    assert!(!h.live_places().contains(&place), "{place} is left");
+    assert!(h.doc().candidates.is_empty());
+    assert_eq!(h.sub(one).state, State::Withdrawn);
+    assert_eq!(h.sub(one).result, None);
+    assert_eq!((h.moves(), h.tip()), (0, base));
+    assert!(h.delivered_to("agent-a").is_empty());
+}
+
+/// The obsolete-combinations spec's "Its run had failed" (17, 20, 25, 81;
+/// rule core.8): runs that failed a check, their combinations holding a
+/// submission withdrawn before any round read them, blame no one and tell
+/// no session; the submission behind it is tested without it and lands.
+pub fn a_withdrawn_combinations_failed_run_blames_no_one(h: &impl Rig) {
+    h.fails_with("a:test", "a/bad", "yes");
+    h.work("unit/a", "agent-a", &[("a/bad", Some("yes"))]);
+    h.work("unit/b", "agent-b", &[("b/lib", Some("b2"))]);
+    let one = h.submit("unit/a");
+    let two = h.submit("unit/b");
+    h.step();
+    assert_eq!(h.tested(), [vec![one], vec![one, two]]);
+    let (first, both) = (under_test(h, one), under_test(h, two));
+    finished(h);
+    h.withdraw(one, Requester::Session("agent-a".into()));
+
+    h.step();
+    read_for_nothing(h, &first);
+    read_for_nothing(h, &both);
+    assert!(!h.events().iter().any(|e| matches!(e, Event::Blamed { .. })));
+    for id in [one, two] {
+        let s = h.sub(id);
+        assert!(s.failed.is_empty(), "#{id} was blamed: {s:?}");
+        assert_ne!(s.state, State::Failed);
+    }
+    assert!(h.delivered_to("agent-a").is_empty());
+    assert!(h.delivered_to("agent-b").is_empty());
+
+    h.settle();
+    assert_eq!(h.sub(two).state, State::Landed);
+    assert_eq!(h.tested().last(), Some(&vec![two]));
+    assert!(h
+        .delivered_to("agent-b")
+        .iter()
+        .all(|n| n.decided.word() == "landed"));
+}
+
+/// The obsolete-combinations spec's "Its release fails" (123): the
+/// checkout of a withdrawn submission's combination whose release fails is
+/// held, named with what failed, and tried again the next round as any
+/// failed release is, until it is released.
+pub fn a_withdrawn_combinations_failed_release_holds_its_checkout(h: &impl Rig) {
+    h.hangs("a:test");
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let one = h.submit("unit/a");
+    h.step();
+    let place = h.made_places()[0].clone();
+    h.release_fails(true);
+    h.withdraw(one, Requester::Session("agent-a".into()));
+
+    h.step();
+    assert!(h.doc().candidates.is_empty());
+    assert!(h.live_places().contains(&place), "{place} was removed");
+    let held = h.sluice().status(BRANCH).unwrap().failed_releases;
+    assert_eq!(held.len(), 1, "{held:?}");
+    assert_eq!(held[0].place, place);
+    assert!(held[0].failed.contains(RELEASE_FAILS), "{held:?}");
+    assert_eq!((held[0].tries, held[0].stopped), (1, false));
+
+    h.step();
+    assert_eq!(h.releases_of(&place), 2);
+    assert_eq!(failed_tries(h, &place), [(1, false), (2, false)]);
+    h.release_fails(false);
+    h.step();
+    assert!(!h.live_places().contains(&place), "{place} is left");
+    assert_eq!(running(h), 0);
 }
 
 /// 129, 124: what a reader that decides nothing reads of the branch is the
