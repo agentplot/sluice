@@ -7,7 +7,7 @@
 
 ## 2. The driver reads a branch while anything is under way
 
-- [ ] 2.1 Make `Sluice::in_play` (`sluice-core/src/ops.rs`) true also when the records hold a combination under test or a place in `release`, read from the records alone (design D4). Extend `in_play_reads_the_records_alone` with both cases, no revision or file read for either, and with a branch holding none of the three out of play. Verify with `cargo test -p sluice-core in_play`
+- [x] 2.1 Make `Sluice::in_play` (`sluice-core/src/ops.rs`) true also when the records hold a combination under test or a place in `release`, read from the records alone (design D4). Extend `in_play_reads_the_records_alone` with both cases, no revision or file read for either, and with a branch holding none of the three out of play. Verify with `cargo test -p sluice-core in_play`
 - [ ] 2.2 Add a command test in `sluice/tests/cli.rs` for the `host-driver` scenario "The queue emptied while a run went on": one submission under test with a hanging check, withdrawn, then `sluice run --rounds 1` ends its run and releases its checkout; and "Nothing under test and nothing queued", the pass running no round for the branch. Verify with `sluice exec main -- cargo test -p sluice --test cli`
 
 ## 3. The hand-over ends what it made obsolete
