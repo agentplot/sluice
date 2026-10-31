@@ -939,3 +939,54 @@ fn a_check_that_says_the_engine_is_down_while_it_answers_is_recorded_as_failed()
         "{said}"
     );
 }
+
+/// Design D5; the host-requirements spec's "An engine at a TCP address"
+/// and "Nothing answers at the TCP address": with `docker = true` and
+/// `DOCKER_HOST` naming a fake engine's TCP port, `sluice exec` runs the
+/// tests, which see the address; with nothing listening there, it refuses
+/// them, naming the address. The look is held to that address alone, so
+/// no engine of the host's own answers in its place.
+#[test]
+fn exec_looks_for_the_engine_at_a_tcp_address() {
+    let s = Setup::new("exec-engine-tcp");
+    s.policy(&format!("{POLICY}\n[executor]\ndocker = true\n"));
+    // The session runs its worktree's own check.
+    std::fs::write(
+        s.worktree.join("check.sh"),
+        "echo \"$DOCKER_HOST\" > \"$SLUICE_CHECKOUT/reached\"\n",
+    )
+    .unwrap();
+    let tree = s.worktree.to_str().unwrap();
+    s.repo
+        .git(&["-C", tree, "commit", "-q", "-am", "a check that says where"]);
+    let at = |port: u16| format!("tcp://127.0.0.1:{port}");
+    let exec = |address: &str| {
+        let env = [
+            ("DOCKER_HOST", Path::new(address)),
+            (ENGINE_SOCKETS, Path::new(address)),
+        ];
+        s.sluice_with(&env, &["exec", "bolt/x"])
+    };
+
+    let engine = at(support::tcp_engine("HTTP/1.0 200 OK"));
+    let out = exec(&engine);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert_eq!(
+        std::fs::read_to_string(s.worktree.join("reached")).unwrap(),
+        format!("{engine}\n")
+    );
+
+    std::fs::remove_file(s.worktree.join("reached")).unwrap();
+    let closed = at(support::closed_port());
+    let out = exec(&closed);
+    let said = text(&out);
+    assert_eq!(out.status.code(), Some(2), "{said}");
+    assert!(
+        said.contains(&format!(
+            "refused: no container engine answers: {closed} refused the connection; \
+             bolt/x's tests ask for one ([executor] docker = true)"
+        )),
+        "{said}"
+    );
+    assert!(!s.worktree.join("reached").exists(), "nothing runs");
+}
