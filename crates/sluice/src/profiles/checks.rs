@@ -1164,10 +1164,15 @@ impl Tests for Checks {
         Ok(RunHandle(name.clone()))
     }
 
-    /// 84, record 0074: a run that may reach the container engine asks
-    /// the host for one that answers where the run would reach it.
+    /// 84, 87, record 0074 (design D2): a limit the executor cannot hold,
+    /// in the words its start would refuse it with, before any socket is
+    /// looked at; then, for a run that may reach the container engine, one
+    /// that answers where the run would reach it.
     fn unmet(&self, limits: &Limits) -> Result<Option<String>> {
-        if !limits.asks_of_host() {
+        if let Err(refused) = choose(limits) {
+            return Ok(Some(format!("{refused:#}")));
+        }
+        if !limits.docker {
             return Ok(None);
         }
         Ok(engine_unmet(&self.engine_sockets()))

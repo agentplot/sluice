@@ -678,6 +678,62 @@ fn a_run_that_asks_for_no_engine_is_met_with_none() {
     assert_eq!(c.unmet(&Limits::default()).unwrap(), None);
 }
 
+/// 84, 87 (design D2): a limit the executor cannot hold leaves a run
+/// unmet in the words its start refuses it with, the open executor's and
+/// the macOS sandbox's, before any socket is looked at; limits the
+/// executor holds are met, and a run that asks for no engine has none
+/// looked for.
+#[test]
+fn a_limit_the_executor_cannot_hold_leaves_a_run_unmet_before_any_socket() {
+    let repo = Repo::new("checks-limits-unmet");
+    let dir = Scratch::short();
+    let socket = dir.path().join("e.sock");
+    let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let c = checks(&repo).with_engine_sockets(vec![socket]);
+    let gig = Some(1 << 30);
+    let open = Limits {
+        memory: gig,
+        ..docker()
+    };
+    assert_eq!(
+        c.unmet(&open).unwrap().as_deref(),
+        Some("[executor] memory = 1073741824 bytes: the open executor cannot hold a memory limit")
+    );
+    let offline = Limits {
+        network: Some(Network::Denied),
+        ..Limits::default()
+    };
+    assert_eq!(
+        c.unmet(&offline).unwrap().as_deref(),
+        Some("[executor] network = Denied: the open executor cannot hold a run's network")
+    );
+    if cfg!(target_os = "macos") {
+        let sandbox = |memory, network| Limits {
+            executor: Some("sandbox".into()),
+            memory,
+            network,
+            docker: false,
+        };
+        assert_eq!(
+            c.unmet(&sandbox(gig, None)).unwrap().as_deref(),
+            Some(
+                "[executor] memory = 1073741824 bytes: the sandbox executor on macOS cannot \
+                 hold a memory limit"
+            )
+        );
+        assert_eq!(
+            c.unmet(&sandbox(None, Some(Network::Denied))).unwrap(),
+            None
+        );
+    }
+    assert_eq!(c.unmet(&Limits::default()).unwrap(), None);
+    assert!(
+        matches!(listener.accept(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock),
+        "no socket was looked at"
+    );
+}
+
 /// `tests` with `key` set to `value`.
 fn with(mut tests: Settings, key: &str, value: Setting) -> Settings {
     tests.insert(key.into(), value);

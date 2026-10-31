@@ -1213,10 +1213,14 @@ impl Sluice<'_> {
     pub(crate) fn after_run(&self, limits: &Limits, mut report: RunReport) -> Result<RunReport> {
         let unpassed = report.tasks.iter().any(|t| t.outcome == Outcome::Fail)
             || report.missing.iter().any(|m| !report.kept_out.contains(m));
-        if !limits.asks_of_host() || report.timed_out || !unpassed {
+        if !limits.docker || report.timed_out || !unpassed {
             return Ok(report);
         }
-        let Some(why) = self.seams.tests.unmet(limits)? else {
+        let engine = Limits {
+            docker: true,
+            ..Limits::default()
+        };
+        let Some(why) = self.seams.tests.unmet(&engine)? else {
             return Ok(report);
         };
         let reason = format!("the container engine no longer answers after the run: {why}");
@@ -2449,14 +2453,12 @@ impl Sluice<'_> {
         self.may_claim(run, home, rules, listed) && self.meets(unmet)
     }
 
-    /// Design D3: whether this host meets what `unmet`'s limits ask of it,
-    /// read from the host once a round, and never for limits that ask it
-    /// nothing. A look that fails says so as what it lacks: the host could
+    /// Design D3, D2 (84, 87): whether this host meets what `unmet`'s
+    /// limits ask of it, what its executor holds and, where they ask for
+    /// one, a container engine that answers, read from the host once a
+    /// round. A look that fails says so as what it lacks: the host could
     /// not show it meets them.
     fn meets(&self, unmet: &Unmet) -> bool {
-        if !unmet.limits.asks_of_host() {
-            return true;
-        }
         unmet
             .looked
             .get_or_init(|| match self.seams.tests.unmet(&unmet.limits) {

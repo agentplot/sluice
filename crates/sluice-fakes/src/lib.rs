@@ -184,6 +184,9 @@ struct Inner {
     unmet: BTreeMap<String, String>,
     /// Every look at what a host lacks, by the host that looked, in order.
     looks: Vec<String>,
+    /// What each host's executor cannot hold of a run's memory or network
+    /// limit, by host, as the check seam's look says it (84, 87).
+    limits_unmet: BTreeMap<String, String>,
     cache: BTreeMap<(String, String), String>,
     runs: Vec<RunState>,
     /// What each run says of its tasks while it goes, by run.
@@ -762,7 +765,19 @@ impl World {
         };
     }
 
-    /// Each look at what the host lacks, by the host that looked, in
+    /// From now, this world's host's executor cannot hold a run's memory
+    /// or network limit, for `why`, as its look says; with `None`, it holds
+    /// them again (84, 87; design D2).
+    pub fn limits_unmet(&self, why: Option<&str>) {
+        let mut inner = self.0.borrow_mut();
+        let host = inner.host.clone();
+        match why {
+            Some(w) => inner.limits_unmet.insert(host, w.into()),
+            None => inner.limits_unmet.remove(&host),
+        };
+    }
+
+    /// Each look at the container engine, by the host that looked, in
     /// order.
     pub fn engine_looks(&self) -> Vec<String> {
         self.0.borrow().looks.clone()
@@ -1967,10 +1982,16 @@ impl Tests for FakeTests {
     fn unmet(&self, limits: &sluice_seams::Limits) -> Result<Option<String>> {
         let mut inner = self.0 .0.borrow_mut();
         let host = inner.host.clone();
-        inner.looks.push(host.clone());
-        if !limits.asks_of_host() {
+        // Design D2: a limit the executor cannot hold, before any engine.
+        if limits.memory.is_some() || limits.network.is_some() {
+            if let Some(why) = inner.limits_unmet.get(&host) {
+                return Ok(Some(why.clone()));
+            }
+        }
+        if !limits.docker {
             return Ok(None);
         }
+        inner.looks.push(host.clone());
         Ok(inner.unmet.get(&host).cloned())
     }
 
