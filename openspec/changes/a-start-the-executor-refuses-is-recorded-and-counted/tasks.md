@@ -43,4 +43,4 @@ rules by id. Every group ends with its check task passing.
 ## 4. The gate
 
 - [x] 4.1 Remove record 0074's item from `docs/architecture/_open.md`, and the file once it is empty. True when nothing there names core.38 or record 0074.
-- [ ] 4.2 Run the gate's checks on the committed work with `sluice exec main`, and `sluice exec main -- moon run root:changes`. True when every task passes and the change validates strictly.
+- [x] 4.2 Run the gate's checks on the committed work with `sluice exec main`, and `sluice exec main -- moon run root:changes`. True when every task passes and the change validates strictly.
