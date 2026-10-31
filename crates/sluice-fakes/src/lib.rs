@@ -184,9 +184,12 @@ struct Inner {
     unmet: BTreeMap<String, String>,
     /// Every look at what a host lacks, by the host that looked, in order.
     looks: Vec<String>,
-    /// What each host's executor cannot hold of a run's memory or network
-    /// limit, by host, as the check seam's look says it (84, 87).
-    limits_unmet: BTreeMap<String, String>,
+    /// Why each host's executor cannot hold a run's memory limit, by host,
+    /// as the check seam's look says it (84, 87).
+    memory_unmet: BTreeMap<String, String>,
+    /// The hosts whose executor holds a run's memory limit, which the
+    /// fake's open executor does not.
+    holds_memory: BTreeSet<String>,
     cache: BTreeMap<(String, String), String>,
     runs: Vec<RunState>,
     /// What each run says of its tasks while it goes, by run.
@@ -766,15 +769,23 @@ impl World {
     }
 
     /// From now, this world's host's executor cannot hold a run's memory
-    /// or network limit, for `why`, as its look says; with `None`, it holds
-    /// them again (84, 87; design D2).
-    pub fn limits_unmet(&self, why: Option<&str>) {
+    /// limit, for `why`, as its look says of a policy that states one; with
+    /// `None`, it holds one again (84, 87; design D2).
+    pub fn memory_unmet(&self, why: Option<&str>) {
         let mut inner = self.0.borrow_mut();
         let host = inner.host.clone();
         match why {
-            Some(w) => inner.limits_unmet.insert(host, w.into()),
-            None => inner.limits_unmet.remove(&host),
+            Some(w) => inner.memory_unmet.insert(host, w.into()),
+            None => inner.memory_unmet.remove(&host),
         };
+    }
+
+    /// This world's host's executor holds a run's memory limit from now,
+    /// as an executor the fake does not stand for would.
+    pub fn holds_memory(&self) {
+        let mut inner = self.0.borrow_mut();
+        let host = inner.host.clone();
+        inner.holds_memory.insert(host);
     }
 
     /// Each look at the container engine, by the host that looked, in
@@ -1909,7 +1920,7 @@ impl Tests for FakeTests {
         if let Some(k) = request.limits.executor.as_deref().filter(|k| *k != "open") {
             bail!("the fake executor is open, not {k}");
         }
-        if request.limits.memory.is_some() {
+        if request.limits.memory.is_some() && !inner.holds_memory.contains(&inner.host) {
             bail!("the open executor cannot hold a memory limit");
         }
         if matches!(
@@ -1983,8 +1994,8 @@ impl Tests for FakeTests {
         let mut inner = self.0 .0.borrow_mut();
         let host = inner.host.clone();
         // Design D2: a limit the executor cannot hold, before any engine.
-        if limits.memory.is_some() || limits.network.is_some() {
-            if let Some(why) = inner.limits_unmet.get(&host) {
+        if limits.memory.is_some() {
+            if let Some(why) = inner.memory_unmet.get(&host) {
                 return Ok(Some(why.clone()));
             }
         }
