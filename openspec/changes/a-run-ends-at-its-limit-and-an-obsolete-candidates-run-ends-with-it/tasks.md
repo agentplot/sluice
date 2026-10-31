@@ -12,7 +12,7 @@
 
 ## 3. The hand-over ends what it made obsolete
 
-- [ ] 3.1 In `profiles/github/pulls.rs`, after `hand_over` withdraws, run the core's drop under the branch's lock and then its releases, so the pass that hands over ends this host's runs of what it withdrew whether or not a round follows (design D5); nothing posted on the pull request. Verify with the tests in 3.2
+- [x] 3.1 In `profiles/github/pulls.rs`, after `hand_over` withdraws, run the core's drop under the branch's lock and then its releases, so the pass that hands over ends this host's runs of what it withdrew whether or not a round follows (design D5); nothing posted on the pull request. Verify with the tests in 3.2
 - [ ] 3.2 Extend `handed_over` in `sluice/tests/profiles/pull_requests.rs` so A's `pull/<n>` is under test with a check that sleeps when B takes the mark: after A's pass its run's processes are gone, its checkout is released, and A's log holds no `result` for the combination. Add the same with A's pass a `sluice wait` and no driver on A ("Handed over mid-test by a wait"), the wait running no round for `main`. Verify with `sluice exec main -- cargo test -p sluice --test pull_requests handed`
 
 ## 4. The time limit holds whatever became of what started it
