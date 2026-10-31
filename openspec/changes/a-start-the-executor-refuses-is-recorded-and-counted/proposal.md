@@ -98,7 +98,12 @@ None.
   `unmet`; the engine look and the sandbox profile reach a TCP
   `DOCKER_HOST`.
 - `crates/sluice/src/progress.rs` and the core's notice words: what a
-  waiting combination waits for.
+  waiting combination waits for; `crates/sluice/src/exec.rs`, whose
+  refusal of a session's tests now leads with the reason, since the
+  reason says what is missing.
+- `Cargo.toml`, `crates/sluice/Cargo.toml` and `Cargo.lock`: `rcgen` and
+  `rustls` as dev-dependencies, for the TLS engine test's certificates
+  and server.
 - `crates/sluice-fakes`, `crates/sluice-conformance`, `crates/sluice/tests`:
   a start that fails, a limit refused before the claim, a TCP engine.
 - Docs: the configuration reference's `docker` and `[executor]` rows,
@@ -114,7 +119,11 @@ crates/sluice-fakes/src/lib.rs
 crates/sluice-conformance/**
 crates/sluice/src/profiles/checks.rs
 crates/sluice/src/progress.rs
+crates/sluice/src/exec.rs
 crates/sluice/src/lib.rs
+Cargo.toml
+crates/sluice/Cargo.toml
+Cargo.lock
 crates/sluice/tests/**
 site/src/content/docs/reference/configuration.md
 plugins/sluice/skills/using-sluice/references/verdicts.md

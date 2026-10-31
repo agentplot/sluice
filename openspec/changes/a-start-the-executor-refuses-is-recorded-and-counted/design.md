@@ -207,6 +207,20 @@ socket `/private/var/run/mDNSResponder` is opened too. A run that
 reaches an engine is never confined (C.3), so the wider rule changes no
 confinement.
 
+*Checked 2026-10-30.* ureq 3.4.2, the version `Cargo.lock` holds, has
+every TLS call this decision names: `TlsConfig::builder`, `client_cert`
+(taking an `Option<ClientCert>`), `root_certs`,
+`ClientCert::new_with_certs`, `RootCerts::new_with_certs` and
+`parse_pem`; `disable_verification` serves `DOCKER_TLS` alone. On macOS
+27.0.1 (26A434), `sandbox-exec` accepts `(remote tcp "*:<port>")` and
+`(remote tcp "localhost:<port>")`, and refuses both an address
+(`127.0.0.1:2375`) and a name (`build-engine:2376`) with "host must be *
+or localhost in network address". Under a profile that denies all
+other outbound traffic, a `localhost:<port>` rule lets a run reach an
+engine on that port at `127.0.0.1` and at `::1` alike, and neither on
+any other port, so an engine at `::1` takes the `localhost` rule as
+above.
+
 *Alternative:* a TCP connect alone. Rejected: record 0074 asks for an
 engine that answers, and a port something else holds is no engine.
 
