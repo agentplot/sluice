@@ -675,9 +675,10 @@ const ENGINE_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 /// 84, record 0074 (design D2): `None` when a container engine answers at
 /// one of `sockets`, by the Docker Engine API's `GET /_ping` over each
 /// that exists, the first answering `200` ending the look; otherwise why
-/// not: each socket that exists with what it said, or, where none exists,
-/// the paths looked at. It runs as the process that would run the checks,
-/// so it finds what their run would reach.
+/// not, beginning with what is missing (design D3): `no container engine
+/// answers: `, then each socket that exists with what it said, or, where
+/// none exists, the paths looked at. It runs as the process that would
+/// run the checks, so it finds what their run would reach.
 pub fn engine_unmet(sockets: &[PathBuf]) -> Option<String> {
     let mut said = Vec::new();
     let mut looked = std::collections::BTreeSet::new();
@@ -692,14 +693,16 @@ pub fn engine_unmet(sockets: &[PathBuf]) -> Option<String> {
             Err(why) => said.push(format!("{} {why}", socket.display())),
         }
     }
-    if said.is_empty() {
+    let said = if said.is_empty() {
         let paths: Vec<String> = sockets.iter().map(|s| s.display().to_string()).collect();
-        return Some(match paths.is_empty() {
+        match paths.is_empty() {
             true => "no socket to look at".into(),
             false => format!("no socket at {}", paths.join(", ")),
-        });
-    }
-    Some(said.join("; "))
+        }
+    } else {
+        said.join("; ")
+    };
+    Some(format!("no container engine answers: {said}"))
 }
 
 /// `GET /_ping` over the unix socket `socket`: `Ok` when it answers `200`,

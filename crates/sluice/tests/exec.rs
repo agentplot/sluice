@@ -868,7 +868,7 @@ fn exec_refuses_the_tests_of_a_branch_whose_engine_does_not_answer() {
     let said = text(&out);
     assert!(
         said.contains(&format!(
-            "refused: this host's container engine does not answer: no socket at {}; \
+            "refused: no container engine answers: no socket at {}; \
              bolt/x's tests ask for one ([executor] docker = true)",
             socket.display()
         )),
@@ -899,7 +899,7 @@ fn a_check_that_fails_after_the_engine_went_is_not_run_and_a_pass_is_recorded() 
     assert_eq!(out.status.code(), Some(1), "{said}");
     assert!(
         said.contains(&format!(
-            "could not run: a:test: the container engine no longer answers after the run: \
+            "could not run: a:test: after the run, no container engine answers: \
              no socket at {}",
             socket.display()
         )),

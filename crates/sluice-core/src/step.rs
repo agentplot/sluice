@@ -1223,7 +1223,7 @@ impl Sluice<'_> {
         let Some(why) = self.seams.tests.unmet(&engine)? else {
             return Ok(report);
         };
-        let reason = format!("the container engine no longer answers after the run: {why}");
+        let reason = format!("after the run, {why}");
         let (failed, passed) = std::mem::take(&mut report.tasks)
             .into_iter()
             .partition(|t| t.outcome == Outcome::Fail);
@@ -3296,12 +3296,13 @@ fn unstarted(checks: &[String], kind: &str, reason: String) -> RunReport {
     }
 }
 
-/// Record 0074: what a run no host took before its time limit waited for,
-/// each host that turned it down named with why (66, 87).
+/// Record 0074 (design D3): what a run no host took before its time
+/// limit waited for, each host that turned it down, for its engine or a
+/// limit its executor cannot hold, named with why (66, 87).
 fn waited_for(declined: &BTreeMap<String, String>) -> String {
     let hosts: Vec<String> = declined.iter().map(|(h, w)| format!("{h}: {w}")).collect();
     format!(
-        "no host whose container engine answers took its tests: {}",
+        "no host that could run its tests as its policy asks took them: {}",
         hosts.join("; ")
     )
 }

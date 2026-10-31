@@ -666,7 +666,13 @@ fn a_host_whose_engine_does_not_answer_does_not_meet_it() {
     let socket = dir.path().join("e.sock");
     let c = checks(&repo).with_engine_sockets(vec![socket.clone()]);
     let why = c.unmet(&docker()).unwrap().expect("unmet");
-    assert_eq!(why, format!("no socket at {}", socket.display()));
+    assert_eq!(
+        why,
+        format!(
+            "no container engine answers: no socket at {}",
+            socket.display()
+        )
+    );
 }
 
 /// 84: a run that asks for no engine is met, with no socket looked at.

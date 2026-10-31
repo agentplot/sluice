@@ -15,7 +15,7 @@ use sluice_seams::Decided;
 const HOST: &str = "this-host";
 
 /// What the fake's look at a host with no engine says.
-const NO_ENGINE: &str = "no socket at /var/run/docker.sock";
+const NO_ENGINE: &str = "no container engine answers: no socket at /var/run/docker.sock";
 
 /// The bolt policy, its runs asking for the container engine.
 fn docker() -> String {
@@ -261,8 +261,9 @@ fn a_run_no_host_takes_for_its_engine_is_not_passed_at_its_time_limit() {
     let sub = h.sub(one);
     assert_eq!(sub.state, State::Failed);
     assert_eq!(sub.result.as_deref(), Some("timed out"));
-    let waited =
-        format!("no host whose container engine answers took its tests: {HOST}: {NO_ENGINE}");
+    let waited = format!(
+        "no host that could run its tests as its policy asks took them: {HOST}: {NO_ENGINE}"
+    );
     assert!(!sub.failed.is_empty());
     assert!(
         sub.failed

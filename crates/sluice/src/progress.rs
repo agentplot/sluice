@@ -75,17 +75,18 @@ pub fn moved(c: &CandidateView) -> Moved {
 /// What [`moved`] reads of a combination.
 pub type Moved = (Vec<u64>, usize, Vec<String>, BTreeMap<String, String>);
 
-/// 84, record 0074: `waiting for a host whose container engine answers:
-/// build-box: no socket at /var/run/docker.sock`, for a combination with
-/// a run some host turned down for its engine and none has taken; `None`
-/// for one that waits for nothing.
+/// 84, 87, record 0074: `waiting for a host that can run its tests as its
+/// policy asks: build-box: no container engine answers: no socket at
+/// /var/run/docker.sock`, for a combination with a run some host turned
+/// down, for its engine or a limit its executor cannot hold, and none has
+/// taken; `None` for one that waits for nothing.
 pub fn waiting(c: &CandidateView) -> Option<String> {
     if c.waiting.is_empty() {
         return None;
     }
     let hosts: Vec<String> = c.waiting.iter().map(|(h, w)| format!("{h}: {w}")).collect();
     Some(format!(
-        "waiting for a host whose container engine answers: {}",
+        "waiting for a host that can run its tests as its policy asks: {}",
         hosts.join("; ")
     ))
 }
@@ -292,25 +293,29 @@ mod tests {
         c.waiting = BTreeMap::from([
             (
                 "box".into(),
-                "/var/run/docker.sock refused the connection".into(),
+                "no container engine answers: /var/run/docker.sock refused the connection".into(),
             ),
             (
                 "build-box".into(),
-                "no socket at /var/run/docker.sock".into(),
+                "[executor] memory = 4294967296 bytes: the sandbox executor on macOS cannot hold \
+                 a memory limit"
+                    .into(),
             ),
         ]);
         assert_eq!(
             testing_line("main", &c, now(), None),
-            "testing main + #12 · 26m10s of 30m · waiting for a host whose container engine \
-             answers: box: /var/run/docker.sock refused the connection; build-box: no socket at \
-             /var/run/docker.sock"
+            "testing main + #12 · 26m10s of 30m · waiting for a host that can run its tests as \
+             its policy asks: box: no container engine answers: /var/run/docker.sock refused the \
+             connection; build-box: [executor] memory = 4294967296 bytes: the sandbox executor \
+             on macOS cannot hold a memory limit"
         );
         c.started = None;
         assert_eq!(
             testing_line("main", &c, now(), None),
-            "testing main + #12 · waiting for a host whose container engine answers: box: \
-             /var/run/docker.sock refused the connection; build-box: no socket at \
-             /var/run/docker.sock"
+            "testing main + #12 · waiting for a host that can run its tests as its policy asks: \
+             box: no container engine answers: /var/run/docker.sock refused the connection; \
+             build-box: [executor] memory = 4294967296 bytes: the sandbox executor on macOS \
+             cannot hold a memory limit"
         );
     }
 
