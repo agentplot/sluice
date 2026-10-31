@@ -65,16 +65,24 @@ sluice status 13 --json | jq '{state, result, tested, failed}'
 `tested.combination` is the revision, `tested.submissions` who was in it,
 `failed[].task` and `failed[].log` the tests and their logs.
 
-## Tests that need the container engine
+## Tests a host cannot run as the policy asks
 
-On a branch whose policy says `[executor] docker = true`, a host whose
-container engine does not answer takes none of the branch's combinations:
-it leaves them for a host whose engine does, and nothing of them runs or is
-recorded there. `sluice status` and `sluice wait` say what a combination
-waits for, and `--json` carries it as `waiting`:
+A host takes none of a branch's combinations when its executor cannot
+hold the limits the branch's policy states (its `[executor] kind`,
+`memory` or `network`), or, on a branch whose policy says `[executor]
+docker = true`, when no container engine answers there. It leaves them
+for a host that can, and nothing of them runs or is recorded there.
+`sluice status` and `sluice wait` say what a combination waits for, and
+`--json` carries it as `waiting`:
 
 ```
-testing feature/x + #12 · 3m10s of 30m · waiting for a host whose container engine answers: build-box: no socket at /var/run/docker.sock
+testing feature/x + #12 · 3m10s of 30m · waiting for a host that can run its tests as its policy asks: build-box: no container engine answers: no socket at /var/run/docker.sock
+```
+
+A limit reads the same way, in the executor's words:
+
+```
+testing feature/x + #12 · 3m10s of 30m · waiting for a host that can run its tests as its policy asks: mac-box: [executor] memory = 8589934592 bytes: the sandbox executor on macOS cannot hold a memory limit
 ```
 
 When no host takes it before the branch's `timeout`, the combination is not
@@ -83,16 +91,17 @@ passed, and each test says why:
 ```
 timed out
 not run: cli:tools
-  cli:tools could not run: no host whose container engine answers took its tests: build-box: no socket at /var/run/docker.sock
+  cli:tools could not run: no host that could run its tests as its policy asks took them: build-box: no container engine answers: no socket at /var/run/docker.sock
 ```
 
-Start the engine where sluice runs, as the user it runs as, then submit
-again. A test that did not pass, after which the engine no longer answers,
-has no result: nothing is recorded under its key, nobody is blamed, and the
+Start the engine where sluice runs, as the user it runs as, or serve the
+branch from a host whose executor holds its limits, then submit again. A
+test that did not pass, after which the engine no longer answers, has no
+result: nothing is recorded under its key, nobody is blamed, and the
 combination is tested again. A test that passed keeps its result.
 
 ```
-could not run: cli:tools: the container engine no longer answers after the run: /var/run/docker.sock refused the connection
+could not run: cli:tools: after the run, no container engine answers: /var/run/docker.sock refused the connection
 ```
 
 What a test prints is never read as the engine gone: a test that says it

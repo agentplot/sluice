@@ -132,11 +132,19 @@ share as [`[[caches]]`](#caches). The caches an earlier sluice saved in
 | | `"container"` | The tests run in a container from the image the policy names. Planned, for a box that runs no agents ([executors and systems](/sluice/guides/executors-and-systems/)); not built. |
 | `network` | `false`, `"localhost"`, `true` | No network; only 127.0.0.1 and ::1, for tests that start a server and talk to it; or any. |
 | `memory` | e.g. `"8G"` | Refused where the executor cannot hold it, never run without it. |
-| `docker` | `true` | The tests may reach the host's container engine. A container may mount any path, so such a run is never counted as confined. A host whose container engine does not answer, at `DOCKER_HOST`'s socket or the usual ones, runs none of the branch's tests. It leaves them for a host whose engine does, and `sluice status` says what they wait for. A test that did not pass, after which the engine no longer answers, has no result, and the combination is tested again. |
+| `docker` | `true` | The tests may reach the host's container engine. A container may mount any path, so such a run is never counted as confined. A host where no container engine answers, at `DOCKER_HOST`'s socket or the usual ones, runs none of the branch's tests. It leaves them for a host that can run them, and `sluice status` says what they wait for. A test that did not pass, after which the engine no longer answers, has no result, and the combination is tested again. |
 
-Every result records which executor ran it and what it held. An executor
-that cannot enforce a limit the policy states refuses the run
-([ADR 0012](/sluice/decisions/0012/)).
+Every result records which executor ran it and what it held. Some
+executors cannot hold every limit: the open executor holds no `memory`
+limit and cannot keep a run off the network, and the sandbox on macOS
+holds no `memory` limit. A host whose
+executor cannot hold the policy's limits runs none of the branch's tests
+and makes no checkout for them. It leaves them for a host that can
+([ADR 0012](/sluice/decisions/0012/)). `sluice status` and `sluice wait`
+say a combination is waiting for a host that can run its tests as its
+policy asks, naming each host that turned it down and why. Where no host
+takes it within the branch's [`timeout`](#timeout), the combination is
+not passed, and each test says why.
 
 ## `[preview]`: a running copy of a landed revision
 
