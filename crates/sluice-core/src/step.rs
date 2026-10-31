@@ -3258,10 +3258,18 @@ fn could_not_start(e: &anyhow::Error) -> String {
     }
 }
 
+/// What a run whose tests never started is named by where neither it nor
+/// its gate names a check: the tests its policy's `[tests]` would have
+/// run.
+const UNNAMED_TESTS: &str = "[tests]";
+
 /// Design D1 (114, 139): the report of a run of `checks`, under the
 /// executor `kind` the policy names, whose tests never started: no task,
-/// nothing missing, each check not run for `reason`.
+/// nothing missing, each check not run for `reason`, or, where it names
+/// none, its tests as one, so the reason is never lost.
 fn unstarted(checks: &[String], kind: &str, reason: String) -> RunReport {
+    let unnamed = [UNNAMED_TESTS.to_string()];
+    let checks = if checks.is_empty() { &unnamed } else { checks };
     RunReport {
         tasks: Vec::new(),
         executor: sluice_seams::Enforced {

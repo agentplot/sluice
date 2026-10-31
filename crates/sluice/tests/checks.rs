@@ -831,3 +831,108 @@ fn a_ready_command_is_never_run() {
         assert!(!dir.join("asked").exists(), "{} holds asked", dir.display());
     }
 }
+
+/// What `toolchain` prints when it fails to enter.
+const STALE_LOCK: &str = "error: flake.lock is not up to date";
+
+/// `sluice` in `dir`, its state and configuration in `state`, out of
+/// reach of the host's own and of every credential.
+fn sluice_in(dir: &std::path::Path, state: &Scratch, args: &[&str]) -> std::process::Output {
+    support::isolated(&mut std::process::Command::new(env!(
+        "CARGO_BIN_EXE_sluice"
+    )))
+    .args(args)
+    .current_dir(dir)
+    .env("XDG_CONFIG_HOME", state.path().join("config"))
+    .env("XDG_STATE_HOME", state.path().join("state"))
+    .env_remove("SLUICE_AGENT")
+    .env_remove("SLUICE_OTEL")
+    .env_remove("GIT_DIR")
+    .env_remove("GIT_WORK_TREE")
+    .stdin(std::process::Stdio::null())
+    .output()
+    .unwrap()
+}
+
+/// 16, 114, 115; the run-outcome spec's "The toolchain fails to enter"
+/// and "Three starts that fail": `sluice step` on a combination whose
+/// `[tests] toolchain` exits 1 records the run with the toolchain's words
+/// and nothing under any key, three times, after which the combination is
+/// not passed and `sluice status` names its tests could not run, with
+/// those words.
+#[test]
+fn a_toolchain_that_fails_could_not_start_the_tests() {
+    let repo = Repo::new("checks-could-not-start");
+    repo.write(
+        ".config/sluice.toml",
+        &format!(
+            "[tests]\nrunner = \"command\"\ncommand = \"true\"\n\
+             toolchain = [\"sh\", \"-c\", \"echo '{STALE_LOCK}' >&2; exit 1\"]\n\n\
+             [branches.\"bolt/*\"]\ntimeout = \"1m\"\n"
+        ),
+    );
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "sluice's policy"]);
+    repo.git(&["branch", "bolt/x", "main"]);
+    let sessions = Scratch::new("checks-could-not-start-sessions");
+    let worktree = sessions.path().join("a");
+    let at = worktree.to_str().unwrap();
+    repo.git(&["worktree", "add", "-q", "-b", "unit/a", at, "bolt/x"]);
+    std::fs::write(worktree.join("a.txt"), "a").unwrap();
+    repo.git(&["-C", at, "add", "-A"]);
+    repo.git(&["-C", at, "commit", "-q", "-m", "a"]);
+    let state = Scratch::new("checks-could-not-start-state");
+    let run = |args: &[&str]| {
+        let out = sluice_in(&worktree, &state, args);
+        let said = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        (out.status.code(), said)
+    };
+    let (code, said) = run(&["submit", "bolt/x", "--no-wait", "--json"]);
+    assert_eq!(code, Some(0), "{said}");
+
+    let words = format!(
+        "could not start: [tests] toolchain sh -c echo '{STALE_LOCK}' >&2; exit 1 exited \
+         exit status: 1: {STALE_LOCK}"
+    );
+    let records = repo.dir().join(".git/sluice");
+    let log = || std::fs::read_to_string(records.join("bolt/x/log.jsonl")).unwrap();
+    let lost = |log: &str| {
+        log.lines()
+            .filter(|l| l.contains("\"lost\"") && l.contains(&words.replace('"', "\\\"")))
+            .count()
+    };
+    let (code, said) = run(&["step", "bolt/x"]);
+    assert_eq!(code, Some(0), "{said}");
+    assert_eq!(lost(&log()), 1, "{}", log());
+    let results = || std::fs::read_to_string(records.join("results.jsonl")).unwrap_or_default();
+    assert_eq!(results(), "", "nothing under any key");
+    let (_, said) = run(&["status", "1", "--json"]);
+    assert_ne!(
+        serde_json::from_str::<serde_json::Value>(&said).unwrap()["state"],
+        "failed",
+        "{said}"
+    );
+
+    for _ in 0..2 {
+        let (code, said) = run(&["step", "bolt/x"]);
+        assert_eq!(code, Some(0), "{said}");
+    }
+    let (code, said) = run(&["step", "bolt/x"]);
+    assert_eq!(code, Some(0), "{said}");
+    assert_eq!(lost(&log()), 2, "the third ends it: {}", log());
+    assert_eq!(results(), "");
+    let (_, said) = run(&["status", "1", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&said).unwrap();
+    assert_eq!(v["state"], "failed", "{said}");
+    assert_eq!(
+        v["failed"],
+        serde_json::json!([{"task": "[tests]", "not_run": words}]),
+        "{said}"
+    );
+    let (_, said) = run(&["status", "1"]);
+    assert!(said.contains("[tests] (could not run)"), "{said}");
+}
