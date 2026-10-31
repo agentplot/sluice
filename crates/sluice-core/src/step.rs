@@ -1342,41 +1342,13 @@ impl Sluice<'_> {
         if c.every_check && !checks.is_empty() && report.tasks.is_empty() {
             v.passed = false;
         }
-        // Could-not-run-1 114, 115: checks the run did not judge have no
-        // outcome. With nothing failed on its own result, the run is open
-        // again and nobody is blamed, up to the bound; past it, or beside a
-        // check that failed, each is named with why.
         if !report.not_run.is_empty() {
-            let x = line.candidate_mut(&c.id).expect("polled candidate");
-            if v.failed.is_empty() && !v.timed_out {
-                x.not_run_runs += 1;
-                if x.not_run_runs < NOT_RUN_BOUND {
-                    let xr = &mut x.runs[i];
-                    xr.state = RunState::Open;
-                    xr.run = None;
-                    xr.host = None;
-                    if let Some(p) = xr.place.take() {
-                        line.doc.release.push(p);
-                    }
-                    line.log(
-                        now,
-                        Event::Lost {
-                            combination: c.revision.clone(),
-                            not_run: report.not_run.clone(),
-                        },
-                    );
-                    return Ok(());
-                }
-            }
+            let judged = !v.failed.is_empty() || v.timed_out;
+            let Some(named) = read_not_run(line, c, i, &report, judged, system, now) else {
+                return Ok(());
+            };
             v.passed = false;
-            v.failed.extend(report.not_run.iter().map(|n| FailedTask {
-                task: n.task.clone(),
-                hash: String::new(),
-                log: None,
-                flaky: None,
-                system: system.map(str::to_string),
-                not_run: Some(n.reason.clone()),
-            }));
+            v.failed.extend(named);
         }
         // 20: what the failed tasks printed, kept while the place still
         // holds it.
@@ -3130,6 +3102,60 @@ impl Sluice<'_> {
             .find(|(_, s)| s.os == p.os && s.arch == p.arch)
             .map(|(n, _)| n.clone()))
     }
+}
+
+/// Could-not-run-1 114, 115 (design D1): the checks run `i` of `c` left
+/// not run, read from its report alone and no run handle, so a run that
+/// came back and one whose tests could not be started are read alike.
+/// `judged` says a check failed on its own result or the time limit ended
+/// the run. Unjudged and under the bound, the run is open again for any
+/// host, its place to be released and its loss logged, and nobody is
+/// blamed: `None`. Past the bound, or judged, each check is returned
+/// named with why, to be read as failed.
+fn read_not_run(
+    line: &mut Line,
+    c: &Candidate,
+    i: usize,
+    report: &RunReport,
+    judged: bool,
+    system: Option<&str>,
+    now: &str,
+) -> Option<Vec<FailedTask>> {
+    let x = line.candidate_mut(&c.id).expect("a read candidate");
+    if !judged {
+        x.not_run_runs += 1;
+        if x.not_run_runs < NOT_RUN_BOUND {
+            let xr = &mut x.runs[i];
+            xr.state = RunState::Open;
+            xr.run = None;
+            xr.host = None;
+            if let Some(p) = xr.place.take() {
+                line.doc.release.push(p);
+            }
+            line.log(
+                now,
+                Event::Lost {
+                    combination: c.revision.clone(),
+                    not_run: report.not_run.clone(),
+                },
+            );
+            return None;
+        }
+    }
+    Some(
+        report
+            .not_run
+            .iter()
+            .map(|n| FailedTask {
+                task: n.task.clone(),
+                hash: String::new(),
+                log: None,
+                flaky: None,
+                system: system.map(str::to_string),
+                not_run: Some(n.reason.clone()),
+            })
+            .collect(),
+    )
 }
 
 /// Record 0074: what a run no host took before its time limit waited for,
