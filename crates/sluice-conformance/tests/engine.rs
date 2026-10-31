@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use sluice_conformance::{policy, Harness, Rig, BRANCH};
 use sluice_core::records::{Event, RunState, State, SystemRun};
-use sluice_core::{Peer, Sluice};
+use sluice_core::{Peer, Sluice, Started};
 use sluice_seams::Decided;
 
 /// The host a sluice over the fakes is, as its records name it.
@@ -480,4 +480,119 @@ fn a_run_no_host_can_hold_the_limit_of_is_not_passed_at_its_time_limit() {
         "{:?}",
         report.rows
     );
+}
+
+/// The checks each run that left checks not run named, with why, in
+/// order.
+fn not_run(h: &Harness) -> Vec<Vec<(String, String)>> {
+    h.events()
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::Lost { not_run, .. } if !not_run.is_empty() => {
+                Some(not_run.into_iter().map(|n| (n.task, n.reason)).collect())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// A run of `bolt/x` launched on the forge pool by a lead whose engine
+/// does not answer, no other host live: the pool's claim.
+fn launched(h: &Harness) -> String {
+    h.w().hold_runs(true);
+    h.w().be_host("lead");
+    h.w().engine_unmet(Some(NO_ENGINE));
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    h.submit("unit/a");
+    on(h, "lead", Some("box")).step(BRANCH).unwrap();
+    assert_eq!(h.w().launches().len(), 1);
+    let claim = claims(h).pop().expect("the pool's claim");
+    assert!(claim.starts_with("pool/forge/"), "{claim}");
+    claim
+}
+
+/// satisfies: 88, 114, 115, 139; the host-requirements spec's "A pool's
+/// machine with no engine"
+#[test]
+fn a_pools_job_on_a_machine_with_no_engine_runs_nothing_and_is_counted() {
+    let h = with_pool();
+    let claim = launched(&h);
+    h.w().be_host("pool-machine");
+    h.w().engine_unmet(Some(NO_ENGINE));
+    let mut releases = Vec::new();
+    let started = h
+        .sluice()
+        .start_claimed(BRANCH, &claim, &mut releases)
+        .unwrap();
+    assert_eq!(started, Some(Started::NotRun(NO_ENGINE.to_string())));
+    assert!(h.w().made_places().is_empty(), "no checkout is made");
+    assert!(h.w().requests().is_empty(), "nothing starts");
+    assert!(h.w().results_log().is_empty(), "nothing under any key");
+    assert!(h.w().delivered().is_empty(), "nobody is blamed");
+    assert_eq!(
+        not_run(&h),
+        [vec![("#gate".to_string(), NO_ENGINE.to_string())]]
+    );
+    assert_eq!(h.doc().candidates[0].not_run_runs, 1, "it counts");
+    let r = &runs(&h)[0];
+    assert_eq!((r.state, r.host.clone()), (RunState::Open, None));
+
+    // Nothing of the claim waits to start any more.
+    let again = h.sluice().start_claimed(BRANCH, &claim, &mut releases);
+    assert_eq!(again.unwrap(), None);
+}
+
+/// satisfies: 88; the host-requirements spec's "A host that meets what
+/// the run needs"
+#[test]
+fn a_pools_job_on_a_machine_whose_engine_answers_starts_its_tests() {
+    let h = with_pool();
+    let claim = launched(&h);
+    h.w().be_host("pool-machine");
+    let mut releases = Vec::new();
+    let started = h
+        .sluice()
+        .start_claimed(BRANCH, &claim, &mut releases)
+        .unwrap();
+    assert!(matches!(started, Some(Started::Running(_))), "{started:?}");
+    assert_eq!(h.w().requests().len(), 1);
+    let r = &runs(&h)[0];
+    assert_eq!(
+        (r.state, r.host.as_deref()),
+        (RunState::Testing, Some(claim.as_str()))
+    );
+    assert!(not_run(&h).is_empty());
+}
+
+/// satisfies: 84, 114, 139; the host-requirements spec's "The engine went
+/// between the claim and the start"
+#[test]
+fn a_run_claimed_in_one_round_reads_the_host_again_at_its_start() {
+    let h = peers();
+    h.w().hold_runs(true);
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    h.submit("unit/a");
+    on(&h, "lead", None).step(BRANCH).unwrap();
+    // Host a claims the run and makes its checkout, and its round ends
+    // before the tests start.
+    h.w().unanswer_starts(1);
+    assert!(on(&h, "a", Some("box")).step(BRANCH).is_err());
+    let r = &runs(&h)[0];
+    assert_eq!(
+        (r.state, r.host.as_deref()),
+        (RunState::Starting, Some("a"))
+    );
+    assert_eq!(h.w().made_places().len(), 1);
+
+    h.w().engine_unmet(Some(NO_ENGINE));
+    on(&h, "a", Some("box")).step(BRANCH).unwrap();
+    assert_eq!(h.w().made_places().len(), 1, "no checkout is made");
+    assert!(h.w().live_places().is_empty(), "the one left is released");
+    assert!(h.w().requests().is_empty());
+    assert_eq!(
+        not_run(&h),
+        [vec![("#gate".to_string(), NO_ENGINE.to_string())]]
+    );
+    let r = &runs(&h)[0];
+    assert_eq!((r.state, r.host.clone()), (RunState::Open, None));
 }

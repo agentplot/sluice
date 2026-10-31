@@ -36,7 +36,7 @@ pub use ops::{
     Lookup, Pending, PendingOutcome, Refused, Requester, Status, SubmitRefusal, SubmitRequest,
     SubmittedHead, Unread, WithdrawRefusal, Withdrew,
 };
-pub use step::{Round, Step};
+pub use step::{Round, Started, Step};
 
 /// The `tracing` target of a failure's output, one event per failed task
 /// with the output as its message: telemetry sends it as its level says,
