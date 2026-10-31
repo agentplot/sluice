@@ -711,11 +711,12 @@ pub fn engine_endpoints() -> Vec<Endpoint> {
     let tls = engine_tls();
     let mut found = Vec::new();
     if let Some(v) = std::env::var_os(ENGINE_SOCKETS_VAR) {
-        found.extend(
-            listed(&v.to_string_lossy())
-                .into_iter()
-                .filter_map(|e| docker_host(e, tls.clone())),
-        );
+        for e in listed(&v.to_string_lossy()) {
+            match e.starts_with("tcp://") {
+                true => found.extend(docker_host(e, tls.clone())),
+                false => found.push(Endpoint::Unix(e.into())),
+            }
+        }
     } else {
         if let Some(e) = std::env::var("DOCKER_HOST")
             .ok()
