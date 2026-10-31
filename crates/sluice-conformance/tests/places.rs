@@ -94,15 +94,41 @@ fn places_of_two_lines_on_one_host_never_collide() {
     assert!(h.w().released_places().is_empty());
 }
 
-/// satisfies: 59, 25, 34
+/// The checks each run that left checks not run named, with why, in
+/// order.
+fn not_run(h: &Harness) -> Vec<Vec<(String, String)>> {
+    h.events()
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::Lost { not_run, .. } if !not_run.is_empty() => {
+                Some(not_run.into_iter().map(|n| (n.task, n.reason)).collect())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// satisfies: 59, 25, 34, 114: a place made for a run whose start failed
+/// is released by the step, which records the run with no result
 #[test]
 fn a_place_made_by_a_step_that_stopped_before_its_run_started_is_released() {
     let h = Harness::bolt();
     h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
     let one = h.submit("unit/a");
     h.w().crash_next_start();
-    assert!(h.sluice().step(BRANCH).is_err());
-    assert_eq!(h.w().live_places().len(), 1);
+    h.step();
+    let made = h.w().made_places();
+    assert_eq!(made.len(), 1);
+    let crashed = format!(
+        "could not start: crashed before starting a run in {}",
+        made[0]
+    );
+    assert_eq!(
+        not_run(&h),
+        [vec![("#gate".to_string(), crashed)]],
+        "recorded with no result, its gate's entry not run"
+    );
+    assert!(h.w().live_places().is_empty());
     h.settle();
     assert_eq!(h.sub(one).state, State::Landed);
     assert_eq!(h.w().made_places().len(), 2);
@@ -147,23 +173,26 @@ fn a_held_checkout_never_holds_its_branch() {
     shared::a_held_checkout_never_holds_its_branch(&Harness::bolt());
 }
 
-/// satisfies: 123, 59: a checkout left by a step that stopped before its
-/// run started, whose release fails, is held as any other, and its run
-/// is opened again and started in another checkout
+/// satisfies: 123, 59, 114: a checkout left by a run whose start failed,
+/// whose release fails, is held as any other, and its run is opened again
+/// and started in another checkout
 #[test]
 fn a_stale_checkout_whose_release_fails_has_its_run_opened_again() {
     let h = Harness::bolt();
     h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
     let one = h.submit("unit/a");
     h.w().crash_next_start();
-    assert!(h.sluice().step(BRANCH).is_err());
+    h.release_fails(true);
+    h.step();
+    h.release_fails(false);
     let stale = h.w().live_places()[0].clone();
     h.w()
         .place_release_fails(&stale, Some(shared::RELEASE_FAILS));
-    h.step();
     let held = h.sluice().status(BRANCH).unwrap().failed_releases;
     assert_eq!(held.len(), 1, "{held:?}");
     assert_eq!((held[0].place.as_str(), held[0].tries), (stale.as_str(), 1));
+    assert!(h.w().requests().is_empty(), "nothing started");
+    h.step();
     let started: Vec<String> = h.w().requests().into_iter().map(|r| r.place.name).collect();
     assert_eq!(started.len(), 1);
     assert_ne!(started[0], stale, "started in another checkout");

@@ -192,6 +192,11 @@ struct Inner {
     tasks_fail: bool,
     hold: bool,
     crash_start: bool,
+    /// Starts from now fail after the host's count admits them, as a
+    /// toolchain that fails to enter does, with these words (114).
+    start_fails: Option<String>,
+    /// Checkouts from now cannot be made, with these words.
+    checkout_fails: Option<String>,
     /// How many starts from now the forge a pool starts runs on answers
     /// 5xx.
     unanswered_starts: usize,
@@ -766,6 +771,19 @@ impl World {
     /// The next start finds its place made and stops before starting.
     pub fn crash_next_start(&self) {
         self.0.borrow_mut().crash_start = true;
+    }
+
+    /// Starts from now fail with `words` once the host's count admits
+    /// them, before any check runs, as a `[tests] toolchain` that fails to
+    /// enter does (114); `None` lets them start again.
+    pub fn start_fails(&self, words: Option<&str>) {
+        self.0.borrow_mut().start_fails = words.map(str::to_string);
+    }
+
+    /// Checkouts of combinations from now cannot be made, failing with
+    /// `words`; `None` lets them be made again.
+    pub fn checkout_fails(&self, words: Option<&str>) {
+        self.0.borrow_mut().checkout_fails = words.map(str::to_string);
     }
 
     /// The next `n` starts fail as a forge's 5xx answer, as a pool's
@@ -1896,6 +1914,9 @@ impl Tests for FakeTests {
         if std::mem::take(&mut inner.crash_start) {
             bail!("crashed before starting a run in {}", request.place.name);
         }
+        if let Some(words) = &inner.start_fails {
+            bail!("{words}");
+        }
         if inner.unanswered_starts > 0 {
             inner.unanswered_starts -= 1;
             return Err(Unanswered(format!(
@@ -2235,6 +2256,9 @@ fn fake_fill(
 impl Checkout for FakeCheckout {
     fn materialize(&self, name: &str, rev: &Rev, _: &Settings) -> Result<Place> {
         let mut inner = self.0 .0.borrow_mut();
+        if let Some(words) = &inner.checkout_fails {
+            bail!("{words}");
+        }
         // 32: two places on one host never collide.
         if inner.places.contains_key(name) || inner.worktrees.contains_key(name) {
             bail!("place {name} already exists");
