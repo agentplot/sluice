@@ -973,6 +973,9 @@ impl Sluice<'_> {
             bail!("{branch} has a landing left unfinished");
         }
         let now = self.now();
+        // Design D2: before any run is read, and before a round that holds
+        // the branch returns.
+        self.drop_withdrawn(&mut line)?;
         let Some(tip) = self.seams.branch.read(branch)? else {
             bail!("{branch} does not exist");
         };
@@ -1129,6 +1132,81 @@ impl Sluice<'_> {
         } else {
             Decided::Contended
         })
+    }
+
+    /// Design D1, D2 (25, 32, 81; rules core.10, core.16, core.23): drop
+    /// every combination under test that holds a withdrawn submission,
+    /// whoever withdrew it, from `line` as read: obsolete, it is open to no
+    /// claim, and the places of this host's runs of it are listed to
+    /// release, which ends each run before anything is started or claimed.
+    /// None of its runs is read, finished or not (D3; rule core.7). A
+    /// combination whose entries ahead landed holds no withdrawn submission,
+    /// and stands (rule core.17). Another host's run of it is that host's
+    /// to end (81).
+    fn drop_withdrawn(&self, line: &mut Line) -> Result<()> {
+        let subs = &line.subs;
+        let obsolete: BTreeSet<String> = line
+            .doc
+            .candidates
+            .iter()
+            .filter(|c| c.state.under_test())
+            .filter(|c| {
+                c.submissions
+                    .iter()
+                    .any(|id| subs.get(id).is_some_and(|s| s.state == State::Withdrawn))
+            })
+            .map(|c| c.id.clone())
+            .collect();
+        if obsolete.is_empty() {
+            return Ok(());
+        }
+        let mut release = Vec::new();
+        line.doc.candidates.retain(|c| {
+            let keep = !obsolete.contains(&c.id);
+            if !keep {
+                release.extend(
+                    c.runs
+                        .iter()
+                        .filter(|r| self.mine(r))
+                        .filter_map(|r| r.place.clone()),
+                );
+            }
+            keep
+        });
+        for id in &obsolete {
+            self.seams.state.unpublish_candidate(&line.branch, id)?;
+        }
+        line.doc.release.extend(release);
+        Ok(())
+    }
+
+    /// Design D5 (137; the obsolete-combinations spec): what a hand-over of
+    /// `branch`'s pull requests to another host ends in its own pass,
+    /// whether or not a round follows: the combinations its withdrawals made
+    /// obsolete dropped, as a round drops them before it reads any run, and
+    /// the places listed to release released, ending this host's runs of
+    /// them. No round: no run is read, and nothing formed, started or
+    /// landed. A branch whose lock another step holds is that step's, which
+    /// began after the withdrawals and drops them itself (rule core.14).
+    /// Each release not plainly released is returned (123).
+    pub fn drop_obsolete(&self, branch: &str) -> Result<Vec<ReleaseOutcome>> {
+        let Some(_lock) = self.seams.state.lock(branch)? else {
+            return Ok(Vec::new());
+        };
+        let mut line = self.read_line(branch)?;
+        let held = line.doc.candidates.len();
+        self.drop_withdrawn(&mut line)?;
+        if line.doc.candidates.len() != held {
+            if let Written::Refused = self.write(&line)? {
+                // 62: written since; the next round reads it again.
+                return Ok(Vec::new());
+            }
+        } else if line.doc.release.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut releases = Vec::new();
+        self.perform_releases(branch, &mut releases)?;
+        Ok(releases)
     }
 
     /// Design D10: what this host had queued on the branch in its own
@@ -3703,5 +3781,132 @@ fn derive_states(line: &mut Line, chain: &[String]) {
                 _ => State::Queued,
             }
         };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{TimeZone, Utc};
+    use sluice_fakes::Fakes;
+
+    use super::*;
+    use crate::{Clock, Requester, Seams, SubmitRequest};
+
+    const POLICY: &str = "[branches.main]\nrequired = [\"#gate\"]\nparallel = 4\n";
+
+    struct Noon;
+
+    impl Clock for Noon {
+        fn now(&self) -> chrono::DateTime<Utc> {
+            Utc.with_ymd_and_hms(2026, 10, 30, 12, 0, 0).unwrap()
+        }
+    }
+
+    fn sluice(f: &Fakes) -> Sluice<'_> {
+        let seams = Seams {
+            checkout: &f.checkout,
+            tests: &f.tests,
+            branch: &f.branch,
+            driver: &f.driver,
+            state: &f.state,
+        };
+        Sluice::new(seams, &Noon)
+    }
+
+    fn submit(s: &Sluice<'_>, worktree: &str) -> u64 {
+        let req = SubmitRequest {
+            worktree: worktree.into(),
+            branch: "main".into(),
+            after: Vec::new(),
+            priority: 0,
+            subject: None,
+        };
+        s.submit(&req).unwrap().unwrap().id
+    }
+
+    /// Whether the branch's log holds a result for the combination `rev`.
+    fn result_read(s: &Sluice<'_>, rev: &Rev) -> bool {
+        let log = Line::read_log(&s.seams.state.read("main").unwrap()).unwrap();
+        log.into_iter()
+            .any(|l| matches!(l.event, Event::Result { combination, .. } if combination == *rev))
+    }
+
+    fn holding(line: &Line, ids: &[u64]) -> Option<Candidate> {
+        line.doc
+            .candidates
+            .iter()
+            .find(|c| c.submissions == ids)
+            .cloned()
+    }
+
+    /// Design D1, D2 (25, 81; rules core.7, core.17): a round drops the
+    /// combination holding a withdrawn submission before it reads any run,
+    /// its place listed to release and its finished run read for nothing,
+    /// while the combination whose entry ahead landed as tested stands.
+    #[test]
+    fn a_withdrawn_submissions_combination_is_dropped_before_any_run_is_read() {
+        let f = Fakes::new();
+        let tip = f.world.init(
+            "main",
+            &[
+                (POLICY_PATH, POLICY),
+                ("a/lib", "1"),
+                ("b/lib", "1"),
+                ("c/lib", "1"),
+            ],
+        );
+        for p in ["a", "b", "c"] {
+            f.world.task(&format!("{p}:test"), &format!("{p}/"));
+            let head = f.world.work(&tip, &[(&format!("{p}/lib"), Some("2"))]);
+            f.world.session(&format!("unit/{p}"), "agent", &head);
+        }
+        f.world.hold_runs(true);
+        let s = sluice(&f);
+        let (one, two, three) = (
+            submit(&s, "unit/a"),
+            submit(&s, "unit/b"),
+            submit(&s, "unit/c"),
+        );
+        s.step("main").unwrap();
+        let line = s.read_line("main").unwrap();
+        let first = holding(&line, &[one]).expect("#1 under test");
+        let last = holding(&line, &[one, two, three]).expect("#3 under test");
+        let place = last.runs[0].place.clone().expect("a run of #3 here");
+        f.world.complete(&first.revision);
+        f.world.complete(&last.revision);
+        s.withdraw(three, &Requester::Operator).unwrap().unwrap();
+
+        // The round's decision, written before anything of it is done (62),
+        // under the branch's lock as a round's is (rule core.14).
+        let lock = s.seams.state.lock("main").unwrap().expect("the lock");
+        let Decided::Written(unmet) = s.decide("main").unwrap() else {
+            panic!("the round's decision is written");
+        };
+        let line = s.read_line("main").unwrap();
+        assert!(line
+            .doc
+            .candidates
+            .iter()
+            .all(|c| !c.submissions.contains(&three)));
+        // Listed before #1's run, read after it, listed its own.
+        let first_place = first.runs[0].place.clone().expect("a run of #1 here");
+        assert_eq!(line.doc.release, [place.clone(), first_place]);
+        assert!(result_read(&s, &first.revision), "#1's run was read");
+        assert!(!result_read(&s, &last.revision), "#3's run was read");
+        assert_eq!(f.world.live_runs(), 2, "#2's and #3's");
+
+        let mut releases = Vec::new();
+        s.perform("main", Some(&unmet), &mut releases).unwrap();
+        drop(lock);
+        assert!(releases.is_empty(), "{releases:?}");
+        assert!(f.world.released_places().contains(&place));
+        assert_eq!(f.world.live_runs(), 1, "#3's run is ended");
+        let line = s.read_line("main").unwrap();
+        assert!(line.doc.release.is_empty());
+        assert_eq!(s.state(one).unwrap().unwrap().state, State::Landed);
+        let stands = holding(&line, &[two]).expect("#2's combination stands");
+        assert!(stands.state.under_test());
+        assert_eq!(Some(&stands.on), line.doc.base.as_ref());
+        assert!(!result_read(&s, &last.revision));
     }
 }

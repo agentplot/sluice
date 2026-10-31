@@ -26,8 +26,11 @@ const KEY: &[u8] = include_bytes!("forge/test-key.pem");
 
 /// The check: fails while a file named `broken` exists, printing a
 /// token-shaped line and a last line, and takes five seconds while one
-/// named `slow` does.
-const CHECK: &str = "if test -e slow; then sleep 5; fi\n\
+/// named `slow` does. While one named `hang` names a file that does not
+/// exist, it writes its process's id there and goes on until it is ended.
+const CHECK: &str = "if test -e hang && ! test -e \"$(cat hang)\"; then \
+                     echo $$ > \"$(cat hang)\"; exec sleep 300; fi\n\
+                     if test -e slow; then sleep 5; fi\n\
                      if test -e broken; then echo GITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123; \
                      echo it broke; fi\ntest ! -e broken\n";
 
@@ -200,6 +203,16 @@ impl OnGitHub {
             v["asked"] = Value::Null;
             std::fs::write(&path, v.to_string()).unwrap();
         }
+    }
+
+    /// This host's log of `main`, a document a line.
+    fn log(&self) -> Vec<Value> {
+        let path = self.repo.dir().join(".git/sluice/main/log.jsonl");
+        std::fs::read_to_string(path)
+            .unwrap_or_default()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect()
     }
 
     /// `main`'s submissions.
@@ -4545,26 +4558,110 @@ fn a_host_that_stopped_loses_the_mark() {
     assert!(!b.of(n).is_empty(), "{said}");
 }
 
-/// request-intake-host, "Handed over": host A has `pull/<n>` under test in
-/// its records and host B's `sluice run` takes main's mark; A's next pass
-/// withdraws it naming B, and B takes it in.
-#[test]
-fn handed_over() {
-    let g = OnGitHub::new("intake-handed", "");
+/// Host A, called `a`, testing `pull/<n>` with a check that goes on until
+/// it is ended, when host B's `sluice run` takes main's mark and the
+/// request in: the request's number, its submission's id on A, the run's
+/// process, and the place and combination A's log says it is tested in.
+fn handed_mid_test(g: &OnGitHub) -> (u64, u64, String, String, String) {
     g.named("a", "");
-    let (n, _) = g.by_hand("unit/handed", &[("slow", Some("s\n"))], false);
+    let pid = g.repo.dir().join(".git/hang.pid");
+    let hang = format!("{}\n", pid.display());
+    let (n, _) = g.by_hand("unit/handed", &[("hang", Some(&hang))], false);
     g.step();
-    assert!(!g.of(n)[0]["state"].as_str().unwrap().is_empty());
+    let id = g.of(n)[0]["id"].as_u64().expect("taken in");
+    let until = Instant::now() + Duration::from_secs(60);
+    while !pid.exists() {
+        assert!(Instant::now() < until, "the check never started");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let process = std::fs::read_to_string(&pid).unwrap().trim().to_string();
+    assert!(alive(&process));
+    let testing = g
+        .log()
+        .into_iter()
+        .find(|l| l["event"] == "testing" && l["submissions"][0] == id)
+        .expect("A tests it");
+    let place = testing["place"].as_str().unwrap().to_string();
+    let combination = testing["combination"].as_str().unwrap().to_string();
     let b = g.other("b", "", "");
     b.run("1");
     assert_eq!(g.mark().unwrap().1["host"], "b");
     assert!(!b.of(n).is_empty(), "B takes it in");
+    (n, id, process, place, combination)
+}
+
+/// Whether the process `pid` is there.
+fn alive(pid: &str) -> bool {
+    Command::new("kill")
+        .args(["-0", pid])
+        .stderr(Stdio::null())
+        .status()
+        .unwrap()
+        .success()
+}
+
+/// Host A's pass after B took main's mark ended A's run of `pull/<n>` and
+/// released its checkout, and read nothing of the run (the
+/// obsolete-combinations spec).
+fn ended_by_the_hand_over(g: &OnGitHub, process: &str, place: &str, combination: &str) {
+    let until = Instant::now() + Duration::from_secs(10);
+    while alive(process) {
+        assert!(Instant::now() < until, "A's run goes on");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let log = g.log();
+    assert!(
+        log.iter()
+            .any(|l| l["event"] == "released" && l["place"] == place),
+        "{log:?}"
+    );
+    assert!(
+        !log.iter()
+            .any(|l| l["event"] == "result" && l["combination"] == combination),
+        "{log:?}"
+    );
+}
+
+/// request-intake-host, "Handed over" and "Handed over mid-test by a
+/// driver": host A has `pull/<n>` under test in its records and host B's
+/// `sluice run` takes main's mark; A's next pass withdraws it naming B,
+/// ends its run and releases its checkout, reading no result of it, and B
+/// takes it in.
+#[test]
+fn handed_over() {
+    let g = OnGitHub::new("intake-handed", "");
+    let (n, _, process, place, combination) = handed_mid_test(&g);
     let posts = g.posts();
     g.step();
     let a = g.of(n);
     assert_eq!(a[0]["state"], "withdrawn", "{a:?}");
     assert_eq!(a[0]["withdrawn"]["by"], "b takes main's pull requests in");
     assert_eq!(g.posts(), posts, "A posts nothing");
+    ended_by_the_hand_over(&g, &process, &place, &combination);
+}
+
+/// request-intake-host, "Handed over mid-test by a wait": host A, with no
+/// driver, is testing `pull/<n>` when B takes main's mark; a wait on A
+/// withdraws it, ends its run and releases its checkout, and runs no round
+/// for `main`, which would read main moved since A last read it.
+#[test]
+fn handed_over_by_a_wait() {
+    let g = OnGitHub::new("intake-handed-wait", "");
+    let (n, id, process, place, combination) = handed_mid_test(&g);
+    let moved = g
+        .repo
+        .branch("elsewhere", "main", &[("e.txt", Some("e\n"))]);
+    g.repo
+        .git(&["push", "-q", "origin", &format!("{moved}:refs/heads/main")]);
+    let posts = g.posts();
+    let out = g.sluice(&["wait", &id.to_string(), "--timeout", "2s", "--json"]);
+    assert_eq!(out.status.code(), Some(sluice::WITHDRAWN), "{}", text(&out));
+    let a = g.of(n);
+    assert_eq!(a[0]["withdrawn"]["by"], "b takes main's pull requests in");
+    assert_eq!(g.posts(), posts, "A posts nothing");
+    ended_by_the_hand_over(&g, &process, &place, &combination);
+    let log = g.log();
+    assert!(!log.iter().any(|l| l["event"] == "moved"), "{log:?}");
 }
 
 /// request-intake-host, "A landing is not handed over": host A's

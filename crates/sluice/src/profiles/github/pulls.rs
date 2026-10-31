@@ -619,9 +619,13 @@ impl Pulls {
     /// submission of its own records taken from a pull request, neither out
     /// of the queue nor landing, the log naming `host`, which takes each in
     /// again; nothing is posted on the pull requests, which `host` posts.
-    /// Submissions from the host's own worktrees stay.
+    /// Submissions from the host's own worktrees stay. This host's runs of
+    /// the combinations the withdrawals made obsolete end in this pass, and
+    /// their checkouts are released, whether or not a round follows (design
+    /// D5).
     fn hand_over(&self, s: &Sluice<'_>, branch: &str, host: &str) -> Result<()> {
         let by = Requester::Intake(handed_over_to(host, branch));
+        let mut withdrew = false;
         for sub in s.status(branch)?.submissions {
             if number(&sub.from.worktree).is_none()
                 || sub.state.is_out()
@@ -630,7 +634,15 @@ impl Pulls {
                 continue;
             }
             // Landing since: it lands, and nothing of it is withdrawn.
-            let _ = s.withdraw(sub.id, &by)?;
+            withdrew |= matches!(s.withdraw(sub.id, &by)?, Ok(Withdrew::Now));
+        }
+        if withdrew {
+            // 123: a release that failed is held in the records, and said.
+            let mut said = Vec::new();
+            crate::exec::tell_releases(&mut said, false, &s.drop_obsolete(branch)?)?;
+            for line in String::from_utf8_lossy(&said).lines() {
+                crate::telemetry::warn(&format!("sluice: warning: {line}"));
+            }
         }
         Ok(())
     }

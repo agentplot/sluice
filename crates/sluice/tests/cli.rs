@@ -4143,6 +4143,52 @@ fn a_driver_with_nothing_queued() {
     assert!(soon(reader_free));
 }
 
+/// The host-driver spec's "The queue emptied while a run went on" (66,
+/// 129; design D4): the one submission withdrawn while its combination's
+/// run goes on and nothing else queued, the driver's next pass runs a
+/// round for the branch, which ends the run and releases its checkout.
+#[test]
+fn a_driver_ends_a_withdrawn_submissions_run_with_nothing_queued() {
+    let f = one_queued();
+    f.world.hangs("plugin:test");
+    f.world.hold_runs(true);
+    let (code, out) = sluice(&f, &["step", BRANCH]);
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(state_of(&f, 1), "testing");
+    assert_eq!(f.world.live_runs(), 1);
+    let place = f.world.made_places()[0].clone();
+    let (code, out) = sluice(&f, &["withdraw", "1", "--as", "agent-a"]);
+    assert_eq!(code, 0, "{out}");
+    let (code, out) = sluice(&f, &["run", "--rounds", "1"]);
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(f.world.live_runs(), 0, "the run goes on");
+    assert_eq!(f.world.released_places(), [place]);
+    assert!(f.world.live_places().is_empty());
+    let (_, status) = sluice(&f, &["status", BRANCH, "--json"]);
+    assert!(!status.contains("\"combination\""), "{status}");
+}
+
+/// The host-driver spec's "Nothing under test and nothing queued" (129;
+/// rule core.31): with every submission landed, the driver's pass runs no
+/// round for the branch and reads no revision of it: a round's read of
+/// the branch, refused, would be said and fail the pass.
+#[test]
+fn a_driver_runs_no_round_for_a_branch_with_nothing_in_play() {
+    let f = setup();
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    let (code, out) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/a"]);
+    assert_eq!(code, LANDED, "{out}");
+    f.world.refuse_reads(BRANCH, Some(UNREADABLE));
+    let (code, out) = sluice(&f, &["run", "--rounds", "1"]);
+    assert_eq!((code, out.as_str()), (0, ""));
+    f.world.refuse_reads(BRANCH, None);
+    work(&f, "unit/b", "agent-b", &[("plugin/b", Some("b"))]);
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/b", "--no-wait"]);
+    f.world.refuse_reads(BRANCH, Some(UNREADABLE));
+    let (code, out) = sluice(&f, &["run", "--rounds", "1"]);
+    assert_ne!(code, 0, "a round ran for the queued: {out}");
+}
+
 /// Whether the reader's lock is free: the test can take it, as the driver
 /// would.
 fn reader_free() -> bool {
