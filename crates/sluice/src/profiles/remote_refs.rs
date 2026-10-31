@@ -58,10 +58,51 @@ const ADD_TRIES: usize = 8;
 /// A signer the branch's policy names, as this profile verifies it (78).
 #[derive(Clone, Debug)]
 pub enum SignerKey {
-    /// Its allowed-signers lines.
-    Ssh(Vec<ssh::Allowed>),
+    /// Its allowed-signers lines, and a digest of them that tells this
+    /// key from another the same signer is listed with elsewhere.
+    Ssh {
+        allowed: Vec<ssh::Allowed>,
+        digest: String,
+    },
     /// A forge job's keyless identity, verified by the forge's profile.
     Keyless,
+}
+
+impl SignerKey {
+    /// The allowed-signers lines of `text`, `ssh-keygen`'s form.
+    pub fn ssh(text: &str) -> Result<SignerKey> {
+        let allowed = ssh::allowed(text)?;
+        let lines: String = allowed
+            .iter()
+            .map(|a| {
+                let at = a.key.fingerprint(ssh_key::HashAlg::Sha256);
+                format!("{} {at}\n", a.principal)
+            })
+            .collect();
+        Ok(SignerKey::Ssh {
+            digest: sha256_hex(lines.as_bytes()),
+            allowed,
+        })
+    }
+
+    /// Whether `key` is among those listed: a signature it makes verifies
+    /// (78, 87).
+    pub fn lists(&self, key: &ssh_key::PublicKey) -> bool {
+        match self {
+            SignerKey::Ssh { allowed, .. } => {
+                allowed.iter().any(|a| a.key.key_data() == key.key_data())
+            }
+            SignerKey::Keyless => false,
+        }
+    }
+
+    /// What names this key among every key a signer is listed with.
+    fn digest(&self) -> &str {
+        match self {
+            SignerKey::Ssh { digest, .. } => digest,
+            SignerKey::Keyless => "keyless",
+        }
+    }
 }
 
 /// This host's signer and its key (78; the host's `[signing]`).
@@ -82,32 +123,31 @@ struct Read {
 pub struct RemoteRefs {
     pushed: Rc<PushedRefs>,
     own: LocalFiles,
-    signers: BTreeMap<String, SignerKey>,
     signing: Option<Signing>,
     read: RefCell<BTreeMap<String, Read>>,
     /// The branches whose last read could not reach the remote, and why
     /// (80, 133).
     stale: RefCell<BTreeMap<String, ReadRefused>>,
-    /// Statements already verified, by their blob, so a round verifies
-    /// only what it has not seen.
-    verified: RefCell<BTreeMap<String, Option<Vec<ResultLine>>>>,
+    /// Statements already verified, by their blob, the signer they were
+    /// read for and the digest of the key they were verified with, so a
+    /// round verifies only what it has not seen and a statement verified
+    /// with one branch's key is never read as verified with another's
+    /// (78; rule core.22).
+    verified: RefCell<BTreeMap<(String, String, String), Option<Vec<ResultLine>>>>,
     /// 129: a tick's ask fetched the hosts' signs of life since
     /// [`State::beats`] last answered: the next answers from it.
     asked: std::cell::Cell<bool>,
 }
 
 impl RemoteRefs {
-    pub fn new(
-        common: &Path,
-        pushed: Rc<PushedRefs>,
-        signers: BTreeMap<String, SignerKey>,
-        signing: Option<Signing>,
-    ) -> Self {
+    /// The remote `pushed` names. It keeps no signer's key: a branch's
+    /// runs are verified with the list its own policy names, handed to
+    /// [`RemoteRefs::results_with`] (78; rule core.22).
+    pub fn new(common: &Path, pushed: Rc<PushedRefs>, signing: Option<Signing>) -> Self {
         let own = LocalFiles::at(common.join("sluice-remote").join(pushed.remote()));
         RemoteRefs {
             pushed,
             own,
-            signers,
             signing,
             read: RefCell::default(),
             stale: RefCell::default(),
@@ -134,6 +174,20 @@ impl RemoteRefs {
 
     pub fn remote(&self) -> &str {
         self.pushed.remote()
+    }
+
+    /// The results each signer in `signers` signed, each verified with the
+    /// key `signers` lists for it and with no other, and this host's own
+    /// replays (core.9). `signers` is the list the policy of the branch
+    /// whose gate reads them names (78; rule core.22).
+    pub fn results_with(&self, signers: &BTreeMap<String, SignerKey>) -> Result<Vec<u8>> {
+        let mut bytes = self.own.results_log()?;
+        for (signer, key) in signers {
+            for l in self.signed(signer, key)? {
+                bytes.extend(to_line(&l));
+            }
+        }
+        Ok(bytes)
     }
 
     fn git(&self, args: &[&str]) -> Result<Output> {
@@ -427,7 +481,8 @@ impl RemoteRefs {
         };
         let mut out = Vec::new();
         for (path, (oid, bytes)) in self.tree(&commit)? {
-            if let Some(known) = self.verified.borrow().get(&oid) {
+            let seen = (oid, signer.to_string(), key.digest().to_string());
+            if let Some(known) = self.verified.borrow().get(&seen) {
                 out.extend(known.clone().unwrap_or_default());
                 continue;
             }
@@ -443,7 +498,7 @@ impl RemoteRefs {
                 }
             };
             out.extend(lines.clone().unwrap_or_default());
-            self.verified.borrow_mut().insert(oid, lines);
+            self.verified.borrow_mut().insert(seen, lines);
         }
         Ok(out)
     }
@@ -579,7 +634,7 @@ fn tempfile_path(git_dir: &Path, what: &str) -> Result<PathBuf> {
 fn verify(signer: &str, key: &SignerKey, bytes: &[u8]) -> Result<Vec<ResultLine>> {
     let envelope: Envelope = serde_json::from_slice(bytes).context("not a DSSE envelope")?;
     let who = match key {
-        SignerKey::Ssh(allowed) => ssh::verify(&envelope, allowed)?
+        SignerKey::Ssh { allowed, .. } => ssh::verify(&envelope, allowed)?
             .map(|a| a.principal.clone())
             .ok_or_else(|| anyhow!("no key {signer} lists signed it"))?,
         SignerKey::Keyless => bail!("{signer}'s keyless signatures are not verified on this host"),
@@ -996,16 +1051,17 @@ impl State for RemoteRefs {
         )
     }
 
-    /// The results every signer the policy names signed, verified, and
-    /// this host's own replays (core.9).
-    fn results(&self) -> Result<Vec<u8>> {
-        let mut bytes = self.own.results()?;
-        for (signer, key) in &self.signers {
-            for l in self.signed(signer, key)? {
-                bytes.extend(to_line(&l));
-            }
-        }
-        Ok(bytes)
+    /// This host's own replays alone: the profile keeps no signer's key,
+    /// so a branch's signed runs are read with
+    /// [`RemoteRefs::results_with`] and its own policy's list (78).
+    fn results(&self, _: &str) -> Result<Vec<u8>> {
+        self.results_with(&BTreeMap::new())
+    }
+
+    /// Nothing this host signs counts: with no list, no signed run is
+    /// verified here (78, 87).
+    fn verifies_own(&self, _: &str, _: &Rev) -> Result<bool> {
+        Ok(false)
     }
 
     /// Could-not-run-1 116: every result set aside on the remote, one file

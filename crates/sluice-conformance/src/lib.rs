@@ -280,10 +280,10 @@ pub trait Rig {
         s.seams().state.read(BRANCH).expect("records read").files
     }
 
-    /// The repository's results log.
+    /// The repository's results log, as the branch's gate reads it.
     fn results(&self) -> Vec<ResultLine> {
         let s = self.sluice();
-        let bytes = s.seams().state.results().expect("results read");
+        let bytes = s.seams().state.results(BRANCH).expect("results read");
         parse_lines(&bytes).expect("the results log parses")
     }
 

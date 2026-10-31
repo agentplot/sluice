@@ -46,7 +46,7 @@ impl Sluice<'_> {
             .filter(|s| s.id < id && !s.state.is_out())
             .map(|s| s.id)
             .collect();
-        let results: Vec<ResultLine> = parse_lines(&self.seams.state.results()?)?;
+        let results: Vec<ResultLine> = parse_lines(&self.seams.state.results(branch)?)?;
         let asides: Vec<SetAside> = parse_lines(&self.seams.state.set_asides()?)?;
         let mut view = verdict_view(&sub, &ahead, &results, &asides, &log);
         if view.standing == Standing::Testing {

@@ -349,9 +349,12 @@ fn ports(n: u16) -> u16 {
     from
 }
 
-/// 31: two places alive at once hold two blocks of ports: the same
-/// position in each block for a name, no port shared, and a short name
-/// each; a block is free again once its place is released.
+/// 31: two places alive at once hold two blocks of ports: each block its
+/// names' ports in a row, in the order written, no port shared, and a
+/// short name each; a block is free again once its place is released.
+/// A port something else on the host takes is passed over, so which
+/// blocks are given is the host's to say: the test reads the ports each
+/// place was given, and the blocks held, rather than expecting numbers.
 #[test]
 fn places_alive_at_once_hold_their_own_ports() {
     let _ports = ports_lock();
@@ -360,31 +363,48 @@ fn places_alive_at_once_hold_their_own_ports() {
     let p = places(&repo).with_blocks(blocks.path().to_path_buf());
     let from = ports(4);
     let settings = ported(&["web", "api-server"], &from.to_string());
+    // The block a place holds, read from the ports it was given.
+    let block = |place: &Place| -> u32 {
+        let web = port(place, "SLUICE_PORT_WEB");
+        assert_eq!(
+            port(place, "SLUICE_PORT_API_SERVER"),
+            web + 1,
+            "not in a row"
+        );
+        assert!(
+            web >= from && (web - from).is_multiple_of(2),
+            "not a block's first port: {web}"
+        );
+        u32::from(web - from) / 2
+    };
+    // The blocks the host holds for a place.
+    let held = || -> Vec<u32> {
+        let mut held: Vec<u32> = std::fs::read_dir(blocks.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| !n.starts_with('.'))
+            .map(|n| n.parse().unwrap())
+            .collect();
+        held.sort();
+        held
+    };
     let a = p.materialize("sluice/try/a/1", &rev, &settings).unwrap();
     let b = p.materialize("sluice/try/b/1", &rev, &settings).unwrap();
-    assert_eq!(port(&a, "SLUICE_PORT_WEB"), from);
-    assert_eq!(port(&a, "SLUICE_PORT_API_SERVER"), from + 1);
-    assert_eq!(port(&b, "SLUICE_PORT_WEB"), from + 2);
-    assert_eq!(port(&b, "SLUICE_PORT_API_SERVER"), from + 3);
+    let (na, nb) = (block(&a), block(&b));
+    assert_ne!(na, nb, "two places hold one block");
+    let mut both = vec![na, nb];
+    both.sort();
+    assert_eq!(held(), both);
     assert_ne!(a.env["SLUICE_PLACE"], b.env["SLUICE_PLACE"]);
     assert!(a.env["SLUICE_PLACE"].starts_with("sluice-"));
 
     p.release("sluice/try/a/1").unwrap();
+    assert_eq!(held(), vec![nb], "a's block is free again");
     let c = p.materialize("sluice/try/c/1", &rev, &settings).unwrap();
-    assert_eq!(port(&c, "SLUICE_PORT_WEB"), from, "a's block is free again");
+    assert_ne!(block(&c), nb, "c was given the block b holds");
     p.release("sluice/try/b/1").unwrap();
     p.release("sluice/try/c/1").unwrap();
-    let held: Vec<_> = std::fs::read_dir(blocks.path())
-        .unwrap()
-        .filter(|e| {
-            !e.as_ref()
-                .unwrap()
-                .file_name()
-                .to_string_lossy()
-                .starts_with('.')
-        })
-        .collect();
-    assert!(held.is_empty());
+    assert!(held().is_empty());
 }
 
 /// 31: a block one of whose ports something else holds is passed over.

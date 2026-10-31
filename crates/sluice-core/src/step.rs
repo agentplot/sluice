@@ -833,6 +833,7 @@ impl Sluice<'_> {
         }
         let rules = self.gate(branch, &tip)?;
         let home = self.home_system(&tip)?;
+        let listed = self.key_listed(branch, &tip, &rules)?;
         let unmet = Unmet::of(self.policy_at(&tip)?.map(|p| p.limits).unwrap_or_default());
         // A new branch starts at its widest window (13).
         if line.doc.window == 0 {
@@ -861,7 +862,14 @@ impl Sluice<'_> {
         for head in &gone {
             self.seams.state.unpublish_head(branch, head)?;
         }
-        self.poll(&mut line, &rules, &unmet.limits, home.as_deref(), &now)?;
+        self.poll(
+            &mut line,
+            &rules,
+            &unmet.limits,
+            home.as_deref(),
+            listed,
+            &now,
+        )?;
         // 140: work no required check reads lands beside the chain, before
         // anything is formed; a round that lands so does nothing else, and
         // the next forms on the revision it made.
@@ -875,9 +883,25 @@ impl Sluice<'_> {
                 }
             };
             if !self.choose_landing(&mut line, &rules, &chain, &now)? {
-                self.choose_starts(&mut line, &rules, home.as_deref(), &unmet, &chain, &now)?;
-                self.launch_on_pools(&mut line, &rules, home.as_deref(), &unmet, &chain, &now)?;
-                self.note_declined(&mut line, &rules, home.as_deref(), &unmet, &now);
+                self.choose_starts(
+                    &mut line,
+                    &rules,
+                    home.as_deref(),
+                    listed,
+                    &unmet,
+                    &chain,
+                    &now,
+                )?;
+                self.launch_on_pools(
+                    &mut line,
+                    &rules,
+                    home.as_deref(),
+                    listed,
+                    &unmet,
+                    &chain,
+                    &now,
+                )?;
+                self.note_declined(&mut line, &rules, home.as_deref(), listed, &unmet, &now);
             }
             derive_states(&mut line, &chain);
         }
@@ -994,6 +1018,7 @@ impl Sluice<'_> {
         rules: &Rules,
         limits: &Limits,
         home: Option<&str>,
+        listed: bool,
         now: &str,
     ) -> Result<()> {
         let pools = match &line.doc.base {
@@ -1063,9 +1088,11 @@ impl Sluice<'_> {
                 }
             }
             // 66, 87: a run no executor here takes, for a system this host
-            // is not or one it turned down for what it lacks (record 0074),
-            // is read as not passed once the time limit has gone; each of
-            // its checks says who turned it down and why, where any did.
+            // is not, one it turned down for what it lacks (record 0074) or,
+            // on a branch whose records are on its remote, one whose result
+            // signed here the gate would not count, is read as not passed
+            // once the time limit has gone; each of its checks says who
+            // turned it down and why, where any did.
             let x = line.candidate(&c.id).expect("polled candidate").clone();
             if let (Some(limit), Some(opened)) = (rules.timeout, x.opened.as_deref()) {
                 let over = seconds_between(opened, now).is_some_and(|s| s >= limit.as_secs_f64());
@@ -1074,7 +1101,9 @@ impl Sluice<'_> {
                     let x = line.candidate_mut(&c.id).expect("polled candidate");
                     for r in x.runs.iter_mut() {
                         if r.state == RunState::Open
-                            && (!ours(r, home) || r.declined.contains_key(&me))
+                            && (!ours(r, home)
+                                || r.declined.contains_key(&me)
+                                || !self.counts_here(r, home, rules, listed))
                         {
                             r.state = RunState::TimedOut;
                             let checks = if r.checks.is_empty() {
@@ -1169,7 +1198,7 @@ impl Sluice<'_> {
             sluice.replayed = 0u64,
         );
         let _span = span.enter();
-        let mut results = self.results()?;
+        let mut results = self.results(&line.branch)?;
         let mut fresh = Vec::new();
         // Design D9 (C.6): on a branch whose records are on its remote, a
         // result is recorded signed, and only for a key the candidate's
@@ -1235,12 +1264,29 @@ impl Sluice<'_> {
             self.seams.state.record_results(&bytes)?;
             if rules.signed {
                 // 78: what counts is what the records hold signed.
-                results = self.results()?;
+                results = self.results(&line.branch)?;
             } else {
                 results.extend(fresh);
             }
         }
         let mut v = verdict::read(&report, &results, rules, system, home);
+        // Design D9: a check whose key the tree did not bear out was signed
+        // by no one, so it is no pass (15), as a check with no result.
+        if let Some(p) = &proven {
+            for t in report.tasks.iter().filter(|t| !p.contains(&t.task)) {
+                if let Some(at) = v.missing.iter().position(|m| *m == t.task) {
+                    v.missing.remove(at);
+                    v.failed.push(FailedTask {
+                        task: t.task.clone(),
+                        hash: t.hash.clone(),
+                        log: None,
+                        flaky: None,
+                        system: system.map(str::to_string),
+                        not_run: None,
+                    });
+                }
+            }
+        }
         // 108: a replay no trusted pass proved counts for nothing, and the
         // checks run again with no replay.
         if !v.unproven.is_empty() && !r.no_replay {
@@ -1258,6 +1304,30 @@ impl Sluice<'_> {
                 Event::Unproven {
                     combination: c.revision.clone(),
                     tasks: v.unproven.clone(),
+                },
+            );
+            return Ok(());
+        }
+        // 87, S18: checks whose results this host signed with a key the
+        // branch's policy does not list are missing, never failed. With
+        // nothing failed on a result the gate counts, the run is open again
+        // for a host whose results count, and the candidate's time limit
+        // reads it not passed where none takes it (66).
+        if !v.missing.is_empty() && v.failed.is_empty() && !v.timed_out {
+            let x = line.candidate_mut(&c.id).expect("polled candidate");
+            let xr = &mut x.runs[i];
+            xr.state = RunState::Open;
+            xr.run = None;
+            xr.host = None;
+            if let Some(p) = xr.place.take() {
+                line.doc.release.push(p);
+            }
+            line.log(
+                now,
+                Event::Uncounted {
+                    combination: c.revision.clone(),
+                    tasks: v.missing.clone(),
+                    host: self.peer.name.clone(),
                 },
             );
             return Ok(());
@@ -2010,7 +2080,7 @@ impl Sluice<'_> {
             // Design D8: on a branch whose records any host may write, a
             // landing reads its verdict again from the signed results.
             if rules.signed {
-                let results = self.results()?;
+                let results = self.results(&line.branch)?;
                 let judged: BTreeSet<&String> = cands[..n]
                     .iter()
                     .map(|c| {
@@ -2153,11 +2223,13 @@ impl Sluice<'_> {
     /// 13, 14, 71: start candidates up to the window, and their runs this
     /// host takes up to what the instance takes; first the runs of
     /// candidates under test opened again (60, 108).
+    #[allow(clippy::too_many_arguments)]
     fn choose_starts(
         &self,
         line: &mut Line,
         rules: &Rules,
         home: Option<&str>,
+        listed: bool,
         unmet: &Unmet,
         chain: &[String],
         now: &str,
@@ -2171,7 +2243,7 @@ impl Sluice<'_> {
                 c.runs
                     .iter()
                     .enumerate()
-                    .filter(|(_, r)| self.claimable(r, home, rules, unmet))
+                    .filter(|(_, r)| self.claimable(r, home, rules, listed, unmet))
                     .map(|(i, _)| (c.id.clone(), i))
                     .collect::<Vec<_>>()
             })
@@ -2251,7 +2323,7 @@ impl Sluice<'_> {
             let mut runs = open_runs(rules, home);
             let mine = runs
                 .iter()
-                .position(|r| self.claimable(r, home, rules, unmet));
+                .position(|r| self.claimable(r, home, rules, listed, unmet));
             // A candidate this host would run starts only with room for it.
             if mine.is_some() && room == 0 {
                 break;
@@ -2321,8 +2393,15 @@ impl Sluice<'_> {
     /// 75, 79, 87, 107, 84: whether this instance takes `run`: one it may
     /// take, on a host that meets what the branch's runs ask of it
     /// (record 0074), which is looked at only here, once a round.
-    fn claimable(&self, run: &SystemRun, home: Option<&str>, rules: &Rules, unmet: &Unmet) -> bool {
-        self.may_claim(run, home, rules) && self.meets(unmet)
+    fn claimable(
+        &self,
+        run: &SystemRun,
+        home: Option<&str>,
+        rules: &Rules,
+        listed: bool,
+        unmet: &Unmet,
+    ) -> bool {
+        self.may_claim(run, home, rules, listed) && self.meets(unmet)
     }
 
     /// Design D3: whether this host meets what `unmet`'s limits ask of it,
@@ -2350,6 +2429,7 @@ impl Sluice<'_> {
         line: &mut Line,
         rules: &Rules,
         home: Option<&str>,
+        listed: bool,
         unmet: &Unmet,
         now: &str,
     ) {
@@ -2365,7 +2445,9 @@ impl Sluice<'_> {
             .filter(|c| c.state.under_test())
         {
             for r in &mut c.runs {
-                if !self.may_claim(r, home, rules) || r.declined.get(me).is_some_and(|w| w == why) {
+                if !self.may_claim(r, home, rules, listed)
+                    || r.declined.get(me).is_some_and(|w| w == why)
+                {
                     continue;
                 }
                 r.declined.insert(me.clone(), why.to_string());
@@ -2383,13 +2465,28 @@ impl Sluice<'_> {
     }
 
     /// 75, 79, 87, 107: whether this instance may take `run`: open and
-    /// unclaimed, of the system it is, and, on a branch whose records are
-    /// on its remote, signed by a signer the gate trusts for what the gate
-    /// needs.
-    fn may_claim(&self, run: &SystemRun, home: Option<&str>, rules: &Rules) -> bool {
-        if run.state != RunState::Open || run.host.is_some() || !self.runs_system(run, home) {
-            return false;
-        }
+    /// unclaimed, of the system it is, and one whose result signed here
+    /// the gate would count ([`Sluice::counts_here`]).
+    fn may_claim(&self, run: &SystemRun, home: Option<&str>, rules: &Rules, listed: bool) -> bool {
+        run.state == RunState::Open
+            && run.host.is_none()
+            && self.runs_system(run, home)
+            && self.counts_here(run, home, rules, listed)
+    }
+
+    /// 78, 79, 87: whether the gate would count `run`'s result signed by
+    /// this host: on a branch whose records are on its remote, it signs as
+    /// a signer the gate trusts for what the gate needs, and `listed`, the
+    /// records' word that the branch's policy at its revision lists the
+    /// key it signs with for that signer ([`Sluice::key_listed`]). The
+    /// signer's name alone takes nothing. On any other branch, any run.
+    fn counts_here(
+        &self,
+        run: &SystemRun,
+        home: Option<&str>,
+        rules: &Rules,
+        listed: bool,
+    ) -> bool {
         if !rules.signed {
             return true;
         }
@@ -2400,11 +2497,23 @@ impl Sluice<'_> {
             return false;
         };
         let system = run.system.as_deref().or(home);
-        (!rules.confined || *may_confine)
+        listed
+            && (!rules.confined || *may_confine)
             && match (system, systems) {
                 (Some(s), Some(list)) => list.iter().any(|x| x == s),
                 _ => true,
             }
+    }
+
+    /// 78, 87: whether `branch`'s policy at `tip`, the revision the round
+    /// read, lists the key this host signs with for the signer it signs
+    /// as, asked of the records, which hold the keys, once where a round
+    /// claims. A branch whose records are the host's own files, or a host
+    /// that signs nothing, asks nothing.
+    fn key_listed(&self, branch: &str, tip: &Rev, rules: &Rules) -> Result<bool> {
+        Ok(rules.signed
+            && self.peer.signer.is_some()
+            && self.seams.state.verifies_own(branch, tip)?)
     }
 
     /// 87: whether this host runs `run`'s system: any run for no system,
@@ -2457,11 +2566,13 @@ impl Sluice<'_> {
     /// that no live instance able to take it has room for by its last sign
     /// of life, the policy's pools tried in order; the job's start is its
     /// claim.
+    #[allow(clippy::too_many_arguments)]
     fn launch_on_pools(
         &self,
         line: &mut Line,
         rules: &Rules,
         home: Option<&str>,
+        listed: bool,
         unmet: &Unmet,
         chain: &[String],
         now: &str,
@@ -2520,7 +2631,7 @@ impl Sluice<'_> {
         for (id, i) in open {
             let run = line.candidate(&id).expect("a chain's candidate").runs[i].clone();
             // 107: a live instance that may take it, with room, comes first.
-            if self.claimable(&run, home, rules, unmet) && lead_room > 0 {
+            if self.claimable(&run, home, rules, listed, unmet) && lead_room > 0 {
                 lead_room -= 1;
                 continue;
             }
@@ -2648,6 +2759,7 @@ impl Sluice<'_> {
             return Ok(());
         }
         let home = self.home_system(&tip)?;
+        let listed = self.key_listed(branch, &tip, &rules)?;
         let unmet = Unmet::of(self.policy_at(&tip)?.map(|p| p.limits).unwrap_or_default());
         let me = self.peer.name.clone();
         let line = self.read_line(branch)?;
@@ -2808,7 +2920,9 @@ impl Sluice<'_> {
                         c.runs
                             .iter()
                             .enumerate()
-                            .find(|(_, r)| self.claimable(r, home.as_deref(), &rules, &unmet))
+                            .find(|(_, r)| {
+                                self.claimable(r, home.as_deref(), &rules, listed, &unmet)
+                            })
                             .map(|(i, _)| (c.id.clone(), i))
                     })
                     .next();
@@ -2844,7 +2958,7 @@ impl Sluice<'_> {
         if unmet.found().is_some() {
             self.update(branch, |l| {
                 let now = self.now();
-                self.note_declined(l, &rules, home.as_deref(), &unmet, &now);
+                self.note_declined(l, &rules, home.as_deref(), listed, &unmet, &now);
                 Ok(())
             })?;
         }

@@ -480,6 +480,79 @@ fn a_verdict_the_state_alone_holds_lands_nothing() {
     assert!(h.w().moves().is_empty());
 }
 
+/// satisfies: 87, 78; rule core.22: a host that signs as a signer the
+/// gate trusts, with a key the branch's policy does not list, takes no
+/// run; a host whose key it lists takes it, and the submission lands.
+#[test]
+fn a_host_whose_key_the_branch_does_not_list_takes_no_run() {
+    let h = peers();
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let one = h.submit("unit/a");
+    h.w().be_host("a");
+    h.w().key_unlisted(true);
+    on(&h, "a").step(BRANCH).unwrap();
+    on(&h, "a").step(BRANCH).unwrap();
+    assert_eq!(runs(&h), [(None, sluice_core::records::RunState::Open)]);
+    assert!(claims(&h).is_empty());
+    assert!(h.w().requests().is_empty());
+    for _ in 0..4 {
+        on(&h, "b").step(BRANCH).unwrap();
+        on(&h, "a").step(BRANCH).unwrap();
+    }
+    assert_eq!(claims(&h), ["b"]);
+    assert_eq!(h.sub(one).state, State::Landed);
+}
+
+/// satisfies: 87, 66: a run no host whose key the branch lists takes
+/// stays open, and the candidate's time limit reads it not passed.
+#[test]
+fn a_run_no_listed_host_takes_is_not_passed_at_the_time_limit() {
+    let h = peers();
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let one = h.submit("unit/a");
+    h.w().be_host("a");
+    h.w().key_unlisted(true);
+    on(&h, "a").step(BRANCH).unwrap();
+    h.w().advance(chrono::Duration::minutes(19));
+    on(&h, "a").step(BRANCH).unwrap();
+    assert_eq!(runs(&h), [(None, sluice_core::records::RunState::Open)]);
+    h.w().advance(chrono::Duration::minutes(2));
+    on(&h, "a").step(BRANCH).unwrap();
+    assert_eq!(h.sub(one).state, State::Failed);
+    assert!(h.w().requests().is_empty());
+}
+
+/// satisfies: 87, 28; S18: a run whose result its host signed with a key
+/// the branch's policy no longer lists, read when it reports, is missing,
+/// never failed: it is open again, and a host whose key the branch lists
+/// settles it.
+#[test]
+fn s18_a_result_signed_with_a_key_the_branch_does_not_list_is_missing() {
+    let h = peers();
+    h.w().hold_runs(true);
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let one = h.submit("unit/a");
+    on(&h, "a").step(BRANCH).unwrap();
+    assert_eq!(h.w().live_runs(), 1, "a runs the combination");
+    // The branch's policy moves on, and lists a's key no more.
+    h.w().key_unlisted(true);
+    h.w().hold_runs(false);
+    h.w().complete_all();
+    on(&h, "a").step(BRANCH).unwrap();
+    assert!(h
+        .events()
+        .iter()
+        .any(|e| matches!(e, Event::Uncounted { host, .. } if host == "a")));
+    assert_eq!(runs(&h), [(None, sluice_core::records::RunState::Open)]);
+    assert_ne!(h.sub(one).state, State::Failed);
+    assert!(h.sub(one).failed.is_empty());
+    for _ in 0..4 {
+        on(&h, "b").step(BRANCH).unwrap();
+        on(&h, "a").step(BRANCH).unwrap();
+    }
+    assert_eq!(h.sub(one).state, State::Landed);
+}
+
 /// satisfies: 108, 78; S42: a key whose only pass was signed by a signer
 /// the gate does not trust replays for nothing, and the check runs.
 #[test]
