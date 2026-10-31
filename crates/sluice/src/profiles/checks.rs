@@ -202,9 +202,9 @@ pub struct Checks {
     sessions: Option<Sessions>,
     /// The host's running checks, when not the host's own directory.
     running: Option<HostCount>,
-    /// Where the container engine is looked for, when not the sockets the
-    /// sandbox opens.
-    engine_sockets: Option<Vec<PathBuf>>,
+    /// Where the container engine is looked for, when not where the
+    /// sandbox lets a run reach it.
+    engines: Option<Vec<Endpoint>>,
 }
 
 impl Checks {
@@ -217,7 +217,7 @@ impl Checks {
             sessions: None,
             running: None,
             pool: None,
-            engine_sockets: None,
+            engines: None,
         }
     }
 
@@ -239,20 +239,28 @@ impl Checks {
         self
     }
 
-    /// The same profile, looking for the container engine at `sockets`
-    /// in place of those the sandbox opens (design D2).
-    pub fn with_engine_sockets(mut self, sockets: Vec<PathBuf>) -> Self {
-        self.engine_sockets = Some(sockets);
+    /// The same profile, looking for the container engine at the unix
+    /// sockets `sockets` in place of where the sandbox lets a run reach it
+    /// (design D2).
+    pub fn with_engine_sockets(self, sockets: Vec<PathBuf>) -> Self {
+        self.with_engine_endpoints(sockets.into_iter().map(Endpoint::Unix).collect())
+    }
+
+    /// The same profile, looking for the container engine at `endpoints`,
+    /// and letting a sandboxed run reach it there, in place of the host's
+    /// (design D5).
+    pub fn with_engine_endpoints(mut self, endpoints: Vec<Endpoint>) -> Self {
+        self.engines = Some(endpoints);
         self
     }
 
-    /// Where the container engine is looked for: the sockets this profile
-    /// was given, else those the sandbox opens for a run that may reach
-    /// the engine (design D2).
-    fn engine_sockets(&self) -> Vec<PathBuf> {
-        match &self.engine_sockets {
-            Some(s) => s.clone(),
-            None => docker_sockets(),
+    /// Where the container engine is looked for: the endpoints this
+    /// profile was given, else those the sandbox lets a run that may reach
+    /// the engine reach (design D2, D5).
+    fn engines(&self) -> Vec<Endpoint> {
+        match &self.engines {
+            Some(e) => e.clone(),
+            None => engine_endpoints(),
         }
     }
 
@@ -361,12 +369,15 @@ fn choose(limits: &Limits) -> Result<Kind> {
 /// a new pseudo-terminal's included;
 /// the network as `network` says: `Denied`, none, local sockets included;
 /// `Localhost`, listening and connecting on localhost only, by address or
-/// by name, and no other connection (name lookups included).
+/// by name, and no other connection (name lookups included); and, whatever
+/// the network, each of `sockets` and the container engine's TCP
+/// addresses `tcp`, by host and port (ADR 0016; design D5).
 fn seatbelt(
     writable: &[PathBuf],
     stamps: &[&str],
     network: Option<Network>,
     sockets: &[PathBuf],
+    tcp: &[(String, u16)],
     user_tmp: Option<&Path>,
 ) -> String {
     let quote = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
@@ -427,6 +438,21 @@ fn seatbelt(
             "(allow network-outbound (remote unix-socket (path-literal \"{}\")))\n",
             quote(&s.to_string_lossy())
         ));
+    }
+    // Design D5: the engine's TCP address, whatever the network. Seatbelt
+    // names a remote host only as `localhost` or `*`; a name is resolved
+    // through mDNSResponder's socket.
+    for (host, port) in tcp {
+        let local = matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1");
+        let at = if local { "localhost" } else { "*" };
+        p.push_str(&format!(
+            "(allow network-outbound (remote tcp \"{at}:{port}\"))\n"
+        ));
+        if host.parse::<std::net::IpAddr>().is_err() && !local {
+            p.push_str(
+                "(allow network-outbound (remote unix-socket (path-literal \"/private/var/run/mDNSResponder\")))\n",
+            );
+        }
     }
     p
 }
@@ -567,9 +593,17 @@ fn environment(
     for cache in caches {
         env.extend(cache.env.clone());
     }
-    // The container engine's client finds the engine as the user's does.
+    // The container engine's client finds the engine as the user's does,
+    // over TLS where the user's would (design D5).
     if request.limits.docker {
-        for k in ["DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG"] {
+        for k in [
+            "DOCKER_HOST",
+            "DOCKER_CONTEXT",
+            "DOCKER_CONFIG",
+            "DOCKER_TLS_VERIFY",
+            "DOCKER_TLS",
+            "DOCKER_CERT_PATH",
+        ] {
             if let Ok(v) = std::env::var(k) {
                 env.insert(k.into(), v);
             }
@@ -622,84 +656,223 @@ fn resolved(path: &Path) -> PathBuf {
     }
 }
 
-/// The container engine's sockets a run with `docker = true` may reach,
-/// and the ones the engine is looked for at (design D2): those
-/// [`ENGINE_SOCKETS_VAR`] names where it is set, else `DOCKER_HOST`'s and
-/// the usual places engines on macOS put theirs; each by the path given
-/// and the path it resolves to.
-fn docker_sockets() -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-    if let Some(v) = std::env::var_os(ENGINE_SOCKETS_VAR) {
-        paths.extend(std::env::split_paths(&v));
-    } else {
-        if let Some(p) = std::env::var("DOCKER_HOST")
-            .ok()
-            .and_then(|h| h.strip_prefix("unix://").map(PathBuf::from))
-        {
-            paths.push(p);
+/// Design D5: where a run with `docker = true` reaches the container
+/// engine, and where the engine is looked for.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Endpoint {
+    /// A unix socket, by its path.
+    Unix(PathBuf),
+    /// A TCP address, over TLS where `tls` says.
+    Tcp {
+        host: String,
+        port: u16,
+        tls: Option<EngineTls>,
+    },
+}
+
+/// How the engine's client speaks TLS to it, as `DOCKER_TLS_VERIFY`,
+/// `DOCKER_TLS` and `DOCKER_CERT_PATH` say (design D5).
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct EngineTls {
+    /// The engine's certificate is verified against `ca.pem`.
+    pub verify: bool,
+    /// Where `ca.pem`, `cert.pem` and `key.pem` are.
+    pub certs: PathBuf,
+}
+
+impl std::fmt::Display for Endpoint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Endpoint::Unix(path) => write!(f, "{}", path.display()),
+            Endpoint::Tcp { port, .. } => write!(f, "tcp://{}:{port}", self.host_part()),
         }
-        paths.push("/var/run/docker.sock".into());
+    }
+}
+
+impl Endpoint {
+    /// A TCP endpoint's host as an address names it: an IPv6 address in
+    /// brackets.
+    fn host_part(&self) -> String {
+        match self {
+            Endpoint::Tcp { host, .. } if host.contains(':') => format!("[{host}]"),
+            Endpoint::Tcp { host, .. } => host.clone(),
+            Endpoint::Unix(_) => String::new(),
+        }
+    }
+}
+
+/// The container engine's endpoints a run with `docker = true` may reach,
+/// and the ones the engine is looked for at (design D2, D5): those
+/// [`ENGINE_SOCKETS_VAR`] names where it is set, else `DOCKER_HOST`'s, a
+/// unix socket or a TCP address, and the usual places engines on macOS
+/// put their sockets; each socket by the path given and the path it
+/// resolves to.
+pub fn engine_endpoints() -> Vec<Endpoint> {
+    let tls = engine_tls();
+    let mut found = Vec::new();
+    if let Some(v) = std::env::var_os(ENGINE_SOCKETS_VAR) {
+        for e in listed(&v.to_string_lossy()) {
+            match e.starts_with("tcp://") {
+                true => found.extend(docker_host(e, tls.clone())),
+                false => found.push(Endpoint::Unix(e.into())),
+            }
+        }
+    } else {
+        if let Some(e) = std::env::var("DOCKER_HOST")
+            .ok()
+            .and_then(|h| docker_host(&h, tls))
+        {
+            found.push(e);
+        }
+        found.push(Endpoint::Unix("/var/run/docker.sock".into()));
         if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
             for p in [
                 ".docker/run/docker.sock",
                 ".orbstack/run/docker.sock",
                 ".colima/default/docker.sock",
             ] {
-                paths.push(home.join(p));
+                found.push(Endpoint::Unix(home.join(p)));
             }
         }
     }
     let mut all = Vec::new();
-    for p in paths {
-        if let Ok(real) = std::fs::canonicalize(&p) {
-            all.push(real);
+    for e in found {
+        if let Endpoint::Unix(p) = &e {
+            if let Ok(real) = std::fs::canonicalize(p) {
+                all.push(Endpoint::Unix(real));
+            }
         }
-        all.push(p);
+        all.push(e);
     }
     all.sort();
     all.dedup();
     all
 }
 
+/// The entries of [`ENGINE_SOCKETS_VAR`]: separated by `:` where the next
+/// begins with `/` or `tcp://`, so an address's own colons stay in it.
+fn listed(v: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut from = 0;
+    for (at, _) in v.match_indices(':') {
+        let next = &v[at + 1..];
+        let starts =
+            next.starts_with("tcp://") || (next.starts_with('/') && !next.starts_with("//"));
+        if starts && at > from {
+            out.push(&v[from..at]);
+            from = at + 1;
+        }
+    }
+    if from < v.len() {
+        out.push(&v[from..]);
+    }
+    out
+}
+
+/// How the engine's client speaks TLS where it is reached by TCP:
+/// verifying the engine under `DOCKER_TLS_VERIFY`, not under `DOCKER_TLS`
+/// alone, with the files of `DOCKER_CERT_PATH`, else of `~/.docker`; `None`
+/// where neither is set (design D5).
+fn engine_tls() -> Option<EngineTls> {
+    let set = |k: &str| std::env::var_os(k).is_some_and(|v| !v.is_empty());
+    let verify = set("DOCKER_TLS_VERIFY");
+    if !verify && !set("DOCKER_TLS") {
+        return None;
+    }
+    let certs = match std::env::var_os("DOCKER_CERT_PATH").filter(|v| !v.is_empty()) {
+        Some(dir) => PathBuf::from(dir),
+        None => std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_default()
+            .join(".docker"),
+    };
+    Some(EngineTls { verify, certs })
+}
+
+/// The endpoint `DOCKER_HOST` names, as the engine's client reads it:
+/// `unix://<path>`, or `tcp://<host>[:<port>]`, the port 2376 over TLS and
+/// 2375 without where none is given; `None` for any other scheme
+/// (`ssh://`, `npipe://`), which the look does not read (design D5).
+pub fn docker_host(value: &str, tls: Option<EngineTls>) -> Option<Endpoint> {
+    if let Some(path) = value.strip_prefix("unix://") {
+        return Some(Endpoint::Unix(path.into()));
+    }
+    let rest = value.strip_prefix("tcp://")?.trim_end_matches('/');
+    let (host, port) = match rest.strip_prefix('[') {
+        Some(v6) => {
+            let (host, after) = v6.split_once(']')?;
+            (host, after.strip_prefix(':'))
+        }
+        None => match rest.rsplit_once(':') {
+            Some((host, port)) => (host, Some(port)),
+            None => (rest, None),
+        },
+    };
+    let port = match port {
+        Some(p) => p.parse().ok()?,
+        None if tls.is_some() => 2376,
+        None => 2375,
+    };
+    (!host.is_empty()).then(|| Endpoint::Tcp {
+        host: host.into(),
+        port,
+        tls,
+    })
+}
+
 /// The tests' way to name where a fake container engine listens, as a
-/// list of paths: where set, these replace the host's sockets both where
-/// the engine is looked for and where the sandbox lets a run reach it, so
-/// the look finds only what the run would reach (design D2). A host names
-/// its engine by `DOCKER_HOST`.
+/// list of unix sockets' paths and `tcp://` addresses: where set, these
+/// replace the host's endpoints both where the engine is looked for and
+/// where the sandbox lets a run reach it, so the look finds only what the
+/// run would reach (design D2, D5). A host names its engine by
+/// `DOCKER_HOST`.
 pub const ENGINE_SOCKETS_VAR: &str = "SLUICE_ENGINE_SOCKETS";
 
-/// How long the engine look waits for a socket to take its connection,
+/// How long the engine look waits for an endpoint to take its connection,
 /// and again for its answer (design D2).
 const ENGINE_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
-/// 84, record 0074 (design D2): `None` when a container engine answers at
-/// one of `sockets`, by the Docker Engine API's `GET /_ping` over each
-/// that exists, the first answering `200` ending the look; otherwise why
-/// not: each socket that exists with what it said, or, where none exists,
-/// the paths looked at. It runs as the process that would run the checks,
-/// so it finds what their run would reach.
-pub fn engine_unmet(sockets: &[PathBuf]) -> Option<String> {
+/// 84, record 0074 (design D2, D5): `None` when a container engine answers
+/// at one of `endpoints`, by the Docker Engine API's `GET /_ping` over each
+/// unix socket that exists and each TCP address, the first answering `200`
+/// ending the look; otherwise why not, beginning with what is missing
+/// (design D3): `no container engine answers: `, then each endpoint tried
+/// with what it said, or, where none was, the paths looked at. It runs as
+/// the process that would run the checks, so it finds what their run would
+/// reach.
+pub fn engine_unmet(endpoints: &[Endpoint]) -> Option<String> {
     let mut said = Vec::new();
     let mut looked = std::collections::BTreeSet::new();
-    for socket in sockets.iter().filter(|s| s.exists()) {
-        // A path and the path it resolves to are one socket.
-        let real = std::fs::canonicalize(socket).unwrap_or_else(|_| socket.clone());
-        if !looked.insert(real) {
-            continue;
-        }
-        match ping(socket) {
+    for e in endpoints {
+        let answer = match e {
+            Endpoint::Unix(socket) => {
+                if !socket.exists() {
+                    continue;
+                }
+                // A path and the path it resolves to are one socket.
+                let real = std::fs::canonicalize(socket).unwrap_or_else(|_| socket.clone());
+                if !looked.insert(real) {
+                    continue;
+                }
+                ping(socket)
+            }
+            Endpoint::Tcp { port, tls, .. } => ping_tcp(&e.host_part(), *port, tls.as_ref()),
+        };
+        match answer {
             Ok(()) => return None,
-            Err(why) => said.push(format!("{} {why}", socket.display())),
+            Err(why) => said.push(format!("{e} {why}")),
         }
     }
-    if said.is_empty() {
-        let paths: Vec<String> = sockets.iter().map(|s| s.display().to_string()).collect();
-        return Some(match paths.is_empty() {
+    let said = if said.is_empty() {
+        let paths: Vec<String> = endpoints.iter().map(|e| e.to_string()).collect();
+        match paths.is_empty() {
             true => "no socket to look at".into(),
             false => format!("no socket at {}", paths.join(", ")),
-        });
-    }
-    Some(said.join("; "))
+        }
+    } else {
+        said.join("; ")
+    };
+    Some(format!("no container engine answers: {said}"))
 }
 
 /// `GET /_ping` over the unix socket `socket`: `Ok` when it answers `200`,
@@ -754,6 +927,78 @@ fn ping(socket: &Path) -> Result<(), String> {
     }
 }
 
+/// `GET /_ping` at the TCP address `host:port`, plain or over `tls`: `Ok`
+/// when it answers `200`, else what it did, in words. The look is one try:
+/// it asks the host's engine, not a remote (rule core.29).
+fn ping_tcp(host: &str, port: u16, tls: Option<&EngineTls>) -> Result<(), String> {
+    let wait = format!("{}s", ENGINE_WAIT.as_secs());
+    let mut config = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .timeout_connect(Some(ENGINE_WAIT))
+        .timeout_global(Some(ENGINE_WAIT * 3))
+        .user_agent("sluice");
+    let scheme = match tls {
+        Some(t) => {
+            config = config.tls_config(engine_tls_config(t)?);
+            "https"
+        }
+        None => "http",
+    };
+    let agent: ureq::Agent = config.build().into();
+    match agent.get(&format!("{scheme}://{host}:{port}/_ping")).call() {
+        Ok(r) if r.status() == 200 => Ok(()),
+        Ok(r) => Err(format!("answered {}", r.status())),
+        Err(e) => Err(match e {
+            ureq::Error::Io(io) if io.kind() == std::io::ErrorKind::ConnectionRefused => {
+                "refused the connection".into()
+            }
+            ureq::Error::ConnectionFailed => "refused the connection".into(),
+            ureq::Error::Timeout(ureq::Timeout::Resolve | ureq::Timeout::Connect) => {
+                format!("took no connection within {wait}")
+            }
+            ureq::Error::Timeout(_) => format!("gave no answer within {wait}"),
+            ureq::Error::HostNotFound => "names no host that resolves".into(),
+            // A TLS failure is told in TLS's own words.
+            ureq::Error::Io(io) => io.to_string(),
+            other => other.to_string(),
+        }),
+    }
+}
+
+/// The TLS the engine's client speaks (design D5): its certificate and key
+/// from `cert.pem` and `key.pem` where they are, and the engine verified
+/// against `ca.pem` where `verify` asks, else not verified.
+fn engine_tls_config(tls: &EngineTls) -> Result<ureq::tls::TlsConfig, String> {
+    use ureq::tls::{parse_pem, ClientCert, PemItem, RootCerts, TlsConfig};
+    let read = |name: &str| {
+        let path = tls.certs.join(name);
+        std::fs::read(&path).map_err(|e| format!("could not read {}: {e}", path.display()))
+    };
+    let certs = |pem: &[u8]| {
+        parse_pem(pem)
+            .filter_map(|i| match i {
+                Ok(PemItem::Certificate(c)) => Some(c),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut config = TlsConfig::builder();
+    if let (Ok(cert), Ok(key)) = (read("cert.pem"), read("key.pem")) {
+        let key = parse_pem(&key).find_map(|i| match i {
+            Ok(PemItem::PrivateKey(k)) => Some(k),
+            _ => None,
+        });
+        if let Some(key) = key {
+            config = config.client_cert(Some(ClientCert::new_with_certs(&certs(&cert), key)));
+        }
+    }
+    config = match tls.verify {
+        true => config.root_certs(RootCerts::new_with_certs(&certs(&read("ca.pem")?))),
+        false => config.disable_verification(true),
+    };
+    Ok(config.build())
+}
+
 /// A path by the path given and, where it resolves, the path it resolves
 /// to: Seatbelt matches resolved paths, and `/var` is `/private/var`.
 fn given_and_resolved(path: &Path) -> Vec<PathBuf> {
@@ -768,21 +1013,27 @@ fn given_and_resolved(path: &Path) -> Vec<PathBuf> {
 
 /// The Seatbelt profile of a run in `place`: its checkout and scratch
 /// directory writable, and each `dir` of the host's `caches`; the
-/// container engine's sockets reachable when `limits` allow it (ADR 0016),
-/// and each `socket` of the caches, whatever the network (35; design D4).
+/// container engine's `engines`, its sockets and its TCP addresses,
+/// reachable when `limits` allow it (ADR 0016; design D5), and each
+/// `socket` of the caches, whatever the network (35; design D4).
 fn sandbox_profile(
     place: &Place,
     limits: &Limits,
     stamps: &[&str],
     caches: &[HostCache],
+    engines: Vec<Endpoint>,
 ) -> String {
     let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
     let mut writable = vec![canon(&place.path), canon(&place.tmp)];
-    let mut sockets = if limits.docker {
-        docker_sockets()
-    } else {
-        Vec::new()
-    };
+    let engines = if limits.docker { engines } else { Vec::new() };
+    let mut sockets = Vec::new();
+    let mut tcp = Vec::new();
+    for e in engines {
+        match e {
+            Endpoint::Unix(p) => sockets.push(p),
+            Endpoint::Tcp { host, port, .. } => tcp.push((host, port)),
+        }
+    }
     for cache in caches {
         writable.extend(given_and_resolved(&cache.dir));
         if let Some(s) = &cache.socket {
@@ -796,6 +1047,7 @@ fn sandbox_profile(
         stamps,
         limits.network,
         &sockets,
+        &tcp,
         user_tmp().as_deref(),
     )
 }
@@ -882,7 +1134,14 @@ pub fn release_request(
     let mut argv = cx.argv(&r);
     if kind == Kind::Sandbox {
         let profile = dir.join("sandbox.sb");
-        std::fs::write(&profile, sandbox_profile(place, limits, &[], caches))?;
+        let engines = match limits.docker {
+            true => engine_endpoints(),
+            false => Vec::new(),
+        };
+        std::fs::write(
+            &profile,
+            sandbox_profile(place, limits, &[], caches, engines),
+        )?;
         argv.splice(
             0..0,
             [
@@ -1111,7 +1370,16 @@ impl Tests for Checks {
                 let profile = dir.join("sandbox.sb");
                 std::fs::write(
                     &profile,
-                    sandbox_profile(&request.place, &request.limits, &plan.stamps, caches),
+                    sandbox_profile(
+                        &request.place,
+                        &request.limits,
+                        &plan.stamps,
+                        caches,
+                        match request.limits.docker {
+                            true => self.engines(),
+                            false => Vec::new(),
+                        },
+                    ),
                 )?;
                 let sandbox = [
                     "/usr/bin/sandbox-exec".to_string(),
@@ -1164,13 +1432,18 @@ impl Tests for Checks {
         Ok(RunHandle(name.clone()))
     }
 
-    /// 84, record 0074: a run that may reach the container engine asks
-    /// the host for one that answers where the run would reach it.
+    /// 84, 87, record 0074 (design D2): a limit the executor cannot hold,
+    /// in the words its start would refuse it with, before any socket is
+    /// looked at; then, for a run that may reach the container engine, one
+    /// that answers where the run would reach it.
     fn unmet(&self, limits: &Limits) -> Result<Option<String>> {
-        if !limits.asks_of_host() {
+        if let Err(refused) = choose(limits) {
+            return Ok(Some(format!("{refused:#}")));
+        }
+        if !limits.docker {
             return Ok(None);
         }
-        Ok(engine_unmet(&self.engine_sockets()))
+        Ok(engine_unmet(&self.engines()))
     }
 
     fn progress(&self, run: &RunHandle) -> Result<Progress> {

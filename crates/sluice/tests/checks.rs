@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use sluice::instance::{HostCache, Instance};
-use sluice::profiles::checks::Checks;
+use sluice::profiles::checks::{docker_host, Checks, Endpoint, EngineTls};
 use sluice_seams::{
     AtBound, Limits, Network, Outcome, Place, Progress, RunReport, RunRequest, Setting, Settings,
     Source, Tests,
@@ -533,6 +533,49 @@ fn the_sandbox_holds_writes_and_the_network() {
     drop(listener);
 }
 
+/// Design D5, ADR 0016; the host-requirements spec's "An engine at a TCP
+/// address": a sandboxed run with `network = "denied"` that may reach the
+/// container engine reaches it at its TCP address, as
+/// `DOCKER_HOST=tcp://127.0.0.1:<port>` names it, and the same run without
+/// `docker` is refused the connection. An engine named by a host name is
+/// opened on its port alone, with the resolver's socket.
+#[cfg(target_os = "macos")]
+#[test]
+fn the_sandbox_opens_the_engines_tcp_address() {
+    let repo = Repo::new("checks-sandbox-engine-tcp");
+    let port = support::tcp_engine("HTTP/1.0 200 OK");
+    let c = checks(&repo).with_engine_endpoints(vec![local(port, None)]);
+    let connect = format!("/usr/bin/nc -z -w 2 127.0.0.1 {port}");
+    let run = |c: &Checks, name: &str, cmd: &str, docker| {
+        let mut req = request(&repo, name, command(cmd));
+        req.limits = Limits {
+            executor: Some("sandbox".into()),
+            network: Some(Network::Denied),
+            memory: None,
+            docker,
+        };
+        finish(c, &req).tasks[0].outcome
+    };
+    assert_eq!(run(&c, "p1", &connect, true), Outcome::Pass);
+    assert_eq!(run(&c, "p2", &connect, false), Outcome::Fail);
+
+    let named = checks(&repo).with_engine_endpoints(vec![Endpoint::Tcp {
+        host: "build-engine".into(),
+        port: 2376,
+        tls: None,
+    }]);
+    assert_eq!(run(&named, "p3", "true", true), Outcome::Pass);
+    let profile = std::fs::read_to_string(named.runs().dir("p3").join("sandbox.sb")).unwrap();
+    assert!(
+        profile.contains("(allow network-outbound (remote tcp \"*:2376\"))"),
+        "{profile}"
+    );
+    assert!(
+        profile.contains("/private/var/run/mDNSResponder"),
+        "{profile}"
+    );
+}
+
 /// C.3: a sandboxed command may open a pseudo-terminal, as a test that
 /// starts a terminal multiplexer does.
 #[cfg(target_os = "macos")]
@@ -666,7 +709,13 @@ fn a_host_whose_engine_does_not_answer_does_not_meet_it() {
     let socket = dir.path().join("e.sock");
     let c = checks(&repo).with_engine_sockets(vec![socket.clone()]);
     let why = c.unmet(&docker()).unwrap().expect("unmet");
-    assert_eq!(why, format!("no socket at {}", socket.display()));
+    assert_eq!(
+        why,
+        format!(
+            "no container engine answers: no socket at {}",
+            socket.display()
+        )
+    );
 }
 
 /// 84: a run that asks for no engine is met, with no socket looked at.
@@ -676,6 +725,185 @@ fn a_run_that_asks_for_no_engine_is_met_with_none() {
     let dir = Scratch::short();
     let c = checks(&repo).with_engine_sockets(vec![dir.path().join("e.sock")]);
     assert_eq!(c.unmet(&Limits::default()).unwrap(), None);
+}
+
+/// A TCP endpoint on this host's loopback at `port`, plain or over `tls`.
+fn local(port: u16, tls: Option<EngineTls>) -> Endpoint {
+    Endpoint::Tcp {
+        host: "127.0.0.1".into(),
+        port,
+        tls,
+    }
+}
+
+/// Design D5; the host-requirements spec's "An engine at a TCP address"
+/// and "Nothing answers at the TCP address": an engine answering `200` at
+/// a TCP address meets a run that asks for one; an address nothing
+/// listens on, and one answering `500`, leave it unmet, naming the address
+/// and what it did.
+#[test]
+fn an_engine_at_a_tcp_address_is_looked_for_there() {
+    let repo = Repo::new("checks-engine-tcp");
+    let port = support::tcp_engine("HTTP/1.0 200 OK");
+    let c = checks(&repo).with_engine_endpoints(vec![local(port, None)]);
+    assert_eq!(c.unmet(&docker()).unwrap(), None);
+
+    let closed = support::closed_port();
+    let c = checks(&repo).with_engine_endpoints(vec![local(closed, None)]);
+    assert_eq!(
+        c.unmet(&docker()).unwrap().as_deref(),
+        Some(
+            format!("no container engine answers: tcp://127.0.0.1:{closed} refused the connection")
+                .as_str()
+        )
+    );
+
+    let failing = support::tcp_engine("HTTP/1.0 500 Internal Server Error");
+    let c = checks(&repo).with_engine_endpoints(vec![local(failing, None)]);
+    assert_eq!(
+        c.unmet(&docker()).unwrap().as_deref(),
+        Some(
+            format!("no container engine answers: tcp://127.0.0.1:{failing} answered 500 Internal Server Error").as_str()
+        )
+    );
+}
+
+/// Design D5; the host-requirements spec's "An engine over TLS": an engine
+/// that takes only a client certificate its own CA signed is found with
+/// the certificate and key `DOCKER_CERT_PATH` holds, verified against its
+/// `ca.pem`; without them, or verified against another CA, it is not.
+#[test]
+fn an_engine_over_tls_is_found_with_the_clients_certificate() {
+    let repo = Repo::new("checks-engine-tls");
+    let certs = Scratch::new("checks-engine-tls-certs");
+    let port = support::tls_engine(certs.path());
+    let tls = |verify, certs: &std::path::Path| {
+        Some(EngineTls {
+            verify,
+            certs: certs.to_path_buf(),
+        })
+    };
+    let c = checks(&repo).with_engine_endpoints(vec![local(port, tls(true, certs.path()))]);
+    assert_eq!(c.unmet(&docker()).unwrap(), None);
+
+    // No client certificate: the engine refuses the connection's TLS.
+    let bare = Scratch::new("checks-engine-tls-bare");
+    std::fs::copy(certs.path().join("ca.pem"), bare.path().join("ca.pem")).unwrap();
+    let c = checks(&repo).with_engine_endpoints(vec![local(port, tls(true, bare.path()))]);
+    let why = c.unmet(&docker()).unwrap().expect("unmet");
+    assert!(
+        why.starts_with(&format!(
+            "no container engine answers: tcp://127.0.0.1:{port} "
+        )),
+        "{why}"
+    );
+
+    // Another CA: the engine is not the one its client trusts.
+    let other = Scratch::new("checks-engine-tls-other");
+    support::tls_engine(other.path());
+    for f in ["cert.pem", "key.pem"] {
+        std::fs::copy(certs.path().join(f), other.path().join(f)).unwrap();
+    }
+    let c = checks(&repo).with_engine_endpoints(vec![local(port, tls(true, other.path()))]);
+    let why = c.unmet(&docker()).unwrap().expect("unmet");
+    assert!(why.contains("invalid peer certificate"), "{why}");
+}
+
+/// Design D5: `DOCKER_HOST` read as the engine's client reads it.
+#[test]
+fn docker_host_names_a_unix_socket_or_a_tcp_address() {
+    let tls = Some(EngineTls {
+        verify: true,
+        certs: "/certs".into(),
+    });
+    assert_eq!(
+        docker_host("unix:///var/run/docker.sock", None),
+        Some(Endpoint::Unix("/var/run/docker.sock".into()))
+    );
+    assert_eq!(
+        docker_host("tcp://127.0.0.1:2375", None),
+        Some(local(2375, None))
+    );
+    assert_eq!(
+        docker_host("tcp://127.0.0.1", None),
+        Some(local(2375, None))
+    );
+    assert_eq!(
+        docker_host("tcp://127.0.0.1", tls.clone()),
+        Some(local(2376, tls.clone()))
+    );
+    assert_eq!(
+        docker_host("tcp://[::1]:2375/", None),
+        Some(Endpoint::Tcp {
+            host: "::1".into(),
+            port: 2375,
+            tls: None
+        })
+    );
+    assert_eq!(
+        docker_host("tcp://build-engine:2376", tls.clone())
+            .unwrap()
+            .to_string(),
+        "tcp://build-engine:2376"
+    );
+    assert_eq!(docker_host("ssh://me@build-engine", None), None);
+    assert_eq!(docker_host("npipe:////./pipe/docker_engine", None), None);
+}
+
+/// 84, 87 (design D2): a limit the executor cannot hold leaves a run
+/// unmet in the words its start refuses it with, the open executor's and
+/// the macOS sandbox's, before any socket is looked at; limits the
+/// executor holds are met, and a run that asks for no engine has none
+/// looked for.
+#[test]
+fn a_limit_the_executor_cannot_hold_leaves_a_run_unmet_before_any_socket() {
+    let repo = Repo::new("checks-limits-unmet");
+    let dir = Scratch::short();
+    let socket = dir.path().join("e.sock");
+    let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let c = checks(&repo).with_engine_sockets(vec![socket]);
+    let gig = Some(1 << 30);
+    let open = Limits {
+        memory: gig,
+        ..docker()
+    };
+    assert_eq!(
+        c.unmet(&open).unwrap().as_deref(),
+        Some("[executor] memory = 1073741824 bytes: the open executor cannot hold a memory limit")
+    );
+    let offline = Limits {
+        network: Some(Network::Denied),
+        ..Limits::default()
+    };
+    assert_eq!(
+        c.unmet(&offline).unwrap().as_deref(),
+        Some("[executor] network = Denied: the open executor cannot hold a run's network")
+    );
+    if cfg!(target_os = "macos") {
+        let sandbox = |memory, network| Limits {
+            executor: Some("sandbox".into()),
+            memory,
+            network,
+            docker: false,
+        };
+        assert_eq!(
+            c.unmet(&sandbox(gig, None)).unwrap().as_deref(),
+            Some(
+                "[executor] memory = 1073741824 bytes: the sandbox executor on macOS cannot \
+                 hold a memory limit"
+            )
+        );
+        assert_eq!(
+            c.unmet(&sandbox(None, Some(Network::Denied))).unwrap(),
+            None
+        );
+    }
+    assert_eq!(c.unmet(&Limits::default()).unwrap(), None);
+    assert!(
+        matches!(listener.accept(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock),
+        "no socket was looked at"
+    );
 }
 
 /// `tests` with `key` set to `value`.
@@ -830,4 +1058,109 @@ fn a_ready_command_is_never_run() {
     for dir in [&req.place.path, &req.place.tmp] {
         assert!(!dir.join("asked").exists(), "{} holds asked", dir.display());
     }
+}
+
+/// What `toolchain` prints when it fails to enter.
+const STALE_LOCK: &str = "error: flake.lock is not up to date";
+
+/// `sluice` in `dir`, its state and configuration in `state`, out of
+/// reach of the host's own and of every credential.
+fn sluice_in(dir: &std::path::Path, state: &Scratch, args: &[&str]) -> std::process::Output {
+    support::isolated(&mut std::process::Command::new(env!(
+        "CARGO_BIN_EXE_sluice"
+    )))
+    .args(args)
+    .current_dir(dir)
+    .env("XDG_CONFIG_HOME", state.path().join("config"))
+    .env("XDG_STATE_HOME", state.path().join("state"))
+    .env_remove("SLUICE_AGENT")
+    .env_remove("SLUICE_OTEL")
+    .env_remove("GIT_DIR")
+    .env_remove("GIT_WORK_TREE")
+    .stdin(std::process::Stdio::null())
+    .output()
+    .unwrap()
+}
+
+/// 16, 114, 115; the run-outcome spec's "The toolchain fails to enter"
+/// and "Three starts that fail": `sluice step` on a combination whose
+/// `[tests] toolchain` exits 1 records the run with the toolchain's words
+/// and nothing under any key, three times, after which the combination is
+/// not passed and `sluice status` names its tests could not run, with
+/// those words.
+#[test]
+fn a_toolchain_that_fails_could_not_start_the_tests() {
+    let repo = Repo::new("checks-could-not-start");
+    repo.write(
+        ".config/sluice.toml",
+        &format!(
+            "[tests]\nrunner = \"command\"\ncommand = \"true\"\n\
+             toolchain = [\"sh\", \"-c\", \"echo '{STALE_LOCK}' >&2; exit 1\"]\n\n\
+             [branches.\"bolt/*\"]\ntimeout = \"1m\"\n"
+        ),
+    );
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "sluice's policy"]);
+    repo.git(&["branch", "bolt/x", "main"]);
+    let sessions = Scratch::new("checks-could-not-start-sessions");
+    let worktree = sessions.path().join("a");
+    let at = worktree.to_str().unwrap();
+    repo.git(&["worktree", "add", "-q", "-b", "unit/a", at, "bolt/x"]);
+    std::fs::write(worktree.join("a.txt"), "a").unwrap();
+    repo.git(&["-C", at, "add", "-A"]);
+    repo.git(&["-C", at, "commit", "-q", "-m", "a"]);
+    let state = Scratch::new("checks-could-not-start-state");
+    let run = |args: &[&str]| {
+        let out = sluice_in(&worktree, &state, args);
+        let said = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        (out.status.code(), said)
+    };
+    let (code, said) = run(&["submit", "bolt/x", "--no-wait", "--json"]);
+    assert_eq!(code, Some(0), "{said}");
+
+    let words = format!(
+        "could not start: [tests] toolchain sh -c echo '{STALE_LOCK}' >&2; exit 1 exited \
+         exit status: 1: {STALE_LOCK}"
+    );
+    let records = repo.dir().join(".git/sluice");
+    let log = || std::fs::read_to_string(records.join("bolt/x/log.jsonl")).unwrap();
+    let lost = |log: &str| {
+        log.lines()
+            .filter(|l| l.contains("\"lost\"") && l.contains(&words.replace('"', "\\\"")))
+            .count()
+    };
+    let (code, said) = run(&["step", "bolt/x"]);
+    assert_eq!(code, Some(0), "{said}");
+    assert_eq!(lost(&log()), 1, "{}", log());
+    let results = || std::fs::read_to_string(records.join("results.jsonl")).unwrap_or_default();
+    assert_eq!(results(), "", "nothing under any key");
+    let (_, said) = run(&["status", "1", "--json"]);
+    assert_ne!(
+        serde_json::from_str::<serde_json::Value>(&said).unwrap()["state"],
+        "failed",
+        "{said}"
+    );
+
+    for _ in 0..2 {
+        let (code, said) = run(&["step", "bolt/x"]);
+        assert_eq!(code, Some(0), "{said}");
+    }
+    let (code, said) = run(&["step", "bolt/x"]);
+    assert_eq!(code, Some(0), "{said}");
+    assert_eq!(lost(&log()), 2, "the third ends it: {}", log());
+    assert_eq!(results(), "");
+    let (_, said) = run(&["status", "1", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&said).unwrap();
+    assert_eq!(v["state"], "failed", "{said}");
+    assert_eq!(
+        v["failed"],
+        serde_json::json!([{"task": "[tests]", "not_run": words}]),
+        "{said}"
+    );
+    let (_, said) = run(&["status", "1"]);
+    assert!(said.contains("[tests] (could not run)"), "{said}");
 }

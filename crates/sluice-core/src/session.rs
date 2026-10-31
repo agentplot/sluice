@@ -6,7 +6,7 @@
 
 use anyhow::{anyhow, Result};
 use sluice_seams::{
-    GoneRelease, Guard, LastResult, Outcome, Place, ReleasePolicy, Rev, RunHandle, RunKind,
+    GoneRelease, Guard, LastResult, Limits, Outcome, Place, ReleasePolicy, Rev, RunHandle, RunKind,
     RunOutcome, RunReport, RunRequest, Session, SessionPlace, Setting, Source, TaskProgress,
     TaskState,
 };
@@ -133,14 +133,19 @@ impl Sluice<'_> {
     /// 84, record 0074 (design D6): what this host lacks of what the
     /// branch's runs ask of it, a container engine that answers, looked
     /// at before a session run of the branch's tests, which it refuses
-    /// while it lacks one; `None` for a branch whose runs ask nothing of
-    /// the host, which is never looked at. A command's run asks nothing of
-    /// it and is never refused for it.
+    /// while it lacks one; `None` for a branch whose runs ask for no
+    /// engine, which is never looked for. A limit its executor cannot hold
+    /// is refused by the run's start, as before. A command's run asks
+    /// nothing of it and is never refused for it.
     pub fn session_unmet(&self, plan: &SessionPlan) -> Result<Option<String>> {
-        if !plan.policy.limits.asks_of_host() {
+        if !plan.policy.limits.docker {
             return Ok(None);
         }
-        self.seams.tests.unmet(&plan.policy.limits)
+        let engine = Limits {
+            docker: true,
+            ..Limits::default()
+        };
+        self.seams.tests.unmet(&engine)
     }
 
     /// 89, 83: a session run of the checks `head` affects against the

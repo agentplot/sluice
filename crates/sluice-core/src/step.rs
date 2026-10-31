@@ -117,6 +117,30 @@ impl Unmet {
     }
 }
 
+/// Design D4: what starting a claimed run came to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Started {
+    /// Its tests are running under this handle.
+    Running(RunHandle),
+    /// The host had no room for it: it is open again, counting toward
+    /// nothing (71).
+    AtBound,
+    /// Its tests did not run, for this reason: the run is recorded as one
+    /// whose tests could not run (114, 115, 139).
+    NotRun(String),
+}
+
+/// What starting a branch's claimed runs reads of it, once.
+struct StartFrom {
+    base: Rev,
+    /// Whether `base` is covered by a verdict under its gate (70).
+    verified: bool,
+    policy: crate::policy::Policy,
+    rules: Rules,
+    /// The policy's name for the system this host is (85).
+    home: Option<String>,
+}
+
 /// 140: how a queued entry's work was read beside the chain.
 enum Read {
     /// Some required check reads it at the branch's revision, or it
@@ -131,7 +155,9 @@ enum Read {
 
 /// What a round's decide step did.
 enum Decided {
-    Written,
+    /// Its write was made; what the round looked at of the host goes on to
+    /// its starts (design D4).
+    Written(Unmet),
     /// 121: it wrote the hold and nothing else.
     Held,
     /// Its write was refused (62).
@@ -218,8 +244,8 @@ impl Sluice<'_> {
             return Ok(Step::Led);
         }
         info_span!("sluice.recover").in_scope(|| self.recover(branch, releases))?;
-        match info_span!("sluice.decide").in_scope(|| self.decide(branch))? {
-            Decided::Written => {}
+        let unmet = match info_span!("sluice.decide").in_scope(|| self.decide(branch))? {
+            Decided::Written(unmet) => unmet,
             Decided::Contended => {
                 round.record("sluice.step", "contended");
                 return Ok(Step::Contended);
@@ -234,8 +260,8 @@ impl Sluice<'_> {
                 round.record("sluice.step", "held");
                 return Ok(Step::Held);
             }
-        }
-        info_span!("sluice.perform").in_scope(|| self.perform(branch, releases))?;
+        };
+        info_span!("sluice.perform").in_scope(|| self.perform(branch, Some(&unmet), releases))?;
         round.record("sluice.step", "stepped");
         Ok(Step::Stepped)
     }
@@ -331,18 +357,25 @@ impl Sluice<'_> {
                 releases.push(outcome);
             }
         }
-        self.perform(branch, releases)
+        self.perform(branch, None, releases)
     }
 
     // -----------------------------------------------------------------------
     // 3. Perform
     // -----------------------------------------------------------------------
 
-    fn perform(&self, branch: &str, releases: &mut Vec<ReleaseOutcome>) -> Result<()> {
+    /// `unmet`, where the round has it, is what it looked at of the host
+    /// before its claims (design D4).
+    fn perform(
+        &self,
+        branch: &str,
+        unmet: Option<&Unmet>,
+        releases: &mut Vec<ReleaseOutcome>,
+    ) -> Result<()> {
         self.perform_landing(branch)?;
         self.perform_releases(branch, releases)?;
         self.perform_outbox(branch)?;
-        self.perform_starts(branch, releases)
+        self.perform_starts(branch, unmet, releases)
     }
 
     /// 25, 34: release the places of candidates whose verdict was read or
@@ -622,13 +655,20 @@ impl Sluice<'_> {
         Ok(())
     }
 
-    /// 33, 37: make each decided run's place and start its checks. 71: a
-    /// run the host has no room for, by its count before the place is made
-    /// or by the check seam's refusal after, goes back to open for a later
-    /// round, and no further run starts this step; a place made for it is
-    /// released as any candidate's is (123), into `releases` when its
-    /// release was not plain.
-    fn perform_starts(&self, branch: &str, releases: &mut Vec<ReleaseOutcome>) -> Result<()> {
+    /// 33, 37: make each decided run's place and start its checks
+    /// ([`Sluice::start_run`]), reading the host where `unmet`, the round's
+    /// look, has not (design D4). 71: a run the host has no room for, by
+    /// its count before the place is made or by the check seam's refusal
+    /// after, goes back to open for a later round, and no further run
+    /// starts this step; a place made for it is released as any
+    /// candidate's is (123), into `releases` when its release was not
+    /// plain.
+    fn perform_starts(
+        &self,
+        branch: &str,
+        unmet: Option<&Unmet>,
+        releases: &mut Vec<ReleaseOutcome>,
+    ) -> Result<()> {
         let line = self.read_line(branch)?;
         let starting: Vec<(Candidate, usize)> = line
             .doc
@@ -647,14 +687,87 @@ impl Sluice<'_> {
         if starting.is_empty() {
             return Ok(());
         }
-        let Some(base) = line.doc.base.clone() else {
+        let Some(from) = self.start_from(branch, &line)? else {
             return Ok(());
+        };
+        let fresh;
+        let unmet = match unmet {
+            Some(u) => u,
+            None => {
+                fresh = Unmet::of(from.policy.limits.clone());
+                &fresh
+            }
+        };
+        let bound = self.seams.tests.bound()?;
+        let mut full = false;
+        for (c, i) in starting {
+            // Another repository's run, or another instance's, took the
+            // host's last run since this one was decided.
+            full = full || self.seams.tests.running()?.total() >= bound;
+            if full {
+                let name = c.runs[i].place.clone().expect("a starting run has a place");
+                self.reopen(branch, &c.id, i, &name, false)?;
+                continue;
+            }
+            if self.start_run(branch, &from, &c, i, unmet, releases)? == Started::AtBound {
+                full = true;
+            }
+        }
+        Ok(())
+    }
+
+    /// Design D4 (88, 114, 139): start the run of `branch` that `claim`
+    /// holds and that waits to start, as a round starts its own: the host
+    /// read afresh first, then its checkout and its tests' start, a start
+    /// that fails or a host that cannot meet what the run needs recorded as
+    /// a run whose tests could not run. `None` where no run of the claim
+    /// waits to start. Under the branch's lock, waited for (rule core.14).
+    ///
+    /// The one start of a claimed run: a round's starts come through it,
+    /// and `sluice job run`, of the change `actions-pool`, is to start its
+    /// pool job's run through it under the job's claim, so the job needs
+    /// nothing of its own to refuse at its start.
+    pub fn start_claimed(
+        &self,
+        branch: &str,
+        claim: &str,
+        releases: &mut Vec<ReleaseOutcome>,
+    ) -> Result<Option<Started>> {
+        let _lock = self.seams.state.wait_lock(branch)?;
+        let line = self.read_line(branch)?;
+        let held = line
+            .doc
+            .candidates
+            .iter()
+            .filter(|c| c.state.under_test())
+            .find_map(|c| {
+                c.runs
+                    .iter()
+                    .position(|r| r.state == RunState::Starting && r.host.as_deref() == Some(claim))
+                    .map(|i| (c.clone(), i))
+            });
+        let Some((c, i)) = held else {
+            return Ok(None);
+        };
+        let Some(from) = self.start_from(branch, &line)? else {
+            return Ok(None);
+        };
+        let unmet = Unmet::of(from.policy.limits.clone());
+        self.start_run(branch, &from, &c, i, &unmet, releases)
+            .map(Some)
+    }
+
+    /// What starting `branch`'s claimed runs reads of it, once: `None`
+    /// where its records hold no revision yet. 29: a gate no run of its
+    /// executor can satisfy starts nothing.
+    fn start_from(&self, branch: &str, line: &Line) -> Result<Option<StartFrom>> {
+        let Some(base) = line.doc.base.clone() else {
+            return Ok(None);
         };
         let policy = self
             .policy_at(&base)?
             .ok_or_else(|| anyhow!("{branch}'s revision {base} has no {POLICY_PATH}"))?;
         let rules = self.gate(branch, &base)?;
-        // 29: a gate no run of this executor can satisfy starts nothing.
         let kind = policy.limits.executor.as_deref().unwrap_or("open");
         if !rules.satisfiable_by(kind) {
             bail!(
@@ -662,75 +775,168 @@ impl Sluice<'_> {
                 rules.trust
             );
         }
-        let bound = self.seams.tests.bound()?;
-        let mut full = false;
-        for (c, i) in starting {
-            let r = &c.runs[i];
-            let _span = info_span!(
-                "sluice.start",
-                sluice.branch = branch,
-                sluice.candidate = %c.revision,
-                sluice.submissions = ?c.submissions,
-                sluice.executor = kind,
-                sluice.system = r.system.as_deref().unwrap_or(""),
-            )
-            .entered();
-            let name = r.place.clone().expect("a starting run has a place");
-            // Another repository's run, or another instance's, took the
-            // host's last run since this one was decided.
-            full = full || self.seams.tests.running()?.total() >= bound;
-            if full {
-                self.reopen(branch, &c.id, i, &name, false)?;
-                continue;
-            }
-            let place = self
-                .seams
-                .checkout
-                .materialize(&name, &c.revision, &policy.checkout)?;
-            let since = (line.doc.verified && c.on == base).then(|| c.on.clone());
-            let started = self.seams.tests.start(&RunRequest {
-                place,
-                revision: c.revision.clone(),
-                required: if r.checks.is_empty() {
-                    rules.required.clone()
-                } else {
-                    r.checks.clone()
-                },
-                since,
-                limit: rules.timeout,
-                limits: policy.limits.clone(),
-                tests: policy.tests.clone(),
-                // 108: the cache supplies outputs; a replay counts only
-                // through a trusted pass recorded for its key.
-                replay: !r.no_replay,
-                system: r.system.clone(),
+        Ok(Some(StartFrom {
+            home: self.home_system(&base)?,
+            verified: line.doc.verified,
+            base,
+            policy,
+            rules,
+        }))
+    }
+
+    /// 33, 37 (design D1, D4): start run `i` of candidate `c`, decided into
+    /// its place. The host is read first where `unmet` has not been this
+    /// round; where it cannot meet what the run needs, no checkout is made
+    /// and each check is not run with the reason, the executor's own
+    /// report (139). Then the checkout and the tests' start; a start
+    /// refused at the bound is open again, counting toward nothing (71),
+    /// and any other start that fails, a remote's unanswered read aside,
+    /// leaves each check not run with the error's words (114). Either is
+    /// read as a run whose tests could not run.
+    fn start_run(
+        &self,
+        branch: &str,
+        from: &StartFrom,
+        c: &Candidate,
+        i: usize,
+        unmet: &Unmet,
+        releases: &mut Vec<ReleaseOutcome>,
+    ) -> Result<Started> {
+        let r = &c.runs[i];
+        let kind = from.policy.limits.executor.as_deref().unwrap_or("open");
+        let _span = info_span!(
+            "sluice.start",
+            sluice.branch = branch,
+            sluice.candidate = %c.revision,
+            sluice.submissions = ?c.submissions,
+            sluice.executor = kind,
+            sluice.system = r.system.as_deref().unwrap_or(""),
+        )
+        .entered();
+        let name = r.place.clone().expect("a starting run has a place");
+        let checks = if r.checks.is_empty() {
+            from.rules.required.clone()
+        } else {
+            r.checks.clone()
+        };
+        let home = from.home.as_deref();
+        if !self.meets(unmet) {
+            let why = unmet.found().unwrap_or_default().to_string();
+            let report = unstarted(&checks, kind, why.clone());
+            self.not_started(branch, c, i, &name, &report, home, releases)?;
+            return Ok(Started::NotRun(why));
+        }
+        let since = (from.verified && c.on == from.base).then(|| c.on.clone());
+        let started = self
+            .seams
+            .checkout
+            .materialize(&name, &c.revision, &from.policy.checkout)
+            .and_then(|place| {
+                self.seams.tests.start(&RunRequest {
+                    place,
+                    revision: c.revision.clone(),
+                    required: checks.clone(),
+                    since,
+                    limit: from.rules.timeout,
+                    limits: from.policy.limits.clone(),
+                    tests: from.policy.tests.clone(),
+                    // 108: the cache supplies outputs; a replay counts only
+                    // through a trusted pass recorded for its key.
+                    replay: !r.no_replay,
+                    system: r.system.clone(),
+                })
             });
-            let run = match started {
-                Ok(run) => run,
-                // Refused before anything of it ran: no run, no outcome.
-                Err(e) if e.downcast_ref::<AtBound>().is_some() => {
-                    let outcome = self.release_made(branch, &name)?;
-                    let retry = matches!(outcome.how, Releasing::Failed { .. });
-                    self.reopen(branch, &c.id, i, &name, retry)?;
-                    if outcome.how != Releasing::Released {
-                        releases.push(outcome);
-                    }
-                    full = true;
-                    continue;
-                }
-                Err(e) => return Err(e),
-            };
-            self.update(branch, |l| {
-                if let Some(x) = l.candidate_mut(&c.id) {
-                    if let Some(xr) = x.runs.get_mut(i) {
-                        if xr.state == RunState::Starting && xr.place.as_deref() == Some(&name) {
-                            xr.state = RunState::Testing;
-                            xr.run = Some(run.clone());
+        let e = match started {
+            Ok(run) => {
+                self.update(branch, |l| {
+                    if let Some(x) = l.candidate_mut(&c.id) {
+                        if let Some(xr) = x.runs.get_mut(i) {
+                            if xr.state == RunState::Starting && xr.place.as_deref() == Some(&name)
+                            {
+                                xr.state = RunState::Testing;
+                                xr.run = Some(run.clone());
+                            }
                         }
                     }
+                    Ok(())
+                })?;
+                return Ok(Started::Running(run));
+            }
+            // Refused before anything of it ran: no run, no outcome.
+            Err(e) if e.downcast_ref::<AtBound>().is_some() => {
+                let outcome = self.release_made(branch, &name)?;
+                let retry = matches!(outcome.how, Releasing::Failed { .. });
+                self.reopen(branch, &c.id, i, &name, retry)?;
+                if outcome.how != Releasing::Released {
+                    releases.push(outcome);
                 }
-                Ok(())
-            })?;
+                return Ok(Started::AtBound);
+            }
+            // 133, 134: a remote that could not answer says nothing of the
+            // run; the round is refused as any such read.
+            Err(e) if sluice_seams::unanswered(&e) || read_refused(&e).is_some() => return Err(e),
+            Err(e) => e,
+        };
+        let why = could_not_start(&e);
+        let report = unstarted(&checks, kind, why.clone());
+        self.not_started(branch, c, i, &name, &report, home, releases)?;
+        Ok(Started::NotRun(why))
+    }
+
+    /// Design D1 (16, 114, 115): run `i` of candidate `c`, decided into
+    /// `place`, whose tests could not be started, read as `report`, a run
+    /// whose every check was not run. Its checkout, where one was made, is
+    /// released as a run refused at the bound has its released, a release
+    /// that failed tried again by the rounds after (123); the run is
+    /// written once, read as any run that left checks not run: open again
+    /// for any host under the bound, past it each check named with why.
+    #[allow(clippy::too_many_arguments)]
+    fn not_started(
+        &self,
+        branch: &str,
+        c: &Candidate,
+        i: usize,
+        place: &str,
+        report: &RunReport,
+        home: Option<&str>,
+        releases: &mut Vec<ReleaseOutcome>,
+    ) -> Result<()> {
+        let made = self.seams.checkout.made()?.iter().any(|p| p == place);
+        let outcome = match made {
+            true => Some(self.release_made(branch, place)?),
+            false => None,
+        };
+        let retry = outcome
+            .as_ref()
+            .is_some_and(|o| matches!(o.how, Releasing::Failed { .. }));
+        self.update(branch, |l| {
+            let now = self.now();
+            let Some(xr) = l.candidate_mut(&c.id).and_then(|x| x.runs.get_mut(i)) else {
+                return Ok(());
+            };
+            if xr.state != RunState::Starting || xr.place.as_deref() != Some(place) {
+                return Ok(());
+            }
+            // Released here; to be released again only where that failed.
+            if !retry {
+                xr.place = None;
+            }
+            let system = xr.system.clone();
+            let system = system.as_deref().or(home);
+            if let Some(named) = read_not_run(l, c, i, report, false, system, &now) {
+                let x = l.candidate_mut(&c.id).expect("a read candidate");
+                let xr = &mut x.runs[i];
+                xr.state = RunState::Failed;
+                let left = xr.place.take();
+                x.failed.extend(named);
+                if let Some(p) = left.filter(|p| !l.doc.release.contains(p)) {
+                    l.doc.release.push(p);
+                }
+            }
+            Ok(())
+        })?;
+        if let Some(o) = outcome.filter(|o| o.how != Releasing::Released) {
+            releases.push(o);
         }
         Ok(())
     }
@@ -919,7 +1125,7 @@ impl Sluice<'_> {
             );
         }
         Ok(if written {
-            Decided::Written
+            Decided::Written(unmet)
         } else {
             Decided::Contended
         })
@@ -1140,13 +1346,17 @@ impl Sluice<'_> {
     pub(crate) fn after_run(&self, limits: &Limits, mut report: RunReport) -> Result<RunReport> {
         let unpassed = report.tasks.iter().any(|t| t.outcome == Outcome::Fail)
             || report.missing.iter().any(|m| !report.kept_out.contains(m));
-        if !limits.asks_of_host() || report.timed_out || !unpassed {
+        if !limits.docker || report.timed_out || !unpassed {
             return Ok(report);
         }
-        let Some(why) = self.seams.tests.unmet(limits)? else {
+        let engine = Limits {
+            docker: true,
+            ..Limits::default()
+        };
+        let Some(why) = self.seams.tests.unmet(&engine)? else {
             return Ok(report);
         };
-        let reason = format!("the container engine no longer answers after the run: {why}");
+        let reason = format!("after the run, {why}");
         let (failed, passed) = std::mem::take(&mut report.tasks)
             .into_iter()
             .partition(|t| t.outcome == Outcome::Fail);
@@ -1342,41 +1552,13 @@ impl Sluice<'_> {
         if c.every_check && !checks.is_empty() && report.tasks.is_empty() {
             v.passed = false;
         }
-        // Could-not-run-1 114, 115: checks the run did not judge have no
-        // outcome. With nothing failed on its own result, the run is open
-        // again and nobody is blamed, up to the bound; past it, or beside a
-        // check that failed, each is named with why.
         if !report.not_run.is_empty() {
-            let x = line.candidate_mut(&c.id).expect("polled candidate");
-            if v.failed.is_empty() && !v.timed_out {
-                x.not_run_runs += 1;
-                if x.not_run_runs < NOT_RUN_BOUND {
-                    let xr = &mut x.runs[i];
-                    xr.state = RunState::Open;
-                    xr.run = None;
-                    xr.host = None;
-                    if let Some(p) = xr.place.take() {
-                        line.doc.release.push(p);
-                    }
-                    line.log(
-                        now,
-                        Event::Lost {
-                            combination: c.revision.clone(),
-                            not_run: report.not_run.clone(),
-                        },
-                    );
-                    return Ok(());
-                }
-            }
+            let judged = !v.failed.is_empty() || v.timed_out;
+            let Some(named) = read_not_run(line, c, i, &report, judged, system, now) else {
+                return Ok(());
+            };
             v.passed = false;
-            v.failed.extend(report.not_run.iter().map(|n| FailedTask {
-                task: n.task.clone(),
-                hash: String::new(),
-                log: None,
-                flaky: None,
-                system: system.map(str::to_string),
-                not_run: Some(n.reason.clone()),
-            }));
+            v.failed.extend(named);
         }
         // 20: what the failed tasks printed, kept while the place still
         // holds it.
@@ -2404,14 +2586,12 @@ impl Sluice<'_> {
         self.may_claim(run, home, rules, listed) && self.meets(unmet)
     }
 
-    /// Design D3: whether this host meets what `unmet`'s limits ask of it,
-    /// read from the host once a round, and never for limits that ask it
-    /// nothing. A look that fails says so as what it lacks: the host could
+    /// Design D3, D2 (84, 87): whether this host meets what `unmet`'s
+    /// limits ask of it, what its executor holds and, where they ask for
+    /// one, a container engine that answers, read from the host once a
+    /// round. A look that fails says so as what it lacks: the host could
     /// not show it meets them.
     fn meets(&self, unmet: &Unmet) -> bool {
-        if !unmet.limits.asks_of_host() {
-            return true;
-        }
         unmet
             .looked
             .get_or_init(|| match self.seams.tests.unmet(&unmet.limits) {
@@ -2962,7 +3142,7 @@ impl Sluice<'_> {
                 Ok(())
             })?;
         }
-        self.perform_starts(branch, releases)
+        self.perform_starts(branch, Some(&unmet), releases)
     }
 
     /// 124: level this host's copy of `branch` to `landed`, the landing
@@ -3132,12 +3312,130 @@ impl Sluice<'_> {
     }
 }
 
-/// Record 0074: what a run no host took before its time limit waited for,
-/// each host that turned it down named with why (66, 87).
+/// Could-not-run-1 114, 115 (design D1): the checks run `i` of `c` left
+/// not run, read from its report alone and no run handle, so a run that
+/// came back and one whose tests could not be started are read alike.
+/// `judged` says a check failed on its own result or the time limit ended
+/// the run. Unjudged and under the bound, the run is open again for any
+/// host, its place to be released and its loss logged, and nobody is
+/// blamed: `None`. Past the bound, or judged, each check is returned
+/// named with why, to be read as failed.
+fn read_not_run(
+    line: &mut Line,
+    c: &Candidate,
+    i: usize,
+    report: &RunReport,
+    judged: bool,
+    system: Option<&str>,
+    now: &str,
+) -> Option<Vec<FailedTask>> {
+    let x = line.candidate_mut(&c.id).expect("a read candidate");
+    if !judged {
+        x.not_run_runs += 1;
+        if x.not_run_runs < NOT_RUN_BOUND {
+            let xr = &mut x.runs[i];
+            xr.state = RunState::Open;
+            xr.run = None;
+            xr.host = None;
+            if let Some(p) = xr.place.take() {
+                line.doc.release.push(p);
+            }
+            line.log(
+                now,
+                Event::Lost {
+                    combination: c.revision.clone(),
+                    not_run: report.not_run.clone(),
+                },
+            );
+            return None;
+        }
+    }
+    Some(
+        report
+            .not_run
+            .iter()
+            .map(|n| FailedTask {
+                task: n.task.clone(),
+                hash: String::new(),
+                log: None,
+                flaky: None,
+                system: system.map(str::to_string),
+                not_run: Some(n.reason.clone()),
+            })
+            .collect(),
+    )
+}
+
+/// Design D1: how much of what a failing program printed a start's reason
+/// keeps, from its end.
+const START_SAID: usize = 2048;
+
+/// Design D1 (114): why a run's tests could not be started, in the
+/// error's words, its whole chain; what a failing program printed among
+/// them, past the first line, which names what failed, kept to its last
+/// [`START_SAID`] bytes.
+fn could_not_start(e: &anyhow::Error) -> String {
+    let text = format!("{e:#}");
+    let (head, rest) = match text.split_once('\n') {
+        Some((head, rest)) if head.len() <= START_SAID => (Some(head), rest),
+        _ => (None, text.as_str()),
+    };
+    if rest.len() <= START_SAID {
+        return format!("could not start: {text}");
+    }
+    let mut cut = rest.len() - START_SAID;
+    while !rest.is_char_boundary(cut) {
+        cut += 1;
+    }
+    match head {
+        Some(head) => format!("could not start: {head}\n…{}", &rest[cut..]),
+        None => format!("could not start: …{}", &rest[cut..]),
+    }
+}
+
+/// What a run whose tests never started is named by where neither it nor
+/// its gate names a check: the tests its policy's `[tests]` would have
+/// run.
+const UNNAMED_TESTS: &str = "[tests]";
+
+/// Design D1 (114, 139): the report of a run of `checks`, under the
+/// executor `kind` the policy names, whose tests never started: no task,
+/// nothing missing, each check not run for `reason`, or, where it names
+/// none, its tests as one, so the reason is never lost.
+fn unstarted(checks: &[String], kind: &str, reason: String) -> RunReport {
+    let unnamed = [UNNAMED_TESTS.to_string()];
+    let checks = if checks.is_empty() { &unnamed } else { checks };
+    RunReport {
+        tasks: Vec::new(),
+        executor: sluice_seams::Enforced {
+            kind: kind.into(),
+            confined: false,
+            processors: None,
+            memory: None,
+            network: None,
+            docker: false,
+        },
+        missing: Vec::new(),
+        not_run: checks
+            .iter()
+            .map(|task| NotRun {
+                task: task.clone(),
+                reason: reason.clone(),
+            })
+            .collect(),
+        timed_out: false,
+        detail: None,
+        kept_out: Vec::new(),
+    }
+}
+
+/// Record 0074 (design D3): what a run no host took before its time
+/// limit waited for, each host that turned it down, for its engine or a
+/// limit its executor cannot hold, named with why (66, 87).
 fn waited_for(declined: &BTreeMap<String, String>) -> String {
     let hosts: Vec<String> = declined.iter().map(|(h, w)| format!("{h}: {w}")).collect();
     format!(
-        "no host whose container engine answers took its tests: {}",
+        "no host that could run its tests as its policy asks took them: {}",
         hosts.join("; ")
     )
 }
