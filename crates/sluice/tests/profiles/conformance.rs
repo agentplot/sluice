@@ -940,3 +940,51 @@ fn peers_read_the_last_fetched_state_when_the_remote_is_unreachable() {
     assert_eq!(status.stale.as_deref(), Some("origin"));
     assert_eq!(status.submissions.len(), landed);
 }
+
+/// The run-outcome spec's "The step that started it has exited" (66; rule
+/// core.10): a step under a one-second limit starts a run whose check
+/// sleeps for minutes, and returns while it goes on; with no step running,
+/// the run's supervisor ends its process group within the grace after the
+/// limit, and the next step records the run timed out.
+#[test]
+fn a_run_is_ended_at_its_limit_after_the_step_that_started_it() {
+    use nix::errno::Errno;
+    use nix::sys::signal::killpg;
+    use nix::unistd::Pid;
+    use sluice_core::records::Event;
+
+    let policy = bolt().replace("timeout = \"20m\"", "timeout = \"1s\"");
+    let r = Real::new("limit-after-step", &policy);
+    r.hangs("a:test");
+    r.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    r.submit("unit/a");
+    let started = Instant::now();
+    assert_eq!(r.step(), Step::Stepped);
+    let tested = r.doc().candidates[0].clone();
+    let run = tested.runs[0].run.clone().expect("a run started");
+    let dir = r.tests.inner.runs().dir(&run.0);
+    let group = loop {
+        if let Ok(text) = std::fs::read_to_string(dir.join("pgid")) {
+            break Pid::from_raw(text.trim().parse().unwrap());
+        }
+        assert!(started.elapsed() < Duration::from_secs(30), "never started");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    // The limit, its grace, and the wait after the kill that follows it.
+    let ended_by = Duration::from_secs(1 + 10 + 5);
+    while killpg(group, None) != Err(Errno::ESRCH) {
+        assert!(
+            started.elapsed() < ended_by,
+            "the run outlived its limit by its grace"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    r.step();
+    let events = r.events();
+    let timed_out = events.iter().any(|e| {
+        matches!(e, Event::Result { combination, result, .. }
+            if *combination == tested.revision && result == "timed out")
+    });
+    assert!(timed_out, "{events:?}");
+}

@@ -17,7 +17,7 @@
 
 ## 4. The time limit holds whatever became of what started it
 
-- [ ] 4.1 Add a test with the real check seam (beside `a_command_over_its_limit_times_out` in `sluice/tests/checks.rs`, or with `Real` in `sluice/tests/profiles/conformance.rs`, whichever starts a run by `sluice step`) for the `run-outcome` scenario "The step that started it has exited": a branch with `timeout = "1s"`, a check that sleeps five minutes, `sluice step main` returning while the run goes on, the run's process group gone within the grace after the limit with no sluice process running, and the next `sluice step main` recording the run timed out. No change to `runs.rs` is expected (design D6); if the test fails, the fix is in the supervisor and this task says what it was. Verify with `sluice exec main -- cargo test -p sluice --test <the file chosen>`
+- [x] 4.1 Add a test with the real check seam (beside `a_command_over_its_limit_times_out` in `sluice/tests/checks.rs`, or with `Real` in `sluice/tests/profiles/conformance.rs`, whichever starts a run by `sluice step`) for the `run-outcome` scenario "The step that started it has exited": a branch with `timeout = "1s"`, a check that sleeps five minutes, `sluice step main` returning while the run goes on, the run's process group gone within the grace after the limit with no sluice process running, and the next `sluice step main` recording the run timed out. No change to `runs.rs` is expected (design D6); if the test fails, the fix is in the supervisor and this task says what it was. Verify with `sluice exec main -- cargo test -p sluice --test <the file chosen>`
 
 ## 5. The gate
 
