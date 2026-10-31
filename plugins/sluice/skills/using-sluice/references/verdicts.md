@@ -129,6 +129,26 @@ not run: cli:tools
 the host could not run cli:tools: once it can, the agent working in tools submits again
 ```
 
+Tests that could not be started count the same way: the checkout could
+not be made, `[tests] toolchain` or the task runner's setup failed, or
+the executor turned down a limit the branch's policy states. Nothing runs
+and nothing is recorded: the checkout is released, and any host, this one
+included, may take the combination again. Since the tests never started,
+each is named as the branch's `required` names it, and the run's words
+say what failed:
+
+```
+not run: #gate
+  #gate could not run: could not start: [tests] toolchain devenv print-dev-env exited exit status: 1: error: flake.lock is not up to date
+the host could not run #gate: once it can, the agent working in tools submits again
+```
+
+The cure is the toolchain or the host. Fix what the words name in your
+worktree when the repository holds it, a stale lock file or a toolchain
+that no longer builds, and submit again; when it is the host's (a full
+disk, a tool missing), tell the user what the host lacks. Nothing was
+recorded, so there is no result to set aside.
+
 sluice tells these apart on its own and records nothing for them: a run
 that never started, a `not_run` exit, a test the time limit ended, and, on
 a branch with `docker = true`, a test that did not pass after which the
