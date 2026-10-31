@@ -45,7 +45,7 @@ trust = ["confined", "sandbox"]
 | | `"command"` | Run one command; exit 0 passes. Every test runs every time. For a repository without moon. |
 | `command` | a command | With `runner = "command"`, the command to run, e.g. `"tests/suite"`. |
 | `release` | a command | The release command: what removes what the tests handed to another process to keep, a container above all. It runs once a checkout is released, under the same executor, toolchain and environment as the tests, ports included, and for a worktree when `sluice release` runs in it ([ADR 0016](/sluice/decisions/0016/)). One that fails holds the checkout; see [`release_retries`](#release_retries). A list, the command first, or a string run by `sh -c`. |
-| `toolchain` | a command | Prints the shell the tests run in, e.g. `["devenv", "print-dev-env"]`. It runs in the checkout, outside the sandbox; the tests run inside it with what it printed. sluice reads nothing from it. |
+| `toolchain` | a command | Prints the shell the tests run in, e.g. `["devenv", "print-dev-env"]`. It runs in the checkout, outside the sandbox; the tests run inside it with what it printed. sluice reads nothing from it. A toolchain that fails runs nothing: no result is recorded, the checkout is released, and the combination is tested again, blaming nobody. After three runs in a row whose tests could not run, the combination is not passed, and each test is named with the toolchain's exit and what it printed. |
 | `not_run` | an exit or a list of them | Exits by which a test says it could not run here, e.g. `[77]`. A test that exits with one has no result. Unset, every exit but `0` is a fail. A test that needs a container engine, a database or a stack starts it, waits for it within the branch's [`timeout`](#timeout), and exits with one of these when it could not set up. |
 | `cold` | a list of tests | Tests that run with none of the host's [caches](#caches), e.g. `["#bench"]` for timings a warm cache would skew. Each is named as `required` names it: a moon target or a `#tag`, or the command with `runner = "command"`. A run that holds one gets no cache directory, no cache socket and none of the caches' variables, and its other tests lose only speed. |
 
@@ -132,11 +132,19 @@ share as [`[[caches]]`](#caches). The caches an earlier sluice saved in
 | | `"container"` | The tests run in a container from the image the policy names. Planned, for a box that runs no agents ([executors and systems](/sluice/guides/executors-and-systems/)); not built. |
 | `network` | `false`, `"localhost"`, `true` | No network; only 127.0.0.1 and ::1, for tests that start a server and talk to it; or any. |
 | `memory` | e.g. `"8G"` | Refused where the executor cannot hold it, never run without it. |
-| `docker` | `true` | The tests may reach the host's container engine. A container may mount any path, so such a run is never counted as confined. A host whose container engine does not answer, at `DOCKER_HOST`'s socket or the usual ones, runs none of the branch's tests. It leaves them for a host whose engine does, and `sluice status` says what they wait for. A test that did not pass, after which the engine no longer answers, has no result, and the combination is tested again. |
+| `docker` | `true` | The tests may reach the host's container engine. A container may mount any path, so such a run is never counted as confined. The engine is looked for where the tests would reach it: at `DOCKER_HOST`, a unix socket or a TCP address, and at the usual sockets. A TCP address is asked plainly, or over TLS as `DOCKER_TLS_VERIFY` and `DOCKER_CERT_PATH` say, as the engine's own client does, and the sandbox lets the tests reach it whatever `network` says. An `ssh://` address and Docker contexts are not read. A host where no container engine answers runs none of the branch's tests. It leaves them for a host that can run them, and `sluice status` says what they wait for. A test that did not pass, after which the engine no longer answers, has no result, and the combination is tested again. |
 
-Every result records which executor ran it and what it held. An executor
-that cannot enforce a limit the policy states refuses the run
-([ADR 0012](/sluice/decisions/0012/)).
+Every result records which executor ran it and what it held. Some
+executors cannot hold every limit: the open executor holds no `memory`
+limit and cannot keep a run off the network, and the sandbox on macOS
+holds no `memory` limit. A host whose
+executor cannot hold the policy's limits runs none of the branch's tests
+and makes no checkout for them. It leaves them for a host that can
+([ADR 0012](/sluice/decisions/0012/)). `sluice status` and `sluice wait`
+say a combination is waiting for a host that can run its tests as its
+policy asks, naming each host that turned it down and why. Where no host
+takes it within the branch's [`timeout`](#timeout), the combination is
+not passed, and each test says why.
 
 ## `[preview]`: a running copy of a landed revision
 

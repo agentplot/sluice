@@ -84,6 +84,17 @@ backon = { version = "1.6", default-features = false, features = [
   "std-blocking-sleep",
 ] }
 
+# The tests' container engine over TLS: its certificates, made in each
+# test's scratch directory, and its server, on the ring provider ureq uses.
+rcgen = { version = "0.14", default-features = false, features = [
+  "pem",
+  "ring",
+] }
+rustls = { version = "0.23", default-features = false, features = [
+  "ring",
+  "std",
+] }
+
 [workspace.lints.clippy]
 too_many_arguments = "allow"
 type_complexity = "allow"

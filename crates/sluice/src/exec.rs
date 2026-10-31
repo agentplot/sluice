@@ -291,7 +291,7 @@ impl Exec<'_> {
         if self.command.is_empty() {
             if let Some(why) = s.session_unmet(&plan)? {
                 let text = format!(
-                    "refused: this host's container engine does not answer: {why}; {}'s tests \
+                    "refused: {why}; {}'s tests \
                      ask for one ([executor] docker = true)",
                     self.branch
                 );

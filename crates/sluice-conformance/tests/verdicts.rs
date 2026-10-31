@@ -448,7 +448,8 @@ fn every_observed_result_records_what_its_executor_enforced() {
     shared::every_observed_result_records_what_its_executor_enforced(&Harness::bolt());
 }
 
-/// satisfies: 83, 84
+/// satisfies: 83, 84, 114: the run is refused before anything of it
+/// runs, and recorded with no result, naming the limit
 #[test]
 fn a_limit_the_executor_cannot_hold_refuses_the_run() {
     let h = Harness::new(&format!(
@@ -457,8 +458,20 @@ fn a_limit_the_executor_cannot_hold_refuses_the_run() {
     ));
     h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
     let one = h.submit("unit/a");
-    let err = h.sluice().step(BRANCH).unwrap_err();
-    assert!(format!("{err:#}").contains("memory"), "{err:#}");
+    h.step();
+    let said: Vec<String> = h
+        .events()
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::Lost { not_run, .. } => Some(not_run.into_iter().map(|n| n.reason)),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert!(
+        !said.is_empty() && said.iter().all(|w| w.contains("memory")),
+        "{said:?}"
+    );
     assert!(h.w().started().is_empty());
     assert!(results(&h).is_empty());
     assert_ne!(h.sub(one).state, State::Landed);

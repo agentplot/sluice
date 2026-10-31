@@ -8593,7 +8593,7 @@ mod read_once {
 /// naming the host and why; one that waits for nothing says nothing of it.
 #[test]
 fn status_and_wait_say_a_combination_waits_for_a_host_whose_engine_answers() {
-    let why = "no socket at /var/run/docker.sock";
+    let why = "no container engine answers: no socket at /var/run/docker.sock";
     let f = Fakes::new();
     f.world.init(
         BRANCH,
@@ -8611,7 +8611,8 @@ fn status_and_wait_say_a_combination_waits_for_a_host_whose_engine_answers() {
     sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"]);
     sluice(&f, &["step", BRANCH]);
 
-    let said = format!("waiting for a host whose container engine answers: this-host: {why}");
+    let said =
+        format!("waiting for a host that can run its tests as its policy asks: this-host: {why}");
     let (_, text) = sluice(&f, &["status", BRANCH]);
     assert!(
         text.lines()

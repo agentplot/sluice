@@ -184,6 +184,12 @@ struct Inner {
     unmet: BTreeMap<String, String>,
     /// Every look at what a host lacks, by the host that looked, in order.
     looks: Vec<String>,
+    /// Why each host's executor cannot hold a run's memory limit, by host,
+    /// as the check seam's look says it (84, 87).
+    memory_unmet: BTreeMap<String, String>,
+    /// The hosts whose executor holds a run's memory limit, which the
+    /// fake's open executor does not.
+    holds_memory: BTreeSet<String>,
     cache: BTreeMap<(String, String), String>,
     runs: Vec<RunState>,
     /// What each run says of its tasks while it goes, by run.
@@ -192,6 +198,11 @@ struct Inner {
     tasks_fail: bool,
     hold: bool,
     crash_start: bool,
+    /// Starts from now fail after the host's count admits them, as a
+    /// toolchain that fails to enter does, with these words (114).
+    start_fails: Option<String>,
+    /// Checkouts from now cannot be made, with these words.
+    checkout_fails: Option<String>,
     /// How many starts from now the forge a pool starts runs on answers
     /// 5xx.
     unanswered_starts: usize,
@@ -757,7 +768,27 @@ impl World {
         };
     }
 
-    /// Each look at what the host lacks, by the host that looked, in
+    /// From now, this world's host's executor cannot hold a run's memory
+    /// limit, for `why`, as its look says of a policy that states one; with
+    /// `None`, it holds one again (84, 87; design D2).
+    pub fn memory_unmet(&self, why: Option<&str>) {
+        let mut inner = self.0.borrow_mut();
+        let host = inner.host.clone();
+        match why {
+            Some(w) => inner.memory_unmet.insert(host, w.into()),
+            None => inner.memory_unmet.remove(&host),
+        };
+    }
+
+    /// This world's host's executor holds a run's memory limit from now,
+    /// as an executor the fake does not stand for would.
+    pub fn holds_memory(&self) {
+        let mut inner = self.0.borrow_mut();
+        let host = inner.host.clone();
+        inner.holds_memory.insert(host);
+    }
+
+    /// Each look at the container engine, by the host that looked, in
     /// order.
     pub fn engine_looks(&self) -> Vec<String> {
         self.0.borrow().looks.clone()
@@ -766,6 +797,19 @@ impl World {
     /// The next start finds its place made and stops before starting.
     pub fn crash_next_start(&self) {
         self.0.borrow_mut().crash_start = true;
+    }
+
+    /// Starts from now fail with `words` once the host's count admits
+    /// them, before any check runs, as a `[tests] toolchain` that fails to
+    /// enter does (114); `None` lets them start again.
+    pub fn start_fails(&self, words: Option<&str>) {
+        self.0.borrow_mut().start_fails = words.map(str::to_string);
+    }
+
+    /// Checkouts of combinations from now cannot be made, failing with
+    /// `words`; `None` lets them be made again.
+    pub fn checkout_fails(&self, words: Option<&str>) {
+        self.0.borrow_mut().checkout_fails = words.map(str::to_string);
     }
 
     /// The next `n` starts fail as a forge's 5xx answer, as a pool's
@@ -1876,7 +1920,7 @@ impl Tests for FakeTests {
         if let Some(k) = request.limits.executor.as_deref().filter(|k| *k != "open") {
             bail!("the fake executor is open, not {k}");
         }
-        if request.limits.memory.is_some() {
+        if request.limits.memory.is_some() && !inner.holds_memory.contains(&inner.host) {
             bail!("the open executor cannot hold a memory limit");
         }
         if matches!(
@@ -1895,6 +1939,9 @@ impl Tests for FakeTests {
         }
         if std::mem::take(&mut inner.crash_start) {
             bail!("crashed before starting a run in {}", request.place.name);
+        }
+        if let Some(words) = &inner.start_fails {
+            bail!("{words}");
         }
         if inner.unanswered_starts > 0 {
             inner.unanswered_starts -= 1;
@@ -1946,10 +1993,16 @@ impl Tests for FakeTests {
     fn unmet(&self, limits: &sluice_seams::Limits) -> Result<Option<String>> {
         let mut inner = self.0 .0.borrow_mut();
         let host = inner.host.clone();
-        inner.looks.push(host.clone());
-        if !limits.asks_of_host() {
+        // Design D2: a limit the executor cannot hold, before any engine.
+        if limits.memory.is_some() {
+            if let Some(why) = inner.memory_unmet.get(&host) {
+                return Ok(Some(why.clone()));
+            }
+        }
+        if !limits.docker {
             return Ok(None);
         }
+        inner.looks.push(host.clone());
         Ok(inner.unmet.get(&host).cloned())
     }
 
@@ -2235,6 +2288,9 @@ fn fake_fill(
 impl Checkout for FakeCheckout {
     fn materialize(&self, name: &str, rev: &Rev, _: &Settings) -> Result<Place> {
         let mut inner = self.0 .0.borrow_mut();
+        if let Some(words) = &inner.checkout_fails {
+            bail!("{words}");
+        }
         // 32: two places on one host never collide.
         if inner.places.contains_key(name) || inner.worktrees.contains_key(name) {
             bail!("place {name} already exists");

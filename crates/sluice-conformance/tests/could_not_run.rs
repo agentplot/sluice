@@ -214,11 +214,11 @@ fn docker() -> String {
 }
 
 /// What the fake's look at a host whose engine has gone says.
-const GONE: &str = "/var/run/docker.sock refused the connection";
+const GONE: &str = "no container engine answers: /var/run/docker.sock refused the connection";
 
 /// What a check that did not pass after the engine went is left with.
 fn engine_gone() -> String {
-    format!("the container engine no longer answers after the run: {GONE}")
+    format!("after the run, {GONE}")
 }
 
 /// satisfies: 114, 139; record 0074 (design D5); the host-requirements
