@@ -82,6 +82,8 @@ rand_core.workspace = true
 sluice-fakes = { path = "../sluice-fakes" }
 sluice-conformance = { path = "../sluice-conformance" }
 opentelemetry_sdk = { workspace = true, features = ["testing"] }
+rcgen.workspace = true
+rustls.workspace = true
 
 [lib]
 doctest = false

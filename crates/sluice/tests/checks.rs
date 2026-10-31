@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use sluice::instance::{HostCache, Instance};
-use sluice::profiles::checks::Checks;
+use sluice::profiles::checks::{docker_host, Checks, Endpoint, EngineTls};
 use sluice_seams::{
     AtBound, Limits, Network, Outcome, Place, Progress, RunReport, RunRequest, Setting, Settings,
     Source, Tests,
@@ -682,6 +682,129 @@ fn a_run_that_asks_for_no_engine_is_met_with_none() {
     let dir = Scratch::short();
     let c = checks(&repo).with_engine_sockets(vec![dir.path().join("e.sock")]);
     assert_eq!(c.unmet(&Limits::default()).unwrap(), None);
+}
+
+/// A TCP endpoint on this host's loopback at `port`, plain or over `tls`.
+fn local(port: u16, tls: Option<EngineTls>) -> Endpoint {
+    Endpoint::Tcp {
+        host: "127.0.0.1".into(),
+        port,
+        tls,
+    }
+}
+
+/// Design D5; the host-requirements spec's "An engine at a TCP address"
+/// and "Nothing answers at the TCP address": an engine answering `200` at
+/// a TCP address meets a run that asks for one; an address nothing
+/// listens on, and one answering `500`, leave it unmet, naming the address
+/// and what it did.
+#[test]
+fn an_engine_at_a_tcp_address_is_looked_for_there() {
+    let repo = Repo::new("checks-engine-tcp");
+    let port = support::tcp_engine("HTTP/1.0 200 OK");
+    let c = checks(&repo).with_engine_endpoints(vec![local(port, None)]);
+    assert_eq!(c.unmet(&docker()).unwrap(), None);
+
+    let closed = support::closed_port();
+    let c = checks(&repo).with_engine_endpoints(vec![local(closed, None)]);
+    assert_eq!(
+        c.unmet(&docker()).unwrap().as_deref(),
+        Some(
+            format!("no container engine answers: tcp://127.0.0.1:{closed} refused the connection")
+                .as_str()
+        )
+    );
+
+    let failing = support::tcp_engine("HTTP/1.0 500 Internal Server Error");
+    let c = checks(&repo).with_engine_endpoints(vec![local(failing, None)]);
+    assert_eq!(
+        c.unmet(&docker()).unwrap().as_deref(),
+        Some(
+            format!("no container engine answers: tcp://127.0.0.1:{failing} answered 500 Internal Server Error").as_str()
+        )
+    );
+}
+
+/// Design D5; the host-requirements spec's "An engine over TLS": an engine
+/// that takes only a client certificate its own CA signed is found with
+/// the certificate and key `DOCKER_CERT_PATH` holds, verified against its
+/// `ca.pem`; without them, or verified against another CA, it is not.
+#[test]
+fn an_engine_over_tls_is_found_with_the_clients_certificate() {
+    let repo = Repo::new("checks-engine-tls");
+    let certs = Scratch::new("checks-engine-tls-certs");
+    let port = support::tls_engine(certs.path());
+    let tls = |verify, certs: &std::path::Path| {
+        Some(EngineTls {
+            verify,
+            certs: certs.to_path_buf(),
+        })
+    };
+    let c = checks(&repo).with_engine_endpoints(vec![local(port, tls(true, certs.path()))]);
+    assert_eq!(c.unmet(&docker()).unwrap(), None);
+
+    // No client certificate: the engine refuses the connection's TLS.
+    let bare = Scratch::new("checks-engine-tls-bare");
+    std::fs::copy(certs.path().join("ca.pem"), bare.path().join("ca.pem")).unwrap();
+    let c = checks(&repo).with_engine_endpoints(vec![local(port, tls(true, bare.path()))]);
+    let why = c.unmet(&docker()).unwrap().expect("unmet");
+    assert!(
+        why.starts_with(&format!(
+            "no container engine answers: tcp://127.0.0.1:{port} "
+        )),
+        "{why}"
+    );
+
+    // Another CA: the engine is not the one its client trusts.
+    let other = Scratch::new("checks-engine-tls-other");
+    support::tls_engine(other.path());
+    for f in ["cert.pem", "key.pem"] {
+        std::fs::copy(certs.path().join(f), other.path().join(f)).unwrap();
+    }
+    let c = checks(&repo).with_engine_endpoints(vec![local(port, tls(true, other.path()))]);
+    let why = c.unmet(&docker()).unwrap().expect("unmet");
+    assert!(why.contains("invalid peer certificate"), "{why}");
+}
+
+/// Design D5: `DOCKER_HOST` read as the engine's client reads it.
+#[test]
+fn docker_host_names_a_unix_socket_or_a_tcp_address() {
+    let tls = Some(EngineTls {
+        verify: true,
+        certs: "/certs".into(),
+    });
+    assert_eq!(
+        docker_host("unix:///var/run/docker.sock", None),
+        Some(Endpoint::Unix("/var/run/docker.sock".into()))
+    );
+    assert_eq!(
+        docker_host("tcp://127.0.0.1:2375", None),
+        Some(local(2375, None))
+    );
+    assert_eq!(
+        docker_host("tcp://127.0.0.1", None),
+        Some(local(2375, None))
+    );
+    assert_eq!(
+        docker_host("tcp://127.0.0.1", tls.clone()),
+        Some(local(2376, tls.clone()))
+    );
+    assert_eq!(
+        docker_host("tcp://[::1]:2375/", None),
+        Some(Endpoint::Tcp {
+            host: "::1".into(),
+            port: 2375,
+            tls: None
+        })
+    );
+    assert_eq!(
+        docker_host("tcp://build-engine:2376", tls.clone())
+            .unwrap()
+            .to_string(),
+        "tcp://build-engine:2376"
+    );
+    assert_eq!(docker_host("ssh://me@build-engine", None), None);
+    assert_eq!(docker_host("npipe:////./pipe/docker_engine", None), None);
 }
 
 /// 84, 87 (design D2): a limit the executor cannot hold leaves a run

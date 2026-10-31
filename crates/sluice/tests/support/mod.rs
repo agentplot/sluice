@@ -547,26 +547,126 @@ impl sluice::exec::Host for FakeHost {
 /// path. Make `dir` with [`Scratch::short`]: a socket's path is at most
 /// 104 bytes on macOS.
 pub fn engine(dir: &Path, status: &'static str) -> PathBuf {
-    use std::io::{Read, Write};
     let path = dir.join("e.sock");
     let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
     std::thread::spawn(move || {
         for conn in listener.incoming() {
             let Ok(mut c) = conn else { continue };
-            let mut asked = Vec::new();
-            let mut buf = [0u8; 512];
-            while !asked.windows(4).any(|w| w == b"\r\n\r\n") {
-                match c.read(&mut buf) {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => asked.extend_from_slice(&buf[..n]),
-                }
-            }
-            let status = match asked.starts_with(b"GET /_ping ") {
-                true => status,
-                false => "HTTP/1.0 404 Not Found",
-            };
-            let _ = write!(c, "{status}\r\nApi-Version: 1.47\r\n\r\nOK");
+            answer_ping(&mut c, status);
         }
     });
     path
+}
+
+/// A fake container engine's answer on `c`: `status` to a `GET /_ping`,
+/// a 404 to anything else.
+fn answer_ping(c: &mut (impl std::io::Read + std::io::Write), status: &str) {
+    let mut asked = Vec::new();
+    let mut buf = [0u8; 512];
+    while !asked.windows(4).any(|w| w == b"\r\n\r\n") {
+        match c.read(&mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => asked.extend_from_slice(&buf[..n]),
+        }
+    }
+    let status = match asked.starts_with(b"GET /_ping ") {
+        true => status,
+        false => "HTTP/1.0 404 Not Found",
+    };
+    let _ = write!(
+        c,
+        "{status}\r\nApi-Version: 1.47\r\nContent-Length: 2\r\n\r\nOK"
+    );
+    let _ = c.flush();
+}
+
+/// A fake container engine on a local TCP port, answering a `GET /_ping`
+/// with `status` and anything else with a 404 (design D5): its port.
+pub fn tcp_engine(status: &'static str) -> u16 {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for conn in listener.incoming() {
+            let Ok(mut c) = conn else { continue };
+            answer_ping(&mut c, status);
+        }
+    });
+    port
+}
+
+/// A local TCP port nothing listens on, as far as the test can tell.
+pub fn closed_port() -> u16 {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.local_addr().unwrap().port()
+}
+
+/// A fake container engine over TLS on a local TCP port, answering `200`
+/// to a `GET /_ping` only from a client whose certificate its own CA
+/// signed (design D5). The CA's certificate, and a client certificate and
+/// key it signed, are written to `dir` as `ca.pem`, `cert.pem` and
+/// `key.pem`, as `DOCKER_CERT_PATH` holds them: its port.
+pub fn tls_engine(dir: &Path) -> u16 {
+    use std::sync::Arc;
+
+    use rcgen::{
+        BasicConstraints, CertificateParams, CertifiedIssuer, ExtendedKeyUsagePurpose, IsCa,
+        KeyPair, KeyUsagePurpose,
+    };
+    use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
+
+    let mut ca = CertificateParams::new(Vec::<String>::new()).unwrap();
+    ca.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    ca.key_usages = vec![
+        KeyUsagePurpose::KeyCertSign,
+        KeyUsagePurpose::DigitalSignature,
+    ];
+    let ca = CertifiedIssuer::self_signed(ca, KeyPair::generate().unwrap()).unwrap();
+    let signed = |names: Vec<String>, usage| {
+        let key = KeyPair::generate().unwrap();
+        let mut params = CertificateParams::new(names).unwrap();
+        params.extended_key_usages = vec![usage];
+        (params.signed_by(&key, &ca).unwrap(), key)
+    };
+    let (server, server_key) = signed(
+        vec!["127.0.0.1".into(), "localhost".into()],
+        ExtendedKeyUsagePurpose::ServerAuth,
+    );
+    let (client, client_key) = signed(Vec::new(), ExtendedKeyUsagePurpose::ClientAuth);
+    std::fs::write(dir.join("ca.pem"), ca.pem()).unwrap();
+    std::fs::write(dir.join("cert.pem"), client.pem()).unwrap();
+    std::fs::write(dir.join("key.pem"), client_key.serialize_pem()).unwrap();
+
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let mut roots = rustls::RootCertStore::empty();
+    roots.add(ca.der().clone()).unwrap();
+    let verifier = rustls::server::WebPkiClientVerifier::builder_with_provider(
+        Arc::new(roots),
+        provider.clone(),
+    )
+    .build()
+    .unwrap();
+    let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(server_key.serialize_der()));
+    let config = Arc::new(
+        rustls::ServerConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_client_cert_verifier(verifier)
+            .with_single_cert(vec![server.der().clone()], key)
+            .unwrap(),
+    );
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for conn in listener.incoming() {
+            let Ok(tcp) = conn else { continue };
+            let Ok(tls) = rustls::ServerConnection::new(config.clone()) else {
+                continue;
+            };
+            let mut c = rustls::StreamOwned::new(tls, tcp);
+            answer_ping(&mut c, "HTTP/1.0 200 OK");
+            c.conn.send_close_notify();
+            let _ = std::io::Write::flush(&mut c);
+        }
+    });
+    port
 }
