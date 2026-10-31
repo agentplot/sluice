@@ -38,9 +38,9 @@ rules by id. Every group ends with its check task passing.
 - [x] 3.3 In `sandbox_profile`, open a `Tcp` endpoint for a run of `docker = true` whatever the network, and the resolver's socket where the host is a name, as D5 says. True when a macOS test in `crates/sluice/tests/checks.rs` shows a sandboxed run with `network = "denied"` and `docker = true` reaching a fake engine at `DOCKER_HOST=tcp://127.0.0.1:<port>`, and the same run without `docker` refused the connection.
 - [x] 3.4 A test in `crates/sluice/tests/exec.rs` for the scenarios "An engine at a TCP address" and "Nothing answers at the TCP address": `sluice exec main` with `docker = true` and `DOCKER_HOST` naming a fake engine's TCP port runs the tests, and with nothing listening refuses them, naming the address. True when `sluice exec main -- cargo test -p sluice --test exec tcp` passes.
 - [x] 3.5 Docs (rule core.26): the configuration reference's `docker` row and `plugins/sluice/skills/setting-up-sluice/references/profiles/sandbox.md` say the engine is looked for at `DOCKER_HOST`, a unix socket or a TCP address, plain or over TLS as `DOCKER_TLS_VERIFY` and `DOCKER_CERT_PATH` say, and that `ssh://` addresses and Docker contexts are not read. True when `sluice exec main -- moon run site:prose` passes with no Vale warning on the pages this group touched, and the plugin's own project tasks pass.
-- [ ] 3.6 Check the group: commit, then run `sluice exec main -- moon run core:test conformance:test cli:test cli:tools cli:sandbox site:prose`. True when every task passes.
+- [x] 3.6 Check the group: commit, then run `sluice exec main -- moon run core:test conformance:test cli:test cli:tools cli:sandbox site:prose`. True when every task passes.
 
 ## 4. The gate
 
-- [ ] 4.1 Remove record 0074's item from `docs/architecture/_open.md`, and the file once it is empty. True when nothing there names core.38 or record 0074.
+- [x] 4.1 Remove record 0074's item from `docs/architecture/_open.md`, and the file once it is empty. True when nothing there names core.38 or record 0074.
 - [ ] 4.2 Run the gate's checks on the committed work with `sluice exec main`, and `sluice exec main -- moon run root:changes`. True when every task passes and the change validates strictly.
