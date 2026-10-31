@@ -533,6 +533,49 @@ fn the_sandbox_holds_writes_and_the_network() {
     drop(listener);
 }
 
+/// Design D5, ADR 0016; the host-requirements spec's "An engine at a TCP
+/// address": a sandboxed run with `network = "denied"` that may reach the
+/// container engine reaches it at its TCP address, as
+/// `DOCKER_HOST=tcp://127.0.0.1:<port>` names it, and the same run without
+/// `docker` is refused the connection. An engine named by a host name is
+/// opened on its port alone, with the resolver's socket.
+#[cfg(target_os = "macos")]
+#[test]
+fn the_sandbox_opens_the_engines_tcp_address() {
+    let repo = Repo::new("checks-sandbox-engine-tcp");
+    let port = support::tcp_engine("HTTP/1.0 200 OK");
+    let c = checks(&repo).with_engine_endpoints(vec![local(port, None)]);
+    let connect = format!("/usr/bin/nc -z -w 2 127.0.0.1 {port}");
+    let run = |c: &Checks, name: &str, cmd: &str, docker| {
+        let mut req = request(&repo, name, command(cmd));
+        req.limits = Limits {
+            executor: Some("sandbox".into()),
+            network: Some(Network::Denied),
+            memory: None,
+            docker,
+        };
+        finish(c, &req).tasks[0].outcome
+    };
+    assert_eq!(run(&c, "p1", &connect, true), Outcome::Pass);
+    assert_eq!(run(&c, "p2", &connect, false), Outcome::Fail);
+
+    let named = checks(&repo).with_engine_endpoints(vec![Endpoint::Tcp {
+        host: "build-engine".into(),
+        port: 2376,
+        tls: None,
+    }]);
+    assert_eq!(run(&named, "p3", "true", true), Outcome::Pass);
+    let profile = std::fs::read_to_string(named.runs().dir("p3").join("sandbox.sb")).unwrap();
+    assert!(
+        profile.contains("(allow network-outbound (remote tcp \"*:2376\"))"),
+        "{profile}"
+    );
+    assert!(
+        profile.contains("/private/var/run/mDNSResponder"),
+        "{profile}"
+    );
+}
+
 /// C.3: a sandboxed command may open a pseudo-terminal, as a test that
 /// starts a terminal multiplexer does.
 #[cfg(target_os = "macos")]
