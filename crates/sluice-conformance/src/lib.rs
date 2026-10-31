@@ -83,6 +83,11 @@ pub trait Rig {
     /// `task` fails on any candidate whose `path` holds `content`.
     fn fails_with(&self, task: &str, path: &str, content: &str);
 
+    /// `task` runs past any time limit on every candidate: a run of it
+    /// goes on until it is ended. On the fakes every run started from now
+    /// goes on so.
+    fn hangs(&self, task: &str);
+
     /// 123: every release of a combination's checkout from now fails, as
     /// a release command that exits 2 printing [`shared::RELEASE_FAILS`]
     /// does, or succeeds again.
@@ -398,6 +403,11 @@ impl Rig for Harness {
 
     fn fails_with(&self, task: &str, path: &str, content: &str) {
         self.w().fails_with(task, path, content);
+    }
+
+    fn hangs(&self, task: &str) {
+        self.w().hangs(task);
+        self.w().hold_runs(true);
     }
 
     fn release_fails(&self, fails: bool) {

@@ -37,10 +37,15 @@ use sluice_seams::{
 use support::{Repo, Scratch};
 
 /// The check every project's test runs: it fails when a rule in the rig's
-/// rules file names it and the file the rule names holds its content.
+/// rules file names it and the file the rule names holds its content, and
+/// goes on until it is ended when a rule names it with the path `-`.
 const CHECK: &str = r#"# $1: the task.
 tab=$(printf '\t')
 while IFS="$tab" read -r task path content; do
+  if [ "$task" = "$1" ] && [ "$path" = "-" ]; then
+    echo "$1: hangs"
+    exec sleep 600
+  fi
   if [ "$task" = "$1" ] && [ -f "$path" ] && [ "$(cat "$path")" = "$content" ]; then
     echo "$1: $path holds $content"
     exit 1
@@ -649,6 +654,10 @@ impl Rig for Real {
         writeln!(f, "{task}\t{path}\t{content}").unwrap();
     }
 
+    fn hangs(&self, task: &str) {
+        self.fails_with(task, "-", "hangs");
+    }
+
     /// Step until no submission is queued, under test or landing, and
     /// every place made is released: runs finish on their own here.
     fn settle(&self) {
@@ -844,6 +853,10 @@ scenarios! {
     a_session_runs_last_result_says_whether_it_was_recorded: bolt();
     a_last_result_decides_nothing: bolt();
     a_worktree_that_changes_while_its_run_runs_records_nothing: bolt();
+    a_withdrawn_combinations_run_is_ended_and_its_checkout_released: bolt();
+    a_withdrawn_combinations_passed_run_is_read_for_nothing: bolt();
+    a_withdrawn_combinations_failed_run_blames_no_one: bolt();
+    a_withdrawn_combinations_failed_release_holds_its_checkout: releasing();
 }
 
 /// Each scenario of `shared` with the branch's records on its remote and
@@ -926,4 +939,52 @@ fn peers_read_the_last_fetched_state_when_the_remote_is_unreachable() {
     std::fs::rename(&away, bare).unwrap();
     assert_eq!(status.stale.as_deref(), Some("origin"));
     assert_eq!(status.submissions.len(), landed);
+}
+
+/// The run-outcome spec's "The step that started it has exited" (66; rule
+/// core.10): a step under a one-second limit starts a run whose check
+/// sleeps for minutes, and returns while it goes on; with no step running,
+/// the run's supervisor ends its process group within the grace after the
+/// limit, and the next step records the run timed out.
+#[test]
+fn a_run_is_ended_at_its_limit_after_the_step_that_started_it() {
+    use nix::errno::Errno;
+    use nix::sys::signal::killpg;
+    use nix::unistd::Pid;
+    use sluice_core::records::Event;
+
+    let policy = bolt().replace("timeout = \"20m\"", "timeout = \"1s\"");
+    let r = Real::new("limit-after-step", &policy);
+    r.hangs("a:test");
+    r.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    r.submit("unit/a");
+    let started = Instant::now();
+    assert_eq!(r.step(), Step::Stepped);
+    let tested = r.doc().candidates[0].clone();
+    let run = tested.runs[0].run.clone().expect("a run started");
+    let dir = r.tests.inner.runs().dir(&run.0);
+    let group = loop {
+        if let Ok(text) = std::fs::read_to_string(dir.join("pgid")) {
+            break Pid::from_raw(text.trim().parse().unwrap());
+        }
+        assert!(started.elapsed() < Duration::from_secs(30), "never started");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    // The limit, its grace, and the wait after the kill that follows it.
+    let ended_by = Duration::from_secs(1 + 10 + 5);
+    while killpg(group, None) != Err(Errno::ESRCH) {
+        assert!(
+            started.elapsed() < ended_by,
+            "the run outlived its limit by its grace"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    r.step();
+    let events = r.events();
+    let timed_out = events.iter().any(|e| {
+        matches!(e, Event::Result { combination, result, .. }
+            if *combination == tested.revision && result == "timed out")
+    });
+    assert!(timed_out, "{events:?}");
 }

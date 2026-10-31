@@ -1225,13 +1225,18 @@ impl Sluice<'_> {
         })
     }
 
-    /// 129: whether `branch`'s records hold a submission not out, the
-    /// question `sluice run` asks of each branch on every pass, read from
-    /// the records alone: no revision of the branch and no policy, so a
-    /// branch with nothing in play costs its pass the records' read.
+    /// 129: whether `branch`'s records hold a submission not out, a
+    /// combination under test, or a checkout to release, the question
+    /// `sluice run` asks of each branch on every pass, read from the records
+    /// alone: no revision of the branch and no policy, so a branch with
+    /// nothing in play costs its pass the records' read. A run goes on
+    /// after its queue has emptied, and is read, or dropped as obsolete, at
+    /// the driver's next pass (66; design D4).
     pub fn in_play(&self, branch: &str) -> Result<bool> {
         let line = Line::load(branch, self.seams.state.read_held(branch)?)?;
-        Ok(line.subs.values().any(|s| !s.state.is_out()))
+        Ok(line.subs.values().any(|s| !s.state.is_out())
+            || line.doc.candidates.iter().any(|c| c.state.under_test())
+            || !line.doc.release.is_empty())
     }
 
     /// 26: a branch's queue as last written, at the revision its records
@@ -2636,9 +2641,11 @@ mod tests {
         assert!(e.contains("later"), "{e}");
     }
 
-    /// 129: whether a branch is in play is read from its records alone,
-    /// no revision and no policy read: none while nothing is queued, and
-    /// one queued submission is in play.
+    /// 129, design D4: whether a branch is in play is read from its
+    /// records alone, no revision and no policy read: none while nothing is
+    /// queued, under test or to release; one queued submission is in play,
+    /// and so is a combination under test whose submission was withdrawn,
+    /// and then a checkout whose release failed, until it is released.
     #[test]
     fn in_play_reads_the_records_alone() {
         let f = sluice_fakes::Fakes::new();
@@ -2671,10 +2678,34 @@ mod tests {
         })
         .unwrap()
         .unwrap();
-        let (revisions, files) = (f.world.revision_reads(), f.world.file_reads());
-        assert!(s.in_play("main").unwrap());
-        assert_eq!(f.world.revision_reads(), revisions);
-        assert_eq!(f.world.file_reads(), files);
+        let in_play = || {
+            let (revisions, files) = (f.world.revision_reads(), f.world.file_reads());
+            let in_play = s.in_play("main").unwrap();
+            assert_eq!(f.world.revision_reads(), revisions);
+            assert_eq!(f.world.file_reads(), files);
+            in_play
+        };
+        assert!(in_play());
+
+        f.world.task("a:test", "");
+        f.world.hold_runs(true);
+        s.step("main").unwrap();
+        s.withdraw(1, &Requester::Operator).unwrap().unwrap();
+        let line = s.read_line("main").unwrap();
+        assert!(line.subs.values().all(|s| s.state.is_out()));
+        assert!(line.doc.candidates.iter().any(|c| c.state.under_test()));
+        assert!(in_play(), "a combination under test");
+
+        f.world.fail_next_release();
+        s.step("main").unwrap();
+        let line = s.read_line("main").unwrap();
+        assert!(line.doc.candidates.is_empty());
+        assert_eq!(line.doc.release.len(), 1);
+        assert!(in_play(), "a checkout to release");
+
+        s.step("main").unwrap();
+        assert!(s.read_line("main").unwrap().doc.release.is_empty());
+        assert!(!in_play());
     }
 
     /// A result of `task` at `at` on `branch`, failed.
