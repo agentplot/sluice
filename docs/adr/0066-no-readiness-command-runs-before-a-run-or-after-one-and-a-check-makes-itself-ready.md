@@ -1,17 +1,19 @@
 ---
 number: 66
-title: No readiness probe runs before a run; a check makes itself ready, and the probe tells a host's fault from the code's after a failure
+title: No readiness command runs before a run or after one, and a check makes itself ready
 status: accepted
 date: 2026-10-27
 decision-makers:
 - Chuck Swanberg
 ---
 
-# No readiness probe runs before a run; a check makes itself ready, and the probe tells a host's fault from the code's after a failure
+# No readiness command runs before a run or after one, and a check makes itself ready
 
 Status: accepted by the user on 2026-10-27, on their card.
 
 Amended 2026-10-30: no readiness probe at all, the after-run probe included. The amendment is accepted on the user's own words, not proposed: their words of 2026-10-27 on this record's card ("this just seems to smell. a test could just make itself ready too") rejected probes as such, as they said on 2026-10-30 on record 0073's card ("This is the third time you've come back talking to me about probes but we rejected the idea of probes outright so I don't know why we're talking about probes") and on the planner's card the same day ("There is no fucking ready command. This should have been removed already. I don't understand what the fuck you're talking about. Why aren't you paying attention?"); this record's keeping of an after-run probe was madswan-design's misreading of an accepted decision, corrected here, and no card is asked for the correction. The words of what replaces the probe's attribution are madswan-design's, drawn from clauses 114, 116 and 139 as they stand.
+
+Retitled 2026-11-02 to the decision as amended on 2026-10-30, which clause 84 states; the title named a probe after a failure, which the amendment removed. Amended 2026-11-02: a `ready` key a policy still names is passed over, nothing run for it and the policy read as if it named none, so a branch whose policy still names one is not stopped while its policy is edited (clause 56 and S64 as amended 2026-11-02, on the user's word of 2026-10-30, letting batch 48's build stand; rule core.37).
 
 Deciders: the user, on the record's first card (2026-10-27): "this just seems to smell. a test could just make itself ready too", which settles that a check readies itself and no probe stands before a run; madswan-design, on wldn-design's reading of 2026-10-27 relayed by swancloud-design (afterthought/crew-state, swancloud/main, signal 2026-10-27-swancloud-operator-dcf318e8/01), for the shape; the user's yes is asked on the record's card.
 Sources: statement clauses 66, 84, 114, 115; `crates/sluice/src/profiles/checks.rs` on main at 2026-10-27 (`READY_LIMIT`, sixty seconds; the probe run before the plan, the run refused when it fails or runs out of time; the probe run again after a failed run for 114); chuck-herdr-alpha, 2026-10-27 22:15 to 22:38Z: main's combination of 847, 848 and 850 refused three times, "the host is not ready to run the checks: [tests] ready `bun run infra/ministack/host-ready.ts`" past 60 s, under a load of 47 to 152 on 16 cores, the same probe answering in 3 to 5 s by hand in a warm checkout.
