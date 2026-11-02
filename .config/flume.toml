@@ -1,0 +1,8 @@
+# flume's binding for this repository: its places are plain git
+# worktrees, its changes OpenSpec's, and its work lands through sluice. It
+# declares no kinds of its own, so a launch here runs flume's own fix,
+# chore and change.
+[profiles]
+place = "git-worktree"
+change = "openspec"
+merge_queue = "sluice"
