@@ -5,6 +5,12 @@ when its code lands, and the file is deleted when it is empty.
 
 ## Accepted, not built
 
+- **core.40 and record 0077** (clause 141, added 2026-11-01; C.6 as
+  amended 2026-11-02): today a run's statement carries a predicate of
+  sluice's own, `RUN_PREDICATE` in
+  `crates/sluice/src/signing/statement.rs`. A change writes in-toto's
+  Test Result in its place, and reads both.
+
 - **core.39 and record 0075** (clauses 8, 10, 23, 24 and 140, added or
   amended 2026-10-30): today a submission whose work no required check
   reads lands with nothing run but joins the chain, waiting for the
