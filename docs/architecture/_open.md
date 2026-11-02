@@ -5,6 +5,13 @@ when its code lands, and the file is deleted when it is empty.
 
 ## Accepted, not built
 
+- **core.41 and record 0078** (clause 131 as amended 2026-10-28, and
+  clause 132): today a finished submission's index line holds its id,
+  state, worktree and subject, and the log is one file. Part 2 of the
+  change `finished-submissions` keeps the log in parts; the index's
+  times, and the overview's rows carrying them, wait on a change of
+  their own.
+
 - **core.40 and record 0077** (clause 141, added 2026-11-01; C.6 as
   amended 2026-11-02): today a run's statement carries a predicate of
   sluice's own, `RUN_PREDICATE` in
