@@ -69,6 +69,11 @@ out, what it allows and the clauses and decisions it rests on.
 - **[core.26](https://github.com/agentplot/sluice/blob/main/docs/architecture/core.md#details)** The site, the README, the plugins' skills and the commands' output speak to any host's operator: no word the statement coined that the reader cannot see in the product, no machine, fleet, partition, deployment or tool of ours, and no team's branch scheme as sluice's own; a skill that proposes a branch or a pattern follows the project's own naming.
 - **[core.25](https://github.com/agentplot/sluice/blob/main/docs/architecture/core.md#details)** On a host, at most one process reads a repository's records to watch its queues; every other watch and wait follows that reader's document.
 
+## Setting up
+
+- **[core.44](https://github.com/agentplot/sluice/blob/main/docs/architecture/core.md#details)** Setup moves nothing a process outside its session has open, and goes on in a repository's one working copy only on the operator's word, which its record says; once set up, no command warns of the layout.
+- **[core.45](https://github.com/agentplot/sluice/blob/main/docs/architecture/core.md#details)** A branch whose team lands by pull request keeps its way whole and sluice alone lands it: no way of sluice's in which the host's merge button, a merge queue of the host's or a merge by hand lands and sluice only tests; and setup asks whether the team lands by pull request today and, where it does, writes the branch's conditions.
+
 ## The gate
 
 - **[core.21](https://github.com/agentplot/sluice/blob/main/docs/architecture/core.md#details)** Every file the tree tracks is owned by a formatter the gate runs, or is excluded by name with its reason; every language with a linter is linted; every directory under `plugins/`, and `site/`, is a moon project of its own, listed in `.moon/workspace.yml` with its language declared, whose check-fast tasks validate, type-check and test it, one task per check.
