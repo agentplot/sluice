@@ -41,13 +41,11 @@ readable with plain tools whether or not sluice is running.
                        addresses, when it was made and its command's run; for a
                        failed preview, what its command printed and nothing held
   .previews/<preview>/ a preview's checkout, kept until it is released
-  .tmp/<code>/         a checkout's scratch, SLUICE_TMP, which its record names:
-                       a short code made from the checkout's name, the same
-                       length for every checkout; a worktree keeps its own
-                       across runs. A checkout an older sluice made keeps its
-                       scratch under the checkout's name until it is released.
-                       A directory here that no record names is removed by
-                       the next round or sluice exec on the host
+  .tmp/<code>/         the scratch of a checkout an older sluice made, at the
+                       code its record names, or at the checkout's name where
+                       the record names none; removed when the checkout is
+                       released. A directory here that no record names is
+                       removed by the next round or sluice exec on the host
   .runs/<checkout>/    a candidate's run, or a preview's command
   .runs/<worktree>/<n>/
                        each run an agent started in its worktree, numbered;
@@ -62,6 +60,34 @@ readable with plain tools whether or not sluice is running.
     release.log        what the release command printed
     released           written once the release command has run
 ```
+
+A checkout's scratch, the [`SLUICE_TMP`](/sluice/reference/configuration/#environment)
+its tests may write, is kept apart from every repository, in a directory
+of the user's own under `/tmp`. Its path is the same short length for
+every checkout of every repository on the host, whatever they are called
+and wherever they are:
+
+```
+/tmp/sluice-<uid>/     the user's own; /private/tmp/sluice-<uid>/ on macOS
+  <repository code>/   a short code made from where the repository's git
+                       directory is, one for each repository on the host
+    <code>/            a checkout's scratch, SLUICE_TMP, which its record names:
+                       a short code made from the checkout's name; a worktree
+                       keeps its own across runs
+```
+
+sluice makes `sluice-<uid>` and the repository's directory under it
+readable, writable and searchable by the user alone. Where either is
+already there as a link, a file, another user's directory or one others
+may enter, sluice makes no checkout under it and changes nothing of it.
+It says the directory's path and what is wrong with it, and makes it
+again once you remove it.
+
+The host may empty `/tmp` when it restarts, or clean out what nobody
+has touched for days. A checkout's next run then makes its scratch
+again, empty, at the path its record names. The next round or `sluice
+exec` on the host removes a directory under the repository's code that
+no record names, and never looks at another repository's.
 
 What belongs to the host and not to any repository is kept under
 `$XDG_STATE_HOME/sluice` (default `~/.local/state/sluice`), shared by
