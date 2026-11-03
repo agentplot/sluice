@@ -73,8 +73,16 @@ impl Setup {
 
     /// [`Setup::sluice`], with `env` set beside the rest.
     fn sluice_with(&self, env: &[(&str, &Path)], args: &[&str]) -> Output {
-        support::isolated(&mut Command::new(env!("CARGO_BIN_EXE_sluice")))
+        self.command(args)
             .envs(env.iter().copied())
+            .output()
+            .unwrap()
+    }
+
+    /// The `sluice` that [`Setup::sluice`] runs, not yet started.
+    fn command(&self, args: &[&str]) -> Command {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_sluice"));
+        support::isolated(&mut c)
             .args(args)
             .current_dir(&self.worktree)
             .env("XDG_CONFIG_HOME", self.config.path())
@@ -83,9 +91,8 @@ impl Setup {
             .env_remove("SLUICE_OTEL")
             .env_remove("GIT_DIR")
             .env_remove("GIT_WORK_TREE")
-            .stdin(Stdio::null())
-            .output()
-            .unwrap()
+            .stdin(Stdio::null());
+        c
     }
 
     /// `sluice` started in this setup's worktree on `host`'s host, its
@@ -446,6 +453,42 @@ fn exec_runs_from_a_worktree_at_a_long_path() {
     let out = s.sluice(&["status", "--json"]);
     let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(doc["worktrees"].as_array().map_or(0, Vec::len), 0, "{doc}");
+}
+
+/// 35 as amended, the C.4 sandbox row, rule core.30: under the sandbox, a
+/// worktree at a long path binds a tool's session socket in a folder under
+/// its scratch, which is under the host user's own directory, the binary
+/// given none of the tests', so the socket's path fits macOS's 104 bytes.
+#[cfg(target_os = "macos")]
+#[test]
+fn exec_under_the_sandbox_binds_a_socket_in_a_folder_under_its_scratch() {
+    let deep = ["a-rather-long-directory-name"; 10].join("/");
+    let s = Setup::at("exec-sandbox-socket", &deep);
+    let canon = std::fs::canonicalize(&s.worktree).unwrap();
+    assert!(canon.as_os_str().len() > 255, "{}", canon.display());
+    s.policy(&format!(
+        "{}\n[executor]\nkind = \"sandbox\"\nnetwork = \"localhost\"\n",
+        POLICY.replace("\"41500\"", "\"43300\"")
+    ));
+
+    let bind = "d=\"$SLUICE_TMP/x/sessions/work\" && mkdir -p \"$d\" && \
+        /usr/bin/perl -MIO::Socket::UNIX -e \
+        'IO::Socket::UNIX->new(Local => $ARGV[0], Listen => 1) or die \"binding $ARGV[0]: $!\\n\"' \
+        \"$d/x-client.sock\" && echo \"$d/x-client.sock\"";
+    let out = s
+        .command(&["exec", "bolt/x", "--", "sh", "-c", bind])
+        .env_remove(sluice::profiles::places::USER_SCRATCH_VAR)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", text(&out));
+    let user = sluice::profiles::places::user_scratch().unwrap();
+    let printed = String::from_utf8_lossy(&out.stdout);
+    let socket = printed
+        .lines()
+        .find(|l| l.ends_with("/x-client.sock"))
+        .unwrap_or_else(|| panic!("no socket's path printed: {}", text(&out)));
+    assert!(Path::new(socket).starts_with(&user), "{socket}");
+    assert!(socket.len() < 104, "{socket}: {} bytes", socket.len());
 }
 
 /// 92: a clean worktree's run of the checks is recorded under its keys
