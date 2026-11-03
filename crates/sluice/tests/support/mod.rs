@@ -22,6 +22,20 @@ pub const HERDR: [&str; 8] = [
     "HERDR_BIN_PATH",
 ];
 
+/// The directory standing for the user's scratch directory (35 as
+/// amended, rule core.30) for every sluice a test starts and every place
+/// seam a test builds beside one: `sluice-test-<uid>` in the tests'
+/// temporary directory, resolved, shared by every test process of the
+/// user as a host's processes share the user's directory, and made by the
+/// first place made under it. sluice's gate runs the tests under the
+/// sandbox, which lets them write there and not in `/tmp/sluice-<uid>`.
+pub fn test_user_scratch() -> PathBuf {
+    let tmp = std::env::temp_dir();
+    std::fs::canonicalize(&tmp)
+        .unwrap_or(tmp)
+        .join(format!("sluice-test-{}", nix::unistd::geteuid()))
+}
+
 /// Out of reach of whatever runs git under `c`, sluice included: the
 /// user's and the system's git config, so their credential helpers, and
 /// every prompt and askpass program. No test may reach the user's
@@ -33,6 +47,10 @@ pub fn isolated(c: &mut Command) -> &mut Command {
         c.env_remove(v);
     }
     c.env("SLUICE_RETRY_SLEEP", "record")
+        .env(
+            sluice::profiles::places::USER_SCRATCH_VAR,
+            test_user_scratch(),
+        )
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_TERMINAL_PROMPT", "0")
@@ -278,6 +296,22 @@ impl OnDisk {
 /// A repository with one worktree, built with the git command.
 pub struct Repo {
     pub scratch: Scratch,
+}
+
+/// What a place sluice made in the repository keeps outside it, its
+/// directory under the user's scratch directory (35 as amended, rule
+/// core.30), the tests' own and the user's, goes with it.
+impl Drop for Repo {
+    fn drop(&mut self) {
+        let Ok(common) = std::fs::canonicalize(self.dir().join(".git")) else {
+            return;
+        };
+        let key = sluice::profiles::places::repository_key(&common);
+        let _ = std::fs::remove_dir_all(test_user_scratch().join(key));
+        if let Ok(dir) = sluice::profiles::places::repository_scratch(&common) {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
 }
 
 impl Repo {

@@ -37,9 +37,30 @@ fn spawns() -> std::sync::RwLockReadGuard<'static, ()> {
     PORTS.read().unwrap_or_else(|e| e.into_inner())
 }
 
+thread_local! {
+    /// The short directories each test's repositories keep their scratch
+    /// under, one per repository, removed when the test's thread ends.
+    static USERS: std::cell::RefCell<BTreeMap<PathBuf, support::Scratch>> =
+        std::cell::RefCell::default();
+}
+
+/// The directory standing for the user's scratch directory (35 as
+/// amended, rule core.30) in this test of `repo`: a path not yet made, in
+/// a short directory of the test's own, so a scratch under it stays short
+/// and no test touches the user's own.
+fn user_dir(repo: &Repo) -> PathBuf {
+    USERS.with(|u| {
+        u.borrow_mut()
+            .entry(repo.dir().to_path_buf())
+            .or_insert_with(support::Scratch::short)
+            .path()
+            .join("u")
+    })
+}
+
 fn places(repo: &Repo) -> Places {
     let common = repo.dir().join(".git");
-    Places::new(&common, runs(repo))
+    Places::new(&common, runs(repo)).with_scratch_root(user_dir(repo))
 }
 
 fn runs(repo: &Repo) -> Runs {

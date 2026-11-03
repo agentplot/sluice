@@ -223,11 +223,18 @@ pub fn user_scratch() -> Result<PathBuf> {
     Ok(tmp.join(format!("sluice-{}", nix::unistd::geteuid())))
 }
 
+/// The tests' way to name the directory standing for the user's own,
+/// [`user_scratch`]: where set, the binding hands it to
+/// [`Places::with_scratch_root`], since sluice's gate runs the tests under
+/// the sandbox, where a binary a test starts may write the tests' own
+/// directories and not `/tmp/sluice-<uid>`. A host sets none.
+pub const USER_SCRATCH_VAR: &str = "SLUICE_USER_SCRATCH";
+
 /// 35 as amended, rule core.30: the repository's key, the first 10 hex
 /// digits of the SHA-1 of its common directory's path, so two copies of a
 /// repository keep their scratch apart, and no process is started for it
 /// (129).
-fn repository_key(common: &Path) -> String {
+pub fn repository_key(common: &Path) -> String {
     use std::os::unix::ffi::OsStrExt as _;
     let mut hasher = gix::hash::hasher(gix::hash::Kind::Sha1);
     hasher.update(common.as_os_str().as_bytes());
