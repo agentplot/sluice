@@ -51,7 +51,7 @@ passing.
 
 ## 6. Say it to the operator
 
-- [ ] 6.1 In `site/src/content/docs/reference/state.md`, give a checkout's scratch its own block after the repository's, as the design's "The words a reader sees" says, and reduce the repository's `.tmp/` line to the scratch of checkouts an older sluice made, removed when they are released, and of strays removed by the next round or `sluice exec`. In `site/src/content/docs/reference/configuration.md`, extend the `SLUICE_TMP` row, and say beside `docker` that a container engine must share `/tmp` (`/private/tmp` on macOS) with its machine for a container to see a folder under `SLUICE_TMP`. Name no host, tool or team of ours (rule core.26). True when `sluice exec main -- moon run site:prose` passes with no warning on the pages this group touched.
+- [x] 6.1 In `site/src/content/docs/reference/state.md`, give a checkout's scratch its own block after the repository's, as the design's "The words a reader sees" says, and reduce the repository's `.tmp/` line to the scratch of checkouts an older sluice made, removed when they are released, and of strays removed by the next round or `sluice exec`. In `site/src/content/docs/reference/configuration.md`, extend the `SLUICE_TMP` row, and say beside `docker` that a container engine must share `/tmp` (`/private/tmp` on macOS) with its machine for a container to see a folder under `SLUICE_TMP`. Name no host, tool or team of ours (rule core.26). True when `sluice exec main -- moon run site:prose` passes with no warning on the pages this group touched.
 
 ## 7. The gate
 
