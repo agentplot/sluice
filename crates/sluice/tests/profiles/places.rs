@@ -1779,23 +1779,77 @@ fn a_place_from_before_keeps_its_scratch_until_released() {
     p.release(&name).unwrap();
 }
 
-/// 123, rule core.30: of the repository's scratch directories, only the
-/// one no record names is removed; a held worktree's checkout's scratch,
-/// and the former-name scratch of a checkout whose record names none, are
-/// left as they were.
+/// What `run` warned of, each warning's words, beside what it returned.
+fn warnings<T>(run: impl FnOnce() -> T) -> (T, Vec<String>) {
+    use tracing_subscriber::layer::SubscriberExt as _;
+    #[derive(Clone, Default)]
+    struct Warned(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
+    struct Words(String);
+    impl tracing::field::Visit for Words {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            if field.name() == "message" {
+                self.0 = format!("{value:?}");
+            }
+        }
+    }
+    impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Warned {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            if *event.metadata().level() == tracing::Level::WARN {
+                let mut words = Words(String::new());
+                event.record(&mut words);
+                self.0.lock().unwrap().push(words.0);
+            }
+        }
+    }
+    let warned = Warned::default();
+    let subscriber = tracing_subscriber::registry().with(warned.clone());
+    let out = tracing::subscriber::with_default(subscriber, run);
+    let seen = warned.0.lock().unwrap().clone();
+    (out, seen)
+}
+
+/// `dir` made as sluice makes the user's scratch directory, the user's
+/// own and closed to everyone else.
+fn make_users(dir: &std::path::Path) {
+    use std::os::unix::fs::DirBuilderExt as _;
+    std::fs::DirBuilder::new().mode(0o700).create(dir).unwrap();
+}
+
+/// 35 as amended, 123, rule core.30: of the repository's scratch
+/// directories, under its directory in the user's and under its former
+/// `sluice/.tmp/`, only those no record names are removed; a held
+/// worktree's checkout's scratch, a scratch an older record names under
+/// `.tmp/`, and the former-name scratch of a checkout whose record names
+/// none are left as they were.
 #[test]
 fn scratch_no_record_names_is_removed() {
     let (repo, _) = scratch("places-scratch-sweep");
     let p = places(&repo);
-    let held = p
-        .adopt(
-            repo.dir().with_extension("session").to_str().unwrap(),
-            "bolt/x",
-            &Settings::new(),
-            "2026-10-27T09:00:00Z",
-        )
-        .unwrap();
+    let held = adopted(&p, &repo.dir().with_extension("session")).unwrap();
     std::fs::write(held.tmp.join("socket"), "").unwrap();
+    let root = repo.dir().join(".git/sluice/.tmp");
+
+    let older = std::fs::canonicalize(another_session(&repo, "older")).unwrap();
+    let older_name = format!("session/{}", older.display());
+    let older_tmp = root.join("fedcba9876");
+    std::fs::write(
+        record_path(&repo, &older_name),
+        serde_json::json!({
+            "kind": "session",
+            "method": "session",
+            "branch": "bolt/x",
+            "path": older,
+            "scratch": older_tmp,
+        })
+        .to_string(),
+    )
+    .unwrap();
+    std::fs::create_dir_all(&older_tmp).unwrap();
+    std::fs::write(older_tmp.join("kept"), "").unwrap();
 
     let before = std::fs::canonicalize(another_session(&repo, "before")).unwrap();
     let name = format!("session/{}", before.display());
@@ -1810,34 +1864,45 @@ fn scratch_no_record_names_is_removed() {
         .to_string(),
     )
     .unwrap();
-    let root = repo.dir().join(".git/sluice/.tmp");
     let former = root.join(sluice::runs::dir_name(&name));
     std::fs::create_dir_all(&former).unwrap();
     std::fs::write(former.join("kept"), "").unwrap();
 
+    let users_stray = repository_dir(&repo).join("abcdef0123");
+    std::fs::create_dir_all(users_stray.join("deep")).unwrap();
     let stray = root.join("0123abcdef");
     std::fs::create_dir_all(stray.join("deep")).unwrap();
 
-    assert_eq!(p.remove_unnamed_scratch().unwrap(), vec![stray.clone()]);
-    assert!(!stray.exists());
+    assert_eq!(
+        p.remove_unnamed_scratch().unwrap(),
+        vec![users_stray.clone(), stray.clone()]
+    );
+    assert!(!users_stray.exists() && !stray.exists());
     assert!(
         held.tmp.join("socket").exists(),
         "a held scratch was removed"
+    );
+    assert!(
+        older_tmp.join("kept").exists(),
+        "an older record's scratch was removed"
     );
     assert!(former.join("kept").exists(), "a former scratch was removed");
     assert_eq!(p.remove_unnamed_scratch().unwrap(), Vec::<PathBuf>::new());
 
     p.release(&held.name).unwrap();
+    p.release(&older_name).unwrap();
     p.release(&name).unwrap();
+    assert!(!older_tmp.exists());
     assert!(!former.exists());
 }
 
-/// 35, 123, rule core.30: a checkout's record that exists and cannot be
-/// read names its scratch still: the scratch of the place its file name
-/// reads back as is kept, of either form, while a directory no record
-/// names is removed; and while such a record's file name was cut short,
-/// so that it names no place, nothing is removed. The sweep succeeds
-/// both times.
+/// 35 as amended, 123, rule core.30: a checkout's record that exists and
+/// cannot be read names its scratch still: the scratch of the place its
+/// file name reads back as is kept, of either form, while a directory no
+/// record names, in either of the repository's scratch roots, is removed,
+/// and the record is warned of by its path; and while such a record's
+/// file name was cut short, so that it names no place, nothing is
+/// removed. The sweep succeeds both times.
 #[test]
 fn an_unreadable_record_keeps_its_scratch() {
     let (repo, rev) = scratch("places-scratch-unreadable");
@@ -1850,10 +1915,18 @@ fn an_unreadable_record_keeps_its_scratch() {
     let root = repo.dir().join(".git/sluice/.tmp");
     let former = root.join(sluice::runs::dir_name(NAME));
     std::fs::create_dir_all(&former).unwrap();
+    let users_stray = repository_dir(&repo).join("abcdef0123");
+    std::fs::create_dir_all(&users_stray).unwrap();
     let stray = root.join("0123abcdef");
     std::fs::create_dir_all(&stray).unwrap();
 
-    assert_eq!(p.remove_unnamed_scratch().unwrap(), vec![stray.clone()]);
+    let (removed, warned) = warnings(|| p.remove_unnamed_scratch().unwrap());
+    assert_eq!(removed, vec![users_stray.clone(), stray.clone()]);
+    let reading = format!(
+        "reading {}, whose checkout's scratch is kept: ",
+        record.display()
+    );
+    assert!(warned.iter().any(|w| w.starts_with(&reading)), "{warned:?}");
     assert!(
         held.tmp.join("socket").exists(),
         "an unreadable record's scratch was removed"
@@ -1868,7 +1941,11 @@ fn an_unreadable_record_keeps_its_scratch() {
         "x".repeat(160)
     ));
     std::fs::write(&cut, "").unwrap();
-    let strays = [root.join("fedcba9876"), root.join("session+2F+2Fgone")];
+    let strays = [
+        repository_dir(&repo).join("fedcba9876"),
+        root.join("fedcba9876"),
+        root.join("session+2F+2Fgone"),
+    ];
     for s in &strays {
         std::fs::create_dir_all(s).unwrap();
     }
@@ -1881,4 +1958,72 @@ fn an_unreadable_record_keeps_its_scratch() {
     std::fs::write(&record, written).unwrap();
     p.release(NAME).unwrap();
     assert!(!held.tmp.exists());
+}
+
+/// 35 as amended, 123, rule core.30: a repository's sweep weighs only its
+/// own directory under the user's: another repository's directory there,
+/// and a directory in the user's own itself, are left as they were though
+/// no record of the first names them, and the other repository's sweep
+/// removes its own.
+#[test]
+fn another_repositorys_scratch_is_left() {
+    let _spawns = spawns();
+    let one = Repo::new("places-sweep-one");
+    let two = Repo::new("places-sweep-two");
+    let user = user_dir(&one);
+    let a = places(&one);
+    let b = places(&two).with_scratch_root(user.clone());
+    make_users(&user);
+    let ones = repository_dir(&one).join("abcdef0123");
+    let twos = user
+        .join(sluice::profiles::places::repository_key(
+            &two.dir().join(".git"),
+        ))
+        .join("abcdef0123");
+    let top = user.join("0123456789");
+    for dir in [&ones, &twos, &top] {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+
+    assert_eq!(a.remove_unnamed_scratch().unwrap(), vec![ones.clone()]);
+    assert!(!ones.exists());
+    assert!(twos.is_dir(), "another repository's scratch was removed");
+    assert!(top.is_dir(), "the user's directory was swept");
+    assert_eq!(b.remove_unnamed_scratch().unwrap(), vec![twos.clone()]);
+    assert!(top.is_dir(), "the user's directory was swept");
+}
+
+/// 35 as amended, 123, rule core.30: where the user's scratch directory
+/// may be entered by others, the sweep removes nothing under it and warns
+/// naming it, as its making refuses it, and still removes what no record
+/// names under the repository's `sluice/.tmp/`; the directory is as it
+/// was, its mode included.
+#[test]
+fn a_users_directory_not_its_own_is_not_swept() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let _spawns = spawns();
+    let repo = Repo::new("places-sweep-open");
+    let p = places(&repo);
+    let user = user_dir(&repo);
+    std::fs::create_dir(&user).unwrap();
+    std::fs::set_permissions(&user, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let users_stray = repository_dir(&repo).join("abcdef0123");
+    std::fs::create_dir_all(&users_stray).unwrap();
+    let stray = repo.dir().join(".git/sluice/.tmp/0123abcdef");
+    std::fs::create_dir_all(&stray).unwrap();
+
+    let (removed, warned) = warnings(|| p.remove_unnamed_scratch().unwrap());
+    assert_eq!(removed, vec![stray.clone()]);
+    assert!(!stray.exists());
+    assert!(
+        users_stray.is_dir(),
+        "a directory others may enter was swept"
+    );
+    let mode = std::fs::metadata(&user).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o755);
+    let refusal = format!(
+        "{} is not a directory of this user's own, closed to everyone else: may be entered by others",
+        user.display()
+    );
+    assert!(warned.iter().any(|w| w.contains(&refusal)), "{warned:?}");
 }
