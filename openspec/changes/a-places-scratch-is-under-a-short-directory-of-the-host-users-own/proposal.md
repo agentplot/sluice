@@ -96,8 +96,13 @@ None.
 - `crates/sluice/src/profiles/places.rs`: the user's directory and the
   repository's key, `new_scratch`, the scratch made through one function
   that makes and checks the directories above it, the sweep's two roots,
-  the module's doc comment; a builder for tests to name the user's
-  directory.
+  the module's doc comment; a builder and a variable for tests to name
+  the directory standing for the user's, since the gate runs the tests
+  under the sandbox, which lets them write their own directories and not
+  `/tmp/sluice-<uid>`.
+- `crates/sluice/src/profiles/mod.rs`: the binding hands the tests'
+  variable to the place seam.
+- `Cargo.toml`: nix's `user` feature, for the effective user's id.
 - `crates/sluice-seams/src/lib.rs`: the doc comments of `Place::tmp` and
   `Checkout::remove_unnamed_scratch`.
 - `crates/sluice/moon.yml`: the `sandbox` task runs `--test exec` too, so
@@ -105,7 +110,9 @@ None.
   tests are.
 - Tests: `crates/sluice/tests/profiles/places.rs`,
   `crates/sluice/tests/exec.rs`, `crates/sluice/tests/support/mod.rs`,
-  and the unit tests in `places.rs`.
+  `crates/sluice/tests/stack.rs`,
+  `crates/sluice/tests/profiles/conformance.rs`, and the unit tests in
+  `places.rs`.
 - Docs: `site/src/content/docs/reference/state.md`,
   `site/src/content/docs/reference/configuration.md`.
 - Records and rules: record 0063 and rule core.30 as amended,
@@ -118,11 +125,15 @@ None.
 
 ```
 crates/sluice/src/profiles/places.rs
+crates/sluice/src/profiles/mod.rs
 crates/sluice-seams/src/lib.rs
+Cargo.toml
 crates/sluice/moon.yml
 crates/sluice/tests/profiles/places.rs
 crates/sluice/tests/exec.rs
 crates/sluice/tests/support/mod.rs
+crates/sluice/tests/stack.rs
+crates/sluice/tests/profiles/conformance.rs
 site/src/content/docs/reference/state.md
 site/src/content/docs/reference/configuration.md
 docs/adr/0063-a-places-scratch-is-at-a-short-path-named-by-its-record.md

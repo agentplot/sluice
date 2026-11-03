@@ -59,10 +59,12 @@ C.4 sandbox row).
   branch whose policy names `[executor] kind = "sandbox"`, runs
   `sluice exec` with a check that makes `$SLUICE_TMP/x/sessions/work/`
   and binds a Unix socket at `x-client.sock` in it
-- **THEN** the check passes, and the socket's path is shorter than 104
+- **THEN** the check passes, and the socket's path is under the resolved
+  path of `/tmp`, then `/sluice-` and the user's id, and shorter than 104
   bytes
   (`exec_under_the_sandbox_binds_a_socket_in_a_folder_under_its_scratch`
-  in `crates/sluice/tests/exec.rs`)
+  in `crates/sluice/tests/exec.rs`, its binary given no
+  `SLUICE_USER_SCRATCH`)
 
 ## MODIFIED Requirements
 
@@ -82,11 +84,11 @@ f15896b; record 0063 as amended; rule core.30).
 
 - **WHEN** a worktree whose path is longer than 255 bytes runs
   `sluice exec` with a command that prints `$SLUICE_TMP`
-- **THEN** the path printed is the resolved path of `/tmp`, then
-  `/sluice-` and the user's id, then `/` and 10 hex digits twice, and
-  holds no part of the worktree's path or the repository's
-  (`exec_runs_from_a_worktree_at_a_long_path` in
-  `crates/sluice/tests/exec.rs`)
+- **THEN** the path printed is the user's directory, then `/` and 10
+  hex digits twice, and holds no part of the worktree's path or the
+  repository's (`exec_runs_from_a_worktree_at_a_long_path` in
+  `crates/sluice/tests/exec.rs`, under the directory
+  `SLUICE_USER_SCRATCH` names for the tests)
 
 #### Scenario: Two worktrees, and one worktree twice
 

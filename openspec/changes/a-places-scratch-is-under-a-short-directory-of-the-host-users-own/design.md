@@ -69,7 +69,8 @@ resolved paths: the record then names the path the sandbox's rule
 names, and `SLUICE_TMP`, `TMPDIR` and a socket a check binds under
 them all match it. It is made from nothing a process's environment
 says, so every process of the user on the host, a session's, a
-service's, a cron job's, finds the same directory.
+service's, a cron job's, finds the same directory; only a test names
+another (below).
 
 Alternatives (record 0063 as amended):
 
@@ -129,20 +130,49 @@ moved gives its next places a new key; its existing records still name
 their old paths.
 
 `places.rs` exports `pub fn repository_scratch(common: &Path) ->
-Result<PathBuf>`, the repository's directory under the user's, for the
-tests' fixture to remove what a test's repository left (below).
+Result<PathBuf>`, the repository's directory under the user's, and
+`pub fn repository_key`, for the tests' fixture to remove what a test's
+repository left there and under the tests' own directory (below).
 
 ### Where the user's directory comes from, in tests
 
 `Places::with_scratch_root(dir)`, beside `with_blocks`, names the
 directory standing for `/tmp/sluice-<uid>`. The profile tests and the
 unit tests use it, so a test that makes it a link or opens it to others
-touches no real directory. The binary has no such setting, and no
-variable names one: the tests that drive the binary use the real
-`/tmp/sluice-<uid>`, each repository under its own key, which proves
-the path a host gets. `support::Repo` removes
-`repository_scratch(<its .git>)` when it is dropped, so a test leaves
-nothing under the user's directory.
+touches no real directory.
+
+sluice's gate runs its tests under the sandbox, which lets a check
+write its checkout, its scratch and the host's caches and nothing else,
+and a binary a test starts runs under it too: there `/tmp/sluice-<uid>`
+cannot be made (`creating /private/tmp/sluice-501: Operation not
+permitted`). So the binary reads `SLUICE_USER_SCRATCH`, the tests' way
+to name the directory standing for the user's, as `SLUICE_ENGINE_SOCKETS`
+is theirs to name a container engine: where it is set, the binding hands
+it to `with_scratch_root`. A host sets none, and no page names it.
+`support::isolated` sets it on every sluice a test starts, to
+`sluice-test-<uid>` in the tests' temporary directory, resolved, which
+every test process of the user shares as a host's processes share the
+user's directory, each repository under its own key. The tests that
+build `Places` beside the binary, the stack's and the conformance
+suite's, hand the same directory to `with_scratch_root`.
+`support::Repo` removes its repository's directory there, and
+`repository_scratch(<its .git>)`, when it is dropped, so a test leaves
+nothing in either.
+
+The path a host gets is proven where nothing confines the tests: by the
+unit test of `user_scratch`, and end to end by the sandbox scenario of
+`sluice exec` in `cli:sandbox`, run outside any sandbox, whose binary is
+given no `SLUICE_USER_SCRATCH` and makes its scratch under the real
+`/tmp/sluice-<uid>`.
+
+Alternatives:
+
+- The tests that drive the binary at the real `/tmp/sluice-<uid>`:
+  refused under the gate's sandbox, as above.
+- The sandbox letting a check write the user's directory: every check
+  could then write every other checkout's scratch on the host, and the
+  sandbox the gate runs under is the installed sluice's, not the one
+  under test.
 
 ### The sweep lists two roots and compares names
 
