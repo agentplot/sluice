@@ -396,26 +396,32 @@ fn exec_runs_from_a_worktree_at_a_long_path() {
     );
     let out = s.sluice(&["exec", "bolt/x", "--", "sh", "-c", "echo $SLUICE_PORT_WEB"]);
     assert!(out.status.success(), "{}", text(&out));
-    // 35, rule core.30: its scratch is the repository's own, as short as
-    // any worktree's, and holds nothing of the worktree's path.
+    // 35 as amended, rule core.30: its scratch is the user's directory,
+    // here the tests', then the repository's 10 hex digits and its own,
+    // and holds nothing of the worktree's path or the repository's.
     let out = s.sluice(&["exec", "bolt/x", "--", "sh", "-c", "echo $SLUICE_TMP"]);
     assert!(out.status.success(), "{}", text(&out));
     let printed = String::from_utf8_lossy(&out.stdout);
+    let user = support::test_user_scratch();
     let tmp = printed
         .lines()
-        .find(|l| l.contains("/sluice/.tmp/"))
-        .unwrap_or_else(|| panic!("no scratch printed: {}", text(&out)));
-    let root = std::fs::canonicalize(s.repo.dir().join(".git")).unwrap();
-    let hex = std::fs::canonicalize(tmp)
+        .find(|l| Path::new(l).starts_with(&user))
+        .unwrap_or_else(|| {
+            panic!(
+                "no scratch under {} printed: {}",
+                user.display(),
+                text(&out)
+            )
+        });
+    let rest = Path::new(tmp)
+        .strip_prefix(&user)
         .unwrap()
-        .strip_prefix(root.join("sluice/.tmp"))
-        .unwrap_or_else(|_| panic!("{tmp} is not under {}", root.display()))
-        .to_string_lossy()
-        .into_owned();
-    assert!(
-        hex.len() == 10 && hex.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')),
-        "{tmp}"
-    );
+        .to_string_lossy();
+    let hex = |h: &str| h.len() == 10 && h.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'));
+    let parts: Vec<&str> = rest.split('/').collect();
+    assert!(parts.len() == 2 && parts.iter().all(|p| hex(p)), "{tmp}");
+    let repo = s.repo.dir().file_name().unwrap().to_string_lossy();
+    assert!(!tmp.contains(repo.as_ref()), "{tmp}");
     assert!(!tmp.contains("a-rather-long-directory-name"), "{tmp}");
 
     let out = s.sluice(&["status", "--json"]);
@@ -478,13 +484,15 @@ fn a_clean_run_of_the_checks_is_recorded_and_a_dirty_one_is_not() {
         text(&out)
     );
     assert_eq!(s.results(), results, "a dirty run records nothing");
-    let tmp = Path::new(&s.repo.dir().join(".git/sluice/.tmp"))
-        .read_dir()
-        .unwrap()
-        .next()
-        .unwrap()
-        .unwrap()
-        .path();
+    let record: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(s.repo.dir().join(format!(
+            ".git/sluice/.places/{}.json",
+            sluice::runs::flat_name(&format!("session/{}", canon.display()))
+        )))
+        .unwrap(),
+    )
+    .unwrap();
+    let tmp = PathBuf::from(record["scratch"].as_str().unwrap());
     assert_eq!(
         std::fs::read_to_string(tmp.join("checked")).unwrap(),
         "checked\nchecked\n",
