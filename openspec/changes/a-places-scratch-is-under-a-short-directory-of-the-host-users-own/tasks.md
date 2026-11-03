@@ -39,7 +39,7 @@ passing.
 
 - [x] 3.1 In `places.rs`, make `list_scratch` list the repository's directory under the user's and the former `root()/.tmp/`, checking the user's directory with `own_dir` first and, where it is refused, warning with the refusal's words and listing nothing under it; never list the user's directory itself; return early with no record read when both listings are empty (129). Keep `named_scratch` and `Named::keeps` comparing names alone, with the design's "The sweep lists two roots and compares names" in the doc comment. True when `sluice exec main -- cargo test -p sluice --lib profiles::places` passes, `a_scratch_made_after_the_listing_is_kept` among them.
 - [x] 3.2 In `crates/sluice/tests/profiles/places.rs`, update `scratch_no_record_names_is_removed` and `an_unreadable_record_keeps_its_scratch` to the spec's scenarios, strays in both roots; add `another_repositorys_scratch_is_left` (two repositories' `Places` given one scratch root) and `a_users_directory_not_its_own_is_not_swept`, each citing 35 as amended, 123 and rule core.30. True when `sluice exec main -- cargo test -p sluice --features tools --test places` passes.
-- [ ] 3.3 Check the group: commit, then run `sluice exec main -- moon run cli:test cli:tools core:test conformance:test`. True when every task passes.
+- [x] 3.3 Check the group: commit, then run `sluice exec main -- moon run cli:test cli:tools core:test conformance:test`. True when every task passes.
 
 ## 4. A checkout made before keeps its scratch
 
