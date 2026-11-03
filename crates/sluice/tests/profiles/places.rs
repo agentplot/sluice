@@ -1721,10 +1721,11 @@ fn a_worktree_keeps_one_short_scratch() {
     p.release(&b.name).unwrap();
 }
 
-/// 35, 34, rule core.30: a worktree's checkout an older sluice adopted,
-/// whose record names no scratch, keeps its scratch at the checkout's name
-/// as one directory name until it is released, which removes it; adopted
-/// again, it is given a short one.
+/// 35 as amended, 34, rule core.30: a worktree's checkout an older sluice
+/// adopted, whose record names no scratch, keeps its scratch at the
+/// checkout's name as one directory name until it is released, which
+/// removes it; adopted again, it is given one under the repository's
+/// directory in the user's.
 #[test]
 fn a_place_from_before_keeps_its_scratch_until_released() {
     let (repo, _) = scratch("places-scratch-before");
@@ -1777,6 +1778,97 @@ fn a_place_from_before_keeps_its_scratch_until_released() {
         next.tmp.to_str()
     );
     p.release(&name).unwrap();
+}
+
+/// 35 as amended, 34, rule core.30: a checkout whose record names a
+/// scratch under the repository's `sluice/.tmp/`, as a sluice before the
+/// user's directory made it, keeps that scratch until it is released. A
+/// worktree's runs are given it and its record keeps naming it; its
+/// release removes it and makes nothing under the user's directory, and
+/// its next run is given one there. A candidate's release removes its
+/// scratch, its checkout and its record.
+#[test]
+fn a_place_in_the_repository_keeps_its_scratch_until_released() {
+    let _spawns = spawns();
+    let (repo, rev) = scratch("places-scratch-in-repository");
+    let p = places(&repo);
+    let root = repo.dir().join(".git/sluice/.tmp");
+    let before = |name: &str, record: serde_json::Value, tmp: &std::path::Path| {
+        let path = record_path(&repo, name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, record.to_string()).unwrap();
+        std::fs::create_dir_all(tmp).unwrap();
+        std::fs::write(tmp.join("kept"), "").unwrap();
+    };
+
+    let session = std::fs::canonicalize(repo.dir().with_extension("session")).unwrap();
+    let name = format!("session/{}", session.display());
+    let kept = root.join("fedcba9876");
+    before(
+        &name,
+        serde_json::json!({
+            "kind": "session",
+            "method": "session",
+            "branch": "bolt/x",
+            "path": session,
+            "scratch": kept,
+        }),
+        &kept,
+    );
+    let place = adopted(&p, &session).unwrap();
+    assert_eq!(place.name, name);
+    assert_eq!(place.tmp, kept);
+    assert!(kept.join("kept").exists(), "its scratch was emptied");
+    assert_eq!(record_of(&repo, &name)["scratch"].as_str(), kept.to_str());
+    assert_eq!(adopted(&p, &session).unwrap().tmp, kept);
+    assert!(!user_dir(&repo).exists(), "the user's directory was made");
+
+    p.release_session(&name, None).unwrap();
+    assert!(!kept.exists(), "{} left", kept.display());
+    assert!(!user_dir(&repo).exists(), "the user's directory was made");
+    let next = adopted(&p, &session).unwrap();
+    assert!(short_scratch(&repo, &next.tmp), "{}", next.tmp.display());
+    assert!(next.tmp.is_dir());
+    assert_eq!(
+        record_of(&repo, &name)["scratch"].as_str(),
+        next.tmp.to_str()
+    );
+    p.release(&name).unwrap();
+
+    let checkout = repo
+        .dir()
+        .join(".git/sluice/.places")
+        .join(sluice::runs::dir_name(NAME));
+    repo.git(&[
+        "worktree",
+        "add",
+        "-q",
+        "--detach",
+        checkout.to_str().unwrap(),
+        rev.as_str(),
+    ]);
+    let candidates = root.join("0123456789");
+    before(
+        NAME,
+        serde_json::json!({
+            "kind": "made",
+            "method": "git-worktree",
+            "path": checkout,
+            "scratch": candidates,
+        }),
+        &candidates,
+    );
+    let listed = |path: &std::path::Path| {
+        repo.git(&["worktree", "list"])
+            .contains(&path.display().to_string())
+    };
+    assert!(listed(&checkout));
+    p.release(NAME).unwrap();
+    assert!(!candidates.exists(), "{} left", candidates.display());
+    assert!(!record_path(&repo, NAME).exists());
+    assert!(!checkout.exists(), "{} left", checkout.display());
+    assert!(!listed(&checkout));
+    assert!(p.made().unwrap().is_empty());
 }
 
 /// What `run` warned of, each warning's words, beside what it returned.
