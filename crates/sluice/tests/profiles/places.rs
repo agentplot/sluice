@@ -1512,18 +1512,165 @@ fn record_of(repo: &Repo, name: &str) -> serde_json::Value {
     serde_json::from_slice(&std::fs::read(record_path(repo, name)).unwrap()).unwrap()
 }
 
-/// Whether `path` is the repository's scratch root and 10 hex digits.
+/// The repository's directory under the one standing for the user's.
+fn repository_dir(repo: &Repo) -> PathBuf {
+    user_dir(repo).join(sluice::profiles::places::repository_key(
+        &repo.dir().join(".git"),
+    ))
+}
+
+/// Whether `path` is the repository's directory under the user's and 10
+/// hex digits.
 fn short_scratch(repo: &Repo, path: &std::path::Path) -> bool {
     let name = path.file_name().unwrap().to_string_lossy();
-    path.parent() == Some(&repo.dir().join(".git/sluice/.tmp"))
+    path.parent() == Some(&repository_dir(repo))
         && name.len() == 10
         && name.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'))
 }
 
-/// 35, 34, rule core.30: a candidate's checkout's record names its
-/// scratch, under the repository's own state and 10 hex digits long, and
-/// its checks are given that directory; its release removes the directory
-/// and the record.
+/// Whether `dir` is a directory of this user's own, closed to everyone
+/// else.
+fn users_own(dir: &std::path::Path) -> bool {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+    let meta = std::fs::symlink_metadata(dir).unwrap();
+    meta.is_dir()
+        && meta.uid() == nix::unistd::geteuid().as_raw()
+        && meta.permissions().mode() & 0o777 == 0o700
+}
+
+/// A session's place adopted for the worktree `worktree`'s run.
+fn adopted(p: &Places, worktree: &std::path::Path) -> anyhow::Result<Place> {
+    p.adopt(
+        worktree.to_str().unwrap(),
+        "bolt/x",
+        &Settings::new(),
+        "2026-11-03T09:00:00Z",
+    )
+}
+
+/// 35 as amended, rule core.30: a worktree's checkout made for its first
+/// run, with neither the user's scratch directory nor the repository's
+/// there, makes both, the user's own and closed to everyone else, and its
+/// scratch is under them.
+#[test]
+fn the_users_scratch_directory_is_made_its_own() {
+    let _spawns = spawns();
+    let (repo, _) = scratch("places-scratch-made");
+    let p = places(&repo);
+    assert!(!user_dir(&repo).exists());
+    let place = adopted(&p, &repo.dir().with_extension("session")).unwrap();
+    for dir in [user_dir(&repo), repository_dir(&repo)] {
+        assert!(users_own(&dir), "{}", dir.display());
+    }
+    assert!(short_scratch(&repo, &place.tmp), "{}", place.tmp.display());
+    assert!(place.tmp.is_dir());
+    p.release(&place.name).unwrap();
+}
+
+/// 35 as amended, rule core.30: where the user's scratch directory is a
+/// link, or a directory others may enter, no checkout is made under it,
+/// the error names it and says what is wrong, and it is as it was, its
+/// mode included.
+#[test]
+fn a_scratch_directory_not_the_users_own_is_refused() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let _spawns = spawns();
+    let (repo, _) = scratch("places-scratch-refused");
+    let p = places(&repo);
+    let session = repo.dir().with_extension("session");
+    let user = user_dir(&repo);
+    let elsewhere = user.with_file_name("elsewhere");
+    std::fs::create_dir(&elsewhere).unwrap();
+
+    std::os::unix::fs::symlink(&elsewhere, &user).unwrap();
+    let e = format!("{:#}", adopted(&p, &session).unwrap_err());
+    assert!(
+        e.contains(&format!(
+            "{} is not a directory of this user's own, closed to everyone else: is a link",
+            user.display()
+        )),
+        "{e}"
+    );
+    assert_eq!(std::fs::read_link(&user).unwrap(), elsewhere);
+    assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 0);
+    let name = adopted_name(&session);
+    p.release(&name).unwrap();
+    std::fs::remove_file(&user).unwrap();
+
+    std::fs::create_dir(&user).unwrap();
+    std::fs::set_permissions(&user, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let e = format!("{:#}", adopted(&p, &session).unwrap_err());
+    assert!(
+        e.contains(&format!(
+            "{} is not a directory of this user's own, closed to everyone else: may be entered by others",
+            user.display()
+        )),
+        "{e}"
+    );
+    let mode = std::fs::metadata(&user).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o755);
+    assert_eq!(std::fs::read_dir(&user).unwrap().count(), 0);
+    p.release(&name).unwrap();
+}
+
+/// The name of the session's place of the worktree `worktree`.
+fn adopted_name(worktree: &std::path::Path) -> String {
+    format!(
+        "session/{}",
+        std::fs::canonicalize(worktree).unwrap().display()
+    )
+}
+
+/// 35 as amended, rule core.30: a worktree's scratch, the repository's
+/// directory and the user's, removed between two runs as a restart or the
+/// system's cleaning removes them, are made again, the scratch at the path
+/// its record names and both directories the user's own.
+#[test]
+fn a_scratch_the_system_emptied_is_made_again() {
+    let _spawns = spawns();
+    let (repo, _) = scratch("places-scratch-emptied");
+    let p = places(&repo);
+    let session = repo.dir().with_extension("session");
+    let first = adopted(&p, &session).unwrap();
+    std::fs::remove_dir_all(user_dir(&repo)).unwrap();
+
+    let second = adopted(&p, &session).unwrap();
+    assert_eq!(second.tmp, first.tmp);
+    assert!(second.tmp.is_dir());
+    for dir in [user_dir(&repo), repository_dir(&repo)] {
+        assert!(users_own(&dir), "{}", dir.display());
+    }
+    p.release(&second.name).unwrap();
+}
+
+/// 35 as amended, rule core.30: two repositories' checkouts of one name,
+/// under one user's directory, are given scratch paths of the same length
+/// that differ in the repository's 10 hex digits alone.
+#[test]
+fn two_repositories_keep_their_scratch_apart() {
+    let _spawns = spawns();
+    let (one, one_rev) = scratch("places-scratch-one");
+    let (two, two_rev) = scratch("places-scratch-two");
+    let user = user_dir(&one);
+    let a = places(&one).with_scratch_root(user.clone());
+    let b = places(&two).with_scratch_root(user.clone());
+    let at_a = a.materialize(NAME, &one_rev, &Settings::new()).unwrap();
+    let at_b = b.materialize(NAME, &two_rev, &Settings::new()).unwrap();
+    assert_eq!(at_a.tmp.as_os_str().len(), at_b.tmp.as_os_str().len());
+    assert_ne!(at_a.tmp, at_b.tmp);
+    assert_eq!(at_a.tmp.file_name(), at_b.tmp.file_name());
+    let (ka, kb) = (at_a.tmp.parent().unwrap(), at_b.tmp.parent().unwrap());
+    assert_eq!(ka.parent(), Some(user.as_path()));
+    assert_eq!(kb.parent(), Some(user.as_path()));
+    assert_ne!(ka.file_name(), kb.file_name());
+    a.release(NAME).unwrap();
+    b.release(NAME).unwrap();
+}
+
+/// 35 as amended, 34, rule core.30: a candidate's checkout's record names
+/// its scratch, under the repository's directory in the user's and 10 hex
+/// digits long, and its checks are given that directory; its release
+/// removes the directory and the record.
 #[test]
 fn a_place_names_its_scratch_on_its_record() {
     let (repo, rev) = scratch("places-scratch-record");
@@ -1539,9 +1686,10 @@ fn a_place_names_its_scratch_on_its_record() {
     assert!(!record_path(&repo, NAME).exists());
 }
 
-/// 35, 34, rule core.30: a worktree is given one scratch on every run, of
-/// the same length as another worktree's and not the same, holding
-/// nothing of the worktree's path.
+/// 35 as amended, 34, rule core.30: a worktree is given one scratch on
+/// every run, under the repository's directory in the user's, of the same
+/// length as another worktree's and not the same, holding nothing of the
+/// worktree's path.
 #[test]
 fn a_worktree_keeps_one_short_scratch() {
     let (repo, _) = scratch("places-scratch-keep");
