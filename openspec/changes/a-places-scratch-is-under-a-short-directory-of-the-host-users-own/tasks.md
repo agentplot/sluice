@@ -43,7 +43,7 @@ passing.
 
 ## 4. A checkout made before keeps its scratch
 
-- [ ] 4.1 In `crates/sluice/tests/profiles/places.rs`, add `a_place_in_the_repository_keeps_its_scratch_until_released`: a worktree's record and a candidate's, written by hand naming `<common>/sluice/.tmp/<10 hex>` with the directory made; the worktree's run is given that path, its release removes it and makes nothing under the root the helper gives, and its next run is given a path under that root; the candidate's release removes its directory and record. Update `a_place_from_before_keeps_its_scratch_until_released` so the next run's path is under that root. No code should need to change for it (design, "A place made before keeps its scratch"); if one does, change the design first. True when `sluice exec main -- cargo test -p sluice --features tools --test places` passes.
+- [x] 4.1 In `crates/sluice/tests/profiles/places.rs`, add `a_place_in_the_repository_keeps_its_scratch_until_released`: a worktree's record and a candidate's, written by hand naming `<common>/sluice/.tmp/<10 hex>` with the directory made; the worktree's run is given that path, its release removes it and makes nothing under the root the helper gives, and its next run is given a path under that root; the candidate's release removes its directory and record. Update `a_place_from_before_keeps_its_scratch_until_released` so the next run's path is under that root. No code should need to change for it (design, "A place made before keeps its scratch"); if one does, change the design first. True when `sluice exec main -- cargo test -p sluice --features tools --test places` passes.
 
 ## 5. Under the sandbox
 
