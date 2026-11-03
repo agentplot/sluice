@@ -5,6 +5,12 @@ when its code lands, and the file is deleted when it is empty.
 
 ## Accepted, not built
 
+- **core.30 and record 0063** (clause 35 as amended 2026-11-03,
+  agentplot/blueprints f15896b): today a checkout's scratch is made under
+  the repository's own `sluice/.tmp/`, whose path grows with where the
+  repository lives. Built by the change
+  `a-places-scratch-is-under-a-short-directory-of-the-host-users-own`.
+
 - **core.41 and record 0078** (clause 131 as amended 2026-10-28, and
   clause 132): today a finished submission's index line holds its id,
   state, worktree and subject, and the log is one file. Part 2 of the
