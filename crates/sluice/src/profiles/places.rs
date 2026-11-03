@@ -279,20 +279,11 @@ fn own_dir(
     }
 }
 
-/// `dir` made readable, writable and searchable by the user alone, or,
-/// where it is there, refused with its path unless it is so (35 as
-/// amended, rule core.30): nothing of one refused is changed or removed.
-/// One another process of the user made first is no error.
-fn make_own(dir: &Path) -> Result<()> {
-    use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _};
-    match std::fs::DirBuilder::new().mode(0o700).create(dir) {
-        Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => {
-            return Err(e).with_context(|| format!("creating {}", dir.display()));
-        }
-        _ => {}
-    }
-    let meta =
-        std::fs::symlink_metadata(dir).with_context(|| format!("reading {}", dir.display()))?;
+/// `dir`, read as `meta`, refused with its path unless it is a directory
+/// of the user's own, closed to everyone else (35 as amended, rule
+/// core.30), in the words both the making and the sweep say it in.
+fn is_own(dir: &Path, meta: &std::fs::Metadata) -> Result<()> {
+    use std::os::unix::fs::MetadataExt as _;
     own_dir(
         meta.file_type(),
         meta.uid(),
@@ -305,6 +296,40 @@ fn make_own(dir: &Path) -> Result<()> {
             dir.display()
         )
     })
+}
+
+/// `dir` made readable, writable and searchable by the user alone, or,
+/// where it is there, refused with its path unless it is so (35 as
+/// amended, rule core.30): nothing of one refused is changed or removed.
+/// One another process of the user made first is no error.
+fn make_own(dir: &Path) -> Result<()> {
+    use std::os::unix::fs::DirBuilderExt as _;
+    match std::fs::DirBuilder::new().mode(0o700).create(dir) {
+        Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => {
+            return Err(e).with_context(|| format!("creating {}", dir.display()));
+        }
+        _ => {}
+    }
+    let meta =
+        std::fs::symlink_metadata(dir).with_context(|| format!("reading {}", dir.display()))?;
+    is_own(dir, &meta)
+}
+
+/// Every directory in `dir`, pushed onto `out`; none where `dir` is not
+/// there.
+fn list_dirs(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e).with_context(|| format!("listing {}", dir.display())),
+    };
+    for e in entries {
+        let e = e?;
+        if e.file_type()?.is_dir() {
+            out.push(e.path());
+        }
+    }
+    Ok(())
 }
 
 /// The repository's directory under the user's, which holds the scratch
@@ -321,13 +346,18 @@ fn is_scratch_name(dir: &OsString) -> bool {
 }
 
 /// What the records under `.places/` and `.previews/` name of the
-/// scratch root, so [`Places::remove_unnamed`] removes nothing a record
-/// may name.
+/// repository's two scratch roots, so [`Places::remove_unnamed`] removes
+/// nothing a record may name (35 as amended, rule core.30). Names alone
+/// are compared, in either root: a record naming a scratch under the
+/// user's directory and one naming the same 10 hex digits under `.tmp/`
+/// are one checkout's name made at two times, so keeping both while
+/// either record stands keeps nothing another checkout needs, and the
+/// former goes once its name is free; whole paths would need every
+/// process to spell a record's path alike, which records older sluices
+/// wrote do not promise.
 #[derive(Default)]
 struct Named {
-    /// The directories records name. Names alone are compared: every
-    /// scratch directory is in the one root, however a process spells its
-    /// path.
+    /// The file names of the scratch directories records name.
     dirs: BTreeSet<OsString>,
     /// A record names no scratch, or cannot be read, and its place's name
     /// cannot be read back, its file name cut short: it may name any
@@ -927,27 +957,32 @@ impl Places {
         std::fs::create_dir_all(path).with_context(|| format!("creating {}", path.display()))
     }
 
-    /// Every directory under the repository's scratch root as it is now:
-    /// what [`Places::remove_unnamed`] may remove.
+    /// 35 as amended, 123, rule core.30: every directory in the
+    /// repository's two scratch roots as they are now, what
+    /// [`Places::remove_unnamed`] may remove: the repository's directory
+    /// under the user's, and the former `<common>/sluice/.tmp/`. The
+    /// user's directory is read before anything under it is listed, and
+    /// where it is not the user's own, closed to everyone else, it is
+    /// warned of in the words its making refuses it in and nothing under
+    /// it is listed. The user's directory itself is never listed, so no
+    /// other repository's scratch is weighed.
     fn list_scratch(&self) -> Result<Vec<PathBuf>> {
-        let dir = self.root().join(".tmp");
-        let entries = match std::fs::read_dir(&dir) {
-            Ok(e) => e,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(e) => return Err(e).with_context(|| format!("listing {}", dir.display())),
-        };
         let mut out = Vec::new();
-        for e in entries {
-            let e = e?;
-            if e.file_type()?.is_dir() {
-                out.push(e.path());
-            }
+        let user = self.user_dir()?;
+        match std::fs::symlink_metadata(&user) {
+            Ok(meta) => match is_own(&user, &meta) {
+                Ok(()) => list_dirs(&self.repository_dir()?, &mut out)?,
+                Err(e) => tracing::warn!("{e:#}; nothing under it is removed"),
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e).with_context(|| format!("reading {}", user.display())),
         }
+        list_dirs(&self.root().join(".tmp"), &mut out)?;
         Ok(out)
     }
 
     /// What every record under `.places/` or `.previews/` names of the
-    /// scratch root: its `scratch`, or, for a record naming none, its
+    /// repository's scratch roots: its `scratch`, or, for a record naming none, its
     /// former path, from the place's name as `session_places`,
     /// `preview_records` and `made` read it back. A record that exists and
     /// cannot be read names its scratch still (35, rule core.30): it is
@@ -1025,7 +1060,7 @@ impl Places {
         Ok(named)
     }
 
-    /// 123, rule core.30: remove each of `listed`, the scratch root's
+    /// 123, rule core.30: remove each of `listed`, the scratch roots'
     /// directories as [`Places::list_scratch`] found them, that no record
     /// names now, and return those removed. Records are read after the
     /// listing, and a place's record names its scratch before the
@@ -1456,7 +1491,7 @@ impl Checkout for Places {
 
     fn remove_unnamed_scratch(&self) -> Result<Vec<PathBuf>> {
         let listed = self.list_scratch()?;
-        // 129: nothing in the scratch root to name, and no record read.
+        // 129: nothing in either scratch root to name, and no record read.
         if listed.is_empty() {
             return Ok(Vec::new());
         }
@@ -2033,19 +2068,22 @@ mod tests {
         assert!(!text.contains("scratch"), "{text}");
     }
 
-    /// 123, rule core.30: a place made after the scratch root was listed
-    /// keeps its scratch, its record written first; a directory the
-    /// listing held that no record names is removed.
+    /// 35 as amended, 123, rule core.30: a place made after the scratch
+    /// roots were listed keeps its scratch, its record written first; a
+    /// directory either listing held that no record names is removed.
     #[test]
     fn a_scratch_made_after_the_listing_is_kept() {
         let root = std::env::temp_dir().join(format!("sluice-sweep-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
         let places = Places::new(&root, Runs::new(&root, "sluice".into()))
             .with_scratch_root(root.join("user"));
-        let stray = root.join("sluice/.tmp/0123456789");
-        std::fs::create_dir_all(&stray).unwrap();
+        let users = places.repository_dir().unwrap().join("abcdef0123");
+        places.make_scratch(&users).unwrap();
+        let former = root.join("sluice/.tmp/0123456789");
+        std::fs::create_dir_all(&former).unwrap();
         let listed = places.list_scratch().unwrap();
-        assert_eq!(listed, vec![stray.clone()]);
+        assert_eq!(listed, vec![users.clone(), former.clone()]);
 
         let name = "sluice/try/main/7";
         let made = Made {
@@ -2054,11 +2092,14 @@ mod tests {
         };
         places.write_record(name, &made).unwrap();
         let tmp = places.scratch(name, &made);
-        std::fs::create_dir_all(&tmp).unwrap();
+        places.make_scratch(&tmp).unwrap();
 
-        assert_eq!(places.remove_unnamed(listed).unwrap(), vec![stray.clone()]);
+        assert_eq!(
+            places.remove_unnamed(listed).unwrap(),
+            vec![users.clone(), former.clone()]
+        );
         assert!(tmp.is_dir(), "a scratch made after the listing was removed");
-        assert!(!stray.exists());
+        assert!(!users.exists() && !former.exists());
         std::fs::remove_dir_all(&root).unwrap();
     }
 
