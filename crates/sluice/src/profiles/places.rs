@@ -67,14 +67,21 @@
 //! is derived from the place's name or read from its record, never
 //! searched for (rule core.16).
 //!
-//! A place's scratch directory, its checks' `SLUICE_TMP`, is
-//! `<common>/sluice/.tmp/` and 10 hex digits of the SHA-1 of its name, the
-//! same length for every place whatever its name or its worktree's
-//! location (35). Its record names it before it is made, and every run,
-//! release and gone release reads it from there (rule core.30). A record
-//! an older sluice wrote names none: its scratch stays where that sluice
-//! put it, `.tmp/` and the place's name as one directory name, until the
-//! place is released.
+//! A place's scratch directory, its checks' `SLUICE_TMP`, is under the
+//! host user's own directory, `/tmp` resolved and `sluice-<uid>`, apart
+//! from every repository: 10 hex digits of the SHA-1 of the repository's
+//! common directory, then 10 of the place's name, the same length for
+//! every place of every repository on the host whatever its name, its
+//! worktree's location or the repository's (35 as amended). The user's
+//! directory and the repository's under it are made readable, writable
+//! and searchable by the user alone, and one that is a link, another
+//! user's or open to others is refused and left as it is. A place's record
+//! names its scratch before it is made, and every run, release and gone
+//! release reads it from there, making it again where the system emptied
+//! it (rule core.30). A place made before keeps its scratch where its
+//! record names, under the repository's `<common>/sluice/.tmp/`, or, on a
+//! record an older sluice wrote, which names none, at `.tmp/` and the
+//! place's name as one directory name, until the place is released.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
@@ -166,9 +173,12 @@ struct Made {
     /// started then: never started again (123).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     gone_release: Option<String>,
-    /// Its scratch directory, named before it is made, at a path that does
-    /// not grow with the place's name (35, rule core.30); none on a record
-    /// an older sluice wrote, whose scratch is where that sluice put it.
+    /// Its scratch directory, named before it is made, under the user's own
+    /// directory at a path that grows with neither the place's name nor
+    /// where its checkout or the repository is (35 as amended, rule
+    /// core.30); under the repository's `sluice/.tmp/` for a place made
+    /// before; none on a record an older sluice wrote, whose scratch is
+    /// where that sluice put it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     scratch: Option<PathBuf>,
 }
