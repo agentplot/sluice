@@ -212,6 +212,39 @@ fn scratch_name(name: &str) -> String {
         .to_string()
 }
 
+/// 35 as amended, rule core.30: the host user's own directory, which
+/// holds the scratch of every repository's checkouts: `/tmp` resolved,
+/// then `sluice-` and the effective user's id, `/private/tmp/sluice-501`
+/// on macOS. Resolved, since the sandbox matches resolved paths; made from
+/// nothing a process's environment says, so every process of the user on
+/// the host finds the same directory.
+pub fn user_scratch() -> Result<PathBuf> {
+    let tmp = std::fs::canonicalize("/tmp").context("resolving /tmp")?;
+    Ok(tmp.join(format!("sluice-{}", nix::unistd::geteuid())))
+}
+
+/// 35 as amended, rule core.30: the repository's key, the first 10 hex
+/// digits of the SHA-1 of its common directory's path, so two copies of a
+/// repository keep their scratch apart, and no process is started for it
+/// (129).
+fn repository_key(common: &Path) -> String {
+    use std::os::unix::ffi::OsStrExt as _;
+    let mut hasher = gix::hash::hasher(gix::hash::Kind::Sha1);
+    hasher.update(common.as_os_str().as_bytes());
+    hasher
+        .try_finalize()
+        .expect("a path is no SHA-1 collision")
+        .to_hex_with_len(10)
+        .to_string()
+}
+
+/// The repository's directory under the user's, which holds the scratch
+/// of the checkouts the repository at the common directory `common` makes
+/// now: what a test's repository leaves there is removed through it.
+pub fn repository_scratch(common: &Path) -> Result<PathBuf> {
+    Ok(user_scratch()?.join(repository_key(common)))
+}
+
 /// Whether `dir` is named as [`scratch_name`] names a scratch directory.
 fn is_scratch_name(dir: &OsString) -> bool {
     dir.to_str()
@@ -484,11 +517,16 @@ pub struct Places {
     runs: Runs,
     /// Where the host's blocks of ports are held; the default when `None`.
     blocks: Option<PathBuf>,
+    /// The directory standing for the user's, [`user_scratch`] when
+    /// `None`.
+    scratch_root: Option<PathBuf>,
     /// How a session's place's release command is built from its policy.
     release: Option<ReleaseBuilder>,
     /// The repository at its common directory, as gix reads it, once
     /// opened: its worktrees, read with no process (129).
     repo: std::cell::OnceCell<gix::Repository>,
+    /// The repository's key, [`repository_key`], once made.
+    key: std::cell::OnceCell<String>,
 }
 
 impl Places {
@@ -497,8 +535,10 @@ impl Places {
             common: common.to_path_buf(),
             runs,
             blocks: None,
+            scratch_root: None,
             release: None,
             repo: std::cell::OnceCell::new(),
+            key: std::cell::OnceCell::new(),
         }
     }
 
@@ -732,6 +772,27 @@ impl Places {
         }
     }
 
+    /// Keep the scratch of checkouts under `dir`, standing for the user's
+    /// own directory, rather than under [`user_scratch`].
+    pub fn with_scratch_root(mut self, dir: PathBuf) -> Self {
+        self.scratch_root = Some(dir);
+        self
+    }
+
+    /// The user's own directory, or the one standing for it.
+    fn user_dir(&self) -> Result<PathBuf> {
+        match &self.scratch_root {
+            Some(d) => Ok(d.clone()),
+            None => user_scratch(),
+        }
+    }
+
+    /// The repository's directory under the user's.
+    fn repository_dir(&self) -> Result<PathBuf> {
+        let key = self.key.get_or_init(|| repository_key(&self.common));
+        Ok(self.user_dir()?.join(key))
+    }
+
     fn root(&self) -> PathBuf {
         self.common.join("sluice")
     }
@@ -769,10 +830,11 @@ impl Places {
             .unwrap_or_else(|| self.root().join(".tmp").join(dir_name(name)))
     }
 
-    /// 35, rule core.30: where a place made now keeps its scratch, which
-    /// its record names before the directory is made.
-    fn new_scratch(&self, name: &str) -> PathBuf {
-        self.root().join(".tmp").join(scratch_name(name))
+    /// 35 as amended, rule core.30: where a place made now keeps its
+    /// scratch, which its record names before the directory is made: the
+    /// repository's directory under the user's, then [`scratch_name`].
+    fn new_scratch(&self, name: &str) -> Result<PathBuf> {
+        Ok(self.repository_dir()?.join(scratch_name(name)))
     }
 
     /// Every directory under the repository's scratch root as it is now:
@@ -1154,7 +1216,7 @@ impl Checkout for Places {
         }
         let record = self.record(name);
         let mut made = Made {
-            scratch: Some(self.new_scratch(name)),
+            scratch: Some(self.new_scratch(name)?),
             ..Made::new(Kind::Made, METHOD)
         };
         self.write_record(name, &made)?;
@@ -1474,7 +1536,7 @@ impl Checkout for Places {
                 let mut made = Made {
                     branch: Some(branch.into()),
                     path: Some(path.clone()),
-                    scratch: Some(self.new_scratch(&name)),
+                    scratch: Some(self.new_scratch(&name)?),
                     ..Made::new(Kind::Session, "session")
                 };
                 // Written before the block is held, so a block names a record
@@ -1551,7 +1613,7 @@ impl Checkout for Places {
             branch: Some(branch.into()),
             last_run: Some(at.into()),
             revision: Some(rev.clone()),
-            scratch: Some(self.new_scratch(name)),
+            scratch: Some(self.new_scratch(name)?),
             ..Made::new(Kind::Preview, METHOD)
         };
         // Written before the block is held, so a block names a record that
@@ -1655,7 +1717,10 @@ impl Checkout for Places {
 
 #[cfg(test)]
 mod tests {
-    use super::{fill, label, repository, scratch_name, slug, Kind, Made, Places};
+    use super::{
+        fill, label, repository, repository_key, scratch_name, slug, user_scratch, Kind, Made,
+        Places,
+    };
     use crate::runs::{dir_name, Runs};
     use sluice_seams::{Checkout, LastResult, Rev, RunKind, RunOutcome};
     use std::collections::BTreeMap;
@@ -1783,6 +1848,58 @@ mod tests {
         assert_ne!(scratch_name(&names[0]), scratch_name(&names[1]));
     }
 
+    /// 35 as amended, rule core.30: a repository's key is 10 lower-case
+    /// hex digits of where the repository is, one path's always the same
+    /// and two paths' different; a place's scratch is the user's
+    /// directory, the key and the place's own 10, 22 bytes past the
+    /// directory whatever the place is called.
+    #[test]
+    fn a_scratch_is_the_users_directory_the_repositorys_key_and_its_name() {
+        let common = Path::new("/Users/me/code/sluice/.git");
+        let key = repository_key(common);
+        assert_eq!(key.len(), 10, "{key}");
+        assert!(
+            key.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')),
+            "{key}"
+        );
+        assert_eq!(key, repository_key(common), "one path, two keys");
+        assert_ne!(key, repository_key(Path::new("/Users/me/code/other/.git")));
+
+        let root = Path::new("/s");
+        let places =
+            Places::new(common, Runs::new(common, "sluice".into())).with_scratch_root(root.into());
+        for name in [
+            "sluice/try/main/39",
+            &format!("session//{}", "w".repeat(300)),
+        ] {
+            let tmp = places.new_scratch(name).unwrap();
+            assert_eq!(tmp, root.join(&key).join(scratch_name(name)));
+            assert_eq!(
+                tmp.as_os_str().len(),
+                root.as_os_str().len() + 22,
+                "{}",
+                tmp.display()
+            );
+        }
+    }
+
+    /// 35 as amended, rule core.30: the user's directory is `/tmp`
+    /// resolved and `sluice-<uid>`, as the sandbox matches paths.
+    #[test]
+    fn the_users_scratch_directory_is_resolved() {
+        let dir = user_scratch().unwrap();
+        assert_eq!(
+            dir.parent(),
+            Some(std::fs::canonicalize("/tmp").unwrap().as_path())
+        );
+        assert_eq!(
+            dir.file_name().unwrap().to_string_lossy(),
+            format!("sluice-{}", nix::unistd::geteuid())
+        );
+        #[cfg(target_os = "macos")]
+        assert!(dir.starts_with("/private/tmp"), "{}", dir.display());
+    }
+
     /// 35, rule core.30: a record an older sluice wrote names no scratch.
     #[test]
     fn an_older_record_names_no_scratch() {
@@ -1800,7 +1917,8 @@ mod tests {
     fn a_scratch_made_after_the_listing_is_kept() {
         let root = std::env::temp_dir().join(format!("sluice-sweep-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        let places = Places::new(&root, Runs::new(&root, "sluice".into()));
+        let places = Places::new(&root, Runs::new(&root, "sluice".into()))
+            .with_scratch_root(root.join("user"));
         let stray = root.join("sluice/.tmp/0123456789");
         std::fs::create_dir_all(&stray).unwrap();
         let listed = places.list_scratch().unwrap();
@@ -1808,7 +1926,7 @@ mod tests {
 
         let name = "sluice/try/main/7";
         let made = Made {
-            scratch: Some(places.new_scratch(name)),
+            scratch: Some(places.new_scratch(name).unwrap()),
             ..Made::new(Kind::Made, "git-worktree")
         };
         places.write_record(name, &made).unwrap();
