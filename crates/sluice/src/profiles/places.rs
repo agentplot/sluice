@@ -238,6 +238,58 @@ fn repository_key(common: &Path) -> String {
         .to_string()
 }
 
+/// 35 as amended, rule core.30: why a directory of `kind`, owned by
+/// `owner` with `mode`, is not one the user `uid` may keep a scratch
+/// under: a link, not a directory, another user's, or one others may
+/// enter. sluice changes nothing it finds, a mode the user widened among
+/// it.
+fn own_dir(
+    kind: std::fs::FileType,
+    owner: u32,
+    mode: u32,
+    uid: u32,
+) -> std::result::Result<(), &'static str> {
+    if kind.is_symlink() {
+        Err("is a link")
+    } else if !kind.is_dir() {
+        Err("is not a directory")
+    } else if owner != uid {
+        Err("belongs to another user")
+    } else if mode & 0o077 != 0 {
+        Err("may be entered by others")
+    } else {
+        Ok(())
+    }
+}
+
+/// `dir` made readable, writable and searchable by the user alone, or,
+/// where it is there, refused with its path unless it is so (35 as
+/// amended, rule core.30): nothing of one refused is changed or removed.
+/// One another process of the user made first is no error.
+fn make_own(dir: &Path) -> Result<()> {
+    use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _};
+    match std::fs::DirBuilder::new().mode(0o700).create(dir) {
+        Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => {
+            return Err(e).with_context(|| format!("creating {}", dir.display()));
+        }
+        _ => {}
+    }
+    let meta =
+        std::fs::symlink_metadata(dir).with_context(|| format!("reading {}", dir.display()))?;
+    own_dir(
+        meta.file_type(),
+        meta.uid(),
+        meta.mode(),
+        nix::unistd::geteuid().as_raw(),
+    )
+    .map_err(|what| {
+        anyhow!(
+            "{} is not a directory of this user's own, closed to everyone else: {what}; remove it, and sluice makes it again",
+            dir.display()
+        )
+    })
+}
+
 /// The repository's directory under the user's, which holds the scratch
 /// of the checkouts the repository at the common directory `common` makes
 /// now: what a test's repository leaves there is removed through it.
@@ -837,6 +889,27 @@ impl Places {
         Ok(self.repository_dir()?.join(scratch_name(name)))
     }
 
+    /// 35 as amended, rule core.30: make the scratch `path` its record
+    /// names. Under the user's directory, that directory and each under it
+    /// above the scratch, the repository's, are made the user's own first,
+    /// or refused; a scratch elsewhere, under the repository's
+    /// `sluice/.tmp/` for a place made before, is made as it was.
+    fn make_scratch(&self, path: &Path) -> Result<()> {
+        let user = self.user_dir()?;
+        if let Some(parent) = path.parent().filter(|p| p.starts_with(&user)) {
+            let mut dir = user.clone();
+            make_own(&dir)?;
+            for part in parent
+                .strip_prefix(&user)
+                .expect("under the user's directory")
+            {
+                dir.push(part);
+                make_own(&dir)?;
+            }
+        }
+        std::fs::create_dir_all(path).with_context(|| format!("creating {}", path.display()))
+    }
+
     /// Every directory under the repository's scratch root as it is now:
     /// what [`Places::remove_unnamed`] may remove.
     fn list_scratch(&self) -> Result<Vec<PathBuf>> {
@@ -1237,7 +1310,7 @@ impl Checkout for Places {
         if tmp.exists() {
             std::fs::remove_dir_all(&tmp)?;
         }
-        std::fs::create_dir_all(&tmp)?;
+        self.make_scratch(&tmp)?;
         let path = self.make_worktree(name, rev)?;
         made.path = Some(path.clone());
         self.write_record(name, &made)?;
@@ -1351,7 +1424,7 @@ impl Checkout for Places {
         };
         let mut gone = GoneRelease::default();
         if let Some(tmp) = start {
-            std::fs::create_dir_all(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
+            self.make_scratch(&tmp)?;
             match self.runs.release_gone(name, &tmp) {
                 Ok(ran) => gone.ran = ran,
                 Err(e) => {
@@ -1562,7 +1635,7 @@ impl Checkout for Places {
         made.last_result = None;
         self.write_record(&name, &made)?;
         let tmp = self.scratch(&name, &made);
-        std::fs::create_dir_all(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
+        self.make_scratch(&tmp)?;
         let mut env = made.ports.clone();
         env.insert(
             "SLUICE_PLACE".to_string(),
@@ -1641,7 +1714,7 @@ impl Checkout for Places {
         if tmp.exists() {
             std::fs::remove_dir_all(&tmp)?;
         }
-        std::fs::create_dir_all(&tmp)?;
+        self.make_scratch(&tmp)?;
         let path = self.make_worktree(name, rev)?;
         made.path = Some(path);
         self.write_record(name, &made)?;
@@ -1718,8 +1791,8 @@ impl Checkout for Places {
 #[cfg(test)]
 mod tests {
     use super::{
-        fill, label, repository, repository_key, scratch_name, slug, user_scratch, Kind, Made,
-        Places,
+        fill, label, own_dir, repository, repository_key, scratch_name, slug, user_scratch, Kind,
+        Made, Places,
     };
     use crate::runs::{dir_name, Runs};
     use sluice_seams::{Checkout, LastResult, Rev, RunKind, RunOutcome};
@@ -1898,6 +1971,39 @@ mod tests {
         );
         #[cfg(target_os = "macos")]
         assert!(dir.starts_with("/private/tmp"), "{}", dir.display());
+    }
+
+    /// 35 as amended, rule core.30: a scratch is kept only under a
+    /// directory, not a link, of the user's own and closed to everyone
+    /// else; a link, a file, another user's directory and one with any
+    /// permission for others are each refused with what is wrong.
+    #[test]
+    fn only_the_users_own_closed_directory_holds_a_scratch() {
+        let root = std::env::temp_dir().join(format!("sluice-own-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("dir")).unwrap();
+        std::fs::write(root.join("file"), "").unwrap();
+        std::os::unix::fs::symlink(root.join("dir"), root.join("link")).unwrap();
+        let kind = |p: &str| std::fs::symlink_metadata(root.join(p)).unwrap().file_type();
+        let uid = 501;
+        assert_eq!(own_dir(kind("dir"), uid, 0o40700, uid), Ok(()));
+        assert_eq!(own_dir(kind("link"), uid, 0o700, uid), Err("is a link"));
+        assert_eq!(
+            own_dir(kind("file"), uid, 0o600, uid),
+            Err("is not a directory")
+        );
+        assert_eq!(
+            own_dir(kind("dir"), uid + 1, 0o700, uid),
+            Err("belongs to another user")
+        );
+        for bit in [0o001, 0o002, 0o004, 0o010, 0o020, 0o040] {
+            assert_eq!(
+                own_dir(kind("dir"), uid, 0o700 | bit, uid),
+                Err("may be entered by others"),
+                "{bit:o}"
+            );
+        }
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     /// 35, rule core.30: a record an older sluice wrote names no scratch.
