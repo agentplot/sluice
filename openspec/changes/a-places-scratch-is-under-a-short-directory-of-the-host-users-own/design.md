@@ -157,7 +157,10 @@ build `Places` beside the binary, the stack's and the conformance
 suite's, hand the same directory to `with_scratch_root`.
 `support::Repo` removes its repository's directory there, and
 `repository_scratch(<its .git>)`, when it is dropped, so a test leaves
-nothing in either.
+nothing in either. The scripts that drive the binary on a repository of
+their own, `e2e/e2e.sh` (`cli:e2e`) and `plugins/screenshots-scene.sh`
+(`root:screenshots-scene`), set it beside `XDG_STATE_HOME`, to a
+directory in their own scratch, which goes when they remove it.
 
 The path a host gets is proven where nothing confines the tests: by the
 unit test of `user_scratch`, and end to end by the sandbox scenario of
