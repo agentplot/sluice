@@ -55,6 +55,6 @@ passing.
 
 ## 7. The gate
 
-- [ ] 7.1 Remove the item for core.30 and record 0063 from `docs/architecture/_open.md`, and the file once it is empty. True when nothing there names this change.
-- [ ] 7.2 Confirm no place made now is given a scratch under the repository's state: `rg -n '"\.tmp"' crates/sluice/src/profiles/places.rs` finds only the former root, in `scratch`'s fallback and `list_scratch`. True when it holds and the commit message says so.
+- [x] 7.1 Remove the item for core.30 and record 0063 from `docs/architecture/_open.md`, and the file once it is empty. True when nothing there names this change.
+- [x] 7.2 Confirm no place made now is given a scratch under the repository's state: `rg -n '"\.tmp"' crates/sluice/src/profiles/places.rs` finds only the former root, in `scratch`'s fallback and `list_scratch`. True when it holds and the commit message says so.
 - [ ] 7.3 Run the gate's checks on the committed work with `sluice exec main`, and `devenv shell -- moon run cli:sandbox` outside any sandbox. True when every task passes and `openspec validate a-places-scratch-is-under-a-short-directory-of-the-host-users-own --strict` passes.
