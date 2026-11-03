@@ -12,13 +12,11 @@ called or where its worktree is (35, 34, 123; record 0063; rule core.30).
 
 A checkout sluice makes or adopts SHALL be given a scratch directory
 under a short directory of the host user's own, apart from every
-repository: the resolved path of `/tmp`, then `sluice-<uid>`, then 10
-hex digits of a digest of the repository's git directory's path, then
-10 hex digits of a digest of the checkout's name. Its path SHALL be the
-same length for every checkout of every repository on the host, and
-SHALL hold nothing of the checkout's name, its worktree's location or
-the repository's location (35 as amended at agentplot/blueprints
-f15896b; record 0063 as amended; rule core.30).
+repository. Its path SHALL be the same length for every checkout of
+every repository on the host, and SHALL hold nothing of the checkout's
+name, its worktree's location or the repository's location (35 as
+amended at agentplot/blueprints f15896b; record 0063 as amended; rule
+core.30).
 
 #### Scenario: A worktree at a long path
 
@@ -36,6 +34,14 @@ f15896b; record 0063 as amended; rule core.30).
 - **THEN** each worktree is given the same scratch path on both runs, and
   the two worktrees' paths differ (`a_worktree_keeps_one_short_scratch`
   in `crates/sluice/tests/profiles/places.rs`)
+
+### Requirement: A checkout's scratch is named by its repository and its own name
+
+A checkout's scratch directory SHALL be the resolved path of `/tmp`,
+then `sluice-<uid>`, then 10 hex digits of a digest of the repository's
+git directory's path, then 10 hex digits of a digest of the checkout's
+name (35 as amended at agentplot/blueprints f15896b; record 0063 as
+amended; rule core.30).
 
 #### Scenario: Two repositories
 
@@ -75,11 +81,9 @@ A checkout made by an older sluice SHALL keep its scratch where that
 sluice put it until it is released, and its release SHALL remove that
 directory: a checkout whose record names no scratch, under the
 repository's `sluice/.tmp/` and the checkout's name written as one
-directory name; a checkout whose record names a scratch under the
-repository's `sluice/.tmp/`, at the path its record names. A worktree's
-checkout so released SHALL be given a scratch under the user's
-directory at its next run (35 as amended; record 0063 as amended; rule
-core.30).
+directory name. A worktree's checkout so released SHALL be given a
+scratch under the user's directory at its next run (35 as amended;
+record 0063 as amended; rule core.30).
 
 #### Scenario: A worktree's checkout with no scratch on its record
 
@@ -91,6 +95,15 @@ core.30).
   under the user's directory
   (`a_place_from_before_keeps_its_scratch_until_released` in
   `crates/sluice/tests/profiles/places.rs`)
+
+### Requirement: A checkout whose record names a scratch in the repository is released there
+
+A checkout made by an older sluice whose record names a scratch under
+the repository's `sluice/.tmp/` SHALL keep its scratch at the path its
+record names until it is released, and its release SHALL remove that
+directory. A worktree's checkout so released SHALL be given a scratch
+under the user's directory at its next run (35 as amended; record 0063
+as amended; rule core.30).
 
 #### Scenario: A worktree's checkout whose record names a scratch in the repository
 
@@ -117,12 +130,9 @@ When a round or `sluice exec` releases the checkouts abandoned on its
 host, it SHALL remove every directory under the repository's own
 directory in the user's scratch directory, and under the repository's
 `sluice/.tmp/`, that no checkout's record names. It SHALL leave every
-directory a record names, an older record's among them, every directory
-a record that exists and cannot be read may name, and every other
-repository's scratch, and SHALL never list the user's scratch directory
-itself. Where the user's scratch directory is not the user's own, it
-SHALL remove nothing under it, say so, and still sweep the repository's
-`sluice/.tmp/` (35 as amended, 123; rule core.30).
+directory a record names, an older record's among them, and every
+directory a record that exists and cannot be read may name (35 as
+amended, 123; rule core.30).
 
 #### Scenario: A stray directory and a held checkout's
 
@@ -134,16 +144,6 @@ SHALL remove nothing under it, say so, and still sweep the repository's
   `sluice exec` runs in another worktree
 - **THEN** the two stray directories are gone and the other three are as
   they were (`scratch_no_record_names_is_removed` in
-  `crates/sluice/tests/profiles/places.rs`)
-
-#### Scenario: Another repository's scratch
-
-- **WHEN** two repositories' directories in the user's scratch directory
-  each hold a directory no record of the repository names, and the
-  first repository's sweep runs
-- **THEN** the first repository's stray directory is gone and the second
-  repository's directory is as it was
-  (`another_repositorys_scratch_is_left` in
   `crates/sluice/tests/profiles/places.rs`)
 
 #### Scenario: A checkout being made as the sweep runs
@@ -165,6 +165,29 @@ SHALL remove nothing under it, say so, and still sweep the repository's
   9f35001; rule core.30 as amended at sluice 4c29e618;
   `an_unreadable_record_keeps_its_scratch` in
   `crates/sluice/tests/profiles/places.rs`)
+
+### Requirement: The removal of scratch no record names reaches only the repository's own
+
+When a round or `sluice exec` removes the scratch no record names, it
+SHALL leave every other repository's scratch, and SHALL never list the
+user's scratch directory itself (35 as amended, 123; rule core.30).
+
+#### Scenario: Another repository's scratch
+
+- **WHEN** two repositories' directories in the user's scratch directory
+  each hold a directory no record of the repository names, and the
+  first repository's sweep runs
+- **THEN** the first repository's stray directory is gone and the second
+  repository's directory is as it was
+  (`another_repositorys_scratch_is_left` in
+  `crates/sluice/tests/profiles/places.rs`)
+
+### Requirement: A user's scratch directory that is not the user's own is not swept
+
+Where the user's scratch directory is not the user's own, the removal of
+scratch no record names SHALL remove nothing under it, say so, and
+still sweep the repository's `sluice/.tmp/` (35 as amended, 123; rule
+core.30).
 
 #### Scenario: A user's scratch directory that is not the user's own
 

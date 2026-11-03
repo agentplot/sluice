@@ -19,6 +19,17 @@ the tasks name pass.
 | `rg -n '"\.tmp"' crates/sluice/src/profiles/places.rs` (7.2) | two lines, both the former root: 929, `scratch`'s fallback for a record naming none; 980, `list_scratch`'s listing of `<common>/sluice/.tmp/` |
 | `/private/tmp/sluice-501` before and after the sandbox run (2.3) | empty both times: the run's repository took its directory with it |
 
+Once synced into `openspec/specs/place-scratch/spec.md`, the three
+requirements this change amends ran past openspec's 500 characters, so
+`root:specs` failed under `--strict`. That check passes
+`openspec validate <change> --strict`, so the change itself never met
+it. Earlier archives split such requirements in the main spec, and so
+does this one, with no change of meaning. Each requirement keeps its
+name and its first behaviour, and what else it said becomes a
+requirement of its own, its scenarios moved with it: the path's parts,
+a record naming a scratch in the repository, the sweep's reach, and the
+user's directory not swept.
+
 moon warned 24 times during the gate that it could not archive a task's
 outputs under `.moon/cache/outputs/`. The tasks still passed. This is
 the sandbox's known refusal (`docs/plans/phase-1-integrations.md`, the
