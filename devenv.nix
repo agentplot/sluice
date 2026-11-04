@@ -277,6 +277,13 @@ in
     # Node.js, the major the Pages runner's image carries, rather than bun
     # standing in for a node the shell lacks.
     pkgs.nodejs_22
+    # The container engine's client, which the stack acceptance test
+    # (ADR 0016) and its release command run as `docker`: the shell's own,
+    # so a run finds it on every host (core.24), never only where the
+    # host's PATH holds one, as a session's may and the queue's need not.
+    # It reaches the engine as the user's client does, by DOCKER_HOST or
+    # the user's docker context.
+    pkgs.docker-client
     # The stack acceptance test's browser test (ADR 0016): Playwright and
     # the one browser it drives, from Nix, read-only for the sandbox.
     pkgs.playwright-test
