@@ -49,5 +49,5 @@ Option 2 leaves a reader of a record told of a product, a repository and a tool 
 ### Consequences
 
 - Rule core.1 rules out the string `boomdrive` where it ruled out `flywheel`; rule core.26 lets the site carry Boomdrive as the family's public name; rule core.31's incident names boomdrive-web. Each cites this record.
-- The site's family diagram, bar and footer come from `@agentplot/site-theme` at the version `site/package.json` names, v0.1.1, which says Flywheel. The site says Boomdrive throughout once that version moves to the theme's renamed release.
+- The site's family diagram, bar and footer come from `@agentplot/site-theme` at the version `site/package.json` names, v0.1.3, the theme's renamed release, so they say Boomdrive and draw timber in the loop.
 - No mention in sluice names a drive, a launch's mark or the original repository, and no word here is spelled enrol.
