@@ -265,27 +265,31 @@ impl<'a> Sluice<'a> {
         if own.is_empty() && !always {
             return Ok(Written::Written(line.version));
         }
-        let now = self.now();
-        let ending = !own.is_empty()
-            && line
-                .doc
-                .refused_writes
-                .iter()
-                .any(|c| !refused_writes::stands(c, &now));
+        // The time is asked only where a cause could end, so a write of a
+        // branch with none reads no clock.
+        let ending = match own.is_empty() || line.doc.refused_writes.is_empty() {
+            true => None,
+            false => Some(self.now()).filter(|now| {
+                line.doc
+                    .refused_writes
+                    .iter()
+                    .any(|c| !refused_writes::stands(c, now))
+            }),
+        };
         let refusal = self.refusal(&line.branch)?;
         let carried = refusal
             .as_ref()
             .map(|r| r.unwritten(&self.peer.name))
             .unwrap_or_default();
-        let changes = if carried.is_empty() && !ending {
+        let changes = if carried.is_empty() && ending.is_none() {
             own
         } else {
             let mut with = line.clone();
             for (at, event) in carried.iter().cloned() {
                 with.log(&at, event);
             }
-            if ending {
-                with.end_refused_writes(&now);
+            if let Some(now) = &ending {
+                with.end_refused_writes(now);
             }
             with.changes()
         };

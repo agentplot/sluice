@@ -57,9 +57,14 @@ pub fn ends(cause: &RefusedWrite) -> Option<DateTime<Utc>> {
 }
 
 /// The causes of `causes` that stand at `now`, newest last refusal first:
-/// what status and the overview show (design D5, D6).
-pub fn standing(causes: &[RefusedWrite], now: &str) -> Vec<RefusedWrite> {
-    let mut out: Vec<RefusedWrite> = causes.iter().filter(|c| stands(c, now)).cloned().collect();
+/// what status and the overview show (design D5, D6). `now` is asked only
+/// where there are causes, so a branch with none reads no clock.
+pub fn standing(causes: &[RefusedWrite], now: impl FnOnce() -> String) -> Vec<RefusedWrite> {
+    if causes.is_empty() {
+        return Vec::new();
+    }
+    let now = now();
+    let mut out: Vec<RefusedWrite> = causes.iter().filter(|c| stands(c, &now)).cloned().collect();
     out.sort_by_key(|c| std::cmp::Reverse(c.last_at()));
     out
 }

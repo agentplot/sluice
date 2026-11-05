@@ -465,7 +465,7 @@ impl Sluice<'_> {
             None => self.seams.branch.held(branch)?,
         };
         view.stale = stale.map(|r| r.to_string());
-        view.refused_writes = crate::refused_writes::standing(&view.refused_writes, &self.now());
+        view.refused_writes = crate::refused_writes::standing(&view.refused_writes, || self.now());
         Ok(view)
     }
 }

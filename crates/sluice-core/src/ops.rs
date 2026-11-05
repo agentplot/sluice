@@ -1277,7 +1277,8 @@ impl Sluice<'_> {
                     rounds: r.rounds,
                 })
             });
-        let refused_writes = crate::refused_writes::standing(&line.doc.refused_writes, &self.now());
+        let refused_writes =
+            crate::refused_writes::standing(&line.doc.refused_writes, || self.now());
         let on_remote =
             !refused_writes.is_empty() && self.seams.branch.copy(branch)? != HostCopy::Itself;
         Ok(Status {
