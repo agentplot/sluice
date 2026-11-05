@@ -34,6 +34,12 @@ pub trait Host {
     }
     /// `dir` as the worktree's canonical path, the key of its session runs.
     fn worktree(&self, dir: &str) -> Result<String>;
+    /// 147: the top of the git worktree that holds `dir`, canonical as
+    /// [`Host::worktree`] gives a path, where the repository keeps what
+    /// equips it; `None` where `dir` is in no worktree.
+    fn working_copy(&self, dir: &str) -> Result<Option<String>> {
+        self.worktree(dir).map(Some)
+    }
     /// The host's lock over its session runs' records, held until dropped.
     fn lock_sessions(&self) -> Result<Box<dyn Any>>;
     /// Record `run` as running, under the lock `held`.

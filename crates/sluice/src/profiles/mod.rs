@@ -411,6 +411,22 @@ impl crate::exec::Host for Bound {
             .ok_or_else(|| anyhow::anyhow!("{} is not UTF-8", path.display()))
     }
 
+    fn working_copy(&self, dir: &str) -> Result<Option<String>> {
+        let out = Command::new("git")
+            .args(["rev-parse", "--show-toplevel"])
+            .current_dir(dir)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()?;
+        let top = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if !out.status.success() || top.is_empty() {
+            return Ok(None);
+        }
+        self.worktree(&top).map(Some)
+    }
+
     fn lock_sessions(&self) -> Result<Box<dyn std::any::Any>> {
         Ok(Box::new(self.tests.host_sessions()?.lock()?))
     }
