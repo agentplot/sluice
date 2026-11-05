@@ -24,7 +24,7 @@ Checks take minutes, so something must keep advancing a branch while they run: f
 
 ## Decision outcome
 
-Option 3, in Rust. The core reads a branch's records and the seams' answers, decides the next actions, performs them and writes the records, and holds nothing between steps. A step takes the branch's lock, a file under the branch's record directory, so two steppers never act on one branch at once; a stepper that finds the lock held leaves. `sluice run` is what a team with only worktrunk uses; crew's conductor and flywheel's effects call `sluice step`. Because every state is in the records (26), stopping either is safe and starting either continues where the records stand (S10).
+Option 3, in Rust. The core reads a branch's records and the seams' answers, decides the next actions, performs them and writes the records, and holds nothing between steps. A step takes the branch's lock, a file under the branch's record directory, so two steppers never act on one branch at once; a stepper that finds the lock held leaves. `sluice run` is what a team with only worktrunk uses; crew's conductor and Boomdrive's effects call `sluice step`. Because every state is in the records (26), stopping either is safe and starting either continues where the records stand (S10).
 
 Option 1 needs a supervisor, which is a service manager the core may not name (core.1), and makes a driver that already loops run a second loop. Option 2 leaves a finished check with nothing to advance the branch unless something calls back, which is option 3 without the loop.
 
