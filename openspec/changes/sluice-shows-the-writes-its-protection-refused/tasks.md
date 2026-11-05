@@ -40,7 +40,7 @@ passing.
 
 ## 4. The hook against git
 
-- [ ] 4.1 In `crates/sluice/src/protect.rs`, make the module's doc comment and `hook`'s say a refusal is recorded once per cause and counted after, as 148 has it, and that what it tells the caller is unchanged. Nothing else of the hook changes (D3). True when `cargo clippy -p sluice --all-targets -- -D warnings` is clean.
+- [x] 4.1 In `crates/sluice/src/protect.rs`, make the module's doc comment and `hook`'s say a refusal is recorded once per cause and counted after, as 148 has it, and that what it tells the caller is unchanged. Nothing else of the hook changes (D3). True when `cargo clippy -p sluice --all-targets -- -D warnings` is clean.
 - [ ] 4.2 In `crates/sluice/tests/protect.rs`, on temporary repositories, add `a_timers_writes_are_one_cause`: `git -C <repository> update-ref refs/heads/bolt/x <new> <old>` run twice, each time with full revisions of its own, gives one `protected` line naming the host, `branch.json` one cause with `times` 2, and the same cause in `sluice status bolt/x --json` and `sluice overview --json`. Add `a_refused_writes_count_is_in_the_state_not_the_log`: after the two refusals, `log.jsonl` is moved to `log/1.jsonl`, and both still give `times` 2. Make every test that counts `protected` lines count them per cause: `every_way_git_moves_a_protected_branch_is_refused` still asserts one line for each git command it runs, each a cause of its own. True when `sluice exec main -- cargo test -p sluice --features tools --test protect` passes.
 - [ ] 4.3 Check the group: commit, then run `sluice exec main -- moon run cli:tools`. True when it passes.
 
