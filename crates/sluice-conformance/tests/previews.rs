@@ -120,11 +120,10 @@ fn the_command_is_the_previewed_revisions_and_the_limits_the_branchs() {
     assert_eq!(plan.timeout, Some(std::time::Duration::from_secs(300)));
     let (place, _) = s.make_preview(&plan).unwrap();
     let request = Sluice::preview_request(&plan, place);
-    assert_eq!(
-        request.tests["command"],
-        Setting::Text("make preview".into())
-    );
-    assert_eq!(request.tests["runner"], Setting::Text("command".into()));
+    assert_eq!(request.command.as_deref(), Some("make preview"));
+    // 147: the checkout is equipped by the runner the policy names.
+    assert_eq!(request.tests["runner"], Setting::Text("fake".into()));
+    assert!(!request.tests.contains_key("command"));
     assert!(request.required.is_empty() && !request.replay);
     assert_eq!(request.revision, old);
 }

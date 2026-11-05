@@ -5033,8 +5033,9 @@ fn exec_past_its_time_limit_is_timed_out_and_unrecorded() {
     assert_eq!(f.world.results_log(), "");
 }
 
-/// 89, 92: a command runs in the adopted place under the command runner
-/// with its words quoted for `sh -c`, gives its exit, and records
+/// 89, 92, 147: a command runs in the adopted place in place of the
+/// runner's checks, with its words quoted for `sh -c`, its worktree
+/// equipped by the runner the policy names; it gives its exit, and records
 /// nothing, clean worktree or not.
 #[test]
 fn exec_runs_a_command_and_records_nothing() {
@@ -5053,14 +5054,10 @@ fn exec_runs_a_command_and_records_nothing() {
     assert_eq!(out, "running moon run 'a b'\\''s'\n");
     let req = f.world.requests().pop().unwrap();
     assert!(req.required.is_empty());
-    assert_eq!(
-        req.tests.get("runner"),
-        Some(&sluice_seams::Setting::Text("command".into()))
-    );
-    assert_eq!(
-        req.tests.get("command"),
-        Some(&sluice_seams::Setting::Text("moon run 'a b'\\''s'".into()))
-    );
+    assert_eq!(req.command.as_deref(), Some("moon run 'a b'\\''s'"));
+    // `[tests]` is the policy's, which names no runner here.
+    assert_eq!(req.tests.get("runner"), None);
+    assert_eq!(req.tests.get("command"), None);
     assert_eq!(f.world.results_log(), "");
 }
 
