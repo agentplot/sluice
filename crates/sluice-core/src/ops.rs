@@ -375,6 +375,9 @@ pub struct Status {
     /// 133: this host's refusal of the branch's remote, while it stands
     /// (record 0061).
     pub refused: Option<Refused>,
+    /// 148: every host's causes of writes the protection refused that
+    /// stand now, newest last refusal first (design D5).
+    pub refused_writes: Vec<crate::records::RefusedWrite>,
 }
 
 /// 133: what this host's rounds of a branch could not read of its remote,
@@ -1290,6 +1293,7 @@ impl Sluice<'_> {
                 .map(|f| (f.id, f.name().to_string()))
                 .collect(),
             failed_releases: line.doc.failed_releases.clone(),
+            refused_writes: crate::refused_writes::standing(&line.doc.refused_writes, &self.now()),
             submissions: line.subs.into_values().collect(),
             warnings,
             stale: self.seams.state.stale(branch).map(|r| r.remote),

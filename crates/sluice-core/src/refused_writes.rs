@@ -56,6 +56,14 @@ pub fn ends(cause: &RefusedWrite) -> Option<DateTime<Utc>> {
     Some(time(&cause.last)? + SHOWN)
 }
 
+/// The causes of `causes` that stand at `now`, newest last refusal first:
+/// what status and the overview show (design D5, D6).
+pub fn standing(causes: &[RefusedWrite], now: &str) -> Vec<RefusedWrite> {
+    let mut out: Vec<RefusedWrite> = causes.iter().filter(|c| stands(c, now)).cloned().collect();
+    out.sort_by_key(|c| std::cmp::Reverse(c.last_at()));
+    out
+}
+
 fn time(at: &str) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(at)
         .ok()

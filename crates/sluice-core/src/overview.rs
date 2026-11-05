@@ -20,8 +20,8 @@ use sluice_seams::{Rev, Snapshot, Submitter, TaskProgress};
 use crate::line::Line;
 use crate::policy::{Policy, Rules};
 use crate::records::{
-    parse_lines, BranchHold, CandidateState, Event, FailedRelease, FailedTask, LogLine, RunState,
-    Submission, LOG_FILE,
+    parse_lines, BranchHold, CandidateState, Event, FailedRelease, FailedTask, LogLine,
+    RefusedWrite, RunState, Submission, LOG_FILE,
 };
 use crate::Sluice;
 
@@ -109,6 +109,12 @@ pub struct BranchView {
     /// tried again by the next round until then.
     #[serde(serialize_with = "held_checkouts")]
     pub held_checkouts: Vec<FailedRelease>,
+    /// 148: the causes of writes the protection refused, from the branch's
+    /// state: those standing when the view was read, newest last refusal
+    /// first, as `sluice status <branch> --json` lists them; `[]` in a
+    /// document from before it (design D6).
+    #[serde(default)]
+    pub refused_writes: Vec<RefusedWrite>,
     /// 26: what refused this host's read of the branch, its policy, its
     /// revision or its records, in the words it was refused with (133).
     /// Nothing else of the branch is read, and no other branch is hidden.
@@ -142,6 +148,7 @@ impl BranchView {
             recent_subjects: BTreeMap::new(),
             held: None,
             held_checkouts: Vec::new(),
+            refused_writes: Vec::new(),
             unread: Some(format!("{why:#}")),
             stale: None,
         }
@@ -303,6 +310,7 @@ pub fn branch_view(read: BranchRead) -> Result<BranchView> {
         recent_subjects,
         held: line.doc.held.clone(),
         held_checkouts: line.doc.failed_releases.clone(),
+        refused_writes: line.doc.refused_writes.clone(),
         unread: None,
         stale: None,
     })
@@ -457,6 +465,7 @@ impl Sluice<'_> {
             None => self.seams.branch.held(branch)?,
         };
         view.stale = stale.map(|r| r.to_string());
+        view.refused_writes = crate::refused_writes::standing(&view.refused_writes, &self.now());
         Ok(view)
     }
 }
@@ -748,6 +757,7 @@ mod tests {
             recent_subjects: BTreeMap::new(),
             held: None,
             held_checkouts: Vec::new(),
+            refused_writes: Vec::new(),
             unread: None,
             stale: None,
         }
