@@ -342,3 +342,48 @@ fn a_watch_reads_the_policy_again_once_the_branch_moves() {
     let last = lines.last().expect("a line once main moved");
     assert_eq!(last["branches"][0]["parallel"], 4, "{lines:?}");
 }
+
+/// 129, 148: `main` written by a command that is not sluice's, the
+/// refusal counted in its state; a watch, the host's reader, and a second
+/// watch beside it, which follows the reader's document; the follower's
+/// document gives `main` the cause the reader's gives it.
+#[test]
+fn a_followers_overview_carries_refused_writes() {
+    let d = OnDisk::new("watched-refused", MAIN);
+    d.land("a");
+    let (old, new) = (d.repo.rev("main"), d.repo.rev("main~1"));
+    let refused = support::git_command()
+        .current_dir(d.repo.dir())
+        .env("XDG_CONFIG_HOME", d.config.path())
+        .env("XDG_STATE_HOME", d.state.path())
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .args(["update-ref", "refs/heads/main", &new, &old])
+        .output()
+        .unwrap();
+    assert!(!refused.status.success(), "the write went through");
+
+    let reader = Watch::of(&d);
+    let read = reader.first_line();
+    let causes = &read["branches"][0]["refused_writes"];
+    assert_eq!(causes.as_array().map(Vec::len), Some(1), "{read}");
+    assert_eq!(causes[0]["times"], 1, "{read}");
+    assert!(
+        causes[0]["command"]
+            .as_str()
+            .is_some_and(|c| c.ends_with("update-ref refs/heads/main <revision> <revision>")),
+        "{read}"
+    );
+    assert!(
+        readers_doc(d.state.path()).is_some(),
+        "no reader's document"
+    );
+
+    let follower = Watch::of(&d);
+    let followed = follower.first_line();
+    assert_eq!(followed["branches"][0]["branch"], "main", "{followed}");
+    assert_eq!(
+        followed["branches"][0]["refused_writes"], *causes,
+        "{followed}"
+    );
+}
