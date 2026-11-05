@@ -35,5 +35,4 @@ with its check task passing.
 ## 3. The gate
 
 - [ ] 3.1 Confirm no check's output is read for a refusal: `rg -n 'openpty|Operation not permitted|denied' crates/sluice/src` finds nothing outside `denials.rs` and its tests. True when it holds and the commit message says so.
-- [ ] 3.2 Remove this change's item from `docs/architecture/_open.md`, and the file once it is empty. True when nothing there names this change.
-- [ ] 3.3 Run the gate's checks on the committed work with `sluice exec main`, and `sluice exec main -- moon run root:changes`. True when every task passes and the change validates strictly.
+- [ ] 3.2 Run the gate's checks on the committed work with `sluice exec main`, and `sluice exec main -- moon run root:changes`. True when every task passes and the change validates strictly.
