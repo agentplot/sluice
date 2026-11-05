@@ -579,3 +579,106 @@ fn s58_a_bolts_landing_worktree_submits_the_bolt_as_its_remote_holds_it() {
     h.step();
     assert_eq!(h.w().copy_of(BRANCH), Some(remote));
 }
+
+/// satisfies: S73, 124, 132, 148; rule core.47: a timer that sets this
+/// host's copy of the branch itself every five minutes for two hours is
+/// one command, logged once and counted 25 times; status and the overview
+/// give it from the branch's state, a part's close that takes the log's
+/// lines away changes nothing of it, and a day after its last refusal
+/// neither gives it and the next write logs its end with its count.
+#[test]
+fn s73_a_timers_refused_writes_are_one_command_counted_and_shown_until_a_day_after_the_last() {
+    use chrono::Duration;
+    use sluice_core::Peer;
+    use sluice_seams::{Changes, Rev};
+
+    let h = Harness::bolt();
+    let full = |n: u64| Rev::new(format!("{n:040x}"));
+    let command =
+        format!("git -C /home/me/app update-ref refs/heads/{BRANCH} <revision> <revision>");
+    let host = Peer::default().name;
+    let s = h.sluice();
+    let state = s.seams().state;
+    for run in 0..25 {
+        let (new, old) = (full(2 * run + 2), full(2 * run + 1));
+        let lock = state.lock(BRANCH).unwrap().expect("the lock is free");
+        s.record_protected(
+            BRANCH,
+            &old,
+            Some(&new),
+            &format!("git -C /home/me/app update-ref refs/heads/{BRANCH} {new} {old}"),
+        )
+        .unwrap();
+        drop(lock);
+        if run < 24 {
+            h.w().advance(Duration::minutes(5));
+        }
+    }
+    let protected = |h: &Harness| -> Vec<Event> {
+        h.events()
+            .into_iter()
+            .filter(|e| matches!(e, Event::Protected { .. } | Event::ProtectedEnded { .. }))
+            .collect()
+    };
+    assert_eq!(protected(&h).len(), 1, "one line for the timer");
+    let shown = |h: &Harness| {
+        let status = h.sluice().status(BRANCH).unwrap().refused_writes;
+        let overview = h
+            .sluice()
+            .overview(None)
+            .unwrap()
+            .into_iter()
+            .find(|b| b.branch == BRANCH)
+            .expect("the branch has records")
+            .refused_writes;
+        assert_eq!(status, overview, "status and the overview give the same");
+        status
+    };
+    let cause = shown(&h);
+    assert_eq!(cause.len(), 1);
+    let cause = cause[0].clone();
+    assert_eq!(
+        (cause.host.as_str(), cause.command.as_str(), cause.times),
+        (host.as_str(), command.as_str(), 25)
+    );
+    assert_eq!(
+        (&cause.from, cause.to.as_ref()),
+        (&full(49), Some(&full(50))),
+        "the last refused write's revisions"
+    );
+
+    // A part's close takes the log's lines away; the count is the state's.
+    {
+        let _lock = state.lock(BRANCH).unwrap().expect("the lock is free");
+        let log = h
+            .w()
+            .files(BRANCH)
+            .remove("log.jsonl")
+            .expect("the branch has a log");
+        let mut close = Changes::default();
+        close.put.insert("log/1.jsonl".into(), log);
+        close.remove.insert("log.jsonl".into());
+        state.write(BRANCH, h.version(), close).unwrap();
+    }
+    assert!(h.events().is_empty());
+    assert_eq!(shown(&h), std::slice::from_ref(&cause));
+
+    h.w().advance(Duration::days(1));
+    assert!(
+        shown(&h).is_empty(),
+        "a day after the last, neither gives it"
+    );
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    h.submit("unit/a");
+    assert_eq!(
+        protected(&h),
+        [Event::ProtectedEnded {
+            host,
+            reference: format!("refs/heads/{BRANCH}"),
+            command,
+            times: 25,
+            first: cause.first,
+            last: cause.last,
+        }]
+    );
+}
