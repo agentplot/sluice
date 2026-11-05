@@ -45,7 +45,7 @@ trust = ["confined", "sandbox"]
 | | `"command"` | Run one command; exit 0 passes. Every test runs every time. For a repository without moon. |
 | `command` | a command | With `runner = "command"`, the command to run, e.g. `"tests/suite"`. |
 | `release` | a command | The release command: what removes what the tests handed to another process to keep, a container above all. It runs once a checkout is released, under the same executor, toolchain and environment as the tests, ports included, and for a worktree when `sluice release` runs in it ([ADR 0016](/sluice/decisions/0016/)). One that fails holds the checkout; see [`release_retries`](#release_retries). A list, the command first, or a string run by `sh -c`. |
-| `toolchain` | a command | Prints the shell the tests run in, e.g. `["devenv", "print-dev-env"]`. It runs in the checkout, outside the sandbox; the tests run inside it with what it printed. sluice reads nothing from it. A toolchain that fails runs nothing: no result is recorded, the checkout is released, and the combination is tested again, blaming nobody. After three runs in a row whose tests could not run, the combination is not passed, and each test is named with the toolchain's exit and what it printed. |
+| `toolchain` | a command | Prints the shell the tests run in, e.g. `["devenv", "print-dev-env"]`. It is the first step of [equipping](#equipping-a-checkout) the checkout: it runs there, outside the sandbox, and every later step and the tests run inside it with what it printed. sluice reads nothing from it. A toolchain that fails runs nothing: no result is recorded, the checkout is released, and the combination is tested again, blaming nobody. After three runs in a row whose tests could not run, the combination is not passed, and each test is named with the toolchain's exit and what it printed. |
 | `not_run` | an exit or a list of them | Exits by which a test says it could not run here, e.g. `[77]`. A test that exits with one has no result. Unset, every exit but `0` is a fail. A test that needs a container engine, a database or a stack starts it, waits for it within the branch's [`timeout`](#timeout), and exits with one of these when it could not set up. |
 | `cold` | a list of tests | Tests that run with none of the host's [caches](#caches), e.g. `["#bench"]` for timings a warm cache would skew. Each is named as `required` names it: a moon target or a `#tag`, or the command with `runner = "command"`. A run that holds one gets no cache directory, no cache socket and none of the caches' variables, and its other tests lose only speed. |
 
@@ -53,6 +53,21 @@ Nothing in `[tests]` chooses what runs on a branch. With
 `runner = "command"`, its command runs on every gated branch; with
 `runner = "moon"`, each branch's [`required`](#required) names the tasks
 that must pass there.
+
+### Equipping a checkout
+
+Before every run, sluice equips the checkout, outside the executor, with
+the environment the run starts from. The `toolchain` runs first. Under
+moon, `proto install --config-mode upwards` follows where the checkout
+holds a `.prototools`, installing the tool versions it lists, then
+`moon --version`, which has to say 2.6 or later, then `moon setup`.
+Equipping stops at the first step that fails, and the run never starts.
+A combination that affects none of its branch's required tasks runs
+nothing, so it stops after `moon --version`. sluice equips an agent's
+worktree before `sluice exec` and a preview's checkout before its
+command the same way, and
+[`sluice equip`](/sluice/reference/commands/#sluice-equip) equips a
+worktree sluice did not make.
 
 ### moon, as your CI runs it
 
@@ -100,9 +115,11 @@ given to `sluice exec` after `--` is not held to `not_run`.
 
 sluice tests each combination in a clean checkout of its own, apart from
 every agent's worktree: `git worktree add --detach` at the combination,
-`git worktree remove` when its result is read. Nothing runs in it but the
-tests: no git or worktrunk hooks. Whatever a test needs before it runs
-goes in the toolchain or in a task the test depends on.
+`git worktree remove` when its result is read. What runs in it is
+sluice's [equipping](#equipping-a-checkout), the toolchain and, under
+moon, `proto install`, `moon --version` and `moon setup`, and then the
+tests. No git or worktrunk hooks run there. Whatever a test needs before
+it runs goes in the toolchain or in a task the test depends on.
 
 There is one way to make a checkout, so no key names it. An older
 `method = "git-worktree"` is still read; any other `method` is refused
@@ -156,7 +173,7 @@ comes from the branch's current revision. With no `[preview]` table,
 
 | key | values | meaning |
 |---|---|---|
-| `command` | a command | Brings the stack up in the preview's checkout, hands what must stay running to the tools that keep it (a container engine, a process manager), and exits; exit 0 is `up`. A list, the command first, or a string run by `sh -c`. It runs once, under the executor, with `[tests] toolchain`, and ends with its process group. |
+| `command` | a command | Brings the stack up in the preview's checkout, hands what must stay running to the tools that keep it (a container engine, a process manager), and exits; exit 0 is `up`. A list, the command first, or a string run by `sh -c`. It runs once, under the executor, in a checkout equipped as a combination's is, and ends with its process group. |
 | `addresses` | e.g. `{ web = "https://{name.web}.localhost" }` | What a person opens, by label. `{name.<port>}` is the preview's name for a port of `[checkout] ports`, `{port.<port>}` its number. A port not listed is refused. sluice fills them in and never contacts them. |
 | `timeout` | e.g. `"10m"` | How long the command may run; the branch's `timeout` when unset. |
 
@@ -344,10 +361,10 @@ key for any tree that returns to those inputs.
 ### `timeout`
 
 How long one combination's tests may run, for example `"20m"`; an hour
-when unset. It times the tests' command, from its start: making the
-checkout and loading the toolchain come before it. A run that hits it is
-ended with everything it started, recorded as timed out, and its
-submission is blamed. Tests that ended before it keep their results. A
+when unset. It times the tests' command, from its start: sluice makes
+and [equips](#equipping-a-checkout) the checkout before it. A run that
+hits it is ended with everything it started, recorded as timed out, and
+its submission is blamed. Tests that ended before it keep their results. A
 test still running has none, so nothing is recorded under its key: on a
 host that was slow, the same head submitted again is tested afresh.
 
