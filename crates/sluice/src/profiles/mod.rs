@@ -159,13 +159,19 @@ impl Bound {
         Ok(Bound {
             // A session's place's release command is the check seam's to
             // build; the binding hands the builder over (rule core.2).
-            checkout: places::Places::new(
-                &common,
-                crate::runs::Runs::new(&common, program.clone()),
-            )
-            .with_release(Box::new(move |place, tests, limits, dir| {
-                checks::release_request(place, tests, limits, jobs, &caches, dir)
-            })),
+            checkout: {
+                let places =
+                    places::Places::new(&common, crate::runs::Runs::new(&common, program.clone()))
+                        .with_release(Box::new(move |place, tests, limits, dir| {
+                            checks::release_request(place, tests, limits, jobs, &caches, dir)
+                        }));
+                // 35 as amended: the tests' directory standing for the
+                // user's, where they name one.
+                match std::env::var_os(places::USER_SCRATCH_VAR).filter(|d| !d.is_empty()) {
+                    Some(dir) => places.with_scratch_root(dir.into()),
+                    None => places,
+                }
+            },
             tests: {
                 let checks = checks::Checks::new(&common, program, instance);
                 // 88: with sluice's app, GitHub Actions is the pool this

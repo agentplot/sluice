@@ -96,6 +96,10 @@ export GIT_AUTHOR_NAME=dev GIT_AUTHOR_EMAIL=dev@example.com GIT_COMMITTER_NAME=d
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never
 unset GIT_ASKPASS SSH_ASKPASS
 export XDG_STATE_HOME=$ROOT/state XDG_CONFIG_HOME=$ROOT/config
+# The directory standing for the user's, where each checkout's scratch is
+# made (35), inside the scene: the gate's sandbox lets --check write no
+# other, and --teardown removes it with the scene.
+export SLUICE_USER_SCRATCH=$ROOT/scratch
 # The host's bound, the same on every machine the scene is built on: two runs, one of them the agent's check.
 mkdir -p "$XDG_CONFIG_HOME/sluice"
 printf '[runs]\nmax = 2\n' >"$XDG_CONFIG_HOME/sluice/config.toml"

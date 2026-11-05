@@ -10,7 +10,7 @@ decision-makers:
 # Records are local JSON, and policy is a checked-in file read from the branch
 
 Deciders: the user, in the requirements interview of 2026-10-08.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 26, 27, 53, 56, C.6, C.7; ADR 0004; flywheel's recutils records as the form set aside.
+Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 26, 27, 53, 56, C.6, C.7; ADR 0004; Boomdrive's recutils records as the form set aside.
 
 ## Context and problem statement
 
@@ -18,7 +18,7 @@ C.6 put entries and verdicts under the common git directory in "the record form 
 
 ## Considered options
 
-1. Records in recutils, as flywheel writes them; policy in the operator's host configuration.
+1. Records in recutils, as Boomdrive writes them; policy in the operator's host configuration.
 2. Records as JSON, one document per entry and one JSON Lines log of runs and verdicts per branch; policy as a TOML file checked into the repository and read from the branch's revision.
 
 ## Decision outcome

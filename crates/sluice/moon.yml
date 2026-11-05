@@ -20,9 +20,10 @@ tasks:
   # The tests of the sandbox executor start a sandbox themselves, which
   # macOS refuses inside another one, so no branch checked under the
   # sandbox requires them; the pre-merge hook runs them, outside any.
-  # Every test whose name holds `sandbox` is here and nowhere else.
+  # Every test whose name holds `sandbox` is here and nowhere else, the
+  # sandbox scenarios of `sluice exec` (`--test exec`) among them.
   sandbox:
-    command: 'cargo test -p sluice --features tools --test checks --test moon --test stack -- sandbox'
+    command: 'cargo test -p sluice --features tools --test checks --test moon --test stack --test exec -- sandbox'
     inputs: ['/crates/sluice/**/*', '/crates/sluice-seams/**/*', '/crates/sluice-core/**/*', '/crates/sluice-fakes/**/*', '/Cargo.toml', '/Cargo.lock', '/devenv.nix', '/devenv.lock']
     tags: [cargo-test, starts-a-sandbox, needs-localhost]
     options: {runFromWorkspaceRoot: true}

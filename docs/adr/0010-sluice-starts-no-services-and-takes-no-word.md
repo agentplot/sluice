@@ -26,7 +26,7 @@ The statement gave sluice a service seam that brought up what a candidate's chec
 
 Option 3. No merge queue starts services: GitHub's, Mergify's, Trunk's, Aviator's, Bors and Zuul all build a candidate and wait on a job that brings up its own, and the tools a repository already has do it (moon's `wait` and `cleanup` dependencies, `devenv test`, testcontainers, a test framework's setup), on ports they pick. What sluice owes the checks is a clean place, its path and a scratch directory in the environment, a time limit recorded as its own outcome (66), and the checks run as one process group ended with the run or the place, so nothing left running fails the next candidate and is blamed on the wrong submission (32).
 
-Whether work may be submitted is the caller's decision: crew or flywheel submits only approved work, so sluice admits every submission it is given (27). And the session's own tests before submitting were an approximation of the candidate's gate, which sluice now runs on the exact combination that lands.
+Whether work may be submitted is the caller's decision: crew or Boomdrive submits only approved work, so sluice admits every submission it is given (27). And the session's own tests before submitting were an approximation of the candidate's gate, which sluice now runs on the exact combination that lands.
 
 Option 2 still has sluice managing processes it cannot see into.
 
