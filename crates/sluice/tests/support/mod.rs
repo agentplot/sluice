@@ -628,10 +628,35 @@ pub fn tcp_engine(status: &'static str) -> u16 {
     port
 }
 
-/// A local TCP port nothing listens on, as far as the test can tell.
+/// A local TCP port nothing listens on, as far as the test can tell: bound
+/// and let go, so the kernel may hand it to the next bind on the host
+/// before the test connects.
 pub fn closed_port() -> u16 {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     listener.local_addr().unwrap().port()
+}
+
+/// What `probe` makes of a local port nothing listens on: the first of a
+/// few such ports at which `refused` holds of it, or else the last tried.
+/// A port let go may be bound by another socket on the host before the
+/// probe connects, which then answers in the refusal's place (the queue's
+/// cli:test, 2026-11-05: a test's TLS engine beside this one resetting the
+/// connection); a port held bound cannot stand in, since macOS drops a
+/// connection to it where Linux refuses it.
+pub fn at_a_closed_port<T>(
+    mut probe: impl FnMut(u16) -> T,
+    refused: impl Fn(u16, &T) -> bool,
+) -> (u16, T) {
+    let mut tried = None;
+    for _ in 0..5 {
+        let port = closed_port();
+        let seen = probe(port);
+        if refused(port, &seen) {
+            return (port, seen);
+        }
+        tried = Some((port, seen));
+    }
+    tried.unwrap()
 }
 
 /// A fake container engine over TLS on a local TCP port, answering `200`

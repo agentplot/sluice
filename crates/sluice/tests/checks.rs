@@ -749,15 +749,17 @@ fn an_engine_at_a_tcp_address_is_looked_for_there() {
     let c = checks(&repo).with_engine_endpoints(vec![local(port, None)]);
     assert_eq!(c.unmet(&docker()).unwrap(), None);
 
-    let closed = support::closed_port();
-    let c = checks(&repo).with_engine_endpoints(vec![local(closed, None)]);
-    assert_eq!(
-        c.unmet(&docker()).unwrap().as_deref(),
-        Some(
-            format!("no container engine answers: tcp://127.0.0.1:{closed} refused the connection")
-                .as_str()
-        )
+    let refusal = |closed: u16| {
+        format!("no container engine answers: tcp://127.0.0.1:{closed} refused the connection")
+    };
+    let (closed, why) = support::at_a_closed_port(
+        |closed| {
+            let c = checks(&repo).with_engine_endpoints(vec![local(closed, None)]);
+            c.unmet(&docker()).unwrap()
+        },
+        |closed, why| why.as_deref() == Some(refusal(closed).as_str()),
     );
+    assert_eq!(why.as_deref(), Some(refusal(closed).as_str()));
 
     let failing = support::tcp_engine("HTTP/1.0 500 Internal Server Error");
     let c = checks(&repo).with_engine_endpoints(vec![local(failing, None)]);
