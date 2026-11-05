@@ -53,7 +53,7 @@ passing.
 ## 5. S72 on the binary
 
 - [x] 5.1 Add `crates/sluice/tests/equip_tools.rs`, `#![cfg(feature = "tools")]` as `crates/sluice/tests/exec.rs` is, on a scratch repository committed with a `.prototools`, a `[preview]` table whose command is `moon run app:preview`, and a policy naming the moon runner and a toolchain outside the repository that puts the stand-ins on the path, the stand-in `moon` absent until the stand-in `proto install` writes it. Add `exec_equips_before_its_command`, `a_preview_is_equipped_before_its_command`, `equip_installs_the_pins_before_moon_runs`, `equip_adopts_nothing`, `equip_runs_at_the_top_of_the_worktree`, `equip_refuses_a_revision_it_cannot_read` and `equip_refuses_a_folder_in_no_worktree`, as the equip spec's scenarios say, each citing 147 and S72. `equip_adopts_nothing` lists the host's state for the worktree's record and ports before and after, and runs `sluice release` there. True when `sluice exec main -- cargo test -p sluice --features tools --test equip_tools` passes.
-- [ ] 5.2 In `crates/sluice/moon.yml`, add `--test equip_tools` to the `tools` task's command. True when `sluice exec main -- moon run cli:tools` passes and its output names the file's tests.
+- [x] 5.2 In `crates/sluice/moon.yml`, add `--test equip_tools` to the `tools` task's command. True when `sluice exec main -- moon run cli:tools` passes and its output names the file's tests.
 - [ ] 5.3 On this repository, time `sluice exec main -- true` on main and on this branch, three runs each in a warm worktree, and say the difference in the group's commit message (design, "Risks / Trade-offs"). True when the commit message says it.
 
 ## 6. Say it to the operator
