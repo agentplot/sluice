@@ -1201,8 +1201,11 @@ impl Sluice<'_> {
             .collect())
     }
 
-    /// 1: report an update to `branch` that protection refused, in its
-    /// log. The caller holds the branch's lock.
+    /// 1, 124: report an update to `branch` that protection refused on
+    /// this host. 148: logged once for each cause while it stands, its
+    /// command with each full revision as `<revision>`, and counted in the
+    /// branch's document after (rule core.47). The caller holds the
+    /// branch's lock.
     pub fn record_protected(
         &self,
         branch: &str,
@@ -1211,17 +1214,9 @@ impl Sluice<'_> {
         by: &str,
     ) -> Result<()> {
         let now = self.now();
+        let reference = format!("refs/heads/{branch}");
         self.update(branch, |l| {
-            l.log(
-                &now,
-                Event::Protected {
-                    reference: format!("refs/heads/{branch}"),
-                    from: from.clone(),
-                    to: to.cloned(),
-                    by: by.to_string(),
-                    host: Some(self.peer.name.clone()),
-                },
-            );
+            l.refuse_write(&now, &self.peer.name, &reference, by, from, to);
             Ok(())
         })
     }

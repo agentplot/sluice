@@ -251,28 +251,41 @@ impl<'a> Sluice<'a> {
     /// Write `line`'s changes. 133: the lines of this host's refusal of
     /// the branch's remote not yet in its log go in the same write, each at
     /// the time it happened, and once written are marked so (design D5).
+    /// 148: a write that changes something ends the causes of refused
+    /// writes past their day, logging each end (design D4).
     fn write(&self, line: &Line) -> Result<Written> {
         self.carry(line, false)
     }
 
     /// [`Sluice::write`]; with `always`, the refusal's lines are written
-    /// even when `line` changes nothing else.
+    /// even when `line` changes nothing else, and no cause of refused
+    /// writes is ended unless it does.
     fn carry(&self, line: &Line, always: bool) -> Result<Written> {
         let own = line.changes();
         if own.is_empty() && !always {
             return Ok(Written::Written(line.version));
         }
+        let now = self.now();
+        let ending = !own.is_empty()
+            && line
+                .doc
+                .refused_writes
+                .iter()
+                .any(|c| !refused_writes::stands(c, &now));
         let refusal = self.refusal(&line.branch)?;
         let carried = refusal
             .as_ref()
             .map(|r| r.unwritten(&self.peer.name))
             .unwrap_or_default();
-        let changes = if carried.is_empty() {
+        let changes = if carried.is_empty() && !ending {
             own
         } else {
             let mut with = line.clone();
             for (at, event) in carried.iter().cloned() {
                 with.log(&at, event);
+            }
+            if ending {
+                with.end_refused_writes(&now);
             }
             with.changes()
         };
