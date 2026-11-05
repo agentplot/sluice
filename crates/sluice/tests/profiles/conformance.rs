@@ -945,7 +945,8 @@ fn peers_read_the_last_fetched_state_when_the_remote_is_unreachable() {
 /// core.10): a step under a one-second limit starts a run whose check
 /// sleeps for minutes, and returns while it goes on; with no step running,
 /// the run's supervisor ends its process group within the grace after the
-/// limit, and the next step records the run timed out.
+/// limit and writes how the run ended, and the step after that records
+/// the run timed out.
 #[test]
 fn a_run_is_ended_at_its_limit_after_the_step_that_started_it() {
     use nix::errno::Errno;
@@ -970,21 +971,35 @@ fn a_run_is_ended_at_its_limit_after_the_step_that_started_it() {
         assert!(started.elapsed() < Duration::from_secs(30), "never started");
         std::thread::sleep(Duration::from_millis(20));
     };
-    // The limit, its grace, and the wait after the kill that follows it.
-    let ended_by = Duration::from_secs(1 + 10 + 5);
+    // From the run's start, when its group was made: the limit, its grace,
+    // and the wait after the kill that follows it.
+    let ended_by = Instant::now() + Duration::from_secs(1 + 10 + 5);
     while killpg(group, None) != Err(Errno::ESRCH) {
         assert!(
-            started.elapsed() < ended_by,
+            Instant::now() < ended_by,
             "the run outlived its limit by its grace"
         );
         std::thread::sleep(Duration::from_millis(50));
     }
+    // The group gone is not yet the run's end: the supervisor writes how
+    // the run ended after it, the last of its ending, and a step before
+    // that reads the run still going and records nothing.
+    while sluice::runs::ended(&dir).unwrap().is_none() {
+        assert!(
+            Instant::now() < ended_by,
+            "the run's group is gone, and its supervisor wrote no end within its limit and grace"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
 
-    r.step();
+    assert_eq!(r.step(), Step::Stepped);
     let events = r.events();
     let timed_out = events.iter().any(|e| {
         matches!(e, Event::Result { combination, result, .. }
             if *combination == tested.revision && result == "timed out")
     });
-    assert!(timed_out, "{events:?}");
+    assert!(
+        timed_out,
+        "the step after the run's end recorded no timed-out result: {events:?}"
+    );
 }
