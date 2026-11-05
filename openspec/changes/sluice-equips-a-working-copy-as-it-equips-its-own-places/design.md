@@ -228,7 +228,16 @@ and shows nothing.
    and `GIT_WORK_TREE` removed, canonical as `Host::worktree` gives a
    path. The default answers `Host::worktree(dir)`, so the tests' hosts
    need nothing new. A folder in no worktree, a bare repository's among
-   them, is refused: `refused: <folder> is in no worktree`.
+   them, is refused: `refused: <folder> is in no worktree`. sluice
+   opens the repository at the folder a command runs in, and a folder
+   below a worktree's top is no repository to it, so `main` opens
+   `Bound` for `sluice equip` alone at that top
+   (`profiles::worktree_top`, which `working_copy` also asks), and at
+   the folder itself where git finds no worktree. Every other command
+   still opens the folder it runs in. The path not taken: every command
+   opened at its worktree's top, which would let `sluice exec` run from
+   a folder below the top and adopt that folder as the worktree (rules
+   core.16, core.18).
 2. `--at` is resolved with `Host::revision`. A name that is no commit
    here is refused: `refused: <at> names no revision here`.
 3. `Sluice::equip`. `NoBranch` is refused with `crate::no_branch`'s

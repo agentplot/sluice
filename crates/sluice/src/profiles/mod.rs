@@ -353,6 +353,24 @@ fn gone(dir: &Path) -> bool {
     !dir.is_dir()
 }
 
+/// The top of the git worktree holding `dir`, as git prints it; `None`
+/// where git finds no worktree, as in a bare repository's git directory.
+pub fn worktree_top(dir: &Path) -> Result<Option<String>> {
+    let out = Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(dir)
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()?;
+    let top = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if !out.status.success() || top.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(top))
+}
+
 /// The branch checked out in `dir`.
 fn checked_out(dir: &Path) -> Result<String> {
     let out = Command::new("git")
@@ -412,19 +430,10 @@ impl crate::exec::Host for Bound {
     }
 
     fn working_copy(&self, dir: &str) -> Result<Option<String>> {
-        let out = Command::new("git")
-            .args(["rev-parse", "--show-toplevel"])
-            .current_dir(dir)
-            .env_remove("GIT_DIR")
-            .env_remove("GIT_WORK_TREE")
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output()?;
-        let top = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        if !out.status.success() || top.is_empty() {
-            return Ok(None);
+        match worktree_top(Path::new(dir))? {
+            Some(top) => self.worktree(&top).map(Some),
+            None => Ok(None),
         }
-        self.worktree(&top).map(Some)
     }
 
     fn lock_sessions(&self) -> Result<Box<dyn std::any::Any>> {

@@ -132,7 +132,10 @@ now gains, the equipping before it, is `equip`'s.
 - `crates/sluice-fakes/src/lib.rs`: the fake's start reads the request's
   command; `FakeTests::equip`, scripted, and what it was asked.
 - `crates/sluice/src/lib.rs`, `crates/sluice/src/equip.rs` (new): the
-  command, its output, its refusals and exits.
+  command, its output, its refusals and exits;
+  `crates/sluice/src/main.rs` and `crates/sluice/src/profiles/mod.rs`:
+  the repository opened at the top of the worktree `sluice equip` runs
+  in.
 - `crates/sluice/moon.yml`: `tools` runs `--test equip_tools`.
 - Tests: `crates/sluice/tests/checks.rs`,
   `crates/sluice/tests/profiles/moon.rs`, `crates/sluice/tests/equip.rs`
@@ -168,6 +171,8 @@ crates/sluice-core/src/step.rs
 crates/sluice-fakes/src/lib.rs
 crates/sluice/src/lib.rs
 crates/sluice/src/equip.rs
+crates/sluice/src/main.rs
+crates/sluice/src/profiles/mod.rs
 crates/sluice/moon.yml
 crates/sluice/tests/**
 crates/sluice-conformance/tests/previews.rs
