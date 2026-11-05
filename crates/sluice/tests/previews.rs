@@ -158,10 +158,9 @@ fn a_preview_returns_its_addresses_once_its_command_starts() {
     assert!(lines[3].starts_with("  ports: SLUICE_PORT_API="), "{out}");
     let req = f.world.requests().pop().unwrap();
     assert_eq!(req.place.name, name);
-    assert_eq!(
-        req.tests["command"],
-        sluice_seams::Setting::Text("moon run app:preview".into())
-    );
+    assert_eq!(req.command.as_deref(), Some("moon run app:preview"));
+    // 147: `[tests]` is the policy's, which names no runner here.
+    assert!(!req.tests.contains_key("runner") && !req.tests.contains_key("command"));
     assert_eq!(req.place.env["SLUICE_NAME_WEB"], p.names["SLUICE_NAME_WEB"]);
     // 102: counted while it runs.
     assert_eq!(sluice_seams::Tests::running(&f.tests).unwrap().sessions, 1);

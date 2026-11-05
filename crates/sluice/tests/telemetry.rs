@@ -424,6 +424,7 @@ fn telemetry_is_off_unless_asked() {
                 Setting::Text("env > \"$SLUICE_TMP/env\"".into()),
             ),
         ]),
+        command: None,
         replay: true,
         system: None,
     };

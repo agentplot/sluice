@@ -114,6 +114,7 @@ fn request(repo: &Repo, name: &str, required: &[&str], since: Option<&str>) -> R
         limit: Some(Duration::from_secs(120)),
         limits: Limits::default(),
         tests: moon(),
+        command: None,
         replay: true,
         system: None,
     }
@@ -734,7 +735,8 @@ fn moon_options_in_sluices_environment_change_nothing() {
     );
 }
 
-/// A moon below 2.6 is refused by its version.
+/// 147, C.2: a moon below 2.6 fails the version check, and the run's
+/// start with it, in words naming its version and moon 2.6.
 #[test]
 fn an_old_moon_is_refused() {
     let repo = workspace("moon-old");
@@ -762,8 +764,10 @@ fn an_old_moon_is_refused() {
             "toolchain".into(),
             Setting::List(vec![enter.to_string_lossy().into()]),
         );
-        let err = checks(&repo).start(&req).unwrap_err();
-        assert!(format!("{err:#}").contains(version), "{err:#}");
+        let err = format!("{:#}", checks(&repo).start(&req).unwrap_err());
+        assert!(err.starts_with("moon --version: "), "{err}");
+        assert!(err.contains(&format!("moon {version}")), "{err}");
+        assert!(err.contains("moon 2.6"), "{err}");
     }
 }
 

@@ -521,6 +521,7 @@ fn a_run_s_checks_join_the_round() {
                 Setting::Text("env > \"$SLUICE_TMP/env\"".into()),
             ),
         ]),
+        command: None,
         replay: true,
         system: None,
     };

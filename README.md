@@ -241,6 +241,7 @@ sets it up.
 | `sluice withdraw <id>` | Take a submission out of the queue; one already withdrawn exits `0` and says so. `--json` for scripts. |
 | `sluice protect` | Install the branch-protection hook; `--remove` takes it out. Warns of a worktree that has checked out a protected branch. `--json` for scripts. |
 | `sluice exec <branch>` | Run the tests this worktree's head affects against the branch, in the worktree, under the host's bound; `-- <command>` runs a command instead. |
+| `sluice equip <branch>` | Make this worktree ready for the branch's runner, as sluice makes every checkout ready before it runs anything there: the toolchain, then under moon the tool versions `.prototools` lists, moon's version check and `moon setup`. It holds nothing. `--json` for scripts. |
 | `sluice release` | Release this worktree: its release command, what its runs left running, its ports. `--json` for scripts. |
 | `sluice preview <branch> <revision>` | Bring up a revision the branch has landed, at the addresses the policy's `[preview]` names, until it is released. `--wait`, `--json`. |
 | `sluice previews` | Every preview on the host, with its addresses and state. |

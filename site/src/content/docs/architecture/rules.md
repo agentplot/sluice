@@ -63,6 +63,7 @@ out, what it allows and the clauses and decisions it rests on.
 - **[core.20](https://github.com/agentplot/sluice/blob/main/docs/architecture/core.md#details)** The core writes no working copy it neither made nor adopted: a worktree that has checked out a branch sluice lands on is reported, never moved, and never stops a landing.
 - **[core.23](https://github.com/agentplot/sluice/blob/main/docs/architecture/core.md#details)** An instance claims no run while a place it made belongs to a candidate with a verdict, an obsolete one, or a claim it no longer holds, until each such place is released or held.
 - **[core.30](https://github.com/agentplot/sluice/blob/main/docs/architecture/core.md#details)** A place's scratch is under a short directory of the host user's own, apart from every repository, at a path that grows with neither the place's name, its checkout's location nor the repository's, and the place's record names it.
+- **[core.46](https://github.com/agentplot/sluice/blob/main/docs/architecture/core.md#details)** Every working copy sluice runs a check or a command in, and one its caller asks `sluice equip` of, is equipped by one sequence of the check profile's: the toolchain the policy names, then the runner's install of what the working copy pins, its version check and its setup, each outside the executor with a run's environment, stopping at the first that fails; one sluice only reads in is equipped up to its version check; and an equip adopts and keeps nothing.
 
 ## Design and records
 

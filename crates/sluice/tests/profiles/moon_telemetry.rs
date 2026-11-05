@@ -66,6 +66,7 @@ fn moon_runs_with_otel_while_telemetry_is_on() {
         limit: Some(Duration::from_secs(60)),
         limits: Limits::default(),
         tests: Settings::new(),
+        command: None,
         replay: true,
         system: None,
     };

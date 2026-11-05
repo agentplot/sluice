@@ -840,6 +840,7 @@ impl Sluice<'_> {
                     limit: from.rules.timeout,
                     limits: from.policy.limits.clone(),
                     tests: from.policy.tests.clone(),
+                    command: None,
                     // 108: the cache supplies outputs; a replay counts only
                     // through a trusted pass recorded for its key.
                     replay: !r.no_replay,

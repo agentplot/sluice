@@ -23,7 +23,9 @@ timeout = "10m"                    # default: the branch's timeout
   limits from the branch's current revision.
 - The command brings the stack up, hands what stays running to the tools that
   keep it (a container engine, a process manager), and exits. Exit 0 is `up`.
-  It runs once under the executor with the toolchain.
+  It runs once under the executor, in a checkout equipped as a combination's
+  is: the toolchain, then under moon the tool versions `.prototools` lists,
+  `moon --version` and `moon setup`.
 - It gets `SLUICE_PORT_<NAME>`, `SLUICE_NAME_<NAME>` (one DNS label per port,
   for a proxy), `SLUICE_BRANCH`, `SLUICE_REVISION` and `SLUICE_PLACE`.
 - Only a preview gets names. An agent's worktree under `sluice exec`, and a

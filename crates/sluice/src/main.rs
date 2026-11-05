@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -92,10 +92,7 @@ fn main() {
         }
         std::process::exit(hook(cli, retry));
     }
-    let bound = match std::env::current_dir()
-        .map_err(anyhow::Error::from)
-        .and_then(|dir| Bound::open(&dir, retry))
-    {
+    let bound = match repository_dir(&cli).and_then(|dir| Bound::open(&dir, retry)) {
         Ok(b) => b,
         Err(e) => {
             eprintln!("sluice: {e:#}");
@@ -149,6 +146,22 @@ fn main() {
         t.finish();
     }
     std::process::exit(code);
+}
+
+/// The folder the repository is opened from: the one the command runs
+/// in, but for `sluice equip`, which equips the worktree holding that
+/// folder (147), the worktree's top where git finds one, so it runs from
+/// any folder of the worktree. Every other command opens the folder it
+/// runs in, so none takes a folder below a worktree's top for the
+/// worktree.
+fn repository_dir(cli: &Cli) -> anyhow::Result<PathBuf> {
+    let dir = std::env::current_dir()?;
+    if let Some(Command::Equip { .. }) = &cli.command {
+        if let Some(top) = sluice::profiles::worktree_top(&dir)? {
+            return Ok(PathBuf::from(top));
+        }
+    }
+    Ok(dir)
 }
 
 /// 124: the protection hook, judging the repository git names: `GIT_DIR`

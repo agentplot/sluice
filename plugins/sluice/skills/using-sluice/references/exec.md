@@ -1,4 +1,4 @@
-# `sluice exec` and `sluice release`
+# `sluice exec`, `sluice equip` and `sluice release`
 
 ## Which form
 
@@ -60,6 +60,48 @@ the run's output goes to stderr.
 
 Exit codes: `0` all passed, `1` a test failed, was not run, could not run
 or timed out, `2` refused, `130` Ctrl-C (which ends the run).
+
+## `sluice equip`
+
+Every checkout, worktree and preview sluice runs anything in is equipped
+first, by the branch's policy: the toolchain `[tests] toolchain` names,
+then, under moon, `proto install --config-mode upwards` where the working
+copy holds a `.prototools`, `moon --version` (2.6 or later) and
+`moon setup`, stopping at the first that fails. `sluice exec` does it
+before your checks or your command, so it needs no `sluice equip` first.
+
+`sluice equip <branch>` does that and nothing else, in the worktree it runs
+in:
+
+```console
+$ sluice equip feature/x
+equipping /src/app-x for feature/x at c41e8f2
+toolchain: passed
+proto install: passed
+moon --version: passed
+moon setup: failed
+  exited 1: error: no such toolchain
+```
+
+- Run it in a worktree sluice did not make, before moon runs there by
+  hand: a fresh clone, or a worktree a tool made for an agent. A tool that
+  makes worktrees for agents runs it in each, so each is ready as sluice's
+  own checkouts are.
+- From any folder of the worktree, it equips the worktree's top, where its
+  `.prototools` is.
+- It reads the policy at the branch's current revision. `--at <revision>`
+  reads the policy there instead, whether or not that policy names the
+  branch, for a worktree made on a base the branch has not landed.
+- It holds nothing: no ports, no record of the worktree, no part of the
+  host's bound, and it never waits for room. Nothing is left for
+  `sluice release` after it.
+
+`--json` prints one document on stdout:
+`{branch, revision, steps[{step,passed,words}]}`; a refusal prints
+`{error{kind,message,next}}` and no steps.
+
+Exit codes: `0` every step passed, or there was none, `1` a step failed,
+its words beneath it, `2` refused.
 
 ## Release
 

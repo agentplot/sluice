@@ -19,6 +19,7 @@ sidebar:
 | `sluice withdraw <id>` | Take a submission out of the queue. One already withdrawn is said so, and exits `0`; one landed is refused. `--json` for scripts. |
 | `sluice protect` | Install the branch-protection hook; `--remove` takes it out. Warns of a worktree that has checked out a protected branch. `--json` for scripts. |
 | `sluice exec <branch>` | Run the tests this worktree's head affects against the branch, in the worktree, under the host's bound, with the worktree's ports and the branch's limits. `-- <command>` runs a command instead. `--json` for scripts. |
+| `sluice equip <branch>` | Make this worktree ready for the branch's runner, as sluice makes every checkout ready before it runs anything there: the toolchain, then under moon the tool versions `.prototools` lists installed, moon's version checked and `moon setup`. It holds nothing. `--at <revision>` reads the policy at that revision; `--json` for scripts ([below](#sluice-equip)). |
 | `sluice release` | Release this worktree: run the policy's release command, end what its runs left running, and free its ports. The worktree stays. `--accept-failure` frees its ports and ends its runs without running the release command. `--json` for scripts. |
 | `sluice preview <branch> <revision>` | Bring up a revision the branch has landed in a checkout of its own, at addresses a person opens, until it is released. `--wait` returns once its command has ended; `--json` for scripts. |
 | `sluice previews` | Every preview on the host, with its addresses and state. `--json` for scripts. |
@@ -216,7 +217,12 @@ something it needs.
 `sluice exec <branch> -- <command>` runs any command the same way, with
 `SLUICE_CHECKOUT`, `SLUICE_TMP` and the ports in its environment, and
 exits with the command's exit code. It records nothing, and is not held
-to `not_run`.
+to `not_run`. Before the command, sluice equips the worktree as it
+equips a combination's checkout, by the runner the branch's policy
+names ([`sluice equip`](#sluice-equip)). Under moon, the command runs
+once `moon setup` has, though it runs in place of moon's tasks. When a
+step fails, the command never starts, and exec exits `3`, naming the
+step and what it printed.
 
 Run suites through `sluice exec` so the agents on one host take turns
 under its bound rather than all running at once. A quick, narrow call,
@@ -233,6 +239,82 @@ What a run starts and hands to another process, a container above all,
 stays up between runs, so the next run finds it. `sluice release` ends
 it. `wt submit` releases the worktree before worktrunk removes it; on
 plain git, run `sluice release` before `git worktree remove`.
+
+## `sluice equip`
+
+Before sluice runs anything in a working copy, a combination's checkout,
+an agent's worktree or a preview's checkout, it equips that working copy
+by the branch's policy, in this order:
+
+1. [`[tests] toolchain`](/sluice/reference/configuration/#tests-how-tests-run),
+   where the policy names one, whose output is the environment of every
+   step after it.
+2. Under the moon runner, `proto install --config-mode upwards`, where
+   the working copy holds a `.prototools`: the tool versions it lists,
+   installed.
+3. `moon --version`, which has to say moon 2.6 or later.
+4. `moon setup`.
+
+Under the `command` runner, the toolchain is the only step. Each step
+runs outside the executor, with the environment a run of the branch's
+tests starts from and nothing else of the caller's. The first step that
+fails ends the sequence. A combination whose checkout could not be
+equipped could not start: its tests are not run, each named with the
+step and what it printed, and nobody is blamed.
+
+`sluice equip <branch>` runs those steps, through `moon setup`, in the
+worktree it runs in, and nothing else. Run it in a worktree sluice did
+not make, before anything runs moon there by hand: a fresh clone, or a
+worktree a tool made for an agent. A tool that makes worktrees for
+agents runs it in each, so each one is ready as sluice's own checkouts
+are. Run from any folder of the worktree, it equips the worktree's top,
+where its `.prototools` is.
+
+```console
+$ sluice equip main
+equipping /home/me/wt/unit-a for main at c41e8f2
+toolchain: passed
+proto install: passed
+moon --version: passed
+moon setup: failed
+  exited 1: error: no such toolchain
+```
+
+Each step gets its own line, saying how it went. A failed step's words
+follow it, indented: sluice's reason, `exited 1` here, then what the
+step printed. Under the `command` runner with no toolchain, it says
+there is nothing to equip.
+
+It reads the policy at the branch's current revision. `--at <revision>`
+reads the policy at that revision instead, whether or not its
+`[branches]` tables name the branch. The revision need not be one the
+branch has landed, so a worktree made from another revision is equipped
+as its own policy says.
+
+`--json` prints one document on stdout and nothing on stderr:
+
+```console
+$ sluice equip main --at 2eb676c --json
+{"branch":"main","revision":"2eb676c8e45d…","steps":[{"step":"toolchain","passed":true,"words":""},{"step":"proto install","passed":true,"words":""},{"step":"moon --version","passed":true,"words":"moon 2.6.1"},{"step":"moon setup","passed":true,"words":""}]}
+```
+
+`steps` lists each step as it ran: its name, whether it passed, and its
+words, what it printed, its output then its error stream. The
+toolchain's words are its error stream alone, since its output is the
+environment. `revision` names in full the revision whose policy was
+read.
+
+It exits `0` when every step passed, or when there was none, and `1`
+when one failed. It refuses, runs nothing and exits `2` for a branch it
+can't read, a revision that is no commit here or holds no
+`.config/sluice.toml`, and a folder in no worktree. Without `--at`, it
+refuses a branch whose policy names no `[branches]` table for it. Under
+`--json` a refusal is the error document, with no `steps`.
+
+It holds nothing: no ports, no record of the worktree and no part of
+the host's bound, and it never waits for room in it. Nothing of its own
+is left once it answers, so `sluice release` there finds nothing to
+release.
 
 ## Worktrees sluice holds
 
@@ -542,6 +624,12 @@ runs, waiting while the bound is full and never using the part
 `[runs] reserved` keeps for submissions; once it has ended, the preview
 counts against nothing. Ctrl-C while it waits leaves the preview to be
 started by the next `sluice preview` of that revision.
+
+Before the command, sluice equips the preview's checkout as it equips a
+combination's ([`sluice equip`](#sluice-equip)): under moon, it installs
+the tool versions `.prototools` lists, checks moon's version and runs
+`moon setup` first. When a step fails, the command never starts, and
+`sluice preview` exits `3`, naming the step and what it printed.
 
 Asking again for a revision that has a preview gives that preview, its
 names, ports and state unchanged, and starts nothing, so a caller that
@@ -1110,6 +1198,9 @@ failed, and `0` otherwise, nothing to release included.
 not run, could not run or timed out, `2` on a refusal, and `130` when stopped with
 Ctrl-C, which ends the run. With a command, it exits with the command's
 code.
+
+`sluice equip` exits `0` when every step passed, or there was none, `1`
+when one failed, and `2` on a refusal.
 
 ## Who runs the rounds
 

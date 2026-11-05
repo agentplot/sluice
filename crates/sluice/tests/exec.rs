@@ -1027,17 +1027,21 @@ fn exec_looks_for_the_engine_at_a_tcp_address() {
         format!("{engine}\n")
     );
 
-    std::fs::remove_file(s.worktree.join("reached")).unwrap();
-    let closed = at(support::closed_port());
-    let out = exec(&closed);
-    let said = text(&out);
-    assert_eq!(out.status.code(), Some(2), "{said}");
-    assert!(
-        said.contains(&format!(
+    let refusal = |closed: &str| {
+        format!(
             "refused: no container engine answers: {closed} refused the connection; \
              bolt/x's tests ask for one ([executor] docker = true)"
-        )),
-        "{said}"
+        )
+    };
+    let (closed, out) = support::at_a_closed_port(
+        |port| {
+            let _ = std::fs::remove_file(s.worktree.join("reached"));
+            exec(&at(port))
+        },
+        |port, out| text(out).contains(&refusal(&at(port))),
     );
+    let said = text(&out);
+    assert_eq!(out.status.code(), Some(2), "{said}");
+    assert!(said.contains(&refusal(&at(closed))), "{said}");
     assert!(!s.worktree.join("reached").exists(), "nothing runs");
 }

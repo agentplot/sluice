@@ -7,25 +7,29 @@
 //! candidate; every moon command gets the run's environment, so nothing of
 //! `MOON_*` in sluice's own reaches it, and stdin from `/dev/null`.
 //!
-//! Before any moon command, outside the executor: when the place has a
-//! `.prototools` (the file listing the exact version of each tool the
-//! repository uses, moon among them), `proto install` installs those
-//! versions, with the repository's toolchain sourced so proto is on the
-//! path. moon cannot run until it is installed, and nothing is installed
-//! inside the executor.
+//! Before any moon command, the working copy is equipped by the check
+//! profile's one sequence (147; rule core.46; [`super::checks::Equipping`]):
+//! the repository's toolchain, then the steps [`Moon::steps`] gives, each
+//! outside the executor with the repository's toolchain sourced: `proto
+//! install` where the working copy has a `.prototools` (the file listing
+//! the exact version of each tool the repository uses, moon among them),
+//! `moon --version`, and `moon setup`. moon cannot run until it is
+//! installed, and nothing is installed inside the executor. A working copy
+//! moon is only asked a question in is equipped up to the version check;
+//! one moon runs a task in, through the setup.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, Output, Stdio};
 
 use anyhow::{anyhow, bail, Context as _, Result};
 use serde_json::Value;
 use sluice_seams::{
-    KeptOutTask, NotRun, Outcome, Reads, Rev, RunDetail, Source, TaskProgress, TaskResult,
-    TaskState,
+    EquipStep, KeptOutTask, NotRun, Outcome, Reads, Rev, RunDetail, Source, TaskProgress,
+    TaskResult, TaskState, Through,
 };
 
-use super::checks::{cold_tests, not_run_reason, Context, Plan};
+use super::checks::{cold_tests, failed, not_run_reason, passed, printed, why, Context, Plan};
 
 /// The run report, relative to the place.
 const REPORT: &str = ".moon/cache/runReport.json";
@@ -40,6 +44,13 @@ const FLOOR: (u64, u64) = (2, 6);
 
 pub struct Moon;
 
+/// 147: one of the runner's steps of equipping a working copy, with how
+/// far an equip goes before it is run.
+pub struct Step {
+    pub through: Through,
+    pub run: fn(&Moon, &Context) -> EquipStep,
+}
+
 /// A task as `moon query tasks` lists it.
 struct Task {
     tags: Vec<String>,
@@ -52,9 +63,6 @@ impl Moon {
         let request = cx.request;
         let place = &request.place.path;
         let cold = cold_tests(&request.tests)?;
-        self.install(cx)?;
-        self.check_version(cx)?;
-
         let tasks = self.tasks(cx, &[])?;
         let mut wanted = BTreeSet::new();
         for r in &request.required {
@@ -116,10 +124,6 @@ impl Moon {
             });
         }
         let cold = holds_cold(&tasks, &targets, &cold);
-        // The workspace's toolchains, installed here, outside the executor,
-        // where a download and a write to the user's home are allowed: the
-        // run inside only uses them.
-        self.command(cx, &["setup"], &[])?;
         let jobs = cx.jobs.to_string();
         let mut argv: Vec<&str> = vec!["moon"];
         // ADR 0014: moon exports beside sluice; it reads no parent trace,
@@ -146,11 +150,10 @@ impl Moon {
     }
 
     /// ADR 0050: which of the required checks moon keeps out of its CI
-    /// mode in the place, read as `plan` reads them, before any run: moon
-    /// installed and checked, then `moon query tasks`. Runs no task.
+    /// mode in the place, read as `plan` reads them, before any run, by
+    /// `moon query tasks` in a working copy equipped up to the version
+    /// check (147). Runs no task.
     pub fn kept_out(&self, cx: &Context) -> Result<Vec<KeptOutTask>> {
-        self.install(cx)?;
-        self.check_version(cx)?;
         let tasks = self.tasks(cx, &[])?;
         Ok(kept_out(&tasks, &cx.request.required))
     }
@@ -164,8 +167,6 @@ impl Moon {
     pub fn reads(&self, cx: &Context, pairs: &[(Rev, Rev)]) -> Result<Vec<Reads>> {
         let place = &cx.request.place.path;
         let at = cx.request.revision.as_str();
-        self.install(cx)?;
-        self.check_version(cx)?;
         let tasks = self.tasks(cx, &[])?;
         let mut wanted = BTreeSet::new();
         for r in &cx.request.required {
@@ -348,13 +349,56 @@ impl Moon {
             .collect()
     }
 
+    /// 147: the runner's steps of equipping `working_copy`, in the order
+    /// they run, after the toolchain: `proto install` where it has a
+    /// `.prototools`, and `moon --version`, before moon is asked anything;
+    /// then `moon setup`, before moon runs a task.
+    pub fn steps(&self, working_copy: &Path) -> Vec<Step> {
+        let mut steps = Vec::new();
+        if working_copy.join(".prototools").exists() {
+            steps.push(Step {
+                through: Through::Reading,
+                run: Moon::install,
+            });
+        }
+        steps.push(Step {
+            through: Through::Reading,
+            run: Moon::check_version,
+        });
+        steps.push(Step {
+            through: Through::Running,
+            run: Moon::setup,
+        });
+        steps
+    }
+
     /// The tool versions the place's `.prototools` lists, installed. Only
     /// the repository's own file is read, not the user's global one.
-    fn install(&self, cx: &Context) -> Result<()> {
-        if cx.request.place.path.join(".prototools").exists() {
-            self.run(cx, &["proto", "install", "--config-mode", "upwards"], &[])?;
-        }
-        Ok(())
+    fn install(&self, cx: &Context) -> EquipStep {
+        let argv = ["proto", "install", "--config-mode", "upwards"];
+        self.step(cx, "proto install", &argv).0
+    }
+
+    /// The workspace's toolchains, installed in the place, outside the
+    /// executor, where a download and a write to the user's home are
+    /// allowed: the run inside only uses them.
+    fn setup(&self, cx: &Context) -> EquipStep {
+        self.step(cx, "moon setup", &["moon", "setup"]).0
+    }
+
+    /// 147: `argv` run as [`Moon::run`] runs it, as the step `name`, with
+    /// what it printed where it could be run.
+    fn step(&self, cx: &Context, name: &str, argv: &[&str]) -> (EquipStep, Option<Output>) {
+        let out = match self.spawn(cx, argv, &[]) {
+            Ok(out) => out,
+            Err(e) => return (failed(name, &format!("could not be run: {e}"), ""), None),
+        };
+        let said = printed(&[&out.stdout, &out.stderr]);
+        let step = match why(out.status) {
+            None => passed(name, said),
+            Some(reason) => failed(name, &reason, &said),
+        };
+        (step, Some(out))
     }
 
     fn command(&self, cx: &Context, args: &[&str], env: &[(&str, &str)]) -> Result<Vec<u8>> {
@@ -364,17 +408,11 @@ impl Moon {
     }
 
     fn run(&self, cx: &Context, argv: &[&str], env: &[(&str, &str)]) -> Result<Vec<u8>> {
-        let argv = cx.argv(argv);
-        let out = Command::new(&argv[0])
-            .args(&argv[1..])
-            .current_dir(&cx.request.place.path)
-            .env_clear()
-            .envs(cx.env)
-            .envs(env.iter().copied())
-            .stdin(Stdio::null())
-            .output()
-            .with_context(|| format!("running {}", argv.join(" ")))?;
+        let out = self
+            .spawn(cx, argv, env)
+            .with_context(|| format!("running {}", cx.argv(argv).join(" ")))?;
         if !out.status.success() {
+            let argv = cx.argv(argv);
             bail!(
                 "{} exited {}: {}",
                 argv.join(" "),
@@ -385,20 +423,40 @@ impl Moon {
         Ok(out.stdout)
     }
 
-    fn check_version(&self, cx: &Context) -> Result<()> {
-        let out = self.command(cx, &["--version"], &[])?;
-        let text = String::from_utf8_lossy(&out);
-        let version =
-            parse_version(&text).ok_or_else(|| anyhow!("moon --version said {:?}", text.trim()))?;
-        if version < FLOOR {
-            bail!(
-                "{} is below moon {}.{}, the oldest the moon runner reads",
-                text.trim(),
-                FLOOR.0,
-                FLOOR.1
-            );
-        }
-        Ok(())
+    /// `argv` in the place with the toolchain sourced, the run's
+    /// environment and `env` its own, and stdin from `/dev/null`.
+    fn spawn(&self, cx: &Context, argv: &[&str], env: &[(&str, &str)]) -> std::io::Result<Output> {
+        let argv = cx.argv(argv);
+        Command::new(&argv[0])
+            .args(&argv[1..])
+            .current_dir(&cx.request.place.path)
+            .env_clear()
+            .envs(cx.env)
+            .envs(env.iter().copied())
+            .stdin(Stdio::null())
+            .output()
+    }
+
+    /// The moon the toolchain puts first, refused below `FLOOR`. Its
+    /// reasons are its own and quote what it printed on its output, so
+    /// only its error stream follows them.
+    fn check_version(&self, cx: &Context) -> EquipStep {
+        const NAME: &str = "moon --version";
+        let (step, out) = self.step(cx, NAME, &["moon", "--version"]);
+        let Some(out) = out.filter(|_| step.passed) else {
+            return step;
+        };
+        let text = String::from_utf8_lossy(&out.stdout);
+        let text = text.trim();
+        let reason = match parse_version(text) {
+            None => format!("moon --version said {text:?}"),
+            Some(version) if version < FLOOR => format!(
+                "{text} is below moon {}.{}, the oldest the moon runner reads",
+                FLOOR.0, FLOOR.1
+            ),
+            Some(_) => return step,
+        };
+        failed(NAME, &reason, &printed(&[&out.stderr]))
     }
 
     /// Every task moon knows in the place, with its tags; with
@@ -1662,5 +1720,156 @@ mod tests {
         assert_eq!(parse_version("moon 1.41.7"), Some((1, 41)));
         assert!(parse_version("moon").is_none());
         assert!((2, 5) < FLOOR && (2, 6) >= FLOOR && (3, 0) > FLOOR && (2, 10) > FLOOR);
+    }
+
+    /// 147: a working copy of a test's own, with a stand-in `moon` first
+    /// on the path that runs `moon`, and a request whose place it is.
+    struct Copy {
+        dir: PathBuf,
+        request: sluice_seams::RunRequest,
+        env: BTreeMap<String, String>,
+    }
+
+    impl Copy {
+        fn new(name: &str, moon: &str) -> Copy {
+            use std::os::unix::fs::PermissionsExt as _;
+            let dir = std::env::temp_dir()
+                .join(format!("sluice-moon-step-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            let bin = dir.join("bin");
+            std::fs::create_dir_all(&bin).unwrap();
+            let stand_in = bin.join("moon");
+            std::fs::write(&stand_in, format!("#!/bin/sh\n{moon}\n")).unwrap();
+            std::fs::set_permissions(&stand_in, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let request = sluice_seams::RunRequest {
+                place: sluice_seams::Place {
+                    name: "equip".into(),
+                    path: dir.clone(),
+                    tmp: dir.join("tmp"),
+                    env: BTreeMap::new(),
+                },
+                revision: Rev::new(""),
+                required: Vec::new(),
+                since: None,
+                limit: None,
+                limits: sluice_seams::Limits::default(),
+                tests: sluice_seams::Settings::new(),
+                command: None,
+                replay: false,
+                system: None,
+            };
+            let env = BTreeMap::from([(
+                "PATH".to_string(),
+                format!("{}:/usr/bin:/bin", bin.display()),
+            )]);
+            Copy { dir, request, env }
+        }
+
+        fn cx(&self) -> Context<'_> {
+            Context {
+                request: &self.request,
+                env: &self.env,
+                toolchain: None,
+                jobs: 1,
+            }
+        }
+
+        /// The step `name`, running `script` by `sh`.
+        fn step(&self, name: &str, script: &str) -> EquipStep {
+            Moon.step(&self.cx(), name, &["/bin/sh", "-c", script]).0
+        }
+    }
+
+    impl Drop for Copy {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    /// 147: a step's words are what it printed, its output then its error
+    /// stream, each trimmed; one that failed is given its exit before them.
+    #[test]
+    fn a_step_that_exited_is_given_its_exit_then_what_it_printed() {
+        let copy = Copy::new("exited", "");
+        assert_eq!(
+            copy.step(
+                "moon setup",
+                "echo ' out '; echo 'error: no such toolchain' >&2; exit 3"
+            ),
+            EquipStep {
+                step: "moon setup".into(),
+                passed: false,
+                words: "exited 3: out\nerror: no such toolchain".into(),
+            }
+        );
+        assert_eq!(
+            copy.step("moon setup", "echo set up; echo warned >&2"),
+            EquipStep {
+                step: "moon setup".into(),
+                passed: true,
+                words: "set up\nwarned".into(),
+            }
+        );
+    }
+
+    /// 147: a step that failed printing nothing is given its exit alone.
+    #[test]
+    fn a_step_that_printed_nothing_is_given_its_exit_alone() {
+        let copy = Copy::new("silent", "");
+        let step = copy.step("moon setup", "exit 1");
+        assert!(!step.passed);
+        assert_eq!(step.words, "exited 1");
+    }
+
+    /// 147: a step a signal ended says which.
+    #[test]
+    fn a_step_ended_by_a_signal_says_which() {
+        let copy = Copy::new("signal", "");
+        let step = copy.step("moon setup", "kill -9 $$");
+        assert!(!step.passed);
+        assert_eq!(step.words, "ended by signal 9");
+    }
+
+    /// 147: a step whose program could not be started says why.
+    #[test]
+    fn a_step_whose_program_could_not_be_run_says_why() {
+        let copy = Copy::new("unrun", "");
+        let missing = copy.dir.join("no-such-proto");
+        let (step, out) = Moon.step(&copy.cx(), "proto install", &[missing.to_str().unwrap()]);
+        assert!(out.is_none());
+        assert!(!step.passed);
+        assert!(
+            step.words.starts_with("could not be run: "),
+            "{}",
+            step.words
+        );
+    }
+
+    /// 147, C.2: a moon below 2.6 fails the version check, in words that
+    /// name it and the oldest the runner reads.
+    #[test]
+    fn a_moon_below_the_floor_fails_its_version_check() {
+        let copy = Copy::new("old", "echo 'moon 2.5.3'");
+        assert_eq!(
+            Moon.check_version(&copy.cx()),
+            EquipStep {
+                step: "moon --version".into(),
+                passed: false,
+                words: "moon 2.5.3 is below moon 2.6, the oldest the moon runner reads".into(),
+            }
+        );
+        let copy = Copy::new("new", "echo 'moon 2.6.1'");
+        assert!(Moon.check_version(&copy.cx()).passed);
+    }
+
+    /// 147: a version moon cannot say fails the version check, quoting
+    /// what it said, and what it printed on its error stream after it.
+    #[test]
+    fn a_version_that_cannot_be_read_fails_its_version_check() {
+        let copy = Copy::new("unread", "echo 'not a version'; echo 'no workspace' >&2");
+        assert_eq!(
+            Moon.check_version(&copy.cx()).words,
+            r#"moon --version said "not a version": no workspace"#
+        );
     }
 }

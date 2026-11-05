@@ -13,7 +13,7 @@
 
 use anyhow::Result;
 use sluice_seams::{
-    GoneRelease, Limits, Place, PreviewPlace, Progress, Rev, RunHandle, RunRequest, Setting,
+    GoneRelease, Limits, Place, PreviewPlace, Progress, Rev, RunHandle, RunRequest,
 };
 
 use crate::policy::{Policy, Preview};
@@ -170,16 +170,11 @@ impl Sluice<'_> {
     }
 
     /// 98, 103: the run of a preview's command: the previewed revision's
-    /// `[tests]`, its toolchain and release command included, running the
-    /// command; the branch's executor and limits; never a check, so
-    /// nothing is required and nothing replayed.
+    /// `[tests]`, its toolchain and release command included, the
+    /// checkout equipped by the runner it names (147) and the command run
+    /// in place of its checks; the branch's executor and limits; never a
+    /// check, so nothing is required and nothing replayed.
     pub fn preview_request(plan: &PreviewPlan, place: Place) -> RunRequest {
-        let mut tests = plan.policy.tests.clone();
-        tests.insert("runner".into(), Setting::Text("command".into()));
-        tests.insert(
-            "command".into(),
-            Setting::Text(shell_line(&plan.preview.command)),
-        );
         RunRequest {
             place,
             revision: plan.revision.clone(),
@@ -187,7 +182,8 @@ impl Sluice<'_> {
             since: None,
             limit: plan.timeout,
             limits: plan.limits.clone(),
-            tests,
+            tests: plan.policy.tests.clone(),
+            command: Some(shell_line(&plan.preview.command)),
             replay: false,
             system: None,
         }

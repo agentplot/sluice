@@ -11,8 +11,8 @@ use std::time::{Duration, Instant};
 use sluice::instance::{HostCache, Instance};
 use sluice::profiles::checks::{docker_host, Checks, Endpoint, EngineTls};
 use sluice_seams::{
-    AtBound, Limits, Network, Outcome, Place, Progress, RunReport, RunRequest, Setting, Settings,
-    Source, Tests,
+    AtBound, Equip, EquipStep, Limits, Network, Outcome, Place, Progress, RunReport, RunRequest,
+    Setting, Settings, Source, Tests, Through,
 };
 use support::{Repo, Scratch};
 
@@ -64,6 +64,7 @@ fn request(repo: &Repo, name: &str, tests: Settings) -> RunRequest {
         limit: Some(Duration::from_secs(60)),
         limits: Limits::default(),
         tests,
+        command: None,
         replay: true,
         system: None,
     }
@@ -748,15 +749,17 @@ fn an_engine_at_a_tcp_address_is_looked_for_there() {
     let c = checks(&repo).with_engine_endpoints(vec![local(port, None)]);
     assert_eq!(c.unmet(&docker()).unwrap(), None);
 
-    let closed = support::closed_port();
-    let c = checks(&repo).with_engine_endpoints(vec![local(closed, None)]);
-    assert_eq!(
-        c.unmet(&docker()).unwrap().as_deref(),
-        Some(
-            format!("no container engine answers: tcp://127.0.0.1:{closed} refused the connection")
-                .as_str()
-        )
+    let refusal = |closed: u16| {
+        format!("no container engine answers: tcp://127.0.0.1:{closed} refused the connection")
+    };
+    let (closed, why) = support::at_a_closed_port(
+        |closed| {
+            let c = checks(&repo).with_engine_endpoints(vec![local(closed, None)]);
+            c.unmet(&docker()).unwrap()
+        },
+        |closed, why| why.as_deref() == Some(refusal(closed).as_str()),
     );
+    assert_eq!(why.as_deref(), Some(refusal(closed).as_str()));
 
     let failing = support::tcp_engine("HTTP/1.0 500 Internal Server Error");
     let c = checks(&repo).with_engine_endpoints(vec![local(failing, None)]);
@@ -1122,10 +1125,7 @@ fn a_toolchain_that_fails_could_not_start_the_tests() {
     let (code, said) = run(&["submit", "bolt/x", "--no-wait", "--json"]);
     assert_eq!(code, Some(0), "{said}");
 
-    let words = format!(
-        "could not start: [tests] toolchain sh -c echo '{STALE_LOCK}' >&2; exit 1 exited \
-         exit status: 1: {STALE_LOCK}"
-    );
+    let words = format!("could not start: toolchain: exited 1: {STALE_LOCK}");
     let records = repo.dir().join(".git/sluice");
     let log = || std::fs::read_to_string(records.join("bolt/x/log.jsonl")).unwrap();
     let lost = |log: &str| {
@@ -1163,4 +1163,445 @@ fn a_toolchain_that_fails_could_not_start_the_tests() {
     );
     let (_, said) = run(&["status", "1"]);
     assert!(said.contains("[tests] (could not run)"), "{said}");
+}
+
+/// What the stand-in `moon query tasks` answers: one task, `app:test`, run
+/// in CI; with `--affected`, none.
+const TASKS: &str = r#"{"tasks":{"app":{"test":{"target":"app:test","tags":[],"options":{}}}}}"#;
+
+/// What the stand-in `moon setup` prints when it fails.
+const NO_TOOLCHAIN: &str = "error: no such toolchain";
+
+/// 147; rule core.46: a repository equipped by stand-ins for proto and
+/// moon, which log each call to a file the test reads, and a toolchain of
+/// the test's own that logs its call and puts them on the path. The
+/// stand-in `moon` is absent until the stand-in `proto install` writes it,
+/// where the repository pins its tools; otherwise it is there from the
+/// start.
+struct Equippable {
+    repo: Repo,
+    tools: Scratch,
+}
+
+impl Equippable {
+    /// `pinned`: whether the repository has a `.prototools`; `setup`: what
+    /// the stand-in `moon setup` runs.
+    fn new(name: &str, pinned: bool, setup: &str) -> Equippable {
+        use std::os::unix::fs::PermissionsExt as _;
+        let repo = Repo::new(name);
+        let tools = Scratch::new(&format!("{name}-tools"));
+        let bin = tools.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let log = tools.path().join("log");
+        let script = |path: &std::path::Path, body: String| {
+            std::fs::write(path, format!("#!/bin/sh\n{body}")).unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        let moon = format!(
+            "echo \"moon $*\" >> '{log}'\n\
+             case \"$1\" in\n\
+             --version) echo 'moon 2.6.1' ;;\n\
+             setup) {setup} ;;\n\
+             query) case \"$*\" in *--affected*) echo '{{\"tasks\":{{}}}}' ;; *) echo '{TASKS}' ;; esac ;;\n\
+             esac\n",
+            log = log.display(),
+        );
+        script(&tools.path().join("moon.in"), moon);
+        script(
+            &bin.join("proto"),
+            format!(
+                "echo \"proto $*\" >> '{log}'\n\
+                 if [ \"$1\" = install ]; then cp '{tools}/moon.in' '{bin}/moon'; fi\n",
+                log = log.display(),
+                tools = tools.path().display(),
+                bin = bin.display(),
+            ),
+        );
+        script(
+            &tools.path().join("toolchain"),
+            format!(
+                "echo toolchain >> '{log}'\necho 'export PATH=\"{bin}:$PATH\"'\n",
+                log = log.display(),
+                bin = bin.display(),
+            ),
+        );
+        if pinned {
+            repo.write(".prototools", "moon = \"2.6.1\"\n");
+        } else {
+            std::fs::copy(tools.path().join("moon.in"), bin.join("moon")).unwrap();
+        }
+        Equippable { repo, tools }
+    }
+
+    /// `[tests]` naming `runner` and the test's toolchain.
+    fn tests(&self, runner: &str) -> Settings {
+        let toolchain = self.tools.path().join("toolchain");
+        Settings::from([
+            ("runner".into(), Setting::Text(runner.into())),
+            (
+                "toolchain".into(),
+                Setting::List(vec![toolchain.to_string_lossy().into()]),
+            ),
+        ])
+    }
+
+    /// The working copy equipped through `through` by `tests`.
+    fn equip(&self, tests: Settings, through: Through) -> Vec<EquipStep> {
+        checks(&self.repo)
+            .equip(&Equip {
+                working_copy: self.repo.dir().to_path_buf(),
+                tests,
+                through,
+            })
+            .unwrap()
+            .steps
+    }
+
+    /// Each call the stand-ins and the toolchain logged, in order.
+    fn log(&self) -> Vec<String> {
+        std::fs::read_to_string(self.tools.path().join("log"))
+            .unwrap_or_default()
+            .lines()
+            .map(String::from)
+            .collect()
+    }
+}
+
+/// The steps' names and whether each passed.
+fn outcomes(steps: &[EquipStep]) -> Vec<(&str, bool)> {
+    steps.iter().map(|s| (s.step.as_str(), s.passed)).collect()
+}
+
+/// 147; rule core.46: a working copy that pins its tools, nothing of them
+/// installed, is equipped by the toolchain, `proto install`, `moon
+/// --version` and `moon setup`, in that order, each passing.
+#[test]
+fn equip_runs_the_sequence_in_order() {
+    let w = Equippable::new("equip-order", true, "true");
+    let steps = w.equip(w.tests("moon"), Through::Running);
+    assert_eq!(
+        outcomes(&steps),
+        [
+            ("toolchain", true),
+            ("proto install", true),
+            ("moon --version", true),
+            ("moon setup", true),
+        ]
+    );
+    assert_eq!(
+        w.log(),
+        [
+            "toolchain",
+            "proto install --config-mode upwards",
+            "moon --version",
+            "moon setup",
+        ]
+    );
+}
+
+/// 147; rule core.46: a working copy with no `.prototools` runs no `proto
+/// install` and names none, `moon --version` following the toolchain;
+/// equipped only for reading, it is never set up.
+#[test]
+fn equip_installs_only_what_is_pinned() {
+    let w = Equippable::new("equip-unpinned", false, "true");
+    let steps = w.equip(w.tests("moon"), Through::Reading);
+    assert_eq!(
+        outcomes(&steps),
+        [("toolchain", true), ("moon --version", true)]
+    );
+    let steps = w.equip(w.tests("moon"), Through::Running);
+    assert_eq!(
+        outcomes(&steps),
+        [
+            ("toolchain", true),
+            ("moon --version", true),
+            ("moon setup", true),
+        ]
+    );
+    assert!(
+        !w.log().iter().any(|l| l.starts_with("proto")),
+        "{:?}",
+        w.log()
+    );
+}
+
+/// 147; rule core.46: under the command runner the toolchain is the one
+/// step, even where the working copy pins its tools; with no toolchain
+/// there is no step.
+#[test]
+fn equip_under_the_command_runner_runs_the_toolchain_alone() {
+    let w = Equippable::new("equip-command", true, "true");
+    let steps = w.equip(w.tests("command"), Through::Running);
+    assert_eq!(outcomes(&steps), [("toolchain", true)]);
+    assert_eq!(w.log(), ["toolchain"]);
+    let bare = Settings::from([("runner".into(), Setting::Text("command".into()))]);
+    assert_eq!(w.equip(bare, Through::Running), []);
+}
+
+/// 147; rule core.46: the sequence stops at the step that failed, which
+/// is given its exit and what it printed.
+#[test]
+fn equip_stops_at_the_step_that_failed() {
+    let w = Equippable::new(
+        "equip-stops",
+        true,
+        &format!("echo '{NO_TOOLCHAIN}' >&2; exit 1"),
+    );
+    let steps = w.equip(w.tests("moon"), Through::Running);
+    assert_eq!(
+        outcomes(&steps),
+        [
+            ("toolchain", true),
+            ("proto install", true),
+            ("moon --version", true),
+            ("moon setup", false),
+        ]
+    );
+    assert_eq!(steps[3].words, format!("exited 1: {NO_TOOLCHAIN}"));
+}
+
+/// 147; rule core.46: a toolchain that fails is the one step, its words
+/// its exit and its error stream, and nothing of the runner runs.
+#[test]
+fn a_toolchain_that_fails_runs_nothing_after_it() {
+    let w = Equippable::new("equip-toolchain-fails", true, "true");
+    let log = w.tools.path().join("log");
+    let mut tests = w.tests("moon");
+    tests.insert(
+        "toolchain".into(),
+        Setting::List(vec![
+            "sh".into(),
+            "-c".into(),
+            format!(
+                "echo toolchain >> '{}'; echo '{STALE_LOCK}' >&2; exit 1",
+                log.display()
+            ),
+        ]),
+    );
+    assert_eq!(
+        w.equip(tests, Through::Running),
+        [EquipStep {
+            step: "toolchain".into(),
+            passed: false,
+            words: format!("exited 1: {STALE_LOCK}"),
+        }]
+    );
+    assert_eq!(w.log(), ["toolchain"]);
+}
+
+/// 147, 71; rule core.46: an equip keeps nothing once it answers: the
+/// directory its toolchain's script went in is gone, and nothing of its
+/// own is left among the check seam's runs.
+#[test]
+fn equip_keeps_nothing() {
+    let w = Equippable::new("equip-keeps-nothing", true, "true");
+    let was = w.tools.path().join("tmp-was");
+    let mut tests = w.tests("moon");
+    tests.insert(
+        "toolchain".into(),
+        Setting::List(vec![
+            "sh".into(),
+            "-c".into(),
+            format!(
+                "echo \"$SLUICE_TMP\" > '{}'; echo 'export PATH=\"{}:$PATH\"'",
+                was.display(),
+                w.tools.path().join("bin").display()
+            ),
+        ]),
+    );
+    let steps = w.equip(tests, Through::Running);
+    assert!(steps.iter().all(|s| s.passed), "{steps:?}");
+    let tmp = std::fs::read_to_string(&was).unwrap();
+    let tmp = std::path::Path::new(tmp.trim());
+    let runs = w.repo.dir().join(".git/sluice/.runs");
+    assert!(tmp.starts_with(&runs), "{}", tmp.display());
+    assert!(!tmp.exists(), "{} is left", tmp.display());
+    let left: Vec<String> = std::fs::read_dir(&runs)
+        .map(|d| {
+            d.filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(left.is_empty(), "{left:?}");
+}
+
+/// Run in a child of this test binary, on a host that declares a cache's
+/// variables, with the caller's environment holding one sluice does not
+/// keep.
+#[test]
+fn equip_env_probe() {
+    let Ok(out) = std::env::var("SLUICE_TEST_EQUIP_ENV_OUT") else {
+        return;
+    };
+    let repo = Repo::new("equip-env");
+    let c = caching(
+        &repo,
+        vec![HostCache {
+            dir: "/caches/c".into(),
+            socket: None,
+            env: [("CACHE_DIR".to_string(), "/caches/c".to_string())].into(),
+        }],
+    );
+    let tests = Settings::from([
+        ("runner".into(), Setting::Text("command".into())),
+        (
+            "toolchain".into(),
+            Setting::List(vec!["sh".into(), "-c".into(), "env >&2".into()]),
+        ),
+    ]);
+    let equipped = c
+        .equip(&Equip {
+            working_copy: repo.dir().to_path_buf(),
+            tests,
+            through: Through::Running,
+        })
+        .unwrap();
+    std::fs::write(&out, &equipped.steps[0].words).unwrap();
+}
+
+/// 147, 35; rule core.46: each step gets the environment a run starts
+/// from, the host's caches' variables and the working copy's paths among
+/// it, and nothing else of the caller's.
+#[test]
+fn equip_steps_get_a_runs_environment() {
+    let out = support::Scratch::new("equip-env-out");
+    let file = out.path().join("seen");
+    let status = support::isolated(&mut std::process::Command::new(
+        std::env::current_exe().unwrap(),
+    ))
+    .args(["--exact", "equip_env_probe", "--nocapture"])
+    .env("SLUICE_TEST_EQUIP_ENV_OUT", &file)
+    .env("FROM_THE_CALLER", "1")
+    .status()
+    .unwrap();
+    assert!(status.success());
+    let seen = std::fs::read_to_string(&file).unwrap();
+    assert!(seen.lines().any(|l| l == "CACHE_DIR=/caches/c"), "{seen}");
+    assert!(
+        seen.lines().any(|l| l.starts_with("SLUICE_CHECKOUT=")),
+        "{seen}"
+    );
+    assert!(!seen.contains("FROM_THE_CALLER"), "{seen}");
+}
+
+/// A run's request of `w`'s working copy under the moon runner, requiring
+/// `app:test`.
+fn moon_request(w: &Equippable, name: &str) -> RunRequest {
+    let mut req = request(&w.repo, name, w.tests("moon"));
+    req.required = vec!["app:test".into()];
+    req
+}
+
+/// 147; rule core.46: a combination that affects a required check is set
+/// up after moon's queries and before the check runs.
+#[test]
+fn a_run_that_runs_a_check_is_set_up() {
+    let w = Equippable::new("equip-run-set-up", true, "true");
+    let c = checks(&w.repo);
+    finish(&c, &moon_request(&w, "p1"));
+    let log = w.log();
+    let at = |what: &str| {
+        log.iter()
+            .position(|l| l.starts_with(what))
+            .unwrap_or_else(|| panic!("no {what}: {log:?}"))
+    };
+    assert_eq!(
+        log[..3],
+        [
+            "toolchain",
+            "proto install --config-mode upwards",
+            "moon --version"
+        ]
+    );
+    assert!(at("moon query tasks") < at("moon setup"), "{log:?}");
+    assert!(at("moon setup") < at("moon exec app:test"), "{log:?}");
+}
+
+/// 147; rule core.46: a combination that affects no required check passes
+/// with nothing run, and its working copy is never set up.
+#[test]
+fn a_run_that_runs_nothing_is_never_set_up() {
+    let w = Equippable::new("equip-run-nothing", true, "true");
+    let c = checks(&w.repo);
+    let mut req = moon_request(&w, "p1");
+    req.since = Some(req.revision.clone());
+    let r = finish(&c, &req);
+    assert!(r.tasks.is_empty() && r.missing.is_empty(), "{r:?}");
+    let log = w.log();
+    assert!(
+        log.iter()
+            .any(|l| l.starts_with("moon query tasks --affected")),
+        "{log:?}"
+    );
+    assert!(!log.iter().any(|l| l == "moon setup"), "{log:?}");
+}
+
+/// 89, 98, 147, S72; rule core.46: a session's or a preview's command
+/// runs in place of the runner's checks, in a working copy equipped
+/// through the setup by the runner its branch's policy names.
+#[test]
+fn a_run_with_a_command_is_equipped_by_its_branchs_runner() {
+    let w = Equippable::new("equip-command", true, "true");
+    let c = checks(&w.repo);
+    let command = format!("echo command >> '{}'", w.tools.path().join("log").display());
+    let mut req = request(&w.repo, "p1", w.tests("moon"));
+    req.command = Some(command.clone());
+    let r = finish(&c, &req);
+    assert_eq!(r.tasks.len(), 1, "{r:?}");
+    assert_eq!(r.tasks[0].task, command);
+    assert_eq!(r.tasks[0].outcome, Outcome::Pass);
+    assert_eq!(
+        w.log(),
+        [
+            "toolchain",
+            "proto install --config-mode upwards",
+            "moon --version",
+            "moon setup",
+            "command",
+        ]
+    );
+}
+
+/// 147, record 0050; rule core.46: a submitter's worktree, read for the
+/// checks moon keeps out of CI, is equipped up to the version check and
+/// never set up.
+#[test]
+fn the_submitters_read_is_never_set_up() {
+    let w = Equippable::new("equip-submitters-read", true, "true");
+    let kept = checks(&w.repo)
+        .kept_out(w.repo.dir(), &w.tests("moon"), &["app:test".into()])
+        .unwrap();
+    assert!(kept.is_empty(), "{kept:?}");
+    assert_eq!(
+        w.log(),
+        [
+            "toolchain",
+            "proto install --config-mode upwards",
+            "moon --version",
+            "moon query tasks",
+        ]
+    );
+}
+
+/// 147, 114; rule core.46: a run whose working copy could not be
+/// equipped starts nothing, and fails its start with the step's name and
+/// words.
+#[test]
+fn a_run_whose_working_copy_could_not_be_equipped_could_not_start() {
+    let w = Equippable::new(
+        "equip-could-not-start",
+        true,
+        &format!("echo '{NO_TOOLCHAIN}' >&2; exit 1"),
+    );
+    let c = checks(&w.repo);
+    let err = c.start(&moon_request(&w, "p1")).unwrap_err();
+    assert_eq!(
+        format!("{err:#}"),
+        format!("moon setup: exited 1: {NO_TOOLCHAIN}")
+    );
+    assert!(!c.runs().dir("p1").join("request.json").exists());
+    let log = w.log();
+    assert!(!log.iter().any(|l| l.starts_with("moon exec")), "{log:?}");
 }
