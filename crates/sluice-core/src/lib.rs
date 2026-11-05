@@ -7,6 +7,7 @@
 //! steps outside the records (rule core.14).
 
 pub mod branches;
+pub mod equip;
 pub mod line;
 pub mod ops;
 pub mod order;
