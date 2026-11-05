@@ -30,8 +30,11 @@ trust = ["confined", "sandbox"]           # no "cache": every required task real
 - sluice runs the affected required tasks with `moon exec`, `--on-failure
   continue` and `--concurrency $SLUICE_JOBS`, and reads moon's run report for
   each task's outcome and hash.
-- With a `.prototools`, sluice runs `proto install` in the checkout before
-  moon, outside the executor, so the pinned moon is there.
+- Before moon runs in any checkout, worktree or preview, sluice equips it,
+  outside the executor: `proto install --config-mode upwards` where it holds
+  a `.prototools`, installing the tool versions listed there, moon among
+  them; then `moon --version`, refused below 2.6; then `moon setup`.
+  `sluice equip <branch>` does the same in a worktree sluice did not make.
 - `cold` names tests, as `required` does, that a cache must not warm (a
   benchmark, a timing). A run holding one gets none of the host's
   `[[caches]]`: no cache directory, socket or variable. The run's other
