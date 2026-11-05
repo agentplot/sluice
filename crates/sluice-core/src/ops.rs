@@ -1219,6 +1219,7 @@ impl Sluice<'_> {
                     from: from.clone(),
                     to: to.cloned(),
                     by: by.to_string(),
+                    host: Some(self.peer.name.clone()),
                 },
             );
             Ok(())
