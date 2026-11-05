@@ -78,8 +78,9 @@ given sluice's reason before them (147; record 0081).
 git worktree holding the folder it runs in, by the policy at
 `--at <revision>` where one is named and at the branch's current
 revision otherwise. With `--at` it SHALL read nothing of the branch,
-and the revision need not be one the branch has landed (147, 56; record
-0081).
+and SHALL equip by the revision's `[tests]` whether or not its
+`[branches]` names the branch; the revision need not be one the branch
+has landed (147, 56; record 0081).
 
 #### Scenario: At a revision named
 
@@ -88,6 +89,14 @@ and the revision need not be one the branch has landed (147, 56; record
 - **THEN** the earlier revision's toolchain is the one asked for, and
   the document's `revision` is the earlier revision in full
   (`equip_reads_the_policy_at_the_revision_named` in
+  `crates/sluice/tests/equip.rs`)
+
+#### Scenario: At a revision whose policy manages no branch
+
+- **WHEN** a revision's policy names a toolchain and no `[branches]`
+  table, and `sluice equip main --at <revision>` runs
+- **THEN** that toolchain is the one asked for, and the command exits 0
+  (`equip_at_a_revision_equips_whatever_its_branches_name` in
   `crates/sluice/tests/equip.rs`)
 
 #### Scenario: At the branch's revision
@@ -131,8 +140,9 @@ failed step's words after it (147, the command).
 ### Requirement: A refusal gives no steps
 
 `sluice equip` SHALL refuse, running nothing, a branch it cannot read, a
-revision that is no commit in the repository, a revision whose policy
-names no `[branches]` table for the branch, and a folder in no worktree.
+revision that is no commit in the repository, a revision that holds no
+policy, a folder in no worktree, and, without `--at`, a branch whose
+policy at its current revision names no `[branches]` table for it.
 With `--json` a refusal SHALL be `{"error": {"kind", "message",
 "next"}}` with no `steps`, and every refusal SHALL exit 2 (147; record
 0081).
@@ -148,11 +158,19 @@ With `--json` a refusal SHALL be `{"error": {"kind", "message",
 
 #### Scenario: A branch the policy does not manage
 
-- **WHEN** the revision's policy has no `[branches]` table naming the
-  branch
+- **WHEN** `sluice equip main` runs with no `--at`, and the policy at
+  `main`'s current revision has no `[branches]` table naming `main`
 - **THEN** the refusal names `.config/sluice.toml`, the revision and the
   branch, and the command exits 2
   (`equip_refuses_a_branch_its_policy_does_not_manage`)
+
+#### Scenario: A revision with no policy
+
+- **WHEN** `sluice equip main --at <revision>` runs, and the revision
+  holds no `.config/sluice.toml`
+- **THEN** the refusal names `.config/sluice.toml` and the revision, the
+  fake check seam was asked nothing, and the command exits 2
+  (`equip_refuses_a_revision_with_no_policy`)
 
 #### Scenario: A revision that is no commit
 

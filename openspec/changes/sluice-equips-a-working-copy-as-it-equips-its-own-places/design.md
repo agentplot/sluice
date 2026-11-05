@@ -200,10 +200,14 @@ state.
 Result<Result<Equipment, EquipRefusal>>`:
 
 - With `at`, it reads the policy at that revision, and nothing of the
-  branch. Without it, it reads the branch's current revision as
-  `session_plan` does, and refuses `NoBranch` where there is none.
-- It refuses `NotManaged` where the revision has no policy, or its
-  policy names no `[branches]` table for the branch.
+  branch. It refuses `NoPolicy` where the revision holds none, and
+  equips by the policy's `[tests]` whether or not its `[branches]` names
+  the branch: flume readies places on bases the policy may not manage,
+  and flume's tools test writes a policy with no `[branches]`.
+- Without it, it reads the branch's current revision as `session_plan`
+  does. It refuses `NoBranch` where there is none, `NoPolicy` where the
+  revision holds no policy, and `NotManaged` where its policy names no
+  `[branches]` table for the branch.
 - It asks `seams.tests.equip` through `Running` with the policy's
   `[tests]`, and answers `Equipment { branch, revision, equipped }`.
 
@@ -228,7 +232,8 @@ and shows nothing.
 2. `--at` is resolved with `Host::revision`. A name that is no commit
    here is refused: `refused: <at> names no revision here`.
 3. `Sluice::equip`. `NoBranch` is refused with `crate::no_branch`'s
-   words and `sluice overview` as the next step. `NotManaged` is
+   words and `sluice overview` as the next step. `NoPolicy` is refused
+   with `refused: no .config/sluice.toml at <revision>`. `NotManaged` is
    refused with `refused: no [branches] table in .config/sluice.toml at
    <revision> names <branch>`.
 4. Each refusal goes through `told::tell` as `Kind::Refused`. That is
@@ -301,8 +306,9 @@ replaces the command line, which for the runner's steps was the
   tier: `an_old_moon_is_refused` reads the version step's words.
 - **The command over the fakes.** `crates/sluice/tests/equip.rs`, in the
   fast tier: the refusals and their exits, the revision read with and
-  without `--at`, both forms of output, and the request the fake was
-  asked.
+  without `--at`, a revision under `--at` whose policy names no
+  `[branches]` equipped by its `[tests]`, both forms of output, and the
+  request the fake was asked.
 - **S72 on the binary.** `crates/sluice/tests/equip_tools.rs`, in the
   tools tier, as `exec.rs` is, since it needs git's worktrees. A
   repository is committed with a `.prototools` and a policy whose
