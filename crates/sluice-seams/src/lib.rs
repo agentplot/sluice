@@ -861,6 +861,69 @@ pub trait Tests {
     fn reads(&self, reading: &Reading) -> Result<Vec<Reads>> {
         Ok(vec![Reads::Every; reading.pairs.len()])
     }
+
+    /// 147: equip `equip.working_copy` by the runner `equip.tests` names,
+    /// through `equip.through`, as the check profile equips every working
+    /// copy before it runs anything there: each step run outside any
+    /// executor, with a run's environment, and the sequence stopped at
+    /// the first that fails. It takes no place, admits nothing against
+    /// the host's bound (71), and keeps nothing once it answers. A step
+    /// that failed is answered as a step, the last of [`Equipped`]'s,
+    /// never as an `Err`, which is sluice's own failure. A check profile
+    /// with nothing to equip answers no steps.
+    fn equip(&self, _equip: &Equip) -> Result<Equipped> {
+        Ok(Equipped::default())
+    }
+}
+
+/// 147: how far a working copy is equipped. A working copy sluice only
+/// reads in, to ask the runner a question, is equipped through
+/// `Reading`; one a check or a command runs in, through `Running`, which
+/// holds every step of `Reading` and then the runner's setup.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Through {
+    /// Up to the runner's version check.
+    Reading,
+    /// Through the runner's setup.
+    Running,
+}
+
+/// 147: what [`Tests::equip`] is asked.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Equip {
+    /// The working copy equipped: the top of its worktree.
+    pub working_copy: PathBuf,
+    /// The policy's `[tests]` table, whose toolchain and runner equip it.
+    pub tests: Settings,
+    /// How far it is equipped.
+    pub through: Through,
+}
+
+/// 147: one step of equipping a working copy, as it ran.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct EquipStep {
+    /// The step's name, as sluice runs it: `toolchain`, or the runner's.
+    pub step: String,
+    /// Whether it passed.
+    pub passed: bool,
+    /// What it printed, its output then its error stream; for one that
+    /// failed, sluice's reason before them.
+    pub words: String,
+}
+
+/// 147: the steps an equip ran, in order; the last failed where any did,
+/// and none ran after it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct Equipped {
+    /// Each step run.
+    pub steps: Vec<EquipStep>,
+}
+
+impl Equipped {
+    /// The step that failed, where one did.
+    pub fn failed(&self) -> Option<&EquipStep> {
+        self.steps.iter().find(|s| !s.passed)
+    }
 }
 
 /// 140: what the core asks of the check's affected reading.

@@ -32,12 +32,16 @@
 //! - `"command"`: `sh -c <command>`, one check named by the command,
 //!   never replayed.
 //!
-//! `[tests] toolchain`, when set, is a command run in the place before the
-//! run, outside the executor, that prints shell code setting the
-//! repository's tools up (`devenv print-dev-env`, `proto activate bash
-//! --export`): sluice keeps what it prints and sources it before every
-//! command the runner runs, opaque to it. Whatever needs the network or
-//! the user's home to set up happens there, outside the executor.
+//! Every working copy sluice runs anything in is equipped first by one
+//! sequence, [`Equipping`] (147; rule core.46): `[tests] toolchain`, then
+//! the runner's own steps, each outside the executor with the run's
+//! environment, stopping at the first that fails. `[tests] toolchain`,
+//! when set, is the sequence's first step: a command run in the place that
+//! prints shell code setting the repository's tools up (`devenv
+//! print-dev-env`, `proto activate bash --export`). sluice keeps what it
+//! prints and sources it before every command the runner runs, opaque to
+//! it. Whatever needs the network or the user's home to set up happens in
+//! the sequence, outside the executor.
 //!
 //! A run whose policy says `[executor] docker = true` asks the host for a
 //! container engine that answers (84; record 0074): [`Tests::unmet`] looks
@@ -51,12 +55,12 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, bail, Context as _, Result};
 use serde::{Deserialize, Serialize};
 use sluice_seams::{
-    log_tail, AtBound, Enforced, HostRun, KeptOutTask, Limits, Network, NotRun, Outcome, Place,
-    Progress, Reading, Reads, Rev, RunHandle, RunReport, RunRequest, Running, Setting, Settings,
-    Source, TaskLog, TaskProgress, TaskResult, Tests,
+    log_tail, AtBound, Enforced, Equip, EquipStep, Equipped, HostRun, KeptOutTask, Limits, Network,
+    NotRun, Outcome, Place, Progress, Reading, Reads, Rev, RunHandle, RunReport, RunRequest,
+    Running, Setting, Settings, Source, TaskLog, TaskProgress, TaskResult, Tests, Through,
 };
 
-use super::moon::Moon;
+use super::moon::{self, Moon};
 use crate::host_count::{self, HostCount};
 use crate::instance::{HostCache, Instance};
 use crate::runs::{Ended, Request, RunState, Runs};
@@ -511,35 +515,210 @@ fn text<'a>(settings: &'a Settings, key: &str) -> Result<Option<&'a str>> {
     }
 }
 
-/// Run `[tests] toolchain` in the place, outside the executor, and keep
-/// what it prints in `script`.
+/// `[tests] toolchain`: the command, or `None`.
+fn toolchain_argv(tests: &Settings) -> Result<Option<Vec<String>>> {
+    match tests.get("toolchain") {
+        None => Ok(None),
+        Some(Setting::List(xs)) if !xs.is_empty() => Ok(Some(xs.clone())),
+        Some(_) => bail!("[tests] toolchain must be a list of strings, the command first"),
+    }
+}
+
+/// The toolchain step's name.
+const TOOLCHAIN: &str = "toolchain";
+
+/// 147: the toolchain step: `[tests] toolchain` run in the place, outside
+/// the executor, and what it prints kept in `script`. Its words are its
+/// error stream alone, since its output is the script.
 fn toolchain(
     argv: &[String],
     place: &Path,
     env: &BTreeMap<String, String>,
     script: &Path,
-) -> Result<()> {
+) -> Result<EquipStep> {
     let (program, args) = argv
         .split_first()
         .ok_or_else(|| anyhow!("[tests] toolchain names no command"))?;
-    let out = std::process::Command::new(program)
+    let out = match std::process::Command::new(program)
         .args(args)
         .current_dir(place)
         .env_clear()
         .envs(env)
         .stdin(std::process::Stdio::null())
         .output()
-        .with_context(|| format!("running [tests] toolchain: {}", argv.join(" ")))?;
-    if !out.status.success() {
-        bail!(
-            "[tests] toolchain {} exited {}: {}",
-            argv.join(" "),
-            out.status,
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
+    {
+        Ok(out) => out,
+        Err(e) => return Ok(failed(TOOLCHAIN, &format!("could not be run: {e}"), "")),
+    };
+    let said = printed(&[&out.stderr]);
+    match why(out.status) {
+        Some(reason) => Ok(failed(TOOLCHAIN, &reason, &said)),
+        None => {
+            std::fs::write(script, out.stdout)
+                .with_context(|| format!("writing {}", script.display()))?;
+            Ok(passed(TOOLCHAIN, said))
+        }
     }
-    std::fs::write(script, out.stdout)?;
-    Ok(())
+}
+
+/// 147: what an equip step printed, each of `parts` as text and trimmed,
+/// one to a line, the empty ones left out.
+pub fn printed(parts: &[&[u8]]) -> String {
+    parts
+        .iter()
+        .map(|p| String::from_utf8_lossy(p).trim().to_string())
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// 147: why a step's command did not pass, `exited <code>` or `ended by
+/// signal <n>`; `None` where it exited 0.
+pub fn why(status: std::process::ExitStatus) -> Option<String> {
+    use std::os::unix::process::ExitStatusExt as _;
+    if status.success() {
+        return None;
+    }
+    Some(match (status.code(), status.signal()) {
+        (Some(code), _) => format!("exited {code}"),
+        (None, Some(signal)) => format!("ended by signal {signal}"),
+        (None, None) => format!("ended {status}"),
+    })
+}
+
+/// 147: the step `name`, passed, with what it printed.
+pub fn passed(name: &str, printed: String) -> EquipStep {
+    EquipStep {
+        step: name.into(),
+        passed: true,
+        words: printed,
+    }
+}
+
+/// 147: the step `name`, failed for `reason`, with what it printed after
+/// it where it printed anything.
+pub fn failed(name: &str, reason: &str, printed: &str) -> EquipStep {
+    EquipStep {
+        step: name.into(),
+        passed: false,
+        words: match printed {
+            "" => reason.into(),
+            said => format!("{reason}: {said}"),
+        },
+    }
+}
+
+/// 147; rule core.46: the one sequence that equips a working copy before
+/// sluice runs anything there, the request's place: the toolchain
+/// `[tests]` names, then the steps of the runner it names, each with the
+/// stop it belongs to, run outside the executor with `env`. Asked through
+/// [`Through::Reading`] and later through [`Through::Running`], it runs
+/// only the steps it had not run, so a run's equipping is one sequence
+/// whose middle is the runner's queries. No step runs after one that
+/// failed.
+pub struct Equipping<'a> {
+    request: &'a RunRequest,
+    env: &'a BTreeMap<String, String>,
+    jobs: usize,
+    /// `[tests] toolchain`, where set.
+    toolchain: Option<Vec<String>>,
+    /// Where what the toolchain prints is kept.
+    script: &'a Path,
+    /// The runner's steps, in order.
+    runner: Vec<moon::Step>,
+    /// The steps run so far, in order.
+    steps: Vec<EquipStep>,
+}
+
+impl<'a> Equipping<'a> {
+    /// The sequence for `request`'s place by its `[tests]`, each step run
+    /// with `env`, the toolchain's output kept in `script`. Runs nothing.
+    pub fn new(
+        request: &'a RunRequest,
+        env: &'a BTreeMap<String, String>,
+        jobs: usize,
+        script: &'a Path,
+    ) -> Result<Self> {
+        let toolchain = toolchain_argv(&request.tests)?;
+        let runner = match text(&request.tests, "runner")? {
+            Some("moon") => Moon.steps(&request.place.path),
+            Some("command") => Vec::new(),
+            Some(other) => {
+                bail!("[tests] runner = {other:?} names no runner: \"moon\" or \"command\"")
+            }
+            None => bail!("[tests] names no runner: \"moon\" or \"command\""),
+        };
+        Ok(Equipping {
+            request,
+            env,
+            jobs,
+            toolchain,
+            script,
+            runner,
+            steps: Vec::new(),
+        })
+    }
+
+    /// Run each step not yet run up to `stop`, in order, stopping at the
+    /// first that fails. `Err` is sluice's own failure, never a step's.
+    pub fn through(&mut self, stop: Through) -> Result<()> {
+        let first = usize::from(self.toolchain.is_some());
+        loop {
+            if self.failed().is_some() {
+                return Ok(());
+            }
+            let next = self.steps.len();
+            let step = match (&self.toolchain, next.checked_sub(first)) {
+                (Some(argv), None) => {
+                    toolchain(argv, &self.request.place.path, self.env, self.script)?
+                }
+                (_, Some(i)) => match self.runner.get(i) {
+                    Some(step) if step.through <= stop => (step.run)(&Moon, &self.context()),
+                    _ => return Ok(()),
+                },
+                (None, None) => unreachable!("with no toolchain the runner's steps are first"),
+            };
+            self.steps.push(step);
+        }
+    }
+
+    /// [`Equipping::through`], failing with the step's name and its words
+    /// where a step failed: a run whose working copy could not be equipped
+    /// could not start (114).
+    pub fn ready(&mut self, stop: Through) -> Result<()> {
+        self.through(stop)?;
+        match self.failed() {
+            Some(step) => bail!("{}: {}", step.step, step.words),
+            None => Ok(()),
+        }
+    }
+
+    /// The step that failed, where one did.
+    pub fn failed(&self) -> Option<&EquipStep> {
+        self.steps.iter().find(|s| !s.passed)
+    }
+
+    /// The `Context` the runner's queries, plan and run use: the place and
+    /// environment the steps had, with the toolchain's script sourced
+    /// where the toolchain ran.
+    pub fn context(&self) -> Context<'a> {
+        let sourced = self.toolchain.is_some()
+            && self
+                .steps
+                .first()
+                .is_some_and(|s| s.step == TOOLCHAIN && s.passed);
+        Context {
+            request: self.request,
+            env: self.env,
+            toolchain: sourced.then_some(self.script),
+            jobs: self.jobs,
+        }
+    }
+
+    /// The steps run, in order.
+    pub fn equipped(self) -> Equipped {
+        Equipped { steps: self.steps }
+    }
 }
 
 /// What a check may need of sluice's own environment: paths, the user,
@@ -1098,11 +1277,7 @@ pub fn release_request(
     let Some(release) = release_argv(tests)? else {
         return Ok(None);
     };
-    let tool_argv = match tests.get("toolchain") {
-        None => None,
-        Some(Setting::List(xs)) if !xs.is_empty() => Some(xs.clone()),
-        Some(_) => bail!("[tests] toolchain must be a list of strings, the command first"),
-    };
+    let tool_argv = toolchain_argv(tests)?;
     let kind = choose(limits)?;
     let request = RunRequest {
         place: place.clone(),
@@ -1121,8 +1296,13 @@ pub fn release_request(
     }
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     let script = dir.join("toolchain.sh");
+    // 95: the working copy was equipped by the run it releases; the
+    // release enters its toolchain alone.
     if let Some(argv) = &tool_argv {
-        toolchain(argv, &place.path, &env, &script)?;
+        let step = toolchain(argv, &place.path, &env, &script)?;
+        if !step.passed {
+            bail!("{}: {}", step.step, step.words);
+        }
     }
     let cx = Context {
         request: &request,
@@ -1243,11 +1423,7 @@ impl Tests for Checks {
         let runner = text(&request.tests, "runner")?
             .ok_or_else(|| anyhow!("[tests] names no runner: \"moon\" or \"command\""))?
             .to_string();
-        let tool_argv = match request.tests.get("toolchain") {
-            None => None,
-            Some(Setting::List(xs)) if !xs.is_empty() => Some(xs.clone()),
-            Some(_) => bail!("[tests] toolchain must be a list of strings, the command first"),
-        };
+        toolchain_argv(&request.tests)?;
         // 84: refuse before anything runs.
         let kind = choose(&request.limits)?;
         outside_checkout(&request.place.path, &self.instance.caches)?;
@@ -1287,16 +1463,12 @@ impl Tests for Checks {
         };
         let dir = self.runs.prepare(name)?;
         let script = dir.join("toolchain.sh");
-        if let Some(argv) = &tool_argv {
-            toolchain(argv, &request.place.path, &env, &script)?;
-        }
-        let sourced = tool_argv.is_some().then_some(script.as_path());
-        let cx = Context {
-            request,
-            env: &env,
-            toolchain: sourced,
-            jobs,
-        };
+        // 147: equipped up to the version check before the runner is
+        // asked anything, and through the setup only where it runs a check.
+        let mut equipping = Equipping::new(request, &env, jobs, &script)?;
+        equipping.ready(Through::Reading)?;
+        let cx = equipping.context();
+        let sourced = cx.toolchain.is_some();
         let not_run = not_run_exits(&request.tests)?;
         let plan = match runner.as_str() {
             "moon" => Moon.plan(&cx)?,
@@ -1322,6 +1494,9 @@ impl Tests for Checks {
             }
             other => bail!("[tests] runner = {other:?} names no runner: \"moon\" or \"command\""),
         };
+        if plan.argv.is_some() {
+            equipping.ready(Through::Running)?;
+        }
         let processors = plan.holds_processors.then_some(jobs);
         let mut argv = plan.argv.unwrap_or_else(|| vec!["/usr/bin/true".into()]);
         let mut release = release_argv(&request.tests)?.map(|r| {
@@ -1345,7 +1520,7 @@ impl Tests for Checks {
                 let command = Context {
                     request,
                     env: &env,
-                    toolchain: sourced,
+                    toolchain: sourced.then_some(script.as_path()),
                     jobs,
                 };
                 Some(super::moon::store(
@@ -1646,11 +1821,6 @@ impl Tests for Checks {
         if text(tests, "runner")? != Some("moon") {
             return Ok(Vec::new());
         }
-        let tool_argv = match tests.get("toolchain") {
-            None => None,
-            Some(Setting::List(xs)) if !xs.is_empty() => Some(xs.clone()),
-            Some(_) => bail!("[tests] toolchain must be a list of strings, the command first"),
-        };
         let scratch = Scratch(self.runs.dir(&format!("kept-out-{}", std::process::id())));
         let _ = std::fs::remove_dir_all(&scratch.0);
         let tmp = scratch.0.join("tmp");
@@ -1674,16 +1844,9 @@ impl Tests for Checks {
         let jobs = self.instance.jobs();
         let env = environment(&request, jobs, &self.instance.caches);
         let script = scratch.0.join("toolchain.sh");
-        if let Some(argv) = &tool_argv {
-            toolchain(argv, worktree, &env, &script)?;
-        }
-        let cx = Context {
-            request: &request,
-            env: &env,
-            toolchain: tool_argv.is_some().then_some(script.as_path()),
-            jobs,
-        };
-        Moon.kept_out(&cx)
+        let mut equipping = Equipping::new(&request, &env, jobs, &script)?;
+        equipping.ready(Through::Reading)?;
+        Moon.kept_out(&equipping.context())
     }
 
     /// 140: the moon runner's affected reading, in a worktree of the first
@@ -1697,11 +1860,6 @@ impl Tests for Checks {
         if text(&reading.tests, "runner")? != Some("moon") || reading.pairs.is_empty() {
             return Ok(vec![Reads::Every; reading.pairs.len()]);
         }
-        let tool_argv = match reading.tests.get("toolchain") {
-            None => None,
-            Some(Setting::List(xs)) if !xs.is_empty() => Some(xs.clone()),
-            Some(_) => bail!("[tests] toolchain must be a list of strings, the command first"),
-        };
         let scratch = Scratch(self.runs.dir(&format!("reading-{}", std::process::id())));
         let _ = std::fs::remove_dir_all(&scratch.0);
         let tmp = scratch.0.join("tmp");
@@ -1727,16 +1885,43 @@ impl Tests for Checks {
         let jobs = self.instance.jobs();
         let env = environment(&request, jobs, &self.instance.caches);
         let script = scratch.0.join("toolchain.sh");
-        if let Some(argv) = &tool_argv {
-            toolchain(argv, &tree.path, &env, &script)?;
-        }
-        let cx = Context {
-            request: &request,
-            env: &env,
-            toolchain: tool_argv.is_some().then_some(script.as_path()),
-            jobs,
+        let mut equipping = Equipping::new(&request, &env, jobs, &script)?;
+        equipping.ready(Through::Reading)?;
+        Moon.reads(&equipping.context(), &reading.pairs)
+    }
+
+    /// 147: `equip.working_copy` equipped through `equip.through` in a
+    /// scratch directory of the check seam's own, `.runs/equip-<pid>/`,
+    /// removed before it answers, with the environment a run there starts
+    /// from, of a place named `equip` with no ports. It takes no place and
+    /// is admitted against no bound (71): it runs no check.
+    fn equip(&self, equip: &Equip) -> Result<Equipped> {
+        let scratch = Scratch(self.runs.dir(&format!("equip-{}", std::process::id())));
+        let _ = std::fs::remove_dir_all(&scratch.0);
+        let tmp = scratch.0.join("tmp");
+        std::fs::create_dir_all(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
+        let request = RunRequest {
+            place: Place {
+                name: "equip".into(),
+                path: equip.working_copy.clone(),
+                tmp,
+                env: BTreeMap::new(),
+            },
+            revision: sluice_seams::Rev::new(""),
+            required: Vec::new(),
+            since: None,
+            limit: None,
+            limits: Limits::default(),
+            tests: equip.tests.clone(),
+            replay: false,
+            system: None,
         };
-        Moon.reads(&cx, &reading.pairs)
+        let jobs = self.instance.jobs();
+        let env = environment(&request, jobs, &self.instance.caches);
+        let script = scratch.0.join("toolchain.sh");
+        let mut equipping = Equipping::new(&request, &env, jobs, &script)?;
+        equipping.through(equip.through)?;
+        Ok(equipping.equipped())
     }
 
     /// ADR 0028: the moon runner's tasks while the run goes; the command
