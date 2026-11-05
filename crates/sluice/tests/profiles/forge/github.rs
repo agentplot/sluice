@@ -595,6 +595,7 @@ fn erring(status: u16) -> Answer {
         502 => "Bad Gateway",
         503 => "Service Unavailable",
         429 => "API rate limit exceeded",
+        404 => "Not Found",
         _ => "Server Error",
     };
     json(status, json!({ "message": why }))

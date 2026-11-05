@@ -1107,6 +1107,54 @@ fn a_failed_list_ends_intake_and_the_queue_still_lands() {
     );
 }
 
+/// deneb, 2026-11-05: GitHub renamed the repository, and its old address,
+/// which the remote still names, finds no installation of the app. A
+/// running driver says so with what to do once, never every pass: its
+/// intake on stderr, `main`'s round on stdout, and the refused read once
+/// in `main`'s log, in GitHub's words (133; rules core.28, core.29).
+#[test]
+fn a_repository_github_no_longer_finds_is_said_once_with_what_to_do() {
+    let g = OnGitHub::new("pr-renamed", "");
+    let (n, _) = g.by_hand("unit/renamed", &[("slow", Some("x\n"))], false);
+    g.step();
+    assert_eq!(g.of(n).len(), 1, "{:?}", g.subs());
+    g.gh.trouble(
+        "GET",
+        "/repos/o/r/installation",
+        usize::MAX,
+        github::Trouble::Status(404),
+    );
+    g.discovery_passes();
+    let out = g.skipping(g.repo.dir(), &["run", "--rounds", "3"]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let said = "GET /repos/o/r/installation: 404 Not Found";
+    let todo = format!(
+        "GitHub finds no installation of app {} on o/r: if the repository was renamed or \
+         transferred, point the remote that names it at its new address",
+        github::APP
+    );
+    let intake = "sluice: warning: taking in main's pull requests: ";
+    assert_eq!(stderr.matches(intake).count(), 1, "{}", text(&out));
+    let warned = &stderr[stderr.find(intake).unwrap()..];
+    assert!(
+        warned.contains(&format!("{said}\n{todo}")),
+        "{}",
+        text(&out)
+    );
+    let passed = "main could not be read, passed by: ";
+    assert_eq!(stdout.matches(passed).count(), 1, "{}", text(&out));
+    assert_eq!(stdout.matches(&todo).count(), 1, "{}", text(&out));
+    let refused: Vec<Value> = g
+        .log()
+        .into_iter()
+        .filter(|l| l["event"] == "read-refused")
+        .collect();
+    assert_eq!(refused.len(), 1, "{refused:?}");
+    assert_eq!(refused[0]["asked"], "refs/heads/main");
+    assert_eq!(refused[0]["said"], said);
+}
+
 // ---------------------------------------------------------------------------
 // pull-request-status
 // ---------------------------------------------------------------------------

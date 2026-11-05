@@ -17,7 +17,7 @@ use chrono::{DateTime, TimeDelta, Utc};
 use serde_json::json;
 use sluice::identity::Identity;
 use sluice::profiles::github::check::{check, Finding};
-use sluice::profiles::github::{App, Repo};
+use sluice::profiles::github::{App, Bearer, Repo};
 use sluice::retry::Policy;
 use support::http::{json, Answer, Fake, Request};
 
@@ -281,6 +281,75 @@ fn a_token_for_another_repository_is_refused() {
     assert!(
         err.contains("GitHub gave a token for o/r that reaches o/other, not o/r"),
         "{err}"
+    );
+}
+
+/// deneb, 2026-11-05: GitHub finds no installation of the app on a
+/// repository's old address once it is renamed. The credentials for it
+/// are withheld in GitHub's words, with what to do beside them, so a read
+/// that needed them is a refused read (133); the answer is asked once.
+#[test]
+fn no_installation_withholds_the_credentials_and_says_what_to_do() {
+    let fake = Fake::start(|_| json(404, json!({ "message": "Not Found" })));
+    let app = app(&fake, &Clock::new());
+    let Err(e) = app.credentials("https://github.com/o/r.git") else {
+        panic!("credentials given");
+    };
+    let w = sluice::identity::withheld(&e).expect("withheld");
+    assert_eq!(w.said, "GET /repos/o/r/installation: 404 Not Found");
+    let note = w.note.as_deref().unwrap_or_default();
+    assert!(
+        note.starts_with("GitHub finds no installation of app 4242 on o/r: if the repository was renamed or transferred, point the remote that names it at its new address"),
+        "{note}"
+    );
+    assert_eq!(fake.requests().len(), 1);
+}
+
+/// GitHub answers a renamed or transferred repository's old address with a
+/// redirect. The redirect is its answer, never followed, which would go
+/// without the token, and says to point the remote at the new address.
+#[test]
+fn a_redirect_is_githubs_answer_and_says_what_to_do() {
+    let clock = Clock::new();
+    let forge = Forge::new(&clock);
+    let minted = Mutex::new(0);
+    let fake = Fake::start(move |r: &Request| {
+        if !r.path.starts_with("/repos/o/r/pulls") {
+            return forge.answer(r, &minted);
+        }
+        let moved = "https://api.github.com/repositories/42/pulls";
+        let body = json!({ "message": "Moved Permanently", "url": moved });
+        (
+            301,
+            vec![
+                ("Location".into(), moved.into()),
+                ("Content-Type".into(), "application/json".into()),
+            ],
+            body.to_string(),
+        )
+    });
+    let app = app(&fake, &clock);
+    let err = format!(
+        "{:#}",
+        app.get("/repos/o/r/pulls", Bearer::Repo(&repo()))
+            .unwrap_err()
+    );
+    assert!(
+        err.starts_with("GET /repos/o/r/pulls: 301 Moved Permanently\nGitHub answers o/r from another address, as it does once a repository is renamed or transferred: point the remote that names o/r at the repository's new address"),
+        "{err}"
+    );
+    let asked: Vec<String> = fake.requests().into_iter().map(|r| r.path).collect();
+    assert_eq!(
+        asked
+            .iter()
+            .filter(|p| p.starts_with("/repos/o/r/pulls"))
+            .count(),
+        1,
+        "{asked:?}"
+    );
+    assert!(
+        asked.iter().all(|p| !p.starts_with("/repositories/")),
+        "{asked:?}"
     );
 }
 

@@ -730,7 +730,9 @@ impl PullRequests for () {
 }
 
 /// Take in `branch`'s pull requests before its round. One that cannot be
-/// read is said and the round goes on, landing what is queued. A spent
+/// read is said and the round goes on, landing what is queued; a failure
+/// that stands is said once, as a round's is, until intake reads again or
+/// it fails in other words (26, 133). A spent
 /// allowance of GitHub's calls is the error returned: one the retry
 /// policy stopped on at once, a round's, is said once for its pause on
 /// `out`, or on stderr under `--json` (133, 134; ADR 0071); one it waited
@@ -749,10 +751,23 @@ fn intake(
         /// The end of the last pause a round said it passed by.
         static SAID: std::cell::Cell<Option<chrono::DateTime<chrono::Utc>>> =
             const { std::cell::Cell::new(None) };
+        /// Each branch's intake failure as last said, while it stands.
+        static FAILED: std::cell::RefCell<BTreeMap<String, String>> =
+            std::cell::RefCell::default();
     }
-    let e = pulls.intake(seams, clock, branch, taker).err()?;
+    let e = match pulls.intake(seams, clock, branch, taker) {
+        Ok(_) => {
+            FAILED.with_borrow_mut(|f| f.remove(branch));
+            return None;
+        }
+        Err(e) => e,
+    };
     let Some(limited) = retry::limited(&e) else {
-        telemetry::warn(&format!("sluice: warning: {e:#}"));
+        let words = format!("sluice: warning: {e:#}");
+        let said = FAILED.with_borrow_mut(|f| f.insert(branch.to_string(), words.clone()));
+        if said.as_ref() != Some(&words) {
+            telemetry::warn(&words);
+        }
         return None;
     };
     let waited = e.downcast_ref::<retry::Spent>().is_some();

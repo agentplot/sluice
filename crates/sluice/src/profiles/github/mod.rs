@@ -19,7 +19,7 @@ pub use forge::Forge;
 
 use anyhow::Result;
 
-use crate::identity::{Credentials, Identity};
+use crate::identity::{Credentials, Identity, Withheld};
 
 /// The username git gives GitHub with an installation token.
 const TOKEN_USER: &str = "x-access-token";
@@ -46,11 +46,22 @@ impl Identity for App {
     }
 }
 
-/// Credentials for `url` with a token for its repository alone.
+/// Credentials for `url` with a token for its repository alone. A token
+/// GitHub refused to give is [`Withheld`] in its words, so a read that
+/// needed it is a read of the remote refused (133; rule core.28).
 fn given(app: &App, url: &str, fresh: bool) -> Result<Credentials> {
     let repo =
         Repo::from_url(url).ok_or_else(|| anyhow::anyhow!("{url} is no repository on GitHub"))?;
-    let token = app.issue(&repo, fresh)?;
+    let token = app
+        .issue(&repo, fresh)
+        .map_err(|e| match app::refused(&e) {
+            Some(r) => Withheld {
+                said: r.said.clone(),
+                note: r.note.clone(),
+            }
+            .into(),
+            None => e,
+        })?;
     Ok(Credentials {
         username: TOKEN_USER.into(),
         password: token.secret,

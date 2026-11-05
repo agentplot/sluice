@@ -350,8 +350,7 @@ impl RemoteRefs {
     ) -> Result<Pushed> {
         let mut args = vec!["push", "--porcelain", "--no-verify"];
         args.extend(lease);
-        args.extend([self.pushed.target(), spec]);
-        self.pushed.push(&args, name, to)
+        self.pushed.push(&args, spec, name, to)
     }
 
     /// Push `commit` to `name`, leased on `expected` (`None`: the remote
@@ -505,12 +504,9 @@ impl RemoteRefs {
 
     /// The branches whose state is on the remote.
     fn remote_branches(&self) -> Result<Vec<String>> {
-        let out = self.pushed.remote_git(&[
-            "ls-remote",
-            "--refs",
-            self.pushed.target(),
-            "refs/sluice/state/*",
-        ])?;
+        let out = self
+            .pushed
+            .remote_git(&["ls-remote", "--refs"], &["refs/sluice/state/*"])?;
         if !out.status.success() {
             bail!(
                 "listing {}'s branches failed: {}",
@@ -793,15 +789,16 @@ impl State for RemoteRefs {
                 "+refs/sluice/hosts/*:refs/sluice-fetched/{}/hosts/*",
                 self.remote()
             );
-            let out = self.pushed.remote_git(&[
-                "fetch",
-                "--quiet",
-                "--no-tags",
-                "--no-write-fetch-head",
-                "--prune",
-                self.pushed.target(),
-                &spec,
-            ])?;
+            let out = self.pushed.remote_git(
+                &[
+                    "fetch",
+                    "--quiet",
+                    "--no-tags",
+                    "--no-write-fetch-head",
+                    "--prune",
+                ],
+                &[&spec],
+            )?;
             if !out.status.success() {
                 bail!(
                     "reading hosts' signs of life from {} failed: {}",
@@ -1169,12 +1166,10 @@ impl State for RemoteRefs {
                 self.remote()
             );
         }
-        let listed = self.pushed.remote_git(&[
-            "ls-remote",
-            "--refs",
-            self.pushed.target(),
-            &format!("refs/sluice/logs/{branch}/*"),
-        ])?;
+        let listed = self.pushed.remote_git(
+            &["ls-remote", "--refs"],
+            &[&format!("refs/sluice/logs/{branch}/*")],
+        )?;
         let mut names: Vec<String> = String::from_utf8_lossy(&listed.stdout)
             .lines()
             .filter_map(|l| l.split('\t').nth(1).map(str::to_string))

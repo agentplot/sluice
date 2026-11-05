@@ -14,6 +14,11 @@
 //! Every call it makes to the remote runs under the retry policy, which
 //! tries again what the remote never judged, a refused credential bought
 //! afresh, and never a push the remote answered (134; rule core.29).
+//!
+//! The remote's address is read as the host's configuration holds it when
+//! each call begins, never kept from the profile's opening: a driver that
+//! runs for days reaches a remote pointed elsewhere since, as at a
+//! repository renamed on its forge, at its next call.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -24,22 +29,25 @@ use serde::{Deserialize, Serialize};
 use sluice_seams::{Branch, Formed, HostCopy, LandingCommit, Moved, ReadRefused, Rev};
 
 use super::local_refs::LocalRefs;
-use crate::identity::{Credentials, Identity, PASSWORD_VAR, USERNAME_VAR};
+use crate::identity::{withheld, Credentials, Identity, PASSWORD_VAR, USERNAME_VAR};
 use crate::retry::{Failed, Judged, Kind, Policy};
 
 pub struct PushedRefs {
     local: LocalRefs,
     remote: String,
-    speaker: Option<Speaker>,
+    /// sluice's identity, where it has one, and the helper command that
+    /// gives git its credentials.
+    identity: Option<(Rc<dyn Identity>, String)>,
     policy: Rc<Policy>,
 }
 
-/// sluice's identity on the remote: the URL its git calls reach the
-/// remote by, and the helper command that gives git its credentials.
-struct Speaker {
-    identity: Rc<dyn Identity>,
+/// sluice's identity on the remote as one call reaches it: the URL its
+/// git reaches the remote by, read from the remote's address when the call
+/// began, and the helper command that gives git its credentials.
+struct Speaker<'a> {
+    identity: &'a dyn Identity,
     url: String,
-    helper: String,
+    helper: &'a str,
 }
 
 impl PushedRefs {
@@ -63,21 +71,11 @@ impl PushedRefs {
         if !local.remotes()?.iter().any(|n| n == remote) {
             bail!("the policy names the remote {remote:?}, which this repository does not have");
         }
-        let speaker = match identity {
-            None => None,
-            Some((identity, program)) => {
-                let url = local.remote_url(remote)?;
-                identity.url(&url).map(|url| Speaker {
-                    identity,
-                    url,
-                    helper: format!("!{} credential", quoted(&program)),
-                })
-            }
-        };
         Ok(PushedRefs {
             local,
             remote: remote.into(),
-            speaker,
+            identity: identity
+                .map(|(identity, program)| (identity, format!("!{} credential", quoted(&program)))),
             policy,
         })
     }
@@ -92,22 +90,33 @@ impl PushedRefs {
         &self.remote
     }
 
-    /// The identity sluice reaches the remote as; `None` for the host's
-    /// own credentials.
-    pub fn identity(&self) -> Option<String> {
-        self.speaker.as_ref().map(|s| s.identity.name())
+    /// The identity sluice reaches the remote as at its address now;
+    /// `None` for the host's own credentials.
+    pub fn identity(&self) -> Result<Option<String>> {
+        Ok(self.speaker()?.map(|s| s.identity.name()))
     }
 
-    /// Where git reaches the remote: its name, or the identity's URL.
-    pub(crate) fn target(&self) -> &str {
-        self.speaker.as_ref().map_or(&self.remote, |s| &s.url)
+    /// sluice's identity on the remote at its address as the host's
+    /// configuration holds it now, read with no process (129): `None` for
+    /// the host's own credentials, or a remote on no forge the identity is
+    /// on.
+    fn speaker(&self) -> Result<Option<Speaker<'_>>> {
+        let Some((identity, helper)) = &self.identity else {
+            return Ok(None);
+        };
+        let url = self.local.remote_url(&self.remote)?;
+        Ok(identity.url(&url).map(|url| Speaker {
+            identity: identity.as_ref(),
+            url,
+            helper,
+        }))
     }
 
-    /// git for the remote, a read: a fetch or a listing. With an identity,
-    /// the user's credential helpers are cleared for this call alone and
-    /// sluice's is named in their place, given the credentials in this
-    /// call's environment; nothing is written to a git config, so no other
-    /// git finds them.
+    /// git for the remote, a read, `git <args> <the remote> <refs>`: a
+    /// fetch or a listing. With an identity, the user's credential helpers
+    /// are cleared for this call alone and sluice's is named in their
+    /// place, given the credentials in this call's environment; nothing is
+    /// written to a git config, so no other git finds them.
     ///
     /// The read runs under the retry policy, tried again whatever failed
     /// but the remote's answer, on credentials made afresh after the
@@ -115,28 +124,34 @@ impl PushedRefs {
     /// (134, rule core.29). A refusal that stands has what each refused
     /// credential was added to git's words, for whoever reports the
     /// failure.
-    pub(crate) fn remote_git(&self, args: &[&str]) -> Result<Output> {
-        let called = self.call(Kind::Read, args)?;
+    pub(crate) fn remote_git(&self, args: &[&str], refs: &[&str]) -> Result<Output> {
+        let called = self.call(Kind::Read, args, refs)?;
         Ok(match called.note {
             Some(note) => told(called.out, &note),
             None => called.out,
         })
     }
 
-    /// git for the remote, a call of `kind`, under the retry policy: its
-    /// last try's output, what each credential the remote refused was,
-    /// apart from git's words (sluice's, never the remote's, 133), and how
-    /// the last try stands when it failed. A try after a credential the
-    /// remote refused carries one made afresh; the same arguments go every
-    /// time, so a push keeps its refspec and its lease (rule core.5).
-    fn call(&self, kind: Kind, args: &[&str]) -> Result<Called> {
+    /// git for the remote, a call of `kind`, `git <args> <the remote>
+    /// <refs>`, under the retry policy: its last try's output, what each
+    /// credential the remote refused was, apart from git's words
+    /// (sluice's, never the remote's, 133), and how the last try stands
+    /// when it failed. A try after a credential the remote refused carries
+    /// one made afresh. The remote is reached where its address was when
+    /// the call began, and the same arguments go every time, so a push
+    /// keeps its target, its refspec and its lease (rule core.5).
+    fn call(&self, kind: Kind, args: &[&str], refs: &[&str]) -> Result<Called> {
+        let speaker = self.speaker()?;
+        let mut line = args.to_vec();
+        line.push(speaker.as_ref().map_or(&self.remote, |s| &s.url));
+        line.extend(refs);
         // Why sluice could not make a try: git not run, or no credential.
         let mut fault = None;
         let mut unrenewed = None;
         let mut refused: Vec<String> = Vec::new();
         let mut last = None;
         let ran = self.policy.run(kind, |t| {
-            let given = match &self.speaker {
+            let given = match &speaker {
                 None => None,
                 Some(s) if t.renew() => match s.identity.renew(&s.url) {
                     Ok(c) => Some(c),
@@ -154,7 +169,7 @@ impl PushedRefs {
                     }
                 },
             };
-            let out = match self.git_as(given.as_ref(), args) {
+            let out = match self.git_as(speaker.as_ref(), given.as_ref(), &line) {
                 Ok(out) if out.status.success() => return Ok(out),
                 Ok(out) => out,
                 Err(e) => {
@@ -162,7 +177,7 @@ impl PushedRefs {
                     return Err(Failed::new(Judged::Answered, ()));
                 }
             };
-            let judged = judged(&out, kind, self.speaker.is_some());
+            let judged = judged(&out, kind, speaker.is_some());
             if let (Judged::Credential, Some(c)) = (judged, given) {
                 refused.push(c.about);
             }
@@ -211,7 +226,10 @@ impl PushedRefs {
 
     /// [`PushedRefs::fetch_spec`] of every one of `refspecs`, in one fetch
     /// under the retry policy (rule core.29): `Ok(false)` when the remote
-    /// has no ref one of them names exactly, which fetches none of them.
+    /// has no ref one of them names exactly, which fetches none of them. A
+    /// fetch the forge would not give sluice's identity a credential for is
+    /// a [`ReadRefused`] in the forge's words, as one git was refused is
+    /// (133; rule core.28).
     pub(crate) fn fetch_specs(
         &self,
         asked: &str,
@@ -220,9 +238,17 @@ impl PushedRefs {
     ) -> Result<bool> {
         let mut args = vec!["fetch", "--quiet", "--no-tags", "--no-write-fetch-head"];
         args.extend(flags);
-        args.push(self.target());
-        args.extend(refspecs);
-        let Called { out, note, .. } = self.call(Kind::Read, &args)?;
+        let called = self.call(Kind::Read, &args, refspecs).map_err(|e| {
+            let Some(w) = withheld(&e) else { return e };
+            ReadRefused {
+                remote: self.remote.clone(),
+                asked: asked.into(),
+                said: w.said.clone(),
+                note: w.note.clone(),
+            }
+            .into()
+        });
+        let Called { out, note, .. } = called?;
         if out.status.success() {
             return Ok(true);
         }
@@ -240,9 +266,14 @@ impl PushedRefs {
     }
 
     /// git for the remote: with the host's own credentials when `given`
-    /// is `None`, and otherwise with sluice's helper alone, given them.
-    fn git_as(&self, given: Option<&Credentials>, args: &[&str]) -> Result<Output> {
-        let (Some(s), Some(c)) = (&self.speaker, given) else {
+    /// is `None`, and otherwise with `speaker`'s helper alone, given them.
+    fn git_as(
+        &self,
+        speaker: Option<&Speaker>,
+        given: Option<&Credentials>,
+        args: &[&str],
+    ) -> Result<Output> {
+        let (Some(s), Some(c)) = (speaker, given) else {
             return git(self.local.git_dir(), args);
         };
         let helper = format!("credential.helper={}", s.helper);
@@ -255,15 +286,21 @@ impl PushedRefs {
             .with_context(|| format!("running git {}", args.join(" ")))
     }
 
-    /// `git push` with `args` under the retry policy, setting the remote's
-    /// ref `name` to `to`, or removing it when `to` is `None`. A push the
-    /// remote never judged is tried again with the same `args`, so the
-    /// same refspec and lease (134; rules core.5, core.29). A push whose
-    /// answer git did not read is never made again: `name` is read once,
-    /// and the push is done when the remote holds `to`, or no `name` for a
-    /// removal (122; ADR 0017).
-    pub(crate) fn push(&self, args: &[&str], name: &str, to: Option<&str>) -> Result<Pushed> {
-        let called = self.call(Kind::Push, args)?;
+    /// `git push <args> <the remote> <refspec>` under the retry policy,
+    /// setting the remote's ref `name` to `to`, or removing it when `to` is
+    /// `None`. A push the remote never judged is tried again with the same
+    /// arguments, so the same refspec and lease (134; rules core.5,
+    /// core.29). A push whose answer git did not read is never made again:
+    /// `name` is read once, and the push is done when the remote holds
+    /// `to`, or no `name` for a removal (122; ADR 0017).
+    pub(crate) fn push(
+        &self,
+        args: &[&str],
+        refspec: &str,
+        name: &str,
+        to: Option<&str>,
+    ) -> Result<Pushed> {
+        let called = self.call(Kind::Push, args, &[refspec])?;
         let out = match called.note {
             Some(note) => told(called.out, &note),
             None => called.out,
@@ -287,7 +324,7 @@ impl PushedRefs {
     /// The revision the remote's ref `name` holds, listed under the retry
     /// policy as a read; `None` when it has no such ref.
     fn on_remote(&self, name: &str) -> Result<Option<String>> {
-        let out = self.remote_git(&["ls-remote", "--refs", self.target(), name])?;
+        let out = self.remote_git(&["ls-remote", "--refs"], &[name])?;
         if !out.status.success() {
             bail!(
                 "listing {name} on {} failed: {}",
@@ -410,14 +447,8 @@ impl PushedRefs {
         let lease = format!("--force-with-lease={name}:{}", from.map_or("", Rev::as_str));
         let refspec = format!("{}:{name}", to.map_or("", Rev::as_str));
         let pushed = self.push(
-            &[
-                "push",
-                "--porcelain",
-                "--no-verify",
-                &lease,
-                self.target(),
-                &refspec,
-            ],
+            &["push", "--porcelain", "--no-verify", &lease],
+            &refspec,
             name,
             to.map(Rev::as_str),
         )?;
@@ -460,13 +491,8 @@ impl PushedRefs {
         let name = format!("refs/heads/{branch}");
         let refspec = format!("+{rev}:{name}");
         let pushed = self.push(
-            &[
-                "push",
-                "--porcelain",
-                "--no-verify",
-                self.target(),
-                &refspec,
-            ],
+            &["push", "--porcelain", "--no-verify"],
+            &refspec,
             &name,
             Some(rev.as_str()),
         )?;
@@ -815,14 +841,8 @@ impl PushedRefs {
         let lease = format!("--force-with-lease={name}:{expected}");
         let refspec = format!("{}:{name}", to.map_or("", Rev::as_str));
         let pushed = self.push(
-            &[
-                "push",
-                "--porcelain",
-                "--no-verify",
-                &lease,
-                self.target(),
-                &refspec,
-            ],
+            &["push", "--porcelain", "--no-verify", &lease],
+            &refspec,
             &name,
             to.map(Rev::as_str),
         )?;

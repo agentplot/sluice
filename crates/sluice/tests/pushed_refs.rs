@@ -6,13 +6,13 @@
 
 mod support;
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::rc::Rc;
 use std::time::Duration;
 
-use sluice::identity::{Credentials, Identity};
+use sluice::identity::{Credentials, Identity, Withheld};
 use sluice::profiles::branches::Branches;
 use sluice::profiles::pushed_refs::{Holder, Mark, PushedRefs};
 use sluice::retry;
@@ -814,21 +814,36 @@ fn made_from_and_policy_of_read_a_refused_copy_as_remote_does() {
 
 /// An identity whose remote is a fake HTTP server, with a token of its
 /// own: `token`, then `token-1`, `token-2` and on as it is renewed, unless
-/// its forge refuses to make another, saying `refuses`.
+/// its forge refuses to make another, saying `refuses`, or gives none at
+/// all, as `withholds` says.
 struct FakeIdentity {
-    url: String,
+    /// The URL it reaches every remote by; `None`, each remote's own.
+    url: Option<String>,
     token: String,
     renewed: Cell<usize>,
     refuses: Option<String>,
+    withholds: Option<Withheld>,
+    /// The URL each credential was asked for, in order.
+    asked: RefCell<Vec<String>>,
 }
 
 impl FakeIdentity {
     fn new(url: &str, token: &str) -> FakeIdentity {
         FakeIdentity {
-            url: url.into(),
+            url: Some(url.into()),
+            ..FakeIdentity::following(token)
+        }
+    }
+
+    /// The identity that reaches each remote at its own address.
+    fn following(token: &str) -> FakeIdentity {
+        FakeIdentity {
+            url: None,
             token: token.into(),
             renewed: Cell::new(0),
             refuses: None,
+            withholds: None,
+            asked: RefCell::default(),
         }
     }
 
@@ -836,6 +851,14 @@ impl FakeIdentity {
     fn refusing(self, why: &str) -> FakeIdentity {
         FakeIdentity {
             refuses: Some(why.into()),
+            ..self
+        }
+    }
+
+    /// The identity whose forge gives no credentials, as `withheld` says.
+    fn withholding(self, withheld: Withheld) -> FakeIdentity {
+        FakeIdentity {
+            withholds: Some(withheld),
             ..self
         }
     }
@@ -854,12 +877,18 @@ impl Identity for FakeIdentity {
         "a fake identity".into()
     }
 
-    fn url(&self, _remote_url: &str) -> Option<String> {
-        Some(self.url.clone())
+    fn url(&self, remote_url: &str) -> Option<String> {
+        Some(self.url.clone().unwrap_or_else(|| remote_url.into()))
     }
 
     fn credentials(&self, url: &str) -> anyhow::Result<Credentials> {
-        assert_eq!(url, self.url);
+        if let Some(own) = &self.url {
+            assert_eq!(url, own);
+        }
+        self.asked.borrow_mut().push(url.into());
+        if let Some(w) = &self.withholds {
+            return Err(w.clone().into());
+        }
         let n = self.renewed.get();
         Ok(Credentials {
             username: "x-fake".into(),
@@ -1004,7 +1033,7 @@ fn an_identity_reaches_only_sluices_git() {
     let url = format!("{}/o/r.git", fake.url());
     let identity = Rc::new(FakeIdentity::new(&url, &token));
     let p = as_identity(&repo, &identity);
-    assert_eq!(p.identity().as_deref(), Some("a fake identity"));
+    assert_eq!(p.identity().unwrap().as_deref(), Some("a fake identity"));
     assert!(p.read("main").is_err(), "the fake refuses every fetch");
     let basic = basic(&token);
     assert_eq!(
@@ -1068,6 +1097,73 @@ fn a_refused_fetch_is_run_again_with_fresh_credentials() {
         [basic(&token), basic(&identity.token(1))],
         "the refused token, then a fresh one, once"
     );
+}
+
+/// deneb, 2026-11-05: a driver keeps each branch's profile open for as
+/// long as it runs, and a remote pointed at its repository's new address
+/// since, as after GitHub renamed it, is reached there by the next read,
+/// its credentials asked for that address, with nothing opened again.
+#[test]
+fn a_remote_pointed_elsewhere_is_reached_there_at_the_next_read() {
+    let repo = Repo::new("repointed");
+    repo.write(
+        ".config/sluice.toml",
+        "[branches.main]\nremote = \"origin\"\n",
+    );
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "policy"]);
+    let _bare = repo.bare_origin();
+    let (old, new) = (
+        remote(|_, _| empty_repository()),
+        remote(|_, _| empty_repository()),
+    );
+    let from = format!("{}/o/old.git", old.url());
+    let to = format!("{}/o/new.git", new.url());
+    repo.git(&["remote", "set-url", "origin", &from]);
+    let identity = Rc::new(FakeIdentity::following("fake-token"));
+    let b = Branches::open_as(repo.dir(), Some(speaker(&identity)), recorded()).unwrap();
+    assert_eq!(b.read("main").unwrap(), None);
+    let reached = old.requests().len();
+    assert!(reached > 0, "the read reached the old address");
+
+    repo.git(&["remote", "set-url", "origin", &to]);
+    assert_eq!(b.read("main").unwrap(), None);
+    assert_eq!(old.requests().len(), reached, "nothing more of the old");
+    assert!(
+        !new.requests().is_empty(),
+        "the read reached the new address"
+    );
+    assert_eq!(*identity.asked.borrow(), [from, to]);
+}
+
+/// 133, rule core.28: a fetch the forge gives sluice's identity no
+/// credential for is a read of the remote refused, in the forge's words
+/// with sluice's note beside them; no git runs, and the forge's answer is
+/// not asked again (rule core.29).
+#[test]
+fn a_credential_the_forge_withholds_is_a_refused_read() {
+    let repo = Repo::new("withheld");
+    let _bare = repo.bare_origin();
+    let fake = remote(|_, _| empty_repository());
+    let url = format!("{}/o/r.git", fake.url());
+    let withheld = Withheld {
+        said: "GET /repos/o/r/installation: 404 Not Found".into(),
+        note: Some("point the remote that names o/r at its new address".into()),
+    };
+    let identity = Rc::new(FakeIdentity::new(&url, "fake-token").withholding(withheld.clone()));
+    let p = as_identity(&repo, &identity);
+    let read = p.read("main").unwrap_err();
+    assert_eq!(
+        read_refused(&read),
+        Some(&ReadRefused {
+            remote: "origin".into(),
+            asked: "refs/heads/main".into(),
+            said: withheld.said,
+            note: withheld.note,
+        })
+    );
+    assert!(fake.requests().is_empty(), "no git ran");
+    assert_eq!(identity.asked.borrow().len(), 1, "asked once");
 }
 
 /// 134: a fetch refused on fresh credentials too, until the retry
