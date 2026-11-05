@@ -22,6 +22,12 @@
 //! of the answer the host keeps for its address, and GitHub's 304 is
 //! answered from it (136; rule core.32). The calls the app's JWT makes,
 //! finding the installation and buying a token, read no pause.
+//!
+//! A redirect is GitHub's answer, never followed: GitHub answers a renamed
+//! or transferred repository's old address with one, and a call followed
+//! there would go without its token. That answer, and no installation of
+//! the app found on a repository, say to point the remote that names it
+//! at the repository's new address, which the next call reads.
 
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
@@ -295,13 +301,30 @@ impl App {
         Ok(slug)
     }
 
-    /// The app's installation on `repo`.
+    /// The app's installation on `repo`. GitHub finds none on a repository
+    /// renamed or transferred since its remote was pointed at it, as on one
+    /// the app was never installed on, and its answer says what to do.
     pub fn installation(&self, repo: &Repo) -> Result<Installation> {
         let v = self
             .get(
                 &format!("/repos/{}/{}/installation", repo.owner, repo.name),
                 Bearer::App,
             )
+            .map_err(|e| match e.downcast::<Refused>() {
+                Ok(r) if r.status == 404 => Refused {
+                    note: Some(format!(
+                        "GitHub finds no installation of app {} on {repo}: if the repository was \
+                         renamed or transferred, point the remote that names it at its new \
+                         address, which a running sluice reads at its next call; otherwise \
+                         install the app on {repo}",
+                        self.id
+                    )),
+                    ..r
+                }
+                .into(),
+                Ok(r) => r.into(),
+                Err(e) => e,
+            })
             .with_context(|| format!("finding app {}'s installation on {repo}", self.id))?;
         let id = v["id"]
             .as_u64()
@@ -753,10 +776,13 @@ impl App {
 }
 
 /// How every call is made: a status GitHub answers is read, not an error,
-/// and no call takes longer than thirty seconds.
+/// a redirect among them, which is never followed, since a call followed
+/// to another address goes without its token; and no call takes longer
+/// than thirty seconds.
 fn http_config() -> ureq::config::Config {
     ureq::Agent::config_builder()
         .http_status_as_error(false)
+        .max_redirects(0)
         .timeout_global(Some(Duration::from_secs(30)))
         .user_agent("sluice")
         .build()
@@ -862,16 +888,62 @@ fn scope(repo: &Repo, v: &Value) -> Result<String> {
     })
 }
 
+/// GitHub's answer to a call, neither a success nor a 5xx: its words, and
+/// sluice's own on what to do where it knows.
+#[derive(Debug)]
+pub struct Refused {
+    pub status: u16,
+    /// The call and GitHub's answer: `GET /repos/o/r/pulls: 404 Not Found`.
+    pub said: String,
+    /// What to do; never GitHub's words.
+    pub note: Option<String>,
+}
+
+impl std::fmt::Display for Refused {
+    /// GitHub's words, then the note on the next line.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.said)?;
+        if let Some(note) = &self.note {
+            write!(f, "\n{note}")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for Refused {}
+
+/// The [`Refused`] `e` is, or that caused it.
+pub fn refused(e: &anyhow::Error) -> Option<&Refused> {
+    e.chain().find_map(|c| c.downcast_ref::<Refused>())
+}
+
 /// A call GitHub answered with `status`, not a success, in its words: a
-/// 5xx is [`Unanswered`], GitHub unable to answer just then.
+/// 5xx is [`Unanswered`], GitHub unable to answer just then; any other is
+/// [`Refused`], a redirect from a repository's address saying to point the
+/// remote that names it at its new one.
 fn failed(method: &str, path: &str, status: u16, v: &Value, text: &str) -> anyhow::Error {
     let why = v["message"].as_str().unwrap_or(text.trim());
     let said = format!("{method} {path}: {status} {why}");
     if (500..600).contains(&status) {
-        Unanswered(said).into()
-    } else {
-        anyhow!(said)
+        return Unanswered(said).into();
     }
+    let note = match (status, repository(path)) {
+        (301 | 302 | 307 | 308, Some(repo)) => Some(format!(
+            "GitHub answers {repo} from another address, as it does once a repository is \
+             renamed or transferred: point the remote that names {repo} at the repository's new \
+             address, which a running sluice reads at its next call"
+        )),
+        _ => None,
+    };
+    Refused { status, said, note }.into()
+}
+
+/// The repository, `owner/name`, a call's `path` is to, when it is one
+/// under `/repos/`.
+fn repository(path: &str) -> Option<String> {
+    let mut parts = path.strip_prefix("/repos/")?.split(['/', '?']);
+    let (owner, name) = (parts.next()?, parts.next()?);
+    (!owner.is_empty() && !name.is_empty()).then(|| format!("{owner}/{name}"))
 }
 
 #[cfg(test)]

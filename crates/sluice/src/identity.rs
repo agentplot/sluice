@@ -36,6 +36,36 @@ pub trait Identity {
     fn renew(&self, url: &str) -> Result<Credentials>;
 }
 
+/// The forge's answer refusing an identity credentials for a remote: a
+/// read that needed them is a read of the remote refused, in the forge's
+/// words (133; rule core.28).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Withheld {
+    /// The forge's words: what was asked of it and its answer, whole.
+    pub said: String,
+    /// sluice's own words on what to do, where it knows; never the
+    /// forge's.
+    pub note: Option<String>,
+}
+
+impl std::fmt::Display for Withheld {
+    /// The forge's words, then the note on the next line.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.said)?;
+        if let Some(note) = &self.note {
+            write!(f, "\n{note}")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for Withheld {}
+
+/// The [`Withheld`] `e` is, or that caused it.
+pub fn withheld(e: &anyhow::Error) -> Option<&Withheld> {
+    e.chain().find_map(|c| c.downcast_ref::<Withheld>())
+}
+
 /// The variables a git call of sluice's is given its credentials in, read
 /// by the helper that call runs.
 pub const USERNAME_VAR: &str = "SLUICE_CREDENTIAL_USERNAME";

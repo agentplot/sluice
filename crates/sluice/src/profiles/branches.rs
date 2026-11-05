@@ -296,9 +296,12 @@ struct Routing {
 
 impl Pushers for Branches {
     fn pusher(&self, branch: &str) -> Result<Option<Pusher>> {
-        Ok(self.route(branch)?.map(|p| Pusher {
+        let Some(p) = self.route(branch)? else {
+            return Ok(None);
+        };
+        Ok(Some(Pusher {
             remote: p.remote().into(),
-            identity: p.identity(),
+            identity: p.identity()?,
         }))
     }
 }

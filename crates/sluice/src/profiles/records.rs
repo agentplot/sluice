@@ -642,8 +642,7 @@ impl State for Records {
                     continue;
                 }
                 let p = self.branches.pushed_refs(&remote)?;
-                let out =
-                    p.remote_git(&["ls-remote", "--refs", p.target(), "refs/sluice/state/*"])?;
+                let out = p.remote_git(&["ls-remote", "--refs"], &["refs/sluice/state/*"])?;
                 if !out.status.success() {
                     // A remote out of reach lists nothing here; a branch
                     // already routed is read as last fetched (80).
