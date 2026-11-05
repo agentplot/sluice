@@ -6,6 +6,7 @@
 //! [`profiles`] binds.
 
 pub mod branch;
+pub mod equip;
 pub mod exec;
 pub mod home;
 pub mod host_count;
@@ -413,6 +414,29 @@ pub enum Command {
         /// Release the worktree once the run ends.
         #[arg(long)]
         release: bool,
+    },
+    /// Equip this worktree for a branch's runner, as sluice equips every
+    /// checkout before it runs anything there; it holds nothing.
+    #[command(
+        long_about = "Equip this worktree for a branch's runner, as sluice equips every \
+                      checkout before it runs anything there: the toolchain the branch's \
+                      policy names, then the runner's own steps, through its setup. It \
+                      holds nothing: no ports, no record, no part of the host's bound.",
+        after_help = "Examples:\n  $ sluice equip main\n  $ sluice equip main --at 2eb676c --json\n\n\
+                      Exit codes:\n  0    every step passed, or there was none\n  \
+                      1    a step failed\n  2    a refusal\n  3    sluice itself failed\n  \
+                      64   a command line sluice cannot read"
+    )]
+    Equip {
+        /// The branch whose policy equips it.
+        branch: String,
+        /// The revision whose policy equips it, whether or not it names the
+        /// branch; the branch's current revision where none is given.
+        #[arg(long)]
+        at: Option<String>,
+        /// One JSON document on stdout.
+        #[arg(long)]
+        json: bool,
     },
     /// Bring up a running copy of a revision a branch has landed, at
     /// addresses a person opens; held until `sluice release <preview>`.
@@ -932,6 +956,7 @@ impl Cli {
                 | Command::Status { json, .. }
                 | Command::Overview { json, .. }
                 | Command::Exec { json, .. }
+                | Command::Equip { json, .. }
                 | Command::Preview { json, .. }
                 | Command::Previews { json }
                 | Command::Step { json, .. }
@@ -1622,6 +1647,14 @@ pub fn run(
             pushers,
             clock,
             pause,
+        }
+        .run(&s, out),
+        Command::Equip { branch, at, json } => equip::Equip {
+            branch,
+            at,
+            json,
+            host,
+            pushers,
         }
         .run(&s, out),
         Command::Preview {
