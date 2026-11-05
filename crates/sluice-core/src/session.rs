@@ -7,8 +7,7 @@
 use anyhow::{anyhow, Result};
 use sluice_seams::{
     GoneRelease, Guard, LastResult, Limits, Outcome, Place, ReleasePolicy, Rev, RunHandle, RunKind,
-    RunOutcome, RunReport, RunRequest, Session, SessionPlace, Setting, Source, TaskProgress,
-    TaskState,
+    RunOutcome, RunReport, RunRequest, Session, SessionPlace, Source, TaskProgress, TaskState,
 };
 
 use crate::policy::{Policy, Rules};
@@ -151,7 +150,9 @@ impl Sluice<'_> {
     /// 89, 83: a session run of the checks `head` affects against the
     /// branch, or of `command`, in `place`, under the branch's executor,
     /// limits and time limit; never answered from the cache, since what a
-    /// session run records must be observed (16).
+    /// session run records must be observed (16). A command runs in place
+    /// of the runner's checks, in a worktree equipped by the runner the
+    /// branch's policy names (147).
     pub fn session_request(
         plan: &SessionPlan,
         place: Place,
@@ -161,9 +162,7 @@ impl Sluice<'_> {
         let mut tests = plan.policy.tests.clone();
         let required = match command {
             None => plan.rules.required.clone(),
-            Some(c) => {
-                tests.insert("runner".into(), Setting::Text("command".into()));
-                tests.insert("command".into(), Setting::Text(c.into()));
+            Some(_) => {
                 // Could-not-run-1 114: a not-run exit says a check could
                 // not run here; a command's exit is its own, so none of
                 // its exits is read so.
@@ -179,7 +178,7 @@ impl Sluice<'_> {
             limit: plan.rules.timeout,
             limits: plan.policy.limits.clone(),
             tests,
-            command: None,
+            command: command.map(str::to_string),
             replay: false,
             system: None,
         }

@@ -1187,17 +1187,10 @@ impl World {
             };
         }
         let tree = inner.commits[&request.revision].tree.clone();
-        // A session's command (session-runs-1 clause 89): its one check is
-        // the command, which fails where a rule names it.
-        let command = match (request.tests.get("runner"), request.tests.get("command")) {
-            (Some(sluice_seams::Setting::Text(r)), Some(sluice_seams::Setting::Text(c)))
-                if r == "command" =>
-            {
-                Some(c.clone())
-            }
-            _ => None,
-        };
-        if let Some(command) = command {
+        // A session's or a preview's command (session-runs-1 clause 89,
+        // previews-1 clause 98): its one check is the command, which fails
+        // where a rule names it.
+        if let Some(command) = request.command.clone() {
             let outcome = match inner
                 .fail_rules
                 .iter()
