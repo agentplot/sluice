@@ -14,7 +14,7 @@ Sources: `agentplot/blueprints:design/sluice/proposals/previews-1.md` clauses 98
 
 ## Context and problem statement
 
-A person checking a bolt's work wants it running. The fleet kept a worktree of each bolt branch for that, checked out and kept current, its stack brought up by hand on whatever ports were free, and means to stop keeping them. The repository already describes its stack for its checks: an emulator, stand-ins and servers on the ports a place is given (ADR 0016), brought up by its own tools. What does sluice owe a caller, such as crew or flywheel, that wants a running copy of what a branch landed, linked to the landing, replaced at the next landing and gone when the bolt lands?
+A person checking a bolt's work wants it running. The fleet kept a worktree of each bolt branch for that, checked out and kept current, its stack brought up by hand on whatever ports were free, and means to stop keeping them. The repository already describes its stack for its checks: an emulator, stand-ins and servers on the ports a place is given (ADR 0016), brought up by its own tools. What does sluice owe a caller, such as crew or Boomdrive, that wants a running copy of what a branch landed, linked to the landing, replaced at the next landing and gone when the bolt lands?
 
 ## Considered options
 

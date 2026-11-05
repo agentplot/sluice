@@ -185,7 +185,7 @@ A branch without `trust` accepts every run sluice starts (`"open"`,
 satisfy it starts nothing and says why.
 
 There is no key for operator approval: that is the caller's business, and
-crew or flywheel submits only once the work is approved.
+crew or Boomdrive submits only once the work is approved.
 
 ## 3. What changes in crew's other config
 
@@ -233,7 +233,7 @@ it is the front door agents and tools use, and it decides nothing about the
 queue. worktrunk is the driver here because agents already live in `wt`
 worktrees and used to finish with `wt merge`; `wt submit` takes its place.
 The alternatives are plain `sluice submit` from any shell, crew's merge
-stage, or flywheel's effect, all calling the same `sluice submit` underneath.
+stage, or Boomdrive's effect, all calling the same `sluice submit` underneath.
 
 ```console
 $ wt submit bolt/concurrent-units
