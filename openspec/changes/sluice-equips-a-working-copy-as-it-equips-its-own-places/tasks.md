@@ -48,7 +48,7 @@ passing.
 - [x] 4.4 In `crates/sluice-fakes/src/lib.rs`, implement `FakeTests::equip`: it keeps each `Equip` asked, for `FakeTests::equips()`, and answers the steps `equip_answers(steps)` set, no steps by default. True when `sluice exec main -- cargo test -p sluice-fakes` passes.
 - [x] 4.5 Add `crates/sluice/tests/equip.rs`, over the fakes and `support::FakeHost` as `crates/sluice/tests/previews.rs` is, with `every_step_passed_exits_0`, `a_failed_step_exits_1`, `a_failed_step_is_printed_with_its_words`, `equip_reads_the_policy_at_the_revision_named`, `equip_at_a_revision_equips_whatever_its_branches_name`, `equip_reads_the_branchs_policy`, `equip_refuses_a_branch_it_cannot_read`, `equip_refuses_a_branch_its_policy_does_not_manage`, `equip_refuses_a_revision_with_no_policy` and `equip_takes_no_part_of_the_bound`, as the equip spec's scenarios say, each citing 147 and the command; each refusal asserts the fake's `equips()` is empty. True when `sluice exec main -- cargo test -p sluice --test equip` passes.
 - [x] 4.6 In `plugins/sluice/skills/using-sluice/references/exec.md`, add a section on `sluice equip`, when an agent or a tool runs it and what it holds, so the skills name the command the group adds. True when `sluice exec main -- cargo test -p sluice --test plugin_docs` passes, `every_command_is_named_in_the_skills` among it.
-- [ ] 4.7 Check the group: commit, then run `sluice exec main -- moon run cli:test core:test fakes:test plugin-sluice:validate`. True when every task passes.
+- [x] 4.7 Check the group: commit, then run `sluice exec main -- moon run cli:test core:test fakes:test plugin-sluice:validate`. True when every task passes.
 
 ## 5. S72 on the binary
 
