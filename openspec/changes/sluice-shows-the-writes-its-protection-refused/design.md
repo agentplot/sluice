@@ -234,12 +234,18 @@ sluice sets each host's main to each landing itself: stop what runs these
 ```
 
 A deletion's line reads `from 10e4791, deleting it`. The command is its
-first line, cut after 100 characters with `…`. `--json` carries it
-whole. The last line is the copy's, `sluice sets each host's <branch> to
-each landing itself: stop what runs these`, where the branch's policy
-names a remote. Otherwise it is `only sluice moves <branch>: submit the
-change to sluice instead`, the refusal's own words (124). `status_json`
-adds `"refused_writes"`, `[]` when none stand.
+first line, cut after 100 characters, with `…` wherever anything of it
+is left out, a second line among it. `--json` carries it whole. The
+last line is the copy's, `sluice sets each host's <branch> to each
+landing itself: stop what runs these`, where the branch's policy names a
+remote. Otherwise it is `only sluice moves <branch>: submit the change
+to sluice instead`, the refusal's own words (124). `Status::on_remote`
+says which: the branch seam's `copy` is a copy apart from the branch, as
+the hook judges it, read by `Sluice::status` only while a cause stands,
+so a status with none reads nothing more. The pusher `write_status`
+takes was the other way, and it is passed only where status is asked
+of a branch, never where a submission's status is shown, and never over
+the fakes. `status_json` adds `"refused_writes"`, `[]` when none stand.
 
 ### D6. The overview shows them under the branch's line
 
