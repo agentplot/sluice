@@ -3113,6 +3113,7 @@ mod tests {
             limit: None,
             limits: Default::default(),
             tests: Settings::new(),
+            command: None,
             replay: true,
             system: None,
         };

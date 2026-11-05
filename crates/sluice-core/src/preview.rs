@@ -188,6 +188,7 @@ impl Sluice<'_> {
             limit: plan.timeout,
             limits: plan.limits.clone(),
             tests,
+            command: None,
             replay: false,
             system: None,
         }

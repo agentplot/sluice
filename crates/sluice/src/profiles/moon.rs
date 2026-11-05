@@ -1754,6 +1754,7 @@ mod tests {
                 limit: None,
                 limits: sluice_seams::Limits::default(),
                 tests: sluice_seams::Settings::new(),
+                command: None,
                 replay: false,
                 system: None,
             };

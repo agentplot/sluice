@@ -545,6 +545,9 @@ pub struct RunRequest {
     pub limits: Limits,
     /// The policy's `[tests]` table: which runner, and its settings.
     pub tests: Settings,
+    /// A command the run runs in place of the runner's checks (89, 98),
+    /// its working copy equipped by the runner `tests` names (147).
+    pub command: Option<String>,
     /// Whether a result may be answered from the task runner's cache. A
     /// replay supplies outputs and decides nothing: it counts only through
     /// a trusted pass recorded for its key (108), and a run whose replays

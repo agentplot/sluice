@@ -425,6 +425,7 @@ fn a_sessions_stack_stays_between_runs_and_goes_on_release() {
                     ..Limits::default()
                 },
                 tests: tests.clone(),
+                command: None,
                 replay: false,
                 system: None,
             })

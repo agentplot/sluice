@@ -114,6 +114,7 @@ fn request(repo: &Repo, name: &str, required: &[&str], since: Option<&str>) -> R
         limit: Some(Duration::from_secs(120)),
         limits: Limits::default(),
         tests: moon(),
+        command: None,
         replay: true,
         system: None,
     }

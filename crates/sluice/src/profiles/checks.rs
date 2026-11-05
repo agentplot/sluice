@@ -1287,6 +1287,7 @@ pub fn release_request(
         limit: None,
         limits: limits.clone(),
         tests: tests.clone(),
+        command: None,
         replay: false,
         system: None,
     };
@@ -1838,6 +1839,7 @@ impl Tests for Checks {
             limit: None,
             limits: Limits::default(),
             tests: tests.clone(),
+            command: None,
             replay: false,
             system: None,
         };
@@ -1879,6 +1881,7 @@ impl Tests for Checks {
             limit: None,
             limits: Limits::default(),
             tests: reading.tests.clone(),
+            command: None,
             replay: false,
             system: None,
         };
@@ -1913,6 +1916,7 @@ impl Tests for Checks {
             limit: None,
             limits: Limits::default(),
             tests: equip.tests.clone(),
+            command: None,
             replay: false,
             system: None,
         };

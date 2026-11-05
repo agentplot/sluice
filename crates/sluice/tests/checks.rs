@@ -64,6 +64,7 @@ fn request(repo: &Repo, name: &str, tests: Settings) -> RunRequest {
         limit: Some(Duration::from_secs(60)),
         limits: Limits::default(),
         tests,
+        command: None,
         replay: true,
         system: None,
     }
