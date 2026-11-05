@@ -1,7 +1,7 @@
 ---
 number: 82
 title: A write the protection refused is shown once per cause, counted in the branch's document, until a day passes with none
-status: proposed
+status: accepted
 date: 2026-11-05
 decision-makers:
 - Chuck Swanberg
@@ -9,10 +9,10 @@ decision-makers:
 
 # A write the protection refused is shown once per cause, counted in the branch's document, until a day passes with none
 
-Status: proposed. The user chose on 2026-11-05, reviewing swancloud's fix for its views timer, "that sluice shows refused writes itself and that swancloud's doctor reads them from sluice, not from sluice's log file", as the brief of the change `sluice-shows-the-writes-its-protection-refused` relays it. Everything else below is the construct stage's own for that change: what a cause is, where its count is kept, how long it is shown, the bound on causes, the end's line, and the words and fields. Each is cheap to change until a release carries it, and the user sees this record at that change's review.
+Status: accepted by the user on 2026-11-05, in the words "Approve: push the amendment and start its code", given on the statement's amendment of that day, now on agentplot/blueprints main at 539f745 (124, 148, C.4, S73), after the user chose, reviewing swancloud's fix for its views timer, "that sluice shows refused writes itself and that swancloud's doctor reads them from sluice, not from sluice's log file", as the brief of the change `sluice-shows-the-writes-its-protection-refused` relays it. The choices within it below are the construct stage's own for that change: what a cause is, where its count is kept, how long it is shown, the bound on causes, the end's line, and the words and fields. Each is cheap to change until a release carries it, and the user sees them at that change's review.
 
-Deciders: the construct stage of `sluice-shows-the-writes-its-protection-refused`, on the user's choice above.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 26, 124, 131, 132, 133, C.4, and clause 148 and S73 as the branch `design/sluice-shows-the-writes-its-protection-refused` words them; ADRs 0053, 0059, 0061, 0078; rules core.11, core.14, core.28, core.41; `crates/sluice/src/protect.rs` `hook` and `crates/sluice-core/src/ops.rs` `record_protected` as main held them at 3f5aed5f; swancloud's `packages/swancloud-doctor/sluice-refused.sh` on its branch `fix/the-views-timer-moves-anchors-only` (7011324e); Boomdrive's ADR 0019; flume's `refused_acts` (`crates/flume-core/src/answer.rs`).
+Deciders: the user, choosing and approving as above on 2026-11-05; the construct stage of `sluice-shows-the-writes-its-protection-refused`, for the choices within it.
+Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 26, 124, 131, 132, 133, C.4, and clause 148 and S73, with 124's and C.4's amendments, as agentplot/blueprints main words them at 539f745; ADRs 0053, 0059, 0061, 0078; rules core.11, core.14, core.28, core.41; `crates/sluice/src/protect.rs` `hook` and `crates/sluice-core/src/ops.rs` `record_protected` as main held them at 3f5aed5f; swancloud's `packages/swancloud-doctor/sluice-refused.sh` on its branch `fix/the-views-timer-moves-anchors-only` (7011324e); Boomdrive's ADR 0019; flume's `refused_acts` (`crates/flume-core/src/answer.rs`).
 
 ## Context and problem statement
 

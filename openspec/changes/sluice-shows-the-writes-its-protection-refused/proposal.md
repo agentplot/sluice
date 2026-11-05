@@ -14,10 +14,10 @@ line, and no one saw any of it for days. swancloud's fix had its doctor
 The user, 2026-11-05, reviewing swancloud's fix, chose that sluice shows
 refused writes itself and that swancloud's doctor reads them from sluice,
 not from sluice's log file. This change is sluice's part. Its clauses are
-148 and S73, and 124's and C.4's amendments, on the blueprints branch
-`design/sluice-shows-the-writes-its-protection-refused` (b981dbf). Record
-0082 sets the design down, and rule core.47 binds it. Both are written
-with this change.
+148 and S73, and 124's and C.4's amendments, on agentplot/blueprints
+main at 539f745, which the user approved on 2026-11-05. Record 0082 sets
+the design down, accepted on that approval, and rule core.47 binds it.
+Both are written with this change.
 
 ## What Changes
 
