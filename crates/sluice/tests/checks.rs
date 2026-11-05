@@ -1536,6 +1536,32 @@ fn a_run_that_runs_nothing_is_never_set_up() {
     assert!(!log.iter().any(|l| l == "moon setup"), "{log:?}");
 }
 
+/// 89, 98, 147, S72; rule core.46: a session's or a preview's command
+/// runs in place of the runner's checks, in a working copy equipped
+/// through the setup by the runner its branch's policy names.
+#[test]
+fn a_run_with_a_command_is_equipped_by_its_branchs_runner() {
+    let w = Equippable::new("equip-command", true, "true");
+    let c = checks(&w.repo);
+    let command = format!("echo command >> '{}'", w.tools.path().join("log").display());
+    let mut req = request(&w.repo, "p1", w.tests("moon"));
+    req.command = Some(command.clone());
+    let r = finish(&c, &req);
+    assert_eq!(r.tasks.len(), 1, "{r:?}");
+    assert_eq!(r.tasks[0].task, command);
+    assert_eq!(r.tasks[0].outcome, Outcome::Pass);
+    assert_eq!(
+        w.log(),
+        [
+            "toolchain",
+            "proto install --config-mode upwards",
+            "moon --version",
+            "moon setup",
+            "command",
+        ]
+    );
+}
+
 /// 147, record 0050; rule core.46: a submitter's worktree, read for the
 /// checks moon keeps out of CI, is equipped up to the version check and
 /// never set up.

@@ -32,6 +32,10 @@
 //! - `"command"`: `sh -c <command>`, one check named by the command,
 //!   never replayed.
 //!
+//! A run's own command, a session's or a preview's (89, 98), runs as the
+//! command runner runs its command, in a working copy equipped by the
+//! runner `[tests]` names (147).
+//!
 //! Every working copy sluice runs anything in is equipped first by one
 //! sequence, [`Equipping`] (147; rule core.46): `[tests] toolchain`, then
 //! the runner's own steps, each outside the executor with the run's
@@ -1471,11 +1475,20 @@ impl Tests for Checks {
         let cx = equipping.context();
         let sourced = cx.toolchain.is_some();
         let not_run = not_run_exits(&request.tests)?;
-        let plan = match runner.as_str() {
-            "moon" => Moon.plan(&cx)?,
-            "command" => {
-                let command = text(&request.tests, "command")?
-                    .ok_or_else(|| anyhow!("[tests] runner = \"command\" needs a command"))?;
+        // 89, 98: a request's command runs in place of the runner's
+        // checks, in a working copy equipped by the runner `[tests]`
+        // names (147), and plans as the command runner does.
+        let command = match (&request.command, runner.as_str()) {
+            (Some(command), _) => Some(command.as_str()),
+            (None, "command") => Some(
+                text(&request.tests, "command")?
+                    .ok_or_else(|| anyhow!("[tests] runner = \"command\" needs a command"))?,
+            ),
+            (None, _) => None,
+        };
+        let plan = match (command, runner.as_str()) {
+            (None, "moon") => Moon.plan(&cx)?,
+            (Some(command), _) => {
                 Plan {
                     argv: Some(cx.argv(&["/bin/sh", "-c", command])),
                     targets: vec![command.to_string()],
@@ -1493,11 +1506,18 @@ impl Tests for Checks {
                     },
                 }
             }
-            other => bail!("[tests] runner = {other:?} names no runner: \"moon\" or \"command\""),
+            (None, other) => {
+                bail!("[tests] runner = {other:?} names no runner: \"moon\" or \"command\"")
+            }
         };
         if plan.argv.is_some() {
             equipping.ready(Through::Running)?;
         }
+        // What the run's results, progress and logs are read by.
+        let runner = match command {
+            Some(_) => "command".to_string(),
+            None => runner,
+        };
         let processors = plan.holds_processors.then_some(jobs);
         let mut argv = plan.argv.unwrap_or_else(|| vec!["/usr/bin/true".into()]);
         let mut release = release_argv(&request.tests)?.map(|r| {
