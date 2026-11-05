@@ -4496,13 +4496,13 @@ fn write_refused_writes(status: &Status, out: &mut dyn Write) -> Result<()> {
             n => format!("{n} times"),
         };
         let to = match &c.to {
-            Some(to) => format!("to {}", to.short()),
-            None => "deleting it".to_string(),
+            Some(to) => format!(" to {}", to.short()),
+            None => ", deleting it".to_string(),
         };
         writeln!(out, "  {}", overview::command_line(&c.command))?;
         writeln!(
             out,
-            "    on {}: {times}, first {}, last {}, from {} {to}",
+            "    on {}: {times}, first {}, last {}, from {}{to}",
             c.host,
             c.first,
             c.last,
