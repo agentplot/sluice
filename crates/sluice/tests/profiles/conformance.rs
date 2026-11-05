@@ -471,7 +471,9 @@ impl Real {
             rules,
             release_ok,
             checkout: RecordedPlaces {
-                inner: checkout.with_blocks(blocks.path().to_path_buf()),
+                inner: checkout
+                    .with_blocks(blocks.path().to_path_buf())
+                    .with_scratch_root(support::test_user_scratch()),
                 log: RefCell::default(),
             },
             tests: RecordedChecks {

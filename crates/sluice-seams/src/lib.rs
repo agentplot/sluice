@@ -130,7 +130,10 @@ pub struct Place {
     pub name: String,
     pub path: PathBuf,
     /// A scratch directory of the place's own, given to the checks as
-    /// `SLUICE_TMP`.
+    /// `SLUICE_TMP`: under a short directory of the host user's own, apart
+    /// from every repository, at a path that grows with neither the place's
+    /// name nor where its checkout or the repository is, as its record
+    /// names it (35 as amended, rule core.30).
     pub tmp: PathBuf,
     /// 31: what the place gives its checks beyond its paths: its short
     /// name, `SLUICE_PLACE`, and a `SLUICE_PORT_<NAME>` for each port the
@@ -342,13 +345,14 @@ pub trait Checkout {
     /// is an error; the command's failure is in what is returned.
     fn release_gone(&self, name: &str) -> Result<GoneRelease>;
 
-    /// 35, 123, rule core.30: remove every scratch directory of the
-    /// repository that no place's record names, and return the paths
-    /// removed. A directory a record names is left, an older record's,
-    /// which names its scratch by the place's name, among them; so is one
-    /// made while the removal runs, since a place's record names its
-    /// scratch before the directory is made. A directory removed meanwhile
-    /// is no error.
+    /// 35 as amended, 123, rule core.30: remove every scratch directory of
+    /// the repository that no place's record names, under the repository's
+    /// own directory in the user's and under its former root, and return
+    /// the paths removed; another repository's scratch is never weighed. A
+    /// directory a record names is left, an older record's, which names its
+    /// scratch by the place's name, among them; so is one made while the
+    /// removal runs, since a place's record names its scratch before the
+    /// directory is made. A directory removed meanwhile is no error.
     fn remove_unnamed_scratch(&self) -> Result<Vec<PathBuf>>;
 
     /// 81: every candidate's place this host made and has not released,

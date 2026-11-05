@@ -240,6 +240,9 @@ fi
 # --- sluice: S1 to S4 for real -------------------------------------------------------------------------------------
 # The host's blocks of ports and session runs, kept with the scratch repository.
 export XDG_STATE_HOME=$ROOT/state
+# The directory standing for the user's, where each place's scratch is made (35), kept there too: under the gate's
+# sandbox, which lets a check write no other, /tmp/sluice-<uid> cannot be made.
+export SLUICE_USER_SCRATCH=$ROOT/scratch
 COMMON=$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir)
 submit() { # submit <session> <scenario> [flags...]: wt submit from the session's place, as its agent would; the
   #        place is kept on landing, since each session's place serves every scenario

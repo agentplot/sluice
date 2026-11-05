@@ -62,7 +62,7 @@ out, what it allows and the clauses and decisions it rests on.
 - **[core.19](https://github.com/agentplot/sluice/blob/main/docs/architecture/core.md#details)** A preview is made only at a revision its branch has landed, and decides nothing: its command is never recorded as a run, read by a gate, or waited on by a submission.
 - **[core.20](https://github.com/agentplot/sluice/blob/main/docs/architecture/core.md#details)** The core writes no working copy it neither made nor adopted: a worktree that has checked out a branch sluice lands on is reported, never moved, and never stops a landing.
 - **[core.23](https://github.com/agentplot/sluice/blob/main/docs/architecture/core.md#details)** An instance claims no run while a place it made belongs to a candidate with a verdict, an obsolete one, or a claim it no longer holds, until each such place is released or held.
-- **[core.30](https://github.com/agentplot/sluice/blob/main/docs/architecture/core.md#details)** A place's scratch is at a path that does not grow with the place's name or its checkout's location, and the place's record names it.
+- **[core.30](https://github.com/agentplot/sluice/blob/main/docs/architecture/core.md#details)** A place's scratch is under a short directory of the host user's own, apart from every repository, at a path that grows with neither the place's name, its checkout's location nor the repository's, and the place's record names it.
 
 ## Design and records
 
