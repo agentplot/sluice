@@ -1,8 +1,9 @@
 # Verify
 
 The work on `change/sluice-equips-a-working-copy-as-it-equips-its-own-places`
-at 9cbc5e21, cut from main at 6b29c5ce, checked on 2026-11-05 against
-this change's proposal, design, equip spec and tasks.
+at 92f3f658, cut from main at 6b29c5ce, checked on 2026-11-05 against
+this change's proposal, design, equip spec and tasks, main standing at
+b1b26ded.
 
 **The work holds.** Every requirement and scenario of the equip spec
 is met by the code and by the test the scenario names, each of which
@@ -13,27 +14,30 @@ the tasks name pass.
 
 | Check | Result |
 |---|---|
-| `sluice exec main` on 9cbc5e21, a clean worktree | 27 of 27 tasks passed, each run; 27 results recorded under their keys; cli:test 559 tests and cli:tools 516, every test the table below names among them |
-| `sluice exec main` on 9cbc5e21, run first | 26 passed and `plugin-board:test` failed, nothing recorded: see below |
-| `devenv shell -- moon run cli:sandbox --force`, outside any sandbox, since macOS refuses one inside another and no gate task runs it | passed: 8 sandbox tests, each through `Checks::start` and its equipping |
+| `sluice exec main` on 92f3f658, a clean worktree, against main at b1b26ded | 27 of 27 tasks passed, each run; cli:test 559 tests and cli:tools 516, none failed, every test the table below names among them; one result recorded under its key |
+| `devenv shell -- moon run cli:sandbox --force` on 9cbc5e21, outside any sandbox, since macOS refuses one inside another and no gate task runs it | passed: 8 sandbox tests, each through `Checks::start` and its equipping |
 | `openspec validate sluice-equips-a-working-copy-as-it-equips-its-own-places --strict` | valid |
 | `rg -n '"proto"\|"setup"\|"--version"' crates/sluice/src crates/sluice-core/src` (7.1) | `moon.rs:378` (`proto install`), `moon.rs:386` (`moon setup`), `moon.rs:445` (`moon --version`), and worktrunk's own `--version` (`worktrunk/mod.rs:567`), which equips nothing |
 | `rg -n 'Text\("command"' crates/sluice-core/src` (7.1) | nothing: no request is written to the command runner |
-| `sluice equip main` and `--json`, the branch's debug build, in a folder below the top of a scratch repository whose policy names `runner = "command"` and no toolchain | `nothing to equip: main's policy names no toolchain, and its runner nothing to set up`, exit 0; `{"branch":"main","revision":…,"steps":[]}`, exit 0 |
+| `sluice equip main` and `--json`, the branch's debug build at 9cbc5e21, in a folder below the top of a scratch repository whose policy names `runner = "command"` and no toolchain | `nothing to equip: main's policy names no toolchain, and its runner nothing to set up`, exit 0; `{"branch":"main","revision":…,"steps":[]}`, exit 0 |
 
-The first gate run failed one test of `plugin-board:test`, `sluice
-0.44.0 on the host: the board says so once, and shows and delivers
-nothing` (`plugins/sluice-board/tests/register.test.tsx:2615`), on the
-engine's 5000 ms limit. It recorded nothing, because this report was
-written into the worktree while that run went. The task's inputs are
-the board plugin's own files and `devenv.nix`, none of which this change
-touches, so its key, 2477d075, is the one main gives. That key passed in
-this change's own 7.2 gate and in the second run, on a host running
-twenty agents at once. The work did not cause the failure. A fail and a
-pass under one key would read as a flake, and it is reported to the
-orchestrator with this verify.
+The two rows checked at 9cbc5e21 stand at 92f3f658. No file under any
+crate's `src/` changed between them. What changed is three test files,
+`checks.rs`, `exec.rs` and `support/mod.rs`, and no sandbox test calls
+`closed_port` or `at_a_closed_port`.
 
-moon warned 51 times across the second run that it could not archive a
+The queue's `cli:test` failed on the change's candidate e22e985:
+`an_engine_at_a_tcp_address_is_looked_for_there` read "Connection reset
+by peer" where it looked for "refused the connection". Another socket
+on the host had bound the port `closed_port` let go. Task 7.4 answers
+it in 92f3f658. `support::at_a_closed_port` tries up to five ports let
+go and takes the first at which the refusal is read, and the test still
+asserts the refusal's exact words at the port it took. That test and
+`exec_looks_for_the_engine_at_a_tcp_address` both use it, and both
+passed in the gate above, in cli:test and cli:tools. Neither test is
+this change's: the flake predates it.
+
+moon warned 62 times across the gate run that it could not archive a
 task's outputs under `.moon/cache/outputs/` or store a blob in the
 shared cache. The tasks still passed. These are the sandbox's known
 refusals of those writes, which the change `a-checks-key-holds-its-executor`
@@ -77,7 +81,7 @@ it, from `write_text` in `crates/sluice/src/equip.rs`.
 | | A combination that runs a check | `Checks::start`: `Reading`, `Moon::plan`, then `Running` where `argv` is `Some` | `a_run_that_runs_a_check_is_set_up`, cli:test |
 | A working copy sluice only reads in is equipped up to the version check | A combination that affects nothing | `Checks::start` skips `Running` where the plan runs nothing | `a_run_that_runs_nothing_is_never_set_up`, cli:test |
 | | A submitter's worktree | `Checks::kept_out` through `Reading` | `the_submitters_read_is_never_set_up`, cli:test |
-| A run whose working copy could not be equipped could not start | A combination's setup fails | `Equipping::ready` fails `start` with `<step>: <words>`; the core's `could_not_start` as before | `a_run_whose_working_copy_could_not_be_equipped_could_not_start`, cli:test; the toolchain's words, `could not start: toolchain: exited 1: …`, at `checks.rs:1126`, cli:test |
+| A run whose working copy could not be equipped could not start | A combination's setup fails | `Equipping::ready` fails `start` with `<step>: <words>`; the core's `could_not_start` as before | `a_run_whose_working_copy_could_not_be_equipped_could_not_start`, cli:test; the toolchain's words, `could not start: toolchain: exited 1: …`, at `checks.rs:1128`, cli:test |
 
 The affected reading's tree (140) is equipped through `Reading` in
 `Checks::reads`, as the spec's requirement on working copies only read
@@ -85,7 +89,7 @@ in says; no scenario names it, and its tests in cli:tools pass.
 
 ## Tasks
 
-29 of 29 are ticked, and each one's condition holds:
+30 of 30 are ticked, and each one's condition holds:
 
 - 1.1, 1.2: record 0081 is accepted on the user's approval of
   2026-11-05; rule core.46 stands under "Places" with its details; the
@@ -121,6 +125,10 @@ in says; no scenario names it, and its tests in cli:tools pass.
 - 7.1, 7.2: as the checks above.
 - 7.3: what the orchestrator does once the change lands is below. No
   task waits on the landing.
+- 7.4: `support::at_a_closed_port` in `crates/sluice/tests/support/mod.rs`,
+  used by `an_engine_at_a_tcp_address_is_looked_for_there` and
+  `exec_looks_for_the_engine_at_a_tcp_address`; cli:test and cli:tools
+  pass in the gate.
 
 ## After the landing
 
