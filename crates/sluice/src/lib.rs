@@ -4257,6 +4257,7 @@ fn write_status(
     if let Some(refused) = &status.refused {
         writeln!(out, "{}", refused_lines(refused))?;
     }
+    write_refused_writes(status, out)?;
     for t in testing {
         writeln!(out, "  {t}")?;
     }
@@ -4363,6 +4364,7 @@ fn status_json(status: &Status, submissions: &[Submission]) -> serde_json::Value
         "held": status.held.as_ref().map(held_json),
         "held_checkouts": held_checkouts,
         "copy": status.copy,
+        "refused_writes": status.refused_writes,
     });
     if let Some(refused) = &status.refused {
         json["refused"] = serde_json::json!(refused);
@@ -4472,6 +4474,53 @@ fn refused_lines(refused: &sluice_core::Refused) -> String {
         text.push_str(&format!("\n  {line}"));
     }
     text
+}
+
+/// 148: the writes sluice's protection refused on the branch whose causes
+/// stand, newest first, each by its command and then by its host, count,
+/// first, last and last revisions; then what to do, in the words of the
+/// copy's refusal where the branch is kept on a remote and of the
+/// refusal itself where it is not (124; design D5).
+fn write_refused_writes(status: &Status, out: &mut dyn Write) -> Result<()> {
+    if status.refused_writes.is_empty() {
+        return Ok(());
+    }
+    let branch = &status.branch;
+    writeln!(
+        out,
+        "sluice refused writes to {branch} in the last day, by commands that are not sluice's:"
+    )?;
+    for c in &status.refused_writes {
+        let times = match c.times {
+            1 => "1 time".to_string(),
+            n => format!("{n} times"),
+        };
+        let to = match &c.to {
+            Some(to) => format!("to {}", to.short()),
+            None => "deleting it".to_string(),
+        };
+        writeln!(out, "  {}", overview::command_line(&c.command))?;
+        writeln!(
+            out,
+            "    on {}: {times}, first {}, last {}, from {} {to}",
+            c.host,
+            c.first,
+            c.last,
+            c.from.short()
+        )?;
+    }
+    if status.on_remote {
+        writeln!(
+            out,
+            "sluice sets each host's {branch} to each landing itself: stop what runs these"
+        )?;
+    } else {
+        writeln!(
+            out,
+            "only sluice moves {branch}: submit the change to sluice instead"
+        )?;
+    }
+    Ok(())
 }
 
 /// 124, S64: this host's copy of `branch` left behind its landing, and

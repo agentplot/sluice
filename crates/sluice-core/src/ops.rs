@@ -378,6 +378,10 @@ pub struct Status {
     /// 148: every host's causes of writes the protection refused that
     /// stand now, newest last refusal first (design D5).
     pub refused_writes: Vec<crate::records::RefusedWrite>,
+    /// 124, 148: whether the branch is kept on a remote, so the refused
+    /// writes were to sluice's copy of it, for the words after them
+    /// (design D5). Read only while any stand, and `false` while none do.
+    pub on_remote: bool,
 }
 
 /// 133: what this host's rounds of a branch could not read of its remote,
@@ -1273,6 +1277,9 @@ impl Sluice<'_> {
                     rounds: r.rounds,
                 })
             });
+        let refused_writes = crate::refused_writes::standing(&line.doc.refused_writes, &self.now());
+        let on_remote =
+            !refused_writes.is_empty() && self.seams.branch.copy(branch)? != HostCopy::Itself;
         Ok(Status {
             branch: branch.into(),
             at,
@@ -1293,7 +1300,8 @@ impl Sluice<'_> {
                 .map(|f| (f.id, f.name().to_string()))
                 .collect(),
             failed_releases: line.doc.failed_releases.clone(),
-            refused_writes: crate::refused_writes::standing(&line.doc.refused_writes, &self.now()),
+            refused_writes,
+            on_remote,
             submissions: line.subs.into_values().collect(),
             warnings,
             stale: self.seams.state.stale(branch).map(|r| r.remote),

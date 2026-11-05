@@ -14,7 +14,7 @@ use std::time::Duration;
 use anyhow::Result;
 use chrono::SecondsFormat;
 use sluice_core::overview::{BranchView, Room, OVERVIEW_SCHEMA};
-use sluice_core::records::{CandidateState, State};
+use sluice_core::records::{CandidateState, RefusedWrite, State};
 use sluice_core::{Clock, Sluice};
 
 use crate::exec::Host;
@@ -274,6 +274,7 @@ fn write_overview(
             writeln!(out, "  {why}: shown as last fetched")?;
         }
         write_held_places(&held_places(&b.branch, Some(b), doc), out)?;
+        write_refused_writes(&b.branch, &b.refused_writes, out)?;
         let names = branch_names(b);
         for c in &b.candidates {
             if !matches!(c.state, CandidateState::Starting | CandidateState::Testing) {
@@ -489,6 +490,52 @@ fn write_held_places(places: &[HeldPlace], out: &mut dyn Write) -> Result<()> {
         )?;
     }
     Ok(())
+}
+
+/// How many of a branch's refused writes the overview shows under it.
+const REFUSED_SHOWN: usize = 3;
+
+/// 148: a line for each of the branch's standing causes of refused writes,
+/// newest first and at most three, then how many more and where they are
+/// (design D6).
+fn write_refused_writes(branch: &str, causes: &[RefusedWrite], out: &mut dyn Write) -> Result<()> {
+    for c in causes.iter().take(REFUSED_SHOWN) {
+        let writes = match c.times {
+            1 => "1 write".to_string(),
+            n => format!("{n} writes"),
+        };
+        writeln!(
+            out,
+            "  sluice refused {writes} on {}, last {}: {}",
+            c.host,
+            c.last,
+            command_line(&c.command)
+        )?;
+    }
+    if causes.len() > REFUSED_SHOWN {
+        writeln!(
+            out,
+            "  and {} more: sluice status {branch}",
+            causes.len() - REFUSED_SHOWN
+        )?;
+    }
+    Ok(())
+}
+
+/// How many characters of a refused write's command a line shows.
+const COMMAND_SHOWN: usize = 100;
+
+/// 148: a refused write's command as a line shows it: its first line, cut
+/// after a hundred characters, `…` where anything of it is left out
+/// (design D5, D6). `--json` carries it whole.
+pub(crate) fn command_line(command: &str) -> String {
+    let mut lines = command.lines();
+    let first = lines.next().unwrap_or_default();
+    let mut shown: String = first.chars().take(COMMAND_SHOWN).collect();
+    if shown.len() < first.len() || lines.next().is_some() {
+        shown.push('…');
+    }
+    shown
 }
 
 /// ADR 0035: the clause a branch's counts line ends with when agents'
