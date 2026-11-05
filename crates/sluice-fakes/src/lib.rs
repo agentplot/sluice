@@ -17,12 +17,12 @@ use anyhow::{anyhow, bail, Result};
 use chrono::{DateTime, Duration as Span, TimeZone, Utc};
 use sluice_core::{Clock, Seams, Sluice};
 use sluice_seams::{
-    Adopted, AtBound, Branch, Changes, CheckedOut, Checkout, Delivery, Driver, Enforced, Formed,
-    GoneRelease, Guard, HostCopy, HostRun, KeptOutTask, LandingCommit, LastResult, Moved, Network,
-    NotRun, Notification, Outcome, Place, PreviewPlace, Progress, ReadRefused, Reading, Reads,
-    ReleaseFailure, ReleasePolicy, Released, Rev, RunHandle, RunReport, RunRequest, Running,
-    Session, SessionPlace, Settings, Snapshot, Source, State, Submitter, TaskLog, TaskProgress,
-    TaskResult, Tests, Unanswered, Written,
+    Adopted, AtBound, Branch, Changes, CheckedOut, Checkout, Delivery, Driver, Enforced, Equip,
+    EquipStep, Equipped, Formed, GoneRelease, Guard, HostCopy, HostRun, KeptOutTask, LandingCommit,
+    LastResult, Moved, Network, NotRun, Notification, Outcome, Place, PreviewPlace, Progress,
+    ReadRefused, Reading, Reads, ReleaseFailure, ReleasePolicy, Released, Rev, RunHandle,
+    RunReport, RunRequest, Running, Session, SessionPlace, Settings, Snapshot, Source, State,
+    Submitter, TaskLog, TaskProgress, TaskResult, Tests, Unanswered, Written,
 };
 
 /// A tree: path to content.
@@ -174,6 +174,11 @@ struct Inner {
     reads_fail: Option<String>,
     /// 140: every change the runner's affected reading was asked of.
     read_pairs: Vec<(Rev, Rev)>,
+    /// 147: every working copy the check seam was asked to equip, in
+    /// order.
+    equips: Vec<Equip>,
+    /// 147: the steps an equip answers.
+    equip_steps: Vec<EquipStep>,
     /// Every head published for its submission, in order (82).
     published: Vec<Rev>,
     took: BTreeMap<String, (u64, u32)>,
@@ -1878,6 +1883,17 @@ impl Branch for FakeBranch {
 }
 
 impl FakeTests {
+    /// 147: every equip the check seam was asked, in order.
+    pub fn equips(&self) -> Vec<Equip> {
+        self.0 .0.borrow().equips.clone()
+    }
+
+    /// 147: each equip from now answers `steps`, as they ran; none by
+    /// default.
+    pub fn equip_answers(&self, steps: &[EquipStep]) {
+        self.0 .0.borrow_mut().equip_steps = steps.to_vec();
+    }
+
     /// The host's count: the submissions' runs it started that still go,
     /// other repositories' runs on it, and the session runs.
     fn count(inner: &Inner) -> Running {
@@ -2123,6 +2139,16 @@ impl Tests for FakeTests {
                 })
             })
             .collect())
+    }
+
+    /// 147: the steps [`FakeTests::equip_answers`] set, the equip kept
+    /// for [`FakeTests::equips`]; it takes no place and counts nothing.
+    fn equip(&self, equip: &Equip) -> Result<Equipped> {
+        let mut inner = self.0 .0.borrow_mut();
+        inner.equips.push(equip.clone());
+        Ok(Equipped {
+            steps: inner.equip_steps.clone(),
+        })
     }
 
     /// 140: each pair's required checks whose prefix holds a path the
