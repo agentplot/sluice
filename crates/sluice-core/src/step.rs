@@ -475,6 +475,7 @@ impl Sluice<'_> {
                             outcome: DecidedRecord::Landed {
                                 landed_as: c.commit.clone(),
                                 beside: intent.beside,
+                                covered_by: None,
                             },
                         };
                         l.doc.outbox.push(item);
@@ -2229,6 +2230,7 @@ impl Sluice<'_> {
             to: tip,
             commits,
             beside: true,
+            covering: None,
         });
         Ok(true)
     }
@@ -2431,6 +2433,7 @@ impl Sluice<'_> {
                 to: parent,
                 commits,
                 beside: false,
+                covering: None,
             });
             Ok(true)
         }

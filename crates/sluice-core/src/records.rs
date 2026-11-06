@@ -18,7 +18,8 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use sluice_seams::{
-    Contested, Decided, Enforced, NotRun, Outcome, Rev, RunDetail, RunHandle, Submitter, TaskLog,
+    Contested, CoveringVerdict, Decided, Enforced, NotRun, Outcome, Rev, RunDetail, RunHandle,
+    Submitter, TaskLog,
 };
 
 pub const SUBMISSION_SCHEMA: &str = "sluice/submission@1";
@@ -265,6 +266,11 @@ pub struct Submission {
     /// work some required check reads at the branch's revision.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub beside: Option<Beside>,
+    /// 140: for work landed beside the chain, the verdict that covered the
+    /// revision it landed on, which its landing commit names; `None`
+    /// otherwise, and in records written before it (70; record 0083).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub covered_by: Option<CoveringVerdict>,
     /// 125: the first head of the act it was submitted in, where the act
     /// gave several; `None` for a submission made alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -338,7 +344,7 @@ impl Submission {
             State::Landed => Some(Decided::Landed {
                 landed_as: self.landed_as.clone()?,
                 beside: self.beside == Some(Beside::Landed),
-                covered_by: None,
+                covered_by: self.covered_by.clone(),
             }),
             State::Failed => {
                 let tested = self.tested.as_ref()?;
@@ -652,6 +658,13 @@ pub struct LandingIntent {
     /// with nothing run.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub beside: bool,
+    /// 70, 140: the verdict that covers `to` once the branch is there: for
+    /// a landing through the chain, the one its last commit names; for a
+    /// landing beside, the one that covered `from`. `None` in an intent
+    /// written before it, whose landing leaves the branch's `covered_by`
+    /// unset (record 0083).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub covering: Option<CoveringVerdict>,
 }
 
 /// An outcome decided and not yet pushed to its session (50, 51).
@@ -673,6 +686,11 @@ pub enum DecidedRecord {
         /// 140: landed beside the chain, with no check run.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         beside: bool,
+        /// 140: for a landing beside, the verdict that covers the revision
+        /// it landed on; `None` otherwise, and in outcomes recorded before
+        /// it (70; record 0083).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        covered_by: Option<CoveringVerdict>,
     },
     Failed {
         failed: Vec<String>,
@@ -692,10 +710,14 @@ pub enum DecidedRecord {
 impl DecidedRecord {
     pub fn to_decided(&self) -> Decided {
         match self.clone() {
-            DecidedRecord::Landed { landed_as, beside } => Decided::Landed {
+            DecidedRecord::Landed {
                 landed_as,
                 beside,
-                covered_by: None,
+                covered_by,
+            } => Decided::Landed {
+                landed_as,
+                beside,
+                covered_by,
             },
             DecidedRecord::Failed {
                 failed,
@@ -734,6 +756,13 @@ pub struct BranchDoc {
     /// `base` is covered by a verdict: sluice landed it (70).
     #[serde(default)]
     pub verified: bool,
+    /// 70, 140: the verdict that covers `base`, which each landing beside
+    /// on it names; set beside `verified` by a landing under the gate the
+    /// branch carries, and `None` where `verified` is not, and in records
+    /// written before it, on which nothing lands beside until a landing
+    /// names one (record 0083).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub covered_by: Option<CoveringVerdict>,
     /// How many candidates are under test at once (13).
     #[serde(default)]
     pub window: usize,
@@ -828,6 +857,7 @@ impl BranchDoc {
             log: LOG_SCHEMA.into(),
             base: None,
             verified: false,
+            covered_by: None,
             window: 0,
             next_place: 1,
             next_candidate: 1,
@@ -1915,6 +1945,7 @@ mod tests {
             outcome: DecidedRecord::Landed {
                 landed_as: Rev::new("abc1234"),
                 beside: false,
+                covered_by: None,
             },
         };
         let text = serde_json::to_string(&item).unwrap();
@@ -1923,6 +1954,123 @@ mod tests {
             r#"{"id":"5:landed","submission":5,"told":{"outcome":"landed","landed_as":"abc1234"}}"#
         );
         assert_eq!(serde_json::from_str::<OutboxItem>(&text).unwrap(), item);
+    }
+
+    /// 70, 140, record 0083: a branch's document written before the
+    /// covering verdict was kept, `verified` and naming none, with a
+    /// landing intent naming none and a landed beside outcome in its
+    /// outbox, reads with none and writes back unchanged; so does a
+    /// submission landed beside before it. One that names it round-trips.
+    #[test]
+    fn a_branch_and_an_outcome_from_before_covered_by_still_read() {
+        let old = r#"{
+  "schema": "sluice/branch@1",
+  "branch": "main",
+  "log": "sluice/log@1",
+  "base": "c43609b",
+  "verified": true,
+  "window": 4,
+  "next_place": 3,
+  "next_candidate": 5,
+  "candidates": [],
+  "landing": {
+    "ids": [
+      5
+    ],
+    "from": "c43609b",
+    "to": "abc1234",
+    "commits": [
+      {
+        "id": 5,
+        "commit": "abc1234",
+        "tested": "abc1234"
+      }
+    ],
+    "beside": true
+  },
+  "release": [],
+  "outbox": [
+    {
+      "id": "5:landed",
+      "submission": 5,
+      "told": {
+        "outcome": "landed",
+        "landed_as": "abc1234",
+        "beside": true
+      }
+    }
+  ]
+}
+"#;
+        let doc: BranchDoc = serde_json::from_str(old).unwrap();
+        assert!(doc.verified);
+        assert_eq!(doc.covered_by, None);
+        assert_eq!(doc.landing.as_ref().unwrap().covering, None);
+        assert_eq!(
+            doc.outbox[0].outcome.to_decided(),
+            Decided::Landed {
+                landed_as: Rev::new("abc1234"),
+                beside: true,
+                covered_by: None,
+            }
+        );
+        assert_eq!(String::from_utf8(to_document(&doc)).unwrap(), old);
+
+        let mut doc = String::from_utf8(to_document(&submission(None))).unwrap();
+        doc = doc.replacen(
+            "\"state\": \"queued\"",
+            "\"state\": \"landed\",\n  \"landed_as\": \"abc1234\",\n  \"beside\": true",
+            1,
+        );
+        let read: Submission = serde_json::from_str(&doc).unwrap();
+        assert_eq!(read.covered_by, None);
+        assert_eq!(
+            read.decided(),
+            Some(Decided::Landed {
+                landed_as: Rev::new("abc1234"),
+                beside: true,
+                covered_by: None,
+            })
+        );
+        assert_eq!(String::from_utf8(to_document(&read)).unwrap(), doc);
+
+        let covering = CoveringVerdict {
+            at: Rev::new("e25fea4"),
+            result: "passed".into(),
+            ran: 141,
+            replayed: 0,
+        };
+        let mut named: BranchDoc = serde_json::from_str(old).unwrap();
+        named.covered_by = Some(covering.clone());
+        named.landing.as_mut().unwrap().covering = Some(covering.clone());
+        named.outbox[0].outcome = DecidedRecord::Landed {
+            landed_as: Rev::new("abc1234"),
+            beside: true,
+            covered_by: Some(covering.clone()),
+        };
+        let text = String::from_utf8(to_document(&named)).unwrap();
+        assert!(
+            text.contains(
+                "\"covered_by\": {\n    \"at\": \"e25fea4\",\n    \"result\": \"passed\",\n    \
+                 \"ran\": 141,\n    \"replayed\": 0\n  }"
+            ),
+            "{text}"
+        );
+        assert_eq!(serde_json::from_str::<BranchDoc>(&text).unwrap(), named);
+        let landed = Submission {
+            covered_by: Some(covering.clone()),
+            ..read
+        };
+        let text = String::from_utf8(to_document(&landed)).unwrap();
+        assert_eq!(serde_json::from_str::<Submission>(&text).unwrap(), landed);
+        assert_eq!(
+            landed.decided(),
+            Some(Decided::Landed {
+                landed_as: Rev::new("abc1234"),
+                beside: true,
+                covered_by: Some(covering),
+            })
+        );
     }
 
     /// 51: a landed, blamed or conflicting submission's record names the

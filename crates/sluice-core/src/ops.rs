@@ -1663,6 +1663,7 @@ fn admit(
             held: None,
             subject,
             beside: None,
+            covered_by: None,
             act,
         },
     );
