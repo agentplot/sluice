@@ -12,9 +12,10 @@ and give every sluice a test starts `support::isolated`. Tests use
 temporary folders and repositories only. Commit by pathspec (`git add
 <paths>; git commit -m "<subject>" -- <paths>`), Conventional Commits,
 scoped to the part of the tree, citing clauses by number and rules by
-id. The trailer's change is a `fix(core)` commit, so the release CI makes
-from the landing is a new patch version. Every group ends with its check
-task passing.
+id. The trailer's change is a `fix(core)` commit and the records' new
+fields are `feat` commits, so the release CI makes from the landing is a
+new minor version (`cliff.toml`'s `features_always_bump_minor`). Every
+group ends with its check task passing.
 
 ## 1. The decision recorded
 
@@ -50,4 +51,4 @@ task passing.
 ## 5. The gate and the notes
 
 - [ ] 5.1 Run the gate's checks on the committed work with `sluice exec main`, and `openspec validate a-landing-beside-the-queue-names-the-verdict-that-covers-it --strict`. True when every task passes and the change is valid.
-- [ ] 5.2 Write in the change's notes what the orchestrator does once the change lands, after the code, verify and submission stages: confirm the patch release CI makes from the landing; tell crew's and swancloud's owners that a landing beside's `Sluice-Result` now opens with `passed`, so `kit.verification` and the releaser read it as passed with no change of theirs; and that a bolt whose head is a landing beside written before the release, switchboard-kit's at b01e966 among them, reads unknown until its next landing, crew's own change being the only way to read the old words. True when the notes say so and no task of the change waits on the landing.
+- [ ] 5.2 Write in the change's notes what the orchestrator does once the change lands, after the code, verify and submission stages: confirm the minor release CI makes from the landing; tell crew's and swancloud's owners that a landing beside's `Sluice-Result` now opens with `passed`, so `kit.verification` and the releaser read it as passed with no change of theirs; and that a bolt whose head is a landing beside written before the release, switchboard-kit's at b01e966 among them, reads unknown until its next landing, crew's own change being the only way to read the old words. True when the notes say so and no task of the change waits on the landing.
