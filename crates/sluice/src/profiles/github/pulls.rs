@@ -49,7 +49,8 @@ use sluice_core::line::Line;
 use sluice_core::policy::{Policy, PullRequests as Conditions, POLICY_PATH};
 use sluice_core::records::{Event, State, Submission};
 use sluice_core::{
-    Clock, Forecast, GroupRequest, Requester, Seams, Sluice, SubmitRefusal, SubmitRequest, Withdrew,
+    Clock, Forecast, GroupRequest, Requester, Seams, Sluice, SubmitHead, SubmitRefusal,
+    SubmitRequest, Withdrew,
 };
 use sluice_seams::{
     Branch, CoveringVerdict, Decided, Delivery, Formed, HostCopy, LandingCommit, Moved,
@@ -1358,7 +1359,7 @@ impl Pulls {
             // 23, 118, 120: its landing names the request's work by its
             // title.
             let accepted = s.submit(&SubmitRequest {
-                worktree: place(p.number),
+                head: SubmitHead::Worktree(place(p.number)),
                 branch: branch.into(),
                 after: Vec::new(),
                 priority: 0,
@@ -1554,7 +1555,10 @@ impl Pulls {
             {
                 let req = GroupRequest {
                     branch: branch.into(),
-                    worktrees: by_k.values().map(|p| place(p.number)).collect(),
+                    heads: by_k
+                        .values()
+                        .map(|p| SubmitHead::Worktree(place(p.number)))
+                        .collect(),
                     after: Vec::new(),
                     priority: 0,
                     subjects: by_k.values().map(|p| p.title.clone()).collect(),
@@ -1692,7 +1696,10 @@ impl Pulls {
         }
         let req = GroupRequest {
             branch: branch.into(),
-            worktrees: acted.iter().map(|(p, _)| place(p.number)).collect(),
+            heads: acted
+                .iter()
+                .map(|(p, _)| SubmitHead::Worktree(place(p.number)))
+                .collect(),
             after: Vec::new(),
             priority: 0,
             subjects: acted.iter().map(|(p, _)| p.title.clone()).collect(),
@@ -1719,9 +1726,9 @@ impl Pulls {
                     .into_iter()
                     .map(|(at, r)| {
                         let w = req
-                            .worktrees
+                            .heads
                             .iter()
-                            .position(|x| *x == at)
+                            .position(|x| x.name() == at)
                             .map_or(at, |i| worktrees[i].clone());
                         (w, r)
                     })
@@ -1984,6 +1991,8 @@ fn refusal_word(r: &SubmitRefusal) -> String {
         SubmitRefusal::NotManaged => "no [branches] table names its branch".into(),
         SubmitRefusal::UnknownAfter(_) => "it names an unknown submission".into(),
         SubmitRefusal::NoHead(_) => "its head's branch is gone".into(),
+        SubmitRefusal::ToItself => "its head is the branch it lands on".into(),
+        SubmitRefusal::NotLandedOn => "its head is no branch sluice lands on".into(),
         SubmitRefusal::NamedTwice(_) => "it is named twice".into(),
         SubmitRefusal::KeptOut(kept) => format!(
             "its branch requires {}, which the task runner keeps out of CI",

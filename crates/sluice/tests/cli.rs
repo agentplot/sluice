@@ -8607,7 +8607,7 @@ mod read_once {
     use sluice::profiles::local_files::LocalFiles;
     use sluice::{run, Cli, Pause};
     use sluice_core::policy::POLICY_PATH;
-    use sluice_core::{Seams, Sluice, SubmitRequest};
+    use sluice_core::{Seams, Sluice, SubmitHead, SubmitRequest};
     use sluice_fakes::Fakes;
     use sluice_seams::State as _;
 
@@ -8730,7 +8730,7 @@ mod read_once {
         let files = LocalFiles::new(dir);
         let s = Sluice::new(with_files(f, &files), &f.clock);
         s.submit(&SubmitRequest {
-            worktree: worktree.into(),
+            head: SubmitHead::Worktree(worktree.into()),
             branch: BRANCH.into(),
             after: vec![],
             priority: 0,

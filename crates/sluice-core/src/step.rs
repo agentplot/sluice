@@ -3889,7 +3889,7 @@ mod tests {
     use sluice_fakes::Fakes;
 
     use super::*;
-    use crate::{Clock, Requester, Seams, SubmitRequest};
+    use crate::{Clock, Requester, Seams, SubmitHead, SubmitRequest};
 
     const POLICY: &str = "[branches.main]\nrequired = [\"#gate\"]\nparallel = 4\n";
 
@@ -3914,7 +3914,7 @@ mod tests {
 
     fn submit(s: &Sluice<'_>, worktree: &str) -> u64 {
         let req = SubmitRequest {
-            worktree: worktree.into(),
+            head: SubmitHead::Worktree(worktree.into()),
             branch: "main".into(),
             after: Vec::new(),
             priority: 0,

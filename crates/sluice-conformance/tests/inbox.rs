@@ -4,7 +4,7 @@
 use anyhow::{bail, Result};
 use sluice_conformance::{policy, Harness, Rig, BRANCH};
 use sluice_core::records::{Event, State};
-use sluice_core::{Sluice, SubmitRequest};
+use sluice_core::{Sluice, SubmitHead, SubmitRequest};
 use sluice_seams::{Delivery, Driver, Notification, Session, Submitter};
 
 /// The session in place `worktree` collects its pending outcomes and has
@@ -160,7 +160,7 @@ fn one_collect_finds_the_outcomes_of_every_branch() {
     let landed = h
         .sluice()
         .submit(&SubmitRequest {
-            worktree: "unit/a".into(),
+            head: SubmitHead::Worktree("unit/a".into()),
             branch: "main".into(),
             after: Vec::new(),
             priority: 0,

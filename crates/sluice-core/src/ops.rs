@@ -15,10 +15,33 @@ use crate::overview::{after_landed, BranchView};
 use crate::records::{CandidateState, Event, State, Submission, Withdrawal, SUBMISSION_SCHEMA};
 use crate::{Found, Sluice};
 
+/// What a submit names as a head it submits: a session's place, or a
+/// branch sluice lands on, named (124).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SubmitHead {
+    /// A session's place, as its driver names it: the head it holds.
+    Worktree(String),
+    /// 124: a branch sluice lands on, named from anywhere in the
+    /// repository: the branch as its policy holds it, its work and its
+    /// head, submitted from no worktree and no session (record 0090; rule
+    /// core.50).
+    Branch(String),
+}
+
+impl SubmitHead {
+    /// The place or the branch, as the submit named it: what a refusal of
+    /// it is answered with.
+    pub fn name(&self) -> &str {
+        match self {
+            SubmitHead::Worktree(name) | SubmitHead::Branch(name) => name,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SubmitRequest {
-    /// The session's place, as its driver names it.
-    pub worktree: String,
+    /// The session's place, or the branch named (124).
+    pub head: SubmitHead,
     pub branch: String,
     pub after: Vec<u64>,
     pub priority: i64,
@@ -26,18 +49,25 @@ pub struct SubmitRequest {
     pub subject: Option<String>,
 }
 
-/// 125: several places' heads submitted to one branch as one act.
+/// 125: several heads submitted to one branch as one act.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GroupRequest {
     pub branch: String,
-    /// The places, as their driver names them, in the order their heads
+    /// The places, or the branches named (124), in the order their heads
     /// land.
-    pub worktrees: Vec<String>,
+    pub heads: Vec<SubmitHead>,
     /// Every submission of the act lands after these, alike.
     pub after: Vec<u64>,
     pub priority: i64,
-    /// 23, 125: each place's subject, in the places' order, or none.
+    /// 23, 125: each head's subject, in the heads' order, or none.
     pub subjects: Vec<String>,
+}
+
+impl GroupRequest {
+    /// Each head's place or branch, as the act named it, in its order.
+    pub fn names(&self) -> Vec<String> {
+        self.heads.iter().map(|h| h.name().to_string()).collect()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -61,8 +91,8 @@ pub struct Accepted {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SubmittedHead {
     pub head: Rev,
-    /// The head is the remote's revision of a branch sluice lands on: the
-    /// submit pushes nothing to it (1).
+    /// The head is the remote's revision of a branch sluice lands on, or a
+    /// branch named (124): the submit pushes nothing to it (1).
     pub from_remote: bool,
     pub copy: Option<CopyDiffers>,
 }
@@ -116,8 +146,16 @@ pub enum SubmitRefusal {
     NotManaged,
     /// `after` names submissions the branch does not hold.
     UnknownAfter(Vec<u64>),
-    /// The branch named as the head to forecast has no revision.
+    /// The branch named as the head to forecast or to submit has no
+    /// revision.
     NoHead(String),
+    /// 124: the branch named as the head to submit is the branch it would
+    /// be submitted to.
+    ToItself,
+    /// 124: the branch named as the head to submit is no branch sluice
+    /// lands on: no `[branches]` table at its revision names it (56). A
+    /// branch of a worktree's own is submitted from that worktree (2).
+    NotLandedOn,
     /// 125: a group names this place already, as the place given.
     NamedTwice(String),
     /// ADR 0050: the branch's gate requires checks the runner, in the
@@ -464,7 +502,7 @@ impl Sluice<'_> {
     pub fn submit(&self, req: &SubmitRequest) -> Result<Result<Accepted, SubmitRefusal>> {
         let group = GroupRequest {
             branch: req.branch.clone(),
-            worktrees: vec![req.worktree.clone()],
+            heads: vec![req.head.clone()],
             after: req.after.clone(),
             priority: req.priority,
             subjects: req.subject.iter().cloned().collect(),
@@ -475,52 +513,66 @@ impl Sluice<'_> {
         })
     }
 
-    /// 125, 47, 1, 2, 3, 67: admit several places' heads to a branch's
-    /// queue as one act, in the order given, or none of them. Every place
-    /// is read before anything is written, and every refusal is answered
-    /// with the place it refuses; then the submissions are written in one
-    /// write of the branch's records, so no reader sees some of them and
-    /// not the rest (62; rule core.14). Each lands after the one before by
-    /// its order of submission (6), never as another's `after`.
+    /// 125, 47, 1, 2, 3, 67, 124: admit several heads to a branch's queue
+    /// as one act, in the order given, or none of them. Every head is read
+    /// before anything is written, and every refusal is answered with the
+    /// place or the branch it refuses; then the submissions are written in
+    /// one write of the branch's records, so no reader sees some of them
+    /// and not the rest (62; rule core.14). Each lands after the one
+    /// before by its order of submission (6), never as another's `after`.
     pub fn submit_group(
         &self,
         req: &GroupRequest,
     ) -> Result<Result<Vec<Accepted>, Vec<(String, SubmitRefusal)>>> {
-        if req.worktrees.is_empty() {
+        if req.heads.is_empty() {
             bail!("a group submit to {} names no worktree", req.branch);
         }
-        if !req.subjects.is_empty() && req.subjects.len() != req.worktrees.len() {
+        if !req.subjects.is_empty() && req.subjects.len() != req.heads.len() {
             bail!(
                 "a group submit to {} gives {} subjects for {} worktrees",
                 req.branch,
                 req.subjects.len(),
-                req.worktrees.len()
+                req.heads.len()
             );
         }
         let mut refused = Vec::new();
-        let mut sessions: Vec<Session> = Vec::new();
-        for (k, worktree) in req.worktrees.iter().enumerate() {
-            let session = self.seams.driver.session(worktree)?;
-            let before = req.worktrees[..k]
+        // Each head read, by the name it was given, with the head a branch
+        // named submits, read with it.
+        let mut sessions: Vec<(&str, Session, Option<SubmittedHead>)> = Vec::new();
+        for head in &req.heads {
+            let name = head.name();
+            let (session, submitted) = match head {
+                SubmitHead::Worktree(worktree) => (self.seams.driver.session(worktree)?, None),
+                SubmitHead::Branch(branch) => match self.named_session(branch, &req.branch)? {
+                    Ok((session, submitted)) => (session, Some(submitted)),
+                    Err(r) => {
+                        refused.push((name.to_string(), r));
+                        continue;
+                    }
+                },
+            };
+            let before = sessions
                 .iter()
-                .zip(&sessions)
-                .find(|(w, s)| *w == worktree || s.from.worktree == session.from.worktree);
-            if let Some((earlier, _)) = before {
-                refused.push((worktree.clone(), SubmitRefusal::NamedTwice(earlier.clone())));
+                .find(|(n, s, _)| *n == name || s.from.worktree == session.from.worktree);
+            if let Some((earlier, _, _)) = before {
+                refused.push((
+                    name.to_string(),
+                    SubmitRefusal::NamedTwice(earlier.to_string()),
+                ));
             } else if session.detached {
-                refused.push((worktree.clone(), SubmitRefusal::Detached));
+                refused.push((name.to_string(), SubmitRefusal::Detached));
             } else if !session.dirty.is_empty() {
                 refused.push((
-                    worktree.clone(),
+                    name.to_string(),
                     SubmitRefusal::Dirty(session.dirty.clone()),
                 ));
             }
-            sessions.push(session);
+            sessions.push((name, session, submitted));
         }
-        // What the branch refuses, it refuses for every place.
+        // What the branch refuses, it refuses for every head.
         let mut whole = |r: SubmitRefusal| {
-            for w in &req.worktrees {
-                refused.push((w.clone(), r.clone()));
+            for h in &req.heads {
+                refused.push((h.name().to_string(), r.clone()));
             }
         };
         let tip = self.seams.branch.read(&req.branch)?;
@@ -547,23 +599,28 @@ impl Sluice<'_> {
         };
         // ADR 0050: each place's runner is asked which of the gate's
         // required checks it keeps out of CI; a place that keeps one out is
-        // refused, and the act with it.
+        // refused, and the act with it. A branch named has no worktree to
+        // ask, so is taken with nothing asked.
         let mut warnings = Vec::new();
-        for (worktree, session) in req.worktrees.iter().zip(&sessions) {
+        for (name, session, _) in &sessions {
             match self.check_kept_out(session, &req.branch, &tip)? {
                 Ok(w) => warnings.push(w),
-                Err(r) => refused.push((worktree.clone(), r)),
+                Err(r) => refused.push((name.to_string(), r)),
             }
         }
         if !refused.is_empty() {
             return Ok(Err(refused));
         }
         // 124: from a worktree on a branch sluice lands on, the remote's
-        // revision of it.
+        // revision of it; a branch named, as it was read.
         let submitted = sessions
             .iter()
-            .map(|s| self.submitted_head(s))
+            .map(|(_, s, named)| match named {
+                Some(h) => Ok(h.clone()),
+                None => self.submitted_head(s),
+            })
             .collect::<Result<Vec<_>>>()?;
+        let sessions: Vec<Session> = sessions.into_iter().map(|(_, s, _)| s).collect();
         // 82: every head is fetchable by every host before any is
         // submitted.
         for s in &submitted {
@@ -615,6 +672,45 @@ impl Sluice<'_> {
             }
         }
         Ok(Ok(accepted))
+    }
+
+    /// 124: the session of `branch`, named as the head to submit to
+    /// `target`, and the head it submits: who the driver says submits it,
+    /// the branch as its work and its head, with no worktree and no session
+    /// (record 0090), and the branch as one read of the branch seam gives
+    /// it, the remote's revision where its policy names a remote. It asks
+    /// the driver for no place's session, so reads nothing of the folder
+    /// it runs in (rule core.48), and says nothing of the host's copy of
+    /// the branch, which no worktree submits. Refused where `branch` is
+    /// `target`, has no revision, or is no branch sluice lands on (2).
+    /// Writes nothing (rule core.4).
+    pub fn named_session(
+        &self,
+        branch: &str,
+        target: &str,
+    ) -> Result<std::result::Result<(Session, SubmittedHead), SubmitRefusal>> {
+        if branch == target {
+            return Ok(Err(SubmitRefusal::ToItself));
+        }
+        let Some(at) = self.seams.branch.read(branch)? else {
+            return Ok(Err(SubmitRefusal::NoHead(branch.into())));
+        };
+        if self.rules_at(branch, &at)?.is_none() {
+            return Ok(Err(SubmitRefusal::NotLandedOn));
+        }
+        let session = Session {
+            head: at.clone(),
+            from: self.seams.driver.named(branch)?,
+            dirty: Vec::new(),
+            detached: false,
+            bare: false,
+        };
+        let submitted = SubmittedHead {
+            head: at,
+            from_remote: true,
+            copy: None,
+        };
+        Ok(Ok((session, submitted)))
     }
 
     /// ADR 0050: refuse `session`'s submission to `branch`, whose revision
@@ -1778,7 +1874,10 @@ mod tests {
         fn group(&self, worktrees: &[&str], after: &[u64]) -> GroupRequest {
             GroupRequest {
                 branch: BRANCH.into(),
-                worktrees: worktrees.iter().map(|w| w.to_string()).collect(),
+                heads: worktrees
+                    .iter()
+                    .map(|w| SubmitHead::Worktree(w.to_string()))
+                    .collect(),
                 after: after.to_vec(),
                 priority: 0,
                 subjects: Vec::new(),
@@ -2694,7 +2793,7 @@ mod tests {
         let head = f.world.work(&f.world.tip("main"), &[("a", Some("1"))]);
         f.world.session("unit/a", "agent", &head);
         s.submit(&SubmitRequest {
-            worktree: "unit/a".into(),
+            head: SubmitHead::Worktree("unit/a".into()),
             branch: "main".into(),
             after: vec![],
             priority: 0,
@@ -2801,7 +2900,7 @@ mod forecasts {
 
     fn submit(s: &Sluice<'_>, worktree: &str) -> u64 {
         let req = SubmitRequest {
-            worktree: worktree.into(),
+            head: SubmitHead::Worktree(worktree.into()),
             branch: "main".into(),
             after: Vec::new(),
             priority: 0,
