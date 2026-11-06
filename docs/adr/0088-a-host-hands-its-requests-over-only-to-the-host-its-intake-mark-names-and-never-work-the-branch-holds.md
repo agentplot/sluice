@@ -12,6 +12,8 @@ decision-makers:
 Status: accepted, a decision of the code stage of `fix/a-hosts-intake-never-withdraws-anothers-submission` under the statement as written (122, 137, C.5) and rules core.33 and core.48, which it keeps; cheap to change later. How a host's several waits hold one mark is record 0089's.
 
 Deciders: the code stage of `fix/a-hosts-intake-never-withdraws-anothers-submission`.
+
+Amended 2026-11-06 by madswan-design, below: a withdrawal for a hand-over holds no request.
 Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 5, 45, 122, 137 and C.5's pull request row, at c94c496; rules core.5, core.33, core.48; record 0085; the signal `afterthought/crew-state:swancloud/main signals/2026-11-06-swancloud-ops-012fa188/01-wldn-gate-box-offline-leaves-switchboard-kit-intake-to-waits`; chuck-herdr-alpha's records of WilldanGroup/switchboard-kit's `main`, `/workspace/switchboard-kit/switchboard-kit.git/sluice/main/log.jsonl`, for 2026-11-06; GitHub's timelines of switchboard-kit's pull requests 241 to 243 and its `refs/sluice/intake/main`; afterthought/crew 23b3b3dc's `plugin/lib/plan.py` `pull_hold`; `crates/sluice/src/profiles/github/pulls.rs` (`takes`, `put_mark`, `hand_over`) as main held it at b2263f63.
 
 ## Context and problem statement
@@ -51,3 +53,33 @@ Options 1 and a. Rule core.33 holds them.
 - A refused push costs one more fetch and push before a pass decides. A host whose waits come and go, as crew's do, keeps its submissions through a mark let go under its renewal, and nothing is tested twice for it.
 - "another host takes <branch>'s pull requests in" is no longer written; an older record holding it reads as before.
 - crew's draft of a withdrawn landing's request is crew's, by its own design; with this record and 0085 no hand-over is reported to it as withdrawn, so it drafts none for one.
+
+## Amendment, 2026-11-06: a hand-over's withdrawal holds no request
+
+Status: accepted on 2026-11-06 by madswan-design, the design agent: clause 137 already has the holder of the mark take each request in again as its conditions hold, and this squares clause 120 with it; cheap to change.
+
+Deciders: madswan-design.
+
+Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 120 and 137 as amended at 73ed779; the signals `afterthought/crew-state:madswan/main signals/2026-10-30-madswan-ops-8e042647/01-sluice-intake-handover-withdraws-a-tested-submission` and `signals/2026-11-06-madswan-operator-0da8ddac/01-sluice-intake-handover-strands-submitted-requests`; GitHub's timelines of agentplot/sluice pull 171 and of WilldanGroup/switchboard-kit's pull requests 268 and 269; `crates/sluice/src/profiles/github/pulls.rs` at 6e16063f (`is_held`, `left_unlanded`); records 0052, 0071 and 0085.
+
+### Context
+
+A host's withdrawal of its own submissions at a hand-over is recorded as any withdrawal is. Intake's hold reads every withdrawn, failed or conflicting submission of a submit's pull request as one that left the queue without landing (`left_unlanded`): the request then waits for its submitter's act, a submit or a person's ready mark, and the merge queue marks it a draft (120, S56, record 0052). A taking host that keeps its own records finds no such submission and takes the request in, as this record decided. Where the records a host reads hold the withdrawal, the request is held for an act nobody owes: when the mark comes back to the host that withdrew it, a driver returning, and wherever hosts read one branch's records. Clause 120 said the same: an entry withdrawn is submitted again only by a new submit or by the operator.
+
+agentplot/sluice pull 171 was so held on 2026-10-30. It was withdrawn as #345 at the hand-over of main's intake at 16:18:58Z, marked a draft by the merge queue's App at 16:30:08Z and again at 16:41:49Z after a person marked it ready, and landed only on a hand's resubmit as #357 the next day. On WilldanGroup/switchboard-kit on 2026-11-06, pull requests 268 and 269, withdrawn at a hand-over at 21:17:42Z and 21:18:08Z, were drafted by the person's account: crew's landing hold, on a sluice 0.68.1 wait's exit 4, which record 0085 has a wait no longer give for a hand-over since 0.70.0. They were made ready again by 21:19:07Z.
+
+### Considered options
+
+1. **A withdrawal for a hand-over holds no request** (chosen). Intake's hold reads a submission that left by a failure, a conflict, a culprit's removal, the operator's withdrawal, or the request's own draft or closing, and passes by one withdrawn for a hand-over. Whichever host holds the mark takes the request in again at the head it holds as its conditions hold, the withdrawing host included, and nothing marks it a draft for the hand-over.
+2. The taking host submits the request again at the hand-over in its submitter's name. A submit no session made (120), for a request the holder takes in as its conditions hold already.
+3. The hold kept, its check saying a hand-over withdrew it. The request still waits on a person; it is only named.
+
+### Decision outcome
+
+Option 1. Rule core.33 holds it. A hand-over's withdrawal is told by what its record says of it, a field the construction chooses, never by reading its words; a record written before, whose withdrawal says no such thing, is read as it was, and a ready mark lets its request go as now.
+
+### Consequences
+
+- A request withdrawn for a hand-over is taken in again wherever the mark stands, with no person's act and no draft.
+- The hold for a submitter's act still follows a failure, a conflict, a culprit's removal, the operator's withdrawal and the request's own draft or closing (120, S56).
+- crew's draft of a withdrawn landing's request stays crew's; with record 0085 a wait follows a handed-over request and gives crew no withdrawal to draft for.
