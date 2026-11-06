@@ -26,6 +26,10 @@
 //!   pushed it, so that a host takes another's mark only once it stood
 //!   unchanged for the lease by its own observation, and renews its own
 //!   only when a third of the lease has passed (73, 137).
+//! - `intake/<owner>/<repo>/<base>.waits/<pid>.hold`: each wait on the
+//!   host that reads the branch's pull requests, its file locked while it
+//!   lives, made and let go under the `.lock` beside them; the host's waits
+//!   hold its mark together, and the last of them to end lets it go (137).
 //!
 //! Each file is written whole to a file of its own and renamed over the
 //! last, so a reader finds a whole one or the one before; a file that does
@@ -311,6 +315,77 @@ impl Kept {
         }
     }
 
+    /// Where the holds of the host's waits on `repo`'s intake mark of
+    /// `base` are kept, with the lock over them.
+    fn waits_dir(&self, repo: &Repo, base: &str) -> PathBuf {
+        self.dir
+            .join("intake")
+            .join(&repo.owner)
+            .join(&repo.name)
+            .join(format!("{}.waits", crate::runs::flat_name(base)))
+    }
+
+    /// 137: this process's hold as one of the host's waits on `repo`'s
+    /// intake mark of `base`, kept until [`Kept::let_go`]: a file named for
+    /// the process, locked while it lives, made under the lock over them.
+    pub fn hold(&self, repo: &Repo, base: &str) -> Result<Hold> {
+        let dir = self.waits_dir(repo, base);
+        let _lock = lock_in(&dir)?;
+        let path = dir.join(format!("{}.hold", std::process::id()));
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)
+            .with_context(|| path.display().to_string())?;
+        file.try_lock()
+            .map_err(|e| anyhow::anyhow!("{e}"))
+            .with_context(|| format!("holding {}", path.display()))?;
+        Ok(Hold { file, path })
+    }
+
+    /// 137: let `hold` go, and whether another of the host's waits still
+    /// holds the same mark, read under the lock over them; a hold whose
+    /// process is gone is removed.
+    pub fn let_go(&self, hold: Hold) -> Result<bool> {
+        let dir = hold
+            .path
+            .parent()
+            .expect("a hold has a directory")
+            .to_path_buf();
+        let _lock = lock_in(&dir)?;
+        let Hold { file, path } = hold;
+        match std::fs::remove_file(&path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                return Err(e).with_context(|| format!("removing {}", path.display()))
+            }
+            _ => {}
+        }
+        drop(file);
+        let mut others = false;
+        for entry in std::fs::read_dir(&dir).with_context(|| dir.display().to_string())? {
+            let other = entry?.path();
+            if other.extension().is_none_or(|e| e != "hold") {
+                continue;
+            }
+            let file = match std::fs::File::open(&other) {
+                Ok(f) => f,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e).with_context(|| other.display().to_string()),
+            };
+            match file.try_lock() {
+                Ok(()) => {
+                    let _ = std::fs::remove_file(&other);
+                }
+                Err(std::fs::TryLockError::WouldBlock) => others = true,
+                Err(std::fs::TryLockError::Error(e)) => {
+                    return Err(e).with_context(|| format!("reading the hold {}", other.display()))
+                }
+            }
+        }
+        Ok(others)
+    }
+
     /// The pause kept for `allowance`, standing or past; `None` when none
     /// is, or it is torn.
     pub fn pause(&self, allowance: &Allowance) -> Option<Pause> {
@@ -330,6 +405,29 @@ impl Kept {
         write(&self.pause_path(allowance), &pause)?;
         Ok(pause)
     }
+}
+
+/// 137: one wait's hold among its host's waits on a branch's intake mark:
+/// its file, locked while the process lives.
+#[derive(Debug)]
+pub struct Hold {
+    file: std::fs::File,
+    path: PathBuf,
+}
+
+/// The lock over the holds in `dir`, which is made where it is missing,
+/// once whatever holds it lets go.
+fn lock_in(dir: &Path) -> Result<std::fs::File> {
+    std::fs::create_dir_all(dir).with_context(|| format!("making {}", dir.display()))?;
+    let path = dir.join(".lock");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .with_context(|| path.display().to_string())?;
+    file.lock().with_context(|| path.display().to_string())?;
+    Ok(file)
 }
 
 /// `path`'s JSON; `None` when it is absent or does not parse.
@@ -509,6 +607,33 @@ mod tests {
         kept.observe(&repo, "bolt/x", None).unwrap();
         kept.observe(&repo, "bolt/x", None).unwrap();
         assert_eq!(kept.observed(&repo, "bolt/x"), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 137: a wait's hold says whether another of the host's waits on the
+    /// same mark lives when it is let go; one whose process is gone is
+    /// removed, and holds on another branch count for nothing.
+    #[test]
+    fn the_hosts_waits_hold_a_mark_together() {
+        let dir = scratch("holds");
+        let kept = Kept::new(&dir);
+        let repo = Repo::from_url("https://github.com/o/r.git").unwrap();
+        let waits = dir.join("forge/intake/o/r/main.waits");
+        // Another wait of the host, its file locked while it lives.
+        let hold = kept.hold(&repo, "main").unwrap();
+        let other = waits.join("4000001.hold");
+        let live = std::fs::File::create(&other).unwrap();
+        live.lock().unwrap();
+        let elsewhere = kept.hold(&repo, "bolt/x").unwrap();
+        assert!(kept.let_go(hold).unwrap(), "the other wait holds it still");
+        assert!(other.exists());
+        assert!(!waits.join(format!("{}.hold", std::process::id())).exists());
+        // It ended without letting go: its hold is read as gone.
+        drop(live);
+        let hold = kept.hold(&repo, "main").unwrap();
+        assert!(!kept.let_go(hold).unwrap(), "the last of the host's waits");
+        assert!(!other.exists(), "a dead wait's hold is removed");
+        assert!(!kept.let_go(elsewhere).unwrap());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
