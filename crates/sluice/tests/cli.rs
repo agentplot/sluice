@@ -7715,6 +7715,309 @@ fn status_shows_this_hosts_copy_behind_while_it_lasts() {
     assert!(v["copy"].is_null(), "{v}");
 }
 
+/// A revision whose first seven digits are `short`.
+fn rev_of(short: &str) -> Rev {
+    Rev::new(format!("{short:0<40}"))
+}
+
+/// The timer's cause on `build-1`, as 148's example names it.
+const TIMER: &str = "git -C /home/me/app update-ref refs/heads/main <revision> <revision>";
+
+/// A cause of refused writes as the branch's state keeps it (148).
+fn cause(
+    host: &str,
+    command: &str,
+    times: u64,
+    first: &str,
+    last: &str,
+    to: Option<&str>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "host": host,
+        "ref": format!("refs/heads/{BRANCH}"),
+        "command": command,
+        "times": times,
+        "first": first,
+        "last": last,
+        "from": rev_of("10e4791"),
+        "to": to.map(rev_of),
+    })
+}
+
+/// The branch's state given `causes` of refused writes, as the hook's
+/// writes would have left them (148), its document made by a round first.
+fn refused_writes(f: &Fakes, causes: &[serde_json::Value]) {
+    sluice(f, &["step", BRANCH]);
+    let state = f.seams().state;
+    let _lock = state.wait_lock(BRANCH).unwrap();
+    let read = state.read(BRANCH).unwrap();
+    let mut doc: serde_json::Value = serde_json::from_slice(&read.files["branch.json"]).unwrap();
+    doc["refused_writes"] = causes.into();
+    let mut changes = Changes::default();
+    changes.put.insert(
+        "branch.json".to_string(),
+        serde_json::to_vec_pretty(&doc).unwrap(),
+    );
+    assert!(matches!(
+        state.write(BRANCH, read.version, changes).unwrap(),
+        sluice_seams::Written::Written(_)
+    ));
+}
+
+/// The world's clock set to `at`; it moves a second on each ask after.
+fn clock_at(f: &Fakes, at: &str) {
+    use sluice_core::Clock;
+    let at = chrono::DateTime::parse_from_rfc3339(at).unwrap();
+    let now = f.clock.now();
+    f.world.advance(at.with_timezone(&chrono::Utc) - now);
+}
+
+/// 148: status says, above the queue, which writes sluice's protection
+/// refused in the last day, by command, with its host, how many times, the
+/// first, the last and the last write's revisions, and then, on a branch
+/// kept on a remote, that sluice sets each host's copy itself; `--json`
+/// carries each cause whole under `refused_writes`.
+#[test]
+fn status_shows_the_writes_its_protection_refused() {
+    let f = setup();
+    f.world.on_remote(BRANCH);
+    let timer = cause(
+        "build-1",
+        TIMER,
+        2024,
+        "2026-10-30T05:50:23Z",
+        "2026-11-02T16:01:20Z",
+        Some("8079db3"),
+    );
+    refused_writes(&f, std::slice::from_ref(&timer));
+    clock_at(&f, "2026-11-02T17:00:00Z");
+
+    let (code, out) = sluice(&f, &["status", BRANCH]);
+    assert_eq!(code, 0, "{out}");
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(
+        lines[1..5],
+        [
+            format!(
+                "sluice refused writes to {BRANCH} in the last day, by commands that are not sluice's:"
+            ),
+            format!("  {TIMER}"),
+            "    on build-1: 2024 times, first 2026-10-30T05:50:23Z, last 2026-11-02T16:01:20Z, \
+             from 10e4791 to 8079db3"
+                .to_string(),
+            format!(
+                "sluice sets each host's {BRANCH} to each landing itself: stop what runs these"
+            ),
+        ],
+        "{out}"
+    );
+    let v = json(&sluice(&f, &["status", BRANCH, "--json"]).1);
+    assert_eq!(v["refused_writes"], serde_json::json!([timer]), "{v}");
+}
+
+/// 148: with no cause standing, status says nothing of refused writes, and
+/// `--json` carries `refused_writes` empty.
+#[test]
+fn status_says_nothing_of_no_refused_writes() {
+    let f = setup();
+    sluice(&f, &["step", BRANCH]);
+
+    let (code, out) = sluice(&f, &["status", BRANCH]);
+    assert_eq!(code, 0, "{out}");
+    assert!(!out.contains("refused"), "{out}");
+    let v = json(&sluice(&f, &["status", BRANCH, "--json"]).1);
+    assert_eq!(v["refused_writes"], serde_json::json!([]), "{v}");
+}
+
+/// 124, 148: on a branch kept in this host's own repository, status's
+/// last line of its refused writes is the refusal's own: only sluice
+/// moves it.
+#[test]
+fn status_tells_a_local_branchs_refused_writes_what_to_do() {
+    let f = setup();
+    let commit = format!("git commit -m 'fix the build' on {BRANCH}");
+    refused_writes(
+        &f,
+        &[cause(
+            "build-1",
+            &commit,
+            1,
+            "2026-11-02T16:01:20Z",
+            "2026-11-02T16:01:20Z",
+            Some("8079db3"),
+        )],
+    );
+    clock_at(&f, "2026-11-02T17:00:00Z");
+
+    let (_, out) = sluice(&f, &["status", BRANCH]);
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(
+        lines[2..5],
+        [
+            format!("  {commit}"),
+            "    on build-1: 1 time, first 2026-11-02T16:01:20Z, last 2026-11-02T16:01:20Z, \
+             from 10e4791 to 8079db3"
+                .to_string(),
+            format!("only sluice moves {BRANCH}: submit the change to sluice instead"),
+        ],
+        "{out}"
+    );
+    assert!(!out.contains("each landing itself"), "{out}");
+}
+
+/// 148: a refused deletion is named as one: status says `deleting it`
+/// where a move names its revision, and `--json` gives its `to` as null.
+#[test]
+fn status_names_a_refused_deletion() {
+    let f = setup();
+    let delete = format!("git branch -D {BRANCH}");
+    refused_writes(
+        &f,
+        &[cause(
+            "build-1",
+            &delete,
+            1,
+            "2026-11-02T16:01:20Z",
+            "2026-11-02T16:01:20Z",
+            None,
+        )],
+    );
+    clock_at(&f, "2026-11-02T17:00:00Z");
+
+    let (_, out) = sluice(&f, &["status", BRANCH]);
+    assert!(
+        out.contains(&format!(
+            "  {delete}\n    on build-1: 1 time, first 2026-11-02T16:01:20Z, \
+             last 2026-11-02T16:01:20Z, from 10e4791, deleting it\n"
+        )),
+        "{out}"
+    );
+    let v = json(&sluice(&f, &["status", BRANCH, "--json"]).1);
+    assert!(v["refused_writes"][0]["to"].is_null(), "{v}");
+    assert_eq!(v["refused_writes"][0]["command"], delete.as_str(), "{v}");
+}
+
+/// Five causes standing on the branch, refused last in the order of
+/// their numbers, set down out of that order; the third's command is a
+/// line longer than a hundred characters, and a second line.
+fn five_causes(f: &Fakes) -> Vec<serde_json::Value> {
+    let long = format!(
+        "git -C /home/me/{} update-ref refs/heads/main <revision>\nand more",
+        "a".repeat(80)
+    );
+    let causes: Vec<serde_json::Value> = [3, 1, 5, 2, 4]
+        .into_iter()
+        .map(|n| {
+            let command = match n {
+                3 => long.clone(),
+                n => format!("git branch -f {BRANCH} unit/{n}"),
+            };
+            cause(
+                &format!("build-{n}"),
+                &command,
+                n,
+                "2026-11-02T10:00:00Z",
+                &format!("2026-11-02T1{n}:00:00Z"),
+                Some("8079db3"),
+            )
+        })
+        .collect();
+    refused_writes(f, &causes);
+    clock_at(f, "2026-11-02T17:00:00Z");
+    causes
+}
+
+/// 26, 148: the overview shows, under the branch's line, the three causes
+/// refused last, newest first, each command cut as status cuts it after a
+/// hundred characters, and then how many more and where they are.
+#[test]
+fn the_overview_shows_three_and_how_many_more() {
+    let f = setup();
+    five_causes(&f);
+
+    let (code, out) = sluice(&f, &["overview"]);
+    assert_eq!(code, 0, "{out}");
+    let lines: Vec<&str> = out.lines().collect();
+    let cut: String = format!(
+        "git -C /home/me/{} update-ref refs/heads/main <revision>",
+        "a".repeat(80)
+    )
+    .chars()
+    .take(100)
+    .collect();
+    assert_eq!(
+        lines[1..5],
+        [
+            format!(
+                "  sluice refused 5 writes on build-5, last 2026-11-02T15:00:00Z: \
+                 git branch -f {BRANCH} unit/5"
+            ),
+            format!(
+                "  sluice refused 4 writes on build-4, last 2026-11-02T14:00:00Z: \
+                 git branch -f {BRANCH} unit/4"
+            ),
+            format!("  sluice refused 3 writes on build-3, last 2026-11-02T13:00:00Z: {cut}…"),
+            format!("  and 2 more: sluice status {BRANCH}"),
+        ],
+        "{out}"
+    );
+}
+
+/// 26, 129, 148: `sluice overview --json` gives the branch every standing
+/// cause, newest first, each whole as the branch's state keeps it.
+#[test]
+fn the_overviews_document_carries_every_cause() {
+    let f = setup();
+    let causes = five_causes(&f);
+
+    let v = json(&sluice(&f, &["overview", "--json"]).1);
+    let newest_first: Vec<&serde_json::Value> =
+        [2, 4, 0, 3, 1].iter().map(|&i| &causes[i]).collect();
+    assert_eq!(
+        v["branches"][0]["refused_writes"],
+        serde_json::json!(newest_first),
+        "{v}"
+    );
+}
+
+/// 148: a cause is shown until a day passes with none of its writes
+/// refused: neither status nor the overview, in words or in `--json`,
+/// gives it a day after its last.
+#[test]
+fn neither_status_nor_the_overview_shows_a_cause_a_day_after_its_last() {
+    let f = setup();
+    refused_writes(
+        &f,
+        &[cause(
+            "build-1",
+            TIMER,
+            2,
+            "2026-11-02T15:00:00Z",
+            "2026-11-02T16:01:20Z",
+            Some("8079db3"),
+        )],
+    );
+    clock_at(&f, "2026-11-03T16:01:10Z");
+    let (_, out) = sluice(&f, &["status", BRANCH]);
+    assert!(out.contains(TIMER), "{out}");
+    let (_, out) = sluice(&f, &["overview"]);
+    assert!(out.contains(TIMER), "{out}");
+
+    clock_at(&f, "2026-11-03T16:01:20Z");
+    let (_, out) = sluice(&f, &["status", BRANCH]);
+    assert!(!out.contains("refused"), "{out}");
+    let v = json(&sluice(&f, &["status", BRANCH, "--json"]).1);
+    assert_eq!(v["refused_writes"], serde_json::json!([]), "{v}");
+    let (_, out) = sluice(&f, &["overview"]);
+    assert!(!out.contains("refused"), "{out}");
+    let v = json(&sluice(&f, &["overview", "--json"]).1);
+    assert_eq!(
+        v["branches"][0]["refused_writes"],
+        serde_json::json!([]),
+        "{v}"
+    );
+}
+
 /// 124, S58: a submit from a worktree that has checked out a bolt kept on
 /// a remote submits the remote's revision and says how this host's copy
 /// stands to it, in text and under `copy` in JSON; level, it says

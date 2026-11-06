@@ -659,6 +659,31 @@ pub fn at_a_closed_port<T>(
     tried.unwrap()
 }
 
+/// What `probe` makes of a Unix socket in `dir` that nothing listens on:
+/// the first of a few such sockets, each bound and let go, at which
+/// `refused` holds of it, or else the last tried. On macOS a socket is
+/// made close-on-exec only after it is made, so a child another test
+/// spawns between the two keeps it listening for the child's life, and a
+/// connection to it is taken and dropped in the refusal's place (the
+/// queue's cli:test, 2026-11-05: `closed the connection unanswered`).
+pub fn at_a_closed_socket<T>(
+    dir: &Path,
+    mut probe: impl FnMut(&Path) -> T,
+    refused: impl Fn(&Path, &T) -> bool,
+) -> (PathBuf, T) {
+    let mut tried = None;
+    for n in 0..5 {
+        let socket = dir.join(format!("e{n}.sock"));
+        drop(std::os::unix::net::UnixListener::bind(&socket).unwrap());
+        let seen = probe(&socket);
+        if refused(&socket, &seen) {
+            return (socket, seen);
+        }
+        tried = Some((socket, seen));
+    }
+    tried.unwrap()
+}
+
 /// A fake container engine over TLS on a local TCP port, answering `200`
 /// to a `GET /_ping` only from a client whose certificate its own CA
 /// signed (design D5). The CA's certificate, and a client certificate and

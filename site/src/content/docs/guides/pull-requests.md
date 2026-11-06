@@ -137,8 +137,9 @@ the ref `refs/sluice/intake/main` on the remote:
   every third of `[peers] lease`, never each round. A second host's
   `sluice run` finds it and takes nothing in.
 - A `sluice wait` or waiting submit on a host where `sluice run` isn't
-  running pushes the mark where none stands, and removes it when it
-  ends. A `sluice run` takes the mark from a wait at once.
+  running pushes the mark where none stands. The host's waits hold it
+  together: the last of them to end removes it. A `sluice run` takes the
+  mark from a wait at once.
 - Any host takes the mark once it has stood unchanged for `[peers]
   lease` as that host has watched it, as when the host that held it
   stopped.
@@ -146,10 +147,12 @@ the ref `refs/sluice/intake/main` on the remote:
   waits and steps alone keeps none between them.
 
 A host that doesn't hold the mark asks GitHub nothing about `main`'s
-pull requests. It withdraws its own queued submissions of them, naming
-the host that holds the mark, and that host takes each in again. A
-submission that is landing finishes, and work submitted from the host's
-own worktrees stays in its queue. A wait on that host follows its pull
+pull requests. Once it finds another host's mark, it withdraws its own
+queued submissions of them, naming that host, and that host takes each
+in again. A host withdraws nothing where its push of the mark was
+refused and the mark names no other host. A submission that is landing
+finishes, one whose work `main` already holds is recorded landed, and
+work submitted from the host's own worktrees stays in its queue. A wait on that host follows its pull
 request on GitHub, as [`sluice wait`](/sluice/reference/commands/#sluice-wait)
 says.
 
@@ -350,7 +353,7 @@ check reads:
 | `failed: app:test` | its combination failed and it is to blame; the comment names the failed tests and where their logs are |
 | `conflict: plan.py` | it no longer merges with what is ahead of it; the comment names the files and the pull requests |
 | `landed as b7d2e94` | on `main`; GitHub marks the pull request merged |
-| `landed as 4e1a07c beside the queue` | no required check reads its changes, so it landed on `main` at once with no check run, ahead of the queue; the report says so |
+| `landed as 4e1a07c beside the queue` | no required check reads its changes, so it landed on `main` at once with no check run, ahead of the queue. The check and the report say so, and name the result that covers it, as its landing commit does: "Covered by the result at `b7d2e94`, passed (2 run, 31 replayed)." |
 
 While a pull request waits or is queued, the check shows as pending on
 GitHub; while it is tested, in progress; failed and conflict fail it,

@@ -7,7 +7,7 @@
 mod support;
 
 use sluice::profiles::local_refs::LocalRefs;
-use sluice_seams::{Branch, Formed, HostCopy, LandingCommit, Moved, Rev};
+use sluice_seams::{Branch, CoveringVerdict, Formed, HostCopy, LandingCommit, Moved, Rev};
 use support::Repo;
 
 fn rev(s: String) -> Rev {
@@ -206,6 +206,67 @@ fn commit_writes_the_landing() {
         4,
         "{trailers}"
     );
+}
+
+/// 23, 140; record 0083; rule core.39: a landing beside committed as
+/// sluice writes it reads to git as passed: its `Sluice-Result` is one
+/// line whose first word is `passed`, whole as written, by either reading
+/// of the trailer, and it has no `Sluice-Tested`.
+#[test]
+fn a_landing_beside_reads_as_passed_to_git() {
+    let repo = Repo::new("beside");
+    let r = refs(&repo);
+    let onto = rev(repo.branch("bolt/x", "main", &[("a", Some("1"))]));
+    let head = rev(repo.branch("unit/d", "main", &[("docs/guide.md", Some("guide"))]));
+    let candidate = formed(r.form(&onto, &head).unwrap());
+    let sub: sluice_core::records::Submission = serde_json::from_value(serde_json::json!({
+        "schema": sluice_core::records::SUBMISSION_SCHEMA, "id": 13, "branch": "bolt/x",
+        "head": head.as_str(), "from": { "agent": "agent", "worktree": "unit/d" },
+        "submitted": "2026-11-05T10:00:00Z", "after": [], "priority": 0,
+        "attempt": 1, "state": "landing",
+    }))
+    .unwrap();
+    let covering = CoveringVerdict {
+        at: onto.clone(),
+        result: "passed".into(),
+        ran: 141,
+        replayed: 0,
+    };
+    let message = sluice_core::text::beside_message(
+        sluice_core::policy::LANDING_SUBJECT,
+        "bolt/x",
+        &sub,
+        &covering,
+    );
+    let landed = r
+        .commit(&LandingCommit {
+            tree_of: candidate,
+            parent: onto.clone(),
+            head,
+            message,
+        })
+        .unwrap();
+    let written = format!(
+        "passed (0 run, 0 replayed) beside the queue: no required check reads its changes; \
+         covered by the result at {onto}, passed (141 run, 0 replayed)"
+    );
+    assert_eq!(onto.as_str().len(), 40);
+    for format in [
+        "--format=%(trailers:key=Sluice-Result,valueonly)",
+        "--format=%(trailers:key=Sluice-Result,valueonly,separator=%x20)",
+    ] {
+        let result = repo.git(&["log", "-1", format, landed.as_str()]);
+        assert_eq!(result.lines().count(), 1, "{format}: {result}");
+        assert_eq!(result.split_whitespace().next(), Some("passed"), "{format}");
+        assert_eq!(result, written, "{format}");
+    }
+    let tested = repo.git(&[
+        "log",
+        "-1",
+        "--format=%(trailers:key=Sluice-Tested,valueonly)",
+        landed.as_str(),
+    ]);
+    assert_eq!(tested, "");
 }
 
 /// 7, S8, 24, 45: moved from the expected revision, refused from a stale

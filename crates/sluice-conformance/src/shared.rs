@@ -51,6 +51,7 @@ pub fn s1_two_heads_pass_and_land_in_order(h: &impl Rig) {
         Decided::Landed {
             landed_as: k1.clone(),
             beside: false,
+            covered_by: None,
         }
     );
     assert_eq!(h.delivered_to("agent-b")[0].submission, two);
@@ -499,6 +500,43 @@ pub fn a_resubmission_withdraws_the_earlier_submission_which_stays_readable(h: &
     assert_eq!(h.sub(again.id).state, State::Withdrawn);
     h.settle();
     assert_eq!(h.sub(third).state, State::Landed);
+}
+
+/// 122, 5, 6: a submission whose work the branch took by a landing not its
+/// own, as another queue of the branch lands it, and then moved on past, is
+/// landed as the commit that landed it, logged as found so and delivered as
+/// any landing; nothing is formed, run or landed of it, and it is never
+/// withdrawn.
+pub fn work_another_landing_took_is_landed_as_the_commit_that_landed_it(h: &impl Rig) {
+    let head = h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let id = h.submit("unit/a");
+    let landing = match h.sluice().seams().branch.form(&h.tip(), &head).unwrap() {
+        sluice_seams::Formed::Revision(rev) => rev,
+        other => panic!("{other:?}"),
+    };
+    h.branch_at(BRANCH, &landing);
+    h.elsewhere(&[("later", Some("later"))]);
+    let (moves, started) = (h.moves(), h.started().len());
+    h.settle();
+    let sub = h.sub(id);
+    assert_eq!(sub.state, State::Landed, "{sub:?}");
+    assert_eq!(sub.landed_as.as_ref(), Some(&landing));
+    assert!(sub.landed_elsewhere);
+    assert_eq!(h.started().len(), started, "nothing is run of it");
+    assert_eq!(h.moves(), moves, "nothing is landed of it");
+    assert!(h.events().iter().any(
+        |e| matches!(e, Event::FoundLanded { ids, to } if *ids == vec![id] && *to == landing)
+    ));
+    assert!(!h
+        .events()
+        .iter()
+        .any(|e| matches!(e, Event::Withdrawn { id: w, .. } if *w == id)));
+    let told = h.delivered_to("agent-a");
+    assert!(
+        told.iter().any(|n| n.submission == id
+            && matches!(&n.decided, Decided::Landed { landed_as, .. } if *landed_as == landing)),
+        "{told:?}"
+    );
 }
 
 /// 7: a submission waits for its `after`, and holds no one behind it.

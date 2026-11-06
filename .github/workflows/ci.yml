@@ -112,7 +112,8 @@ jobs:
 
   # The commits since the last release are conventional (.versionrc): a
   # session can skip the commit-msg hook, and git-cliff releases from them.
-  # Merge commits are not checked.
+  # Merge commits are not checked, nor a commit `git revert` wrote, whose
+  # subject opens `Revert "`, as the hook takes it (devenv.nix).
   conventional:
     needs: landing
     if: needs.landing.outputs.tested == ''
@@ -124,7 +125,7 @@ jobs:
       - uses: cachix/install-nix-action@v31
       - run: |
           last="$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)"
-          nix shell --inputs-from . nixpkgs#convco -c convco check ${last:+"$last..HEAD"}
+          nix shell --inputs-from . nixpkgs#convco -c convco check --ignore-reverts ${last:+"$last..HEAD"}
 
   # The next version from the commits since the last v* tag; empty when
   # it is already tagged.

@@ -67,5 +67,12 @@ only by the git hook `sluice protect` installs.
   remote answers; running tests keep running.
 - Never press GitHub's merge button on the branch: sluice treats it as the
   branch moving under its queue and retests everything queued.
+- A script or a timer that sets this host's copy of the branch itself is
+  refused each time it runs: a round sets the copy to each landing.
+  `sluice status <branch>` names its command, how many times it was
+  refused, the first and the last, until a day passes with none. Stop
+  what runs it. A host's checks read `refused_writes` from
+  `sluice overview --json` (`branches[].refused_writes`), never from the
+  branch's `log.jsonl` or `branch.json`: the log says each command once.
 
 Reference: <https://agentplot.github.io/sluice/guides/github/>.

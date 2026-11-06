@@ -52,8 +52,8 @@ use sluice_core::{
     Clock, Forecast, GroupRequest, Requester, Seams, Sluice, SubmitRefusal, SubmitRequest, Withdrew,
 };
 use sluice_seams::{
-    Branch, Decided, Delivery, Formed, HostCopy, LandingCommit, Moved, Notification, Rev, Session,
-    Submitter,
+    Branch, CoveringVerdict, Decided, Delivery, Formed, HostCopy, LandingCommit, Moved,
+    Notification, Rev, Session, Submitter,
 };
 
 use super::app::Repo;
@@ -61,7 +61,7 @@ use super::forge::{
     approvals, Check, Forge, Posted, Posting, Pull, Request, Review, Standing, Status, SLUICE_CHECK,
 };
 use super::kept::Observed;
-use super::kept::{Kept, Reading, Readings};
+use super::kept::{Hold, Kept, Reading, Readings};
 use super::render;
 use crate::identity::Identity;
 use crate::profiles::local_refs::LocalRefs;
@@ -318,10 +318,10 @@ pub struct Pulls {
     default_policy: RefCell<Option<(Rev, std::result::Result<Option<Policy>, String>)>>,
     /// This host as its peers name it, and its lease (72, 73, 137).
     peer: sluice_core::Peer,
-    /// The intake marks this process pushed as a wait and still holds, by
-    /// branch: the branch's remote and the mark's commit, let go when the
-    /// wait ends (137).
-    held: RefCell<BTreeMap<String, (String, Rev)>>,
+    /// 137: this process's hold among its host's waits on each branch's
+    /// intake mark, by branch, with the branch's remote: let go when the
+    /// wait ends, the host's last wait letting the mark go.
+    holds: RefCell<BTreeMap<String, (String, Hold)>>,
     /// The host that takes each branch's pull requests in, by branch, as
     /// this process's last intake found it, where that is another host.
     away: RefCell<BTreeMap<String, String>>,
@@ -379,6 +379,9 @@ enum Taking {
     Here,
     /// Another host does, by its name.
     Elsewhere(String),
+    /// The mark moved under two pushes of this host's and names no other
+    /// host: this pass takes nothing in and hands nothing over.
+    Undecided,
 }
 
 impl Pulls {
@@ -417,7 +420,7 @@ impl Pulls {
             policies: sluice_core::Policies::default(),
             default_policy: RefCell::default(),
             peer,
-            held: RefCell::default(),
+            holds: RefCell::default(),
             away: RefCell::default(),
         }
     }
@@ -501,8 +504,13 @@ impl Pulls {
     ///   it, by this host's own observation: a driver or a wait takes it;
     /// - otherwise another host takes them in.
     ///
-    /// A push refused at its lease is another host's take: this host takes
-    /// nothing in this pass.
+    /// A push refused at its lease is decided again, once, on the mark the
+    /// branch's fetch then brings: this host's own, which another of its
+    /// processes moved, is held; none standing, which the process that
+    /// held it let go, is pushed again leased on its absence; another
+    /// host's is that host's. Only a mark naming another host hands the
+    /// requests over; a second refusal leaves this pass taking nothing in
+    /// and handing nothing over (137; rule core.33).
     fn takes(
         &self,
         s: &Sluice<'_>,
@@ -523,30 +531,45 @@ impl Pulls {
             Taker::Wait => Some(Holder::Wait),
             Taker::Step => None,
         };
+        for _ in 0..2 {
+            if let Some(taking) = self.decide(t, pushed, branch, holder, now)? {
+                return Ok(taking);
+            }
+            pushed.read(branch)?;
+        }
+        Ok(Taking::Undecided)
+    }
+
+    /// 137: [`Pulls::takes`] on the mark as the branch's last fetch brought
+    /// it, as `holder`, or as a step where it is `None`; `None` when a push
+    /// of the mark was refused at its lease.
+    fn decide(
+        &self,
+        t: &Target,
+        pushed: &PushedRefs,
+        branch: &str,
+        holder: Option<Holder>,
+        now: DateTime<Utc>,
+    ) -> Result<Option<Taking>> {
         let lease = chrono::TimeDelta::from_std(self.peer.lease).unwrap_or(chrono::TimeDelta::MAX);
         let seen = self.kept.observed(&t.repo, branch);
         let Some((rev, mark)) = pushed.intake_mark(branch)? else {
             return match holder {
-                None => Ok(Taking::Here),
+                None => Ok(Some(Taking::Here)),
                 // The host there alone: what it read stands.
                 Some(h) => self.put_mark(t, pushed, branch, None, h, now),
             };
         };
         if mark.host == self.peer.name {
             let Some(h) = holder else {
-                return Ok(Taking::Here);
+                return Ok(Some(Taking::Here));
             };
             let renewed = seen
                 .filter(|o| o.seen == rev.0)
                 .and_then(|o| o.renewed)
                 .filter(|r| now - *r < lease / 3);
             if mark.holder == h && renewed.is_some() {
-                if h == Holder::Wait {
-                    self.held
-                        .borrow_mut()
-                        .insert(branch.to_string(), (t.remote.clone(), rev));
-                }
-                return Ok(Taking::Here);
+                return Ok(Some(Taking::Here));
             }
             return self.put_mark(t, pushed, branch, Some(&rev), h, now);
         }
@@ -562,19 +585,19 @@ impl Pulls {
                     renewed: None,
                 };
                 self.kept.observe(&t.repo, branch, Some(&first))?;
-                return Ok(Taking::Elsewhere(mark.host));
+                return Ok(Some(Taking::Elsewhere(mark.host)));
             }
         };
         match holder {
             Some(h) if now - since >= lease => self.put_mark(t, pushed, branch, Some(&rev), h, now),
-            _ => Ok(Taking::Elsewhere(mark.host)),
+            _ => Ok(Some(Taking::Elsewhere(mark.host))),
         }
     }
 
     /// 137: push this host's mark as `holder` over `from`, leased on it:
-    /// [`Taking::Here`] once pushed, kept as seen and renewed
-    /// now, and held for letting go when its holder is a wait; refused at
-    /// its lease, the host that moved it, read in the branch's fetch again.
+    /// [`Taking::Here`] once pushed, kept as seen and renewed now; `None`
+    /// when the push was refused at its lease, which names no holder until
+    /// the branch is read again.
     #[allow(clippy::too_many_arguments)]
     fn put_mark(
         &self,
@@ -584,20 +607,14 @@ impl Pulls {
         from: Option<&Rev>,
         holder: Holder,
         now: DateTime<Utc>,
-    ) -> Result<Taking> {
+    ) -> Result<Option<Taking>> {
         let mark = Mark {
             host: self.peer.name.clone(),
             holder,
             sluice: crate::VERSION.to_string(),
         };
         let Some(rev) = pushed.put_intake_mark(branch, from, &mark)? else {
-            self.held.borrow_mut().remove(branch);
-            pushed.read(branch)?;
-            let host = match pushed.intake_mark(branch)? {
-                Some((_, m)) => m.host,
-                None => "another host".to_string(),
-            };
-            return Ok(Taking::Elsewhere(host));
+            return Ok(None);
         };
         let seen = Observed {
             seen: rev.0.clone(),
@@ -605,31 +622,40 @@ impl Pulls {
             renewed: Some(now),
         };
         self.kept.observe(&t.repo, branch, Some(&seen))?;
-        match holder {
-            Holder::Wait => self
-                .held
-                .borrow_mut()
-                .insert(branch.to_string(), (t.remote.clone(), rev)),
-            Holder::Driver => self.held.borrow_mut().remove(branch),
-        };
-        Ok(Taking::Here)
+        Ok(Some(Taking::Here))
+    }
+
+    /// 137: hold `t`'s mark of `branch` among this host's waits, once, for
+    /// this process's life: the host's last wait to end lets it go.
+    fn hold(&self, t: &Target, branch: &str) -> Result<()> {
+        if self.holds.borrow().contains_key(branch) {
+            return Ok(());
+        }
+        let hold = self.kept.hold(&t.repo, branch)?;
+        self.holds
+            .borrow_mut()
+            .insert(branch.to_string(), (t.remote.clone(), hold));
+        Ok(())
     }
 
     /// 122, 137: on a host that finds another host's mark, withdraw every
     /// submission of its own records taken from a pull request, neither out
     /// of the queue nor landing, the log naming `host`, which takes each in
     /// again; nothing is posted on the pull requests, which `host` posts.
-    /// Submissions from the host's own worktrees stay. This host's runs of
-    /// the combinations the withdrawals made obsolete end in this pass, and
-    /// their checkouts are released, whether or not a round follows (design
-    /// D5).
-    fn hand_over(&self, s: &Sluice<'_>, branch: &str, host: &str) -> Result<()> {
+    /// One whose head the branch at `tip`, as this pass fetched it, holds
+    /// has landed, whichever host landed it: it is never withdrawn, and the
+    /// round lands it (rule core.48). Submissions from the host's own
+    /// worktrees stay. This host's runs of the combinations the withdrawals
+    /// made obsolete end in this pass, and their checkouts are released,
+    /// whether or not a round follows (design D5).
+    fn hand_over(&self, s: &Sluice<'_>, branch: &str, host: &str, tip: &Rev) -> Result<()> {
         let by = Requester::Intake(handed_over_to(host, branch));
         let mut withdrew = false;
         for sub in s.status(branch)?.submissions {
             if number(&sub.from.worktree).is_none()
                 || sub.state.is_out()
                 || sub.state == State::Landing
+                || s.seams().branch.contains(tip, &sub.head)?
             {
                 continue;
             }
@@ -647,21 +673,33 @@ impl Pulls {
         Ok(())
     }
 
-    /// 137: let go of every intake mark this process holds as a wait, each
-    /// by a push leased on its last value; one another host has taken since
-    /// is left, and one that could not be let go lapses after the lease.
+    /// 137: let go of every hold this process keeps among its host's waits;
+    /// where it was the host's last wait holding a branch's mark, remove the
+    /// mark, as this repository last read or wrote it, when it names this
+    /// host and a wait, by a push leased on that value. A mark another of
+    /// the host's waits still holds stays theirs; one another host has
+    /// taken since is left, and one that could not be let go lapses after
+    /// the lease.
     pub fn let_go_marks(&self) {
-        let held = std::mem::take(&mut *self.held.borrow_mut());
-        for (branch, (remote, rev)) in held {
-            let dropped = self
-                .pushed(&remote)
-                .and_then(|p| p.drop_intake_mark(&branch, &rev));
-            match dropped {
-                Ok(_) => {}
-                Err(e) => crate::telemetry::warn(&format!(
+        let holds = std::mem::take(&mut *self.holds.borrow_mut());
+        for (branch, (remote, hold)) in holds {
+            let let_go = || -> Result<()> {
+                if self.kept.let_go(hold)? {
+                    return Ok(());
+                }
+                let pushed = self.pushed(&remote)?;
+                if let Some((rev, mark)) = pushed.intake_mark(&branch)? {
+                    if mark.host == self.peer.name && mark.holder == Holder::Wait {
+                        pushed.drop_intake_mark(&branch, &rev)?;
+                    }
+                }
+                Ok(())
+            };
+            if let Err(e) = let_go() {
+                crate::telemetry::warn(&format!(
                     "sluice: warning: letting go of {branch}'s intake mark: {e:#}; \
                      it lapses after the lease"
-                )),
+                ));
             }
         }
     }
@@ -824,6 +862,11 @@ impl Pulls {
         let Some(held) = self.target(s, branch)? else {
             return Ok(false);
         };
+        // 137: a wait holds the branch's mark among its host's waits from
+        // its first pass, whether or not that pass is due.
+        if taker == Taker::Wait && !held.signed {
+            self.hold(&held, branch)?;
+        }
         let forge = self.forge(branch)?;
         let Some(_lock) = self.lock(branch)? else {
             return Ok(true);
@@ -872,8 +915,17 @@ impl Pulls {
                     .borrow_mut()
                     .insert(branch.to_string(), host.clone());
                 if !t.signed {
-                    self.hand_over(s, branch, &host)?;
+                    self.hand_over(s, branch, &host, &t.tip)?;
                 }
+                self.register(&t.repo, &s.status(branch)?.submissions);
+                return Ok(true);
+            }
+            Taking::Undecided => {
+                crate::telemetry::warn(&format!(
+                    "sluice: warning: {branch}'s intake mark moved under two pushes of this \
+                     host's and names no other host: this pass takes none of its pull requests \
+                     in and hands none over"
+                ));
                 self.register(&t.repo, &s.status(branch)?.submissions);
                 return Ok(true);
             }
@@ -888,7 +940,10 @@ impl Pulls {
         let mut names = names(&status.submissions);
 
         // A submitted pull request closed, back in draft or on another
-        // head leaves the queue.
+        // head leaves the queue. One that left the open list because the
+        // branch as fetched holds its head, as another queue's landing
+        // leaves it and GitHub reads as merged, has landed (122, 5): it is
+        // never withdrawn, and the round finds it landed.
         let mut withdrew = false;
         for sub in &status.submissions {
             let Some(n) = number(&sub.from.worktree) else {
@@ -898,7 +953,7 @@ impl Pulls {
                 continue;
             }
             let gone = match pulls.iter().find(|p| p.number == n) {
-                None => true,
+                None => !s.seams().branch.contains(&t.tip, &sub.head)?,
                 Some(p) => p.draft || p.head != sub.head.0,
             };
             if gone {
@@ -1142,6 +1197,12 @@ impl Pulls {
                 r.report_said = Some(said);
             }
             None => {}
+        }
+
+        // 118, 140: a landing beside had no check run or replayed on its
+        // head, so no check per required check says one was.
+        if matches!(view.standing, Stands::Landed { beside: true, .. }) {
+            return Ok(());
         }
 
         // A check per required check per system (many-hosts-3's C.5
@@ -2314,6 +2375,10 @@ enum Outcome {
         landed_as: Rev,
         /// 140: beside the queue, with no check run.
         beside: bool,
+        /// 140: beside the queue, the result that covers the revision it
+        /// landed on; `None` otherwise, and in outcomes recorded before it
+        /// (record 0083).
+        covered_by: Option<CoveringVerdict>,
     },
     Failed {
         tasks: Vec<String>,
@@ -2334,6 +2399,7 @@ impl Outcome {
             State::Landed => Outcome::Landed {
                 landed_as: sub.landed_as.clone().unwrap_or_else(|| sub.head.clone()),
                 beside: sub.beside == Some(sluice_core::records::Beside::Landed),
+                covered_by: sub.covered_by.clone(),
             },
             State::Failed => {
                 let t = sub
@@ -2368,7 +2434,15 @@ impl Outcome {
 
     fn decided(decided: &Decided) -> Outcome {
         match decided.clone() {
-            Decided::Landed { landed_as, beside } => Outcome::Landed { landed_as, beside },
+            Decided::Landed {
+                landed_as,
+                beside,
+                covered_by,
+            } => Outcome::Landed {
+                landed_as,
+                beside,
+                covered_by,
+            },
             Decided::Failed {
                 failed,
                 combination,
@@ -2395,22 +2469,34 @@ fn outcome_shown(branch: &str, o: &Outcome, names: &BTreeMap<u64, String>) -> Sh
         Outcome::Landed {
             landed_as,
             beside: false,
+            ..
         } => (
             Status::Success,
             format!("landed as {}", landed_as.short()),
             format!("Landed on {branch} as `{}`.", landed_as.short()),
         ),
-        // 140: no required check reads its changes.
+        // 140: no required check reads its changes; the result that
+        // covers it named as its landing commit names it (23; record
+        // 0083), where the outcome carries it.
         Outcome::Landed {
             landed_as,
             beside: true,
+            covered_by,
         } => (
             Status::Success,
             format!("landed as {} beside the queue", landed_as.short()),
             format!(
                 "Landed on {branch} as `{}` beside the queue, with no check run: no required \
-                 check reads its changes.",
-                landed_as.short()
+                 check reads its changes.{}",
+                landed_as.short(),
+                covered_by
+                    .as_ref()
+                    .map(|c| format!(
+                        " Covered by the result at `{}`, {}.",
+                        c.at.short(),
+                        sluice_core::text::verdict_words(&c.result, c.ran, c.replayed)
+                    ))
+                    .unwrap_or_default()
             ),
         ),
         Outcome::Failed {
@@ -2574,6 +2660,10 @@ impl Branch for ReadOnce<'_> {
         self.branch.contains(tip, rev)
     }
 
+    fn landed_by(&self, tip: &Rev, rev: &Rev) -> Result<Option<Rev>> {
+        self.branch.landed_by(tip, rev)
+    }
+
     fn move_to(&self, branch: &str, expected: &Rev, to: &Rev) -> Result<Moved> {
         self.branch.move_to(branch, expected, to)
     }
@@ -2596,6 +2686,14 @@ fn once<'a>(seams: Seams<'a>, memo: &'a ReadOnce<'a>) -> Seams<'a> {
 }
 
 impl crate::PullRequests for Pulls {
+    fn request_of(&self, place: &str) -> Option<u64> {
+        number(place)
+    }
+
+    fn handed_over(&self, sub: &Submission) -> bool {
+        handed_over(sub, &sub.branch)
+    }
+
     fn branches(&self, seams: Seams<'_>) -> Result<Vec<String>> {
         let local = self.local()?;
         let Some((default, _)) = crate::profiles::default_branch(local)? else {
@@ -2820,6 +2918,19 @@ impl crate::PullRequests for Pulls {
             }
         }
         if !pull.as_ref().is_some_and(|p| p.open) {
+            // 122: closed as the branch took its head, whichever landing
+            // took it: landed, as the commit that landed it.
+            if let Some(e) = latest.filter(|e| e.state != State::Landed) {
+                if let Some(to) = s.seams().branch.landed_by(&t.tip, &e.head)? {
+                    let landed = Submission {
+                        state: State::Landed,
+                        landed_as: Some(to),
+                        landed_elsewhere: true,
+                        ..e
+                    };
+                    return Ok(Followed::Done(landed, names(&status.submissions)));
+                }
+            }
             return Ok(Followed::Closed);
         }
         // Taken in on the head it has now, and undecided: the submission
@@ -3176,6 +3287,7 @@ impl Pulls {
             },
             dirty: Vec::new(),
             detached: false,
+            bare: false,
         })
     }
 
@@ -3364,6 +3476,148 @@ mod tests {
             .iter()
             .filter(|p| p.name != SLUICE_CHECK)
             .all(|p| p.posting.status == Status::Queued));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// 140, "A request's earlier report is brought up to date": a request
+    /// whose earlier head was blamed, and whose new head lands beside the
+    /// queue, has its one report comment edited to the landing beside's,
+    /// which is also its `sluice` check's text, and no check per required
+    /// check on its new head, since none was run or replayed there (118;
+    /// record 0083).
+    #[test]
+    fn a_landing_beside_edits_the_requests_report() {
+        let dir = std::env::temp_dir().join(format!("sluice-pulls-beside-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let repo = Repo::from_url("https://github.com/o/r.git").unwrap();
+        let forge = Rc::new(FileForge::new(&dir.join("github.json"), &repo));
+        let pulls = Pulls::new(
+            &dir,
+            &dir,
+            Some(forge.clone()),
+            None,
+            Rc::new(retry::Policy::command()),
+            Kept::new(&dir.join("state")),
+            crate::instance::DISCOVERY,
+            sluice_core::Peer::default(),
+        );
+        let mut reading = Reading::default();
+        let names = BTreeMap::from([(12, "#12".to_string())]);
+        let mut failed = row("linux-x64", false);
+        failed.result = RowResult::Failed;
+        let blamed = VerdictView {
+            branch: "main".into(),
+            id: 12,
+            standing: Stands::Blamed { timed_out: false },
+            combination: Some(Rev::new("c1")),
+            on: Some(Rev::new("m0")),
+            submissions: vec![12],
+            runs: Vec::new(),
+            rows: vec![failed],
+            tasks: Vec::new(),
+            pending: Vec::new(),
+        };
+        let sent_back = outcome_shown(
+            "main",
+            &Outcome::Failed {
+                tasks: vec!["cli:build".into()],
+                logs: Vec::new(),
+                combination: Rev::new("c1"),
+                ids: vec![12],
+                timed_out: false,
+            },
+            &names,
+        );
+        pulls
+            .show_report(
+                &*forge,
+                &repo,
+                12,
+                "h1",
+                None,
+                &names,
+                sent_back,
+                Some(&blamed),
+                &mut reading,
+            )
+            .unwrap();
+        let held = forge.held().unwrap();
+        let [first] = held.comments[&12].as_slice() else {
+            panic!("one report comment: {:?}", held.comments);
+        };
+        assert!(
+            first.body.contains("failed on main, #12 is to blame"),
+            "{}",
+            first.body
+        );
+        assert!(held.posted["h1"].iter().any(|p| p.name != SLUICE_CHECK));
+
+        let covered_by = Some(CoveringVerdict {
+            at: Rev::new("e25fea4c0ffee0000000000000000000000000ab"),
+            result: "passed".into(),
+            ran: 141,
+            replayed: 0,
+        });
+        let beside = VerdictView {
+            standing: Stands::Landed {
+                landed_as: Rev::new("0cef58d1234"),
+                beside: true,
+                covered_by: covered_by.clone(),
+            },
+            combination: None,
+            on: None,
+            submissions: Vec::new(),
+            rows: Vec::new(),
+            ..blamed
+        };
+        let landed = outcome_shown(
+            "main",
+            &Outcome::Landed {
+                landed_as: Rev::new("0cef58d1234"),
+                beside: true,
+                covered_by,
+            },
+            &names,
+        );
+        pulls
+            .show_report(
+                &*forge,
+                &repo,
+                12,
+                "h2",
+                None,
+                &names,
+                landed,
+                Some(&beside),
+                &mut reading,
+            )
+            .unwrap();
+        let held = forge.held().unwrap();
+        let [comment] = held.comments[&12].as_slice() else {
+            panic!("still one report comment: {:?}", held.comments);
+        };
+        assert_eq!(comment.id, first.id);
+        assert_eq!(held.edits.len(), 1);
+        assert!(
+            comment.body.contains(
+                "## sluice: landed on main as 0cef58d with no check run: no required check \
+                 reads its changes\n\nCovered by the result at \
+                 [`e25fea4`](https://github.com/o/r/commit/e25fea4c0ffee0000000000000000000000000ab), \
+                 passed (141 run, 0 replayed).\n"
+            ),
+            "{}",
+            comment.body
+        );
+        let [check] = held.posted["h2"].as_slice() else {
+            panic!(
+                "only sluice's check on the new head: {:?}",
+                held.posted["h2"]
+            );
+        };
+        assert_eq!(check.name, SLUICE_CHECK);
+        assert_eq!(check.posting.status, Status::Success);
+        assert_eq!(check.posting.text.as_deref(), Some(comment.body.as_str()));
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -3748,6 +4002,7 @@ mod tests {
             &Outcome::Landed {
                 landed_as: Rev::new("l1"),
                 beside: false,
+                covered_by: None,
             },
             &names,
             Some("unit/review")
@@ -3756,14 +4011,40 @@ mod tests {
     }
 
     /// 140: the `sluice` check of a request landed beside the queue says
-    /// so, and that no check ran.
+    /// so, that no check ran, and the result that covers it, as its
+    /// landing commit names it (23; record 0083); an outcome recorded
+    /// with none says what it said before.
     #[test]
     fn a_landing_beside_the_queue_says_no_check_ran() {
+        let covered = outcome_shown(
+            "main",
+            &Outcome::Landed {
+                landed_as: Rev::new("0cef58d1234"),
+                beside: true,
+                covered_by: Some(CoveringVerdict {
+                    at: Rev::new("e25fea4c0ffee0000000000000000000000000ab"),
+                    result: "passed".into(),
+                    ran: 141,
+                    replayed: 0,
+                }),
+            },
+            &BTreeMap::new(),
+        );
+        assert_eq!(covered.posting.status, Status::Success);
+        assert_eq!(covered.posting.title, "landed as 0cef58d beside the queue");
+        assert_eq!(
+            covered.posting.summary,
+            "Landed on main as `0cef58d` beside the queue, with no check run: no required \
+             check reads its changes. Covered by the result at `e25fea4`, passed (141 run, 0 \
+             replayed)."
+        );
+
         let shown = outcome_shown(
             "main",
             &Outcome::Landed {
                 landed_as: Rev::new("l1abcdef0"),
                 beside: true,
+                covered_by: None,
             },
             &BTreeMap::new(),
         );

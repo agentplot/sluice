@@ -1484,6 +1484,7 @@ impl World {
                 },
                 dirty: Vec::new(),
                 detached: false,
+                bare: false,
             },
         );
     }
@@ -1837,6 +1838,22 @@ impl Branch for FakeBranch {
 
     fn contains(&self, tip: &Rev, rev: &Rev) -> Result<bool> {
         Ok(World::ancestors(&self.0 .0.borrow(), tip).contains(rev))
+    }
+
+    /// 122: down `tip`'s first parents to the oldest that holds `rev`.
+    fn landed_by(&self, tip: &Rev, rev: &Rev) -> Result<Option<Rev>> {
+        let inner = self.0 .0.borrow();
+        if !World::ancestors(&inner, tip).contains(rev) {
+            return Ok(None);
+        }
+        let mut at = tip.clone();
+        while at != *rev {
+            match inner.commits[&at].parents.first() {
+                Some(p) if World::ancestors(&inner, p).contains(rev) => at = p.clone(),
+                _ => break,
+            }
+        }
+        Ok(Some(at))
     }
 
     fn move_to(&self, branch: &str, expected: &Rev, to: &Rev) -> Result<Moved> {
@@ -3071,6 +3088,7 @@ mod tests {
             decided: Decided::Landed {
                 landed_as: head.clone(),
                 beside: false,
+                covered_by: None,
             },
             report: None,
         };

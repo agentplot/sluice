@@ -355,6 +355,10 @@ impl Branch for Branches {
         self.local.contains(tip, rev)
     }
 
+    fn landed_by(&self, tip: &Rev, rev: &Rev) -> Result<Option<Rev>> {
+        self.local.landed_by(tip, rev)
+    }
+
     fn move_to(&self, branch: &str, expected: &Rev, to: &Rev) -> Result<Moved> {
         match self.route(branch)? {
             Some(p) => p.move_to(branch, expected, to),

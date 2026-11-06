@@ -18,7 +18,8 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use sluice_seams::{
-    Contested, Decided, Enforced, NotRun, Outcome, Rev, RunDetail, RunHandle, Submitter, TaskLog,
+    Contested, CoveringVerdict, Decided, Enforced, NotRun, Outcome, Rev, RunDetail, RunHandle,
+    Submitter, TaskLog,
 };
 
 pub const SUBMISSION_SCHEMA: &str = "sluice/submission@1";
@@ -249,6 +250,11 @@ pub struct Submission {
     pub delivered_to: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub landed_as: Option<Rev>,
+    /// 122: landed by a landing this queue did not make, found when the
+    /// branch it was formed on already held its work; `landed_as` is the
+    /// commit that landed it there.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub landed_elsewhere: bool,
     /// Its id in this host's own records, before the branch's records
     /// moved to the remote and it was submitted again there (design D10).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -265,6 +271,11 @@ pub struct Submission {
     /// work some required check reads at the branch's revision.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub beside: Option<Beside>,
+    /// 140: for work landed beside the chain, the verdict that covered the
+    /// revision it landed on, which its landing commit names; `None`
+    /// otherwise, and in records written before it (70; record 0083).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub covered_by: Option<CoveringVerdict>,
     /// 125: the first head of the act it was submitted in, where the act
     /// gave several; `None` for a submission made alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -338,6 +349,7 @@ impl Submission {
             State::Landed => Some(Decided::Landed {
                 landed_as: self.landed_as.clone()?,
                 beside: self.beside == Some(Beside::Landed),
+                covered_by: self.covered_by.clone(),
             }),
             State::Failed => {
                 let tested = self.tested.as_ref()?;
@@ -651,6 +663,13 @@ pub struct LandingIntent {
     /// with nothing run.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub beside: bool,
+    /// 70, 140: the verdict that covers `to` once the branch is there: for
+    /// a landing through the chain, the one its last commit names; for a
+    /// landing beside, the one that covered `from`. `None` in an intent
+    /// written before it, whose landing leaves the branch's `covered_by`
+    /// unset (record 0083).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub covering: Option<CoveringVerdict>,
 }
 
 /// An outcome decided and not yet pushed to its session (50, 51).
@@ -672,6 +691,11 @@ pub enum DecidedRecord {
         /// 140: landed beside the chain, with no check run.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         beside: bool,
+        /// 140: for a landing beside, the verdict that covers the revision
+        /// it landed on; `None` otherwise, and in outcomes recorded before
+        /// it (70; record 0083).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        covered_by: Option<CoveringVerdict>,
     },
     Failed {
         failed: Vec<String>,
@@ -691,7 +715,15 @@ pub enum DecidedRecord {
 impl DecidedRecord {
     pub fn to_decided(&self) -> Decided {
         match self.clone() {
-            DecidedRecord::Landed { landed_as, beside } => Decided::Landed { landed_as, beside },
+            DecidedRecord::Landed {
+                landed_as,
+                beside,
+                covered_by,
+            } => Decided::Landed {
+                landed_as,
+                beside,
+                covered_by,
+            },
             DecidedRecord::Failed {
                 failed,
                 combination,
@@ -729,6 +761,13 @@ pub struct BranchDoc {
     /// `base` is covered by a verdict: sluice landed it (70).
     #[serde(default)]
     pub verified: bool,
+    /// 70, 140: the verdict that covers `base`, which each landing beside
+    /// on it names; set beside `verified` by a landing under the gate the
+    /// branch carries, and `None` where `verified` is not, and in records
+    /// written before it, on which nothing lands beside until a landing
+    /// names one (record 0083).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub covered_by: Option<CoveringVerdict>,
     /// How many candidates are under test at once (13).
     #[serde(default)]
     pub window: usize,
@@ -767,6 +806,10 @@ pub struct BranchDoc {
     /// entry, and each host writes only its own.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub copies: BTreeMap<String, CopyBehind>,
+    /// 148: each write the protection refused whose cause stands, one entry
+    /// per host, ref and command; each host writes its own.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub refused_writes: Vec<RefusedWrite>,
 }
 
 /// 121: a branch read at a revision that lacks the landing its records
@@ -789,6 +832,28 @@ pub struct CopyBehind {
     pub since: String,
 }
 
+/// 148: a cause of writes the protection refused, standing until a day
+/// passes with none of its writes refused, counted here and never from the
+/// log (rule core.47).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RefusedWrite {
+    /// The instance whose ref was tried.
+    pub host: String,
+    #[serde(rename = "ref")]
+    pub reference: String,
+    /// The command, each full object name in it as `<revision>`
+    /// ([`crate::refused_writes::command_of`]).
+    pub command: String,
+    /// How many of its writes were refused while it stood.
+    pub times: u64,
+    pub first: String,
+    pub last: String,
+    /// The last refused write's: the value the ref held on the host, and
+    /// the one it would have set, `None` for a deletion.
+    pub from: Rev,
+    pub to: Option<Rev>,
+}
+
 impl BranchDoc {
     pub fn new(branch: &str) -> Self {
         BranchDoc {
@@ -797,6 +862,7 @@ impl BranchDoc {
             log: LOG_SCHEMA.into(),
             base: None,
             verified: false,
+            covered_by: None,
             window: 0,
             next_place: 1,
             next_candidate: 1,
@@ -809,6 +875,7 @@ impl BranchDoc {
             landed: None,
             held: None,
             copies: BTreeMap::new(),
+            refused_writes: Vec::new(),
         }
     }
 }
@@ -867,6 +934,13 @@ pub enum Event {
     /// The branch was found at a revision sluice did not move it to.
     Moved {
         from: Rev,
+        to: Rev,
+    },
+    /// 122: submissions whose work the branch already held when a round
+    /// came to form them, landed by a landing this queue did not make, at
+    /// `to`, the commit that landed it.
+    FoundLanded {
+        ids: Vec<u64>,
         to: Rev,
     },
     Conflict {
@@ -1080,15 +1154,34 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         failed: Option<String>,
     },
-    /// An update to the branch made by anything but sluice, refused (1).
+    /// An update to the branch made by anything but sluice, refused (1);
+    /// 148: once for each cause while it stands, the rest counted in the
+    /// branch's document.
     Protected {
         #[serde(rename = "ref")]
         reference: String,
         from: Rev,
         /// `None` for a deletion.
         to: Option<Rev>,
-        /// The command that tried it.
+        /// The command that tried it, as git ran it.
         by: String,
+        /// 148: the instance whose ref was tried; `None` on a line written
+        /// before it was named.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        host: Option<String>,
+    },
+    /// 148: a cause of refused writes that stood a day with none refused,
+    /// or put out by a newer one past the twenty: how many it refused, the
+    /// first and the last.
+    #[serde(rename = "protected-ended")]
+    ProtectedEnded {
+        host: String,
+        #[serde(rename = "ref")]
+        reference: String,
+        command: String,
+        times: u64,
+        first: String,
+        last: String,
     },
     /// 51: an outcome a carrier delivered to its session. Read under
     /// `told` too, the name an earlier sluice wrote it under (record 0070).
@@ -1314,7 +1407,8 @@ mod tests {
             s.decided(),
             Some(Decided::Landed {
                 landed_as: Rev::new("abc"),
-                beside: true
+                beside: true,
+                covered_by: None,
             })
         );
     }
@@ -1512,6 +1606,119 @@ mod tests {
             [
                 "{\"schema\":\"sluice/log@1\",\"at\":\"2026-10-26T09:16:40Z\",\"event\":\"read-refused\",\"host\":\"build-1\",\"remote\":\"origin\",\"asked\":\"refs/heads/main\",\"said\":\"remote: Repository not found.\\nfatal: repository 'https://github.com/acme/app.git/' not found\"}\n",
                 "{\"schema\":\"sluice/log@1\",\"at\":\"2026-10-26T09:46:40Z\",\"event\":\"read-again\",\"host\":\"build-1\",\"remote\":\"origin\",\"since\":\"2026-10-26T09:16:40Z\",\"stood\":1800,\"rounds\":12}\n",
+            ]
+        );
+        let back: Vec<LogLine> = parse_lines(text.concat().as_bytes()).unwrap();
+        assert_eq!(back, lines);
+    }
+
+    /// 148: a branch's document written before refused writes were counted
+    /// reads with none standing and writes back unchanged, and a
+    /// `protected` line written before it named its host reads as before.
+    #[test]
+    fn records_written_before_refused_writes_still_read() {
+        let old = r#"{
+  "schema": "sluice/branch@1",
+  "branch": "main",
+  "log": "sluice/log@1",
+  "base": "c43609b",
+  "verified": true,
+  "window": 4,
+  "next_place": 3,
+  "next_candidate": 5,
+  "candidates": [],
+  "landing": null,
+  "release": [],
+  "outbox": []
+}
+"#;
+        let doc: BranchDoc = serde_json::from_str(old).unwrap();
+        assert!(doc.refused_writes.is_empty());
+        assert_eq!(String::from_utf8(to_document(&doc)).unwrap(), old);
+        let line = "{\"schema\":\"sluice/log@1\",\"at\":\"2026-10-30T05:50:23Z\",\
+                    \"event\":\"protected\",\"ref\":\"refs/heads/main\",\
+                    \"from\":\"10e4791\",\"to\":\"8079db3\",\
+                    \"by\":\"git update-ref refs/heads/main 8079db3 10e4791\"}\n";
+        let read: Vec<LogLine> = parse_lines(line.as_bytes()).unwrap();
+        assert_eq!(
+            read[0].event,
+            Event::Protected {
+                reference: "refs/heads/main".into(),
+                from: Rev::new("10e4791"),
+                to: Some(Rev::new("8079db3")),
+                by: "git update-ref refs/heads/main 8079db3 10e4791".into(),
+                host: None,
+            }
+        );
+        assert_eq!(String::from_utf8(to_line(&read[0])).unwrap(), line);
+    }
+
+    /// 148: a cause in the branch's document, a deletion's `to` written as
+    /// `null`, and the `protected` and `protected-ended` lines are the
+    /// spec's.
+    #[test]
+    fn a_refused_write_and_its_end_are_the_documents_and_the_logs() {
+        let mut doc = BranchDoc::new("main");
+        doc.refused_writes.push(RefusedWrite {
+            host: "build-1".into(),
+            reference: "refs/heads/main".into(),
+            command: "git branch -D main".into(),
+            times: 3,
+            first: "2026-10-30T05:50:23Z".into(),
+            last: "2026-11-02T16:01:20Z".into(),
+            from: Rev::new("10e4791"),
+            to: None,
+        });
+        let v = serde_json::to_value(&doc).unwrap();
+        assert_eq!(
+            v["refused_writes"],
+            serde_json::json!([{
+                "host": "build-1",
+                "ref": "refs/heads/main",
+                "command": "git branch -D main",
+                "times": 3,
+                "first": "2026-10-30T05:50:23Z",
+                "last": "2026-11-02T16:01:20Z",
+                "from": "10e4791",
+                "to": null,
+            }])
+        );
+        let back: BranchDoc = serde_json::from_value(v).unwrap();
+        assert_eq!(back, doc);
+        let lines = [
+            LogLine {
+                schema: LOG_SCHEMA.into(),
+                at: "2026-10-30T05:50:23Z".into(),
+                event: Event::Protected {
+                    reference: "refs/heads/main".into(),
+                    from: Rev::new("10e4791"),
+                    to: None,
+                    by: "git branch -D main".into(),
+                    host: Some("build-1".into()),
+                },
+            },
+            LogLine {
+                schema: LOG_SCHEMA.into(),
+                at: "2026-11-03T16:01:20Z".into(),
+                event: Event::ProtectedEnded {
+                    host: "build-1".into(),
+                    reference: "refs/heads/main".into(),
+                    command: "git branch -D main".into(),
+                    times: 3,
+                    first: "2026-10-30T05:50:23Z".into(),
+                    last: "2026-11-02T16:01:20Z".into(),
+                },
+            },
+        ];
+        let text: Vec<String> = lines
+            .iter()
+            .map(|l| String::from_utf8(to_line(l)).unwrap())
+            .collect();
+        assert_eq!(
+            text,
+            [
+                "{\"schema\":\"sluice/log@1\",\"at\":\"2026-10-30T05:50:23Z\",\"event\":\"protected\",\"ref\":\"refs/heads/main\",\"from\":\"10e4791\",\"to\":null,\"by\":\"git branch -D main\",\"host\":\"build-1\"}\n",
+                "{\"schema\":\"sluice/log@1\",\"at\":\"2026-11-03T16:01:20Z\",\"event\":\"protected-ended\",\"host\":\"build-1\",\"ref\":\"refs/heads/main\",\"command\":\"git branch -D main\",\"times\":3,\"first\":\"2026-10-30T05:50:23Z\",\"last\":\"2026-11-02T16:01:20Z\"}\n",
             ]
         );
         let back: Vec<LogLine> = parse_lines(text.concat().as_bytes()).unwrap();
@@ -1750,6 +1957,7 @@ mod tests {
             outcome: DecidedRecord::Landed {
                 landed_as: Rev::new("abc1234"),
                 beside: false,
+                covered_by: None,
             },
         };
         let text = serde_json::to_string(&item).unwrap();
@@ -1758,6 +1966,123 @@ mod tests {
             r#"{"id":"5:landed","submission":5,"told":{"outcome":"landed","landed_as":"abc1234"}}"#
         );
         assert_eq!(serde_json::from_str::<OutboxItem>(&text).unwrap(), item);
+    }
+
+    /// 70, 140, record 0083: a branch's document written before the
+    /// covering verdict was kept, `verified` and naming none, with a
+    /// landing intent naming none and a landed beside outcome in its
+    /// outbox, reads with none and writes back unchanged; so does a
+    /// submission landed beside before it. One that names it round-trips.
+    #[test]
+    fn a_branch_and_an_outcome_from_before_covered_by_still_read() {
+        let old = r#"{
+  "schema": "sluice/branch@1",
+  "branch": "main",
+  "log": "sluice/log@1",
+  "base": "c43609b",
+  "verified": true,
+  "window": 4,
+  "next_place": 3,
+  "next_candidate": 5,
+  "candidates": [],
+  "landing": {
+    "ids": [
+      5
+    ],
+    "from": "c43609b",
+    "to": "abc1234",
+    "commits": [
+      {
+        "id": 5,
+        "commit": "abc1234",
+        "tested": "abc1234"
+      }
+    ],
+    "beside": true
+  },
+  "release": [],
+  "outbox": [
+    {
+      "id": "5:landed",
+      "submission": 5,
+      "told": {
+        "outcome": "landed",
+        "landed_as": "abc1234",
+        "beside": true
+      }
+    }
+  ]
+}
+"#;
+        let doc: BranchDoc = serde_json::from_str(old).unwrap();
+        assert!(doc.verified);
+        assert_eq!(doc.covered_by, None);
+        assert_eq!(doc.landing.as_ref().unwrap().covering, None);
+        assert_eq!(
+            doc.outbox[0].outcome.to_decided(),
+            Decided::Landed {
+                landed_as: Rev::new("abc1234"),
+                beside: true,
+                covered_by: None,
+            }
+        );
+        assert_eq!(String::from_utf8(to_document(&doc)).unwrap(), old);
+
+        let mut doc = String::from_utf8(to_document(&submission(None))).unwrap();
+        doc = doc.replacen(
+            "\"state\": \"queued\"",
+            "\"state\": \"landed\",\n  \"landed_as\": \"abc1234\",\n  \"beside\": true",
+            1,
+        );
+        let read: Submission = serde_json::from_str(&doc).unwrap();
+        assert_eq!(read.covered_by, None);
+        assert_eq!(
+            read.decided(),
+            Some(Decided::Landed {
+                landed_as: Rev::new("abc1234"),
+                beside: true,
+                covered_by: None,
+            })
+        );
+        assert_eq!(String::from_utf8(to_document(&read)).unwrap(), doc);
+
+        let covering = CoveringVerdict {
+            at: Rev::new("e25fea4"),
+            result: "passed".into(),
+            ran: 141,
+            replayed: 0,
+        };
+        let mut named: BranchDoc = serde_json::from_str(old).unwrap();
+        named.covered_by = Some(covering.clone());
+        named.landing.as_mut().unwrap().covering = Some(covering.clone());
+        named.outbox[0].outcome = DecidedRecord::Landed {
+            landed_as: Rev::new("abc1234"),
+            beside: true,
+            covered_by: Some(covering.clone()),
+        };
+        let text = String::from_utf8(to_document(&named)).unwrap();
+        assert!(
+            text.contains(
+                "\"covered_by\": {\n    \"at\": \"e25fea4\",\n    \"result\": \"passed\",\n    \
+                 \"ran\": 141,\n    \"replayed\": 0\n  }"
+            ),
+            "{text}"
+        );
+        assert_eq!(serde_json::from_str::<BranchDoc>(&text).unwrap(), named);
+        let landed = Submission {
+            covered_by: Some(covering.clone()),
+            ..read
+        };
+        let text = String::from_utf8(to_document(&landed)).unwrap();
+        assert_eq!(serde_json::from_str::<Submission>(&text).unwrap(), landed);
+        assert_eq!(
+            landed.decided(),
+            Some(Decided::Landed {
+                landed_as: Rev::new("abc1234"),
+                beside: true,
+                covered_by: Some(covering),
+            })
+        );
     }
 
     /// 51: a landed, blamed or conflicting submission's record names the
@@ -1774,6 +2099,7 @@ mod tests {
             Some(Decided::Landed {
                 landed_as: Rev::new("abc1234"),
                 beside: false,
+                covered_by: None,
             })
         );
         assert_eq!(landed.notification().as_deref(), Some("12:landed"));

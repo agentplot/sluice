@@ -1391,6 +1391,104 @@ fn inbox_delivers_nothing_of_another_worktrees_outcome() {
     assert_eq!(s.status(n)["delivered"], serde_json::Value::Null);
 }
 
+/// 67, 122: a wait on a submission its session's next submit withdrew
+/// follows the submission that carries its work, says so, and reports
+/// that one's landing; the withdrawn one's record stands as it is.
+#[test]
+fn a_wait_follows_the_resubmission_that_carries_its_work() {
+    let s = Scratch::new("wt-carried");
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let first = id(&s.wt_submit(&a, &["--no-wait", "--json"]));
+    std::fs::write(a.join("more.txt"), "more\n").unwrap();
+    let dir = a.to_str().unwrap();
+    s.repo.git(&["-C", dir, "add", "-A"]);
+    s.repo.git(&["-C", dir, "commit", "-q", "-m", "more"]);
+    let second = id(&s.wt_submit(&a, &["--no-wait", "--json"]));
+    assert_eq!(s.status(first)["state"], "withdrawn");
+    let out = s.sluice(&["wait", &first.to_string(), "--timeout", "60s"]);
+    let said = text(&out);
+    assert_eq!(out.status.code(), Some(0), "{said}");
+    assert!(
+        said.contains(&format!(
+            "#{first} withdrawn by resubmission: #{second} carries its work"
+        )),
+        "{said}"
+    );
+    assert!(said.contains("passed · landed as"), "{said}");
+    assert_eq!(s.status(second)["state"], "landed");
+    assert_eq!(s.status(first)["state"], "withdrawn");
+}
+
+/// 2: a repository with no work tree, a bare clone or a checkout's git
+/// directory, holds no uncommitted work: the driver reads its session with
+/// no git status, which refuses to run there, and finds it bare, with no
+/// path and nothing held beyond its commits.
+#[test]
+fn a_repository_with_no_work_tree_is_read_with_no_status() {
+    use sluice_seams::Driver as _;
+    let s = Scratch::new("wt-bare-session");
+    let bare = s.repo.dir().with_extension("bare");
+    s.repo.git(&[
+        "clone",
+        "-q",
+        "--bare",
+        s.repo.dir().to_str().unwrap(),
+        bare.to_str().unwrap(),
+    ]);
+    s.repo.write("untracked.txt", "u\n");
+    let driver = sluice::profiles::worktrunk::Worktrunk::new("h");
+    for dir in [bare, s.repo.dir().join(".git")] {
+        let session = driver.session(dir.to_str().unwrap()).unwrap();
+        assert!(session.bare, "{}", dir.display());
+        assert!(session.dirty.is_empty(), "{:?}", session.dirty);
+        assert_eq!(session.from.path, None);
+    }
+    let session = driver.session(s.repo.dir().to_str().unwrap()).unwrap();
+    assert!(!session.bare);
+    assert_eq!(session.dirty, vec!["?? untracked.txt".to_string()]);
+}
+
+/// 2, 51: a wait and an inbox read in the repository's git directory,
+/// which has no work tree, run no git status there: the wait reports the
+/// landing and exits 0, saying plainly that no session works there, so
+/// its outcome stays pending; the inbox collects nothing and says the
+/// same; the session's own inbox then collects it.
+#[test]
+fn a_wait_with_no_work_tree_says_plainly_what_it_cannot_deliver() {
+    let s = Scratch::new("wt-bare-wait");
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let n = id(&s.wt_submit(&a, &["--no-wait", "--json"]));
+    s.land(n);
+    let git_dir = s.repo.dir().join(".git");
+    let out = s
+        .command(env!("CARGO_BIN_EXE_sluice"), &git_dir)
+        .args(["wait", &n.to_string()])
+        .output()
+        .unwrap();
+    let said = text(&out);
+    assert_eq!(out.status.code(), Some(0), "{said}");
+    assert!(said.contains("landed as"), "{said}");
+    assert!(!said.contains("git status"), "{said}");
+    assert!(
+        said.contains(&format!(
+            "#{n} stays pending for its session's sluice inbox"
+        )) && said.contains("is a repository with no files checked out, so no session works in it"),
+        "{said}"
+    );
+    assert_eq!(s.status(n)["delivered"], serde_json::Value::Null);
+    let out = inbox(&s, &git_dir, &["--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v, serde_json::json!({ "outcomes": [] }));
+    assert!(
+        text(&out).contains("no files checked out"),
+        "{}",
+        text(&out)
+    );
+    let e = collected_one(&s, &a);
+    assert_eq!(e["id"], n);
+}
+
 /// 3, 135: a worktree on no branch has submitted nothing, and collects
 /// nothing.
 #[test]

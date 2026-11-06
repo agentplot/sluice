@@ -43,9 +43,12 @@ readable with plain tools whether or not sluice is running.
   .previews/<preview>/ a preview's checkout, kept until it is released
   .tmp/<code>/         the scratch of a checkout an older sluice made, at the
                        code its record names, or at the checkout's name where
-                       the record names none; removed when the checkout is
-                       released. A directory here that no record names is
-                       removed by the next round or sluice exec on the host
+                       the record names none. A candidate's or a preview's is
+                       removed when it is released. A worktree's moves to the
+                       user's directory, with what is in it, at the worktree's
+                       next run once none of its runs is going. A directory
+                       here that no record names is removed by the next round
+                       or sluice exec on the host
   .runs/<checkout>/    a candidate's run, or a preview's command
   .runs/<worktree>/<n>/
                        each run an agent started in its worktree, numbered;
@@ -113,6 +116,16 @@ every repository on the host and never pushed:
                        touched by a submit that opened, updated or marked
                        ready a pull request into the branch, so the next
                        round asks at once
+  forge/intake/<owner>/<repository>/<branch>.json
+                       the branch's intake mark as this host last saw it on
+                       the remote, when it first saw it there, and when it
+                       last pushed it
+  forge/intake/<owner>/<repository>/<branch>.waits/<process>.hold
+                       held by each wait on the host that reads the
+                       branch's pull requests, for as long as it runs: the
+                       last of them to end removes the mark
+  forge/intake/<owner>/<repository>/<branch>.waits/.lock
+                       held while a wait's hold is made or let go
   ports/<n>            a block of ports, naming the checkout that holds it
   readers/<repository>.lock
                        held by the repository's `sluice run`, or else by the
@@ -298,6 +311,31 @@ All three are left out when there is nothing to say, so
 `sluice/branch@1` is unchanged, and an older sluice reading them passes
 over them.
 
+`covered_by` names the result that covers the revision the combinations
+are formed on, which each landing beside the queue names in its commit:
+`{"at": "b7d2e94f031c5a8e6d2f40b9a7c3e1d58f6a2b47", "result": "passed",
+"ran": 2, "replayed": 31}`. `at` is the revision of the branch that
+result landed as, in full, and the rest are its own words. A landing
+through the queue sets it to its own result, and a landing beside keeps
+it, so landings beside in a row all name the same result. It is left
+out when something other than sluice moved the branch, or a landing
+changed the gate. A record an older sluice wrote has none;
+the branch then lands nothing beside the queue until its next landing
+through the queue names a result.
+
+`refused_writes` holds the writes sluice's protection refused on the
+branch, one for each host, ref and command, each host writing its own:
+`[{"host": "build-1", "ref": "refs/heads/main", "command": "git -C
+/home/me/app update-ref refs/heads/main <revision> <revision>",
+"times": 2024, "first": "2026-10-30T05:50:23Z", "last":
+"2026-11-02T16:01:20Z", "from": "10e4791a2b", "to": "8079db3c55"}]`.
+`command` is the command as git ran it, each full revision in it
+written as `<revision>`. `from` and `to` are the last refused write's,
+`to` `null` for a deletion. A command leaves the list with its
+`protected-ended` event. `sluice status <branch>` and `sluice overview`
+show those refused in the last day; read them there, since this form
+is sluice's own. The field is left out when it is empty.
+
 ## A submission
 
 ```json
@@ -370,7 +408,9 @@ holding it under the key `told`, which an older sluice on another host
 still reads.
 
 A submission that landed beside the queue, because no required check
-reads its changes, has `"beside": true`. Its notice reads `[sluice] #15
+reads its changes, has `"beside": true`, and `covered_by`, the result
+that covered the revision it landed on, in the form `branch.json` gives
+it. Its notice reads `[sluice] #15
 landed on feature/concurrent-units as 4e1a07c beside the queue: no
 required check reads its changes.` A submission can wait all the same,
 though no check reads its changes on the branch as it is. Then it has
@@ -469,6 +509,22 @@ that host's rounds it refused:
 {"schema":"sluice/log@1","event":"read-again","host":"build-1","remote":"origin","since":"2026-10-26T09:16:40Z","stood":1800,"rounds":12}
 ```
 
+`protected` is logged once for each command a host's protection
+refused, with the `host`, the `ref`, its `from` and `to`, and `by`, the
+command as git ran it. `to` is `null` for a deletion. Each later write
+of that command refused on that host is counted in `branch.json`'s
+`refused_writes`, with no event. A day after the last of them,
+`protected-ended` is logged with `times`, how many were refused, and
+the `first` and the `last`. The next write to the state logs it, at
+the time the day ended, and the command's next refused write is logged
+as `protected` again. When one host has more than twenty commands
+counted on the branch, the one refused longest ago ends at once:
+
+```json
+{"schema":"sluice/log@1","event":"protected","ref":"refs/heads/main","from":"10e4791a2b","to":"8079db3c55","by":"git -C /home/me/app update-ref refs/heads/main 8079db3c55e9d71f5ee7c92d6dc9e92ffdad17b8 10e4791a2b86f7e437faa5a7fce15d1ddcb9eaea","host":"build-1"}
+{"schema":"sluice/log@1","event":"protected-ended","host":"build-1","ref":"refs/heads/main","command":"git -C /home/me/app update-ref refs/heads/main <revision> <revision>","times":2024,"first":"2026-10-30T05:50:23Z","last":"2026-11-02T16:01:20Z"}
+```
+
 A round that can't read the branch or its state forms, starts and lands
 nothing, and says why to whoever ran it, as before. When the state is on
 the remote that refused it, the round can't write these events either.
@@ -538,6 +594,27 @@ Author: sluice <sluice@localhost>
     Sluice-Tested: 9ab3d07c11
     Sluice-Result: passed (2 run, 31 replayed)
 ```
+
+A landing beside the queue names no combination, since none was run.
+Its `Sluice-Result` says so, then names the result it stands on:
+
+```console
+$ git log -1 --format=%B feature/concurrent-units
+chore(land): #15 guide
+
+Sluice-Submission: 15
+Sluice-From: agent-4 (guide)
+Sluice-Result: passed (0 run, 0 replayed) beside the queue: no required check reads its changes; covered by the result at b7d2e94f031c5a8e6d2f40b9a7c3e1d58f6a2b47, passed (2 run, 31 replayed)
+```
+
+The first word of `Sluice-Result` is the landing's own result. It is
+`passed` on every landing, since a branch moves only on a result that
+passed, and the counts after it are what that landing ran and replayed.
+A landing beside ran nothing, because no required check reads its
+changes. The rest of the trailer names the result that covers the
+revision it landed on: the revision of the branch that result landed
+as, in full, and that landing's own words. A tool that reads a
+branch's head as passed reads the first word.
 
 The landing commit carries exactly the tree that was tested
 ([ADR 0006](/sluice/decisions/0006/)), so when the submissions ahead of a

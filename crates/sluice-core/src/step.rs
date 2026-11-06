@@ -24,9 +24,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{anyhow, bail, Result};
 use sluice_seams::{
-    read_refused, AtBound, Contested, Delivery, Formed, HostCopy, LandingCommit, Limits, Moved,
-    NotRun, Notification, Outcome, Progress, ReadRefused, Reading, Rev, RunHandle, RunReport,
-    RunRequest, Source, Submitter, TaskLog, Written,
+    read_refused, AtBound, Contested, CoveringVerdict, Delivery, Formed, HostCopy, LandingCommit,
+    Limits, Moved, NotRun, Notification, Outcome, Progress, ReadRefused, Reading, Rev, RunHandle,
+    RunReport, RunRequest, Source, Submitter, TaskLog, Written,
 };
 use tracing::{info, info_span, warn};
 
@@ -469,12 +469,21 @@ impl Sluice<'_> {
                             s.beside = Some(Beside::Landed);
                             heads.push(s.head.clone());
                         }
+                        // 23, 140: work landed beside carries the verdict
+                        // that covered it, as its landing commit names it
+                        // (rule core.39).
+                        let covered_by = if intent.beside {
+                            s.covered_by.clone()
+                        } else {
+                            None
+                        };
                         let item = OutboxItem {
                             id: format!("{}:landed", c.id),
                             submission: c.id,
                             outcome: DecidedRecord::Landed {
                                 landed_as: c.commit.clone(),
                                 beside: intent.beside,
+                                covered_by,
                             },
                         };
                         l.doc.outbox.push(item);
@@ -524,6 +533,15 @@ impl Sluice<'_> {
                     l.doc.release.extend(release);
                     l.doc.base = Some(intent.to.clone());
                     l.doc.verified = same_gate;
+                    // 23, 70, 140: the verdict that covers the revision
+                    // landed, which each landing beside on it names; none
+                    // where the gate changed, or the intent named none
+                    // (record 0083; rule core.39).
+                    l.doc.covered_by = if same_gate {
+                        intent.covering.clone()
+                    } else {
+                        None
+                    };
                     // 121: every later read of the branch must contain it.
                     l.doc.landed = Some(intent.to.clone());
                     Ok(true)
@@ -577,6 +595,7 @@ impl Sluice<'_> {
                             s.state = State::Queued;
                             s.tested = None;
                             s.result = None;
+                            s.covered_by = None;
                         }
                     }
                     l.log(
@@ -1040,6 +1059,8 @@ impl Sluice<'_> {
             }
             line.doc.base = Some(tip.clone());
             line.doc.verified = false;
+            // 70, 140: nor names one (record 0083; rule core.39).
+            line.doc.covered_by = None;
         }
         let rules = self.gate(branch, &tip)?;
         let home = self.home_system(&tip)?;
@@ -1080,6 +1101,9 @@ impl Sluice<'_> {
             listed,
             &now,
         )?;
+        // 122: work the branch already holds, landed by a landing this
+        // queue did not make, is landed there; nothing is formed of it.
+        self.land_found(&mut line, &tip, &now)?;
         // 140: work no required check reads lands beside the chain, before
         // anything is formed; a round that lands so does nothing else, and
         // the next forms on the revision it made.
@@ -1133,6 +1157,54 @@ impl Sluice<'_> {
         } else {
             Decided::Contended
         })
+    }
+
+    /// 122: every submission in the queue, not landing and in no candidate
+    /// formed on `base`, whose work `base` already holds, as another
+    /// queue's landing or a hand's left it there, is landed as the commit
+    /// that landed it, logged as found so; its outcome is delivered as any
+    /// landing's (51), and nothing is formed, run or landed of it (6, 22).
+    /// Only the submissions a round is about to form are read, once each.
+    fn land_found(&self, line: &mut Line, base: &Rev, now: &str) -> Result<()> {
+        let unformed: Vec<(u64, Rev)> = line
+            .subs
+            .values()
+            .filter(|s| !s.state.is_out() && s.state != State::Landing)
+            .filter(|s| {
+                !line
+                    .doc
+                    .candidates
+                    .iter()
+                    .any(|c| c.on == *base && c.submissions.contains(&s.id))
+            })
+            .map(|s| (s.id, s.head.clone()))
+            .collect();
+        let mut found: BTreeMap<Rev, Vec<u64>> = BTreeMap::new();
+        for (id, head) in unformed {
+            if let Some(to) = self.seams.branch.landed_by(base, &head)? {
+                found.entry(to).or_default().push(id);
+            }
+        }
+        for (to, ids) in found {
+            for &id in &ids {
+                let s = line.sub_mut(id);
+                s.state = State::Landed;
+                s.landed_as = Some(to.clone());
+                s.landed_elsewhere = true;
+                s.held = None;
+                line.doc.outbox.push(OutboxItem {
+                    id: format!("{id}:landed"),
+                    submission: id,
+                    outcome: DecidedRecord::Landed {
+                        landed_as: to.clone(),
+                        beside: false,
+                        covered_by: None,
+                    },
+                });
+            }
+            line.log(now, Event::FoundLanded { ids, to });
+        }
+        Ok(())
     }
 
     /// Design D1, D2 (25, 32, 81; rules core.10, core.16, core.23): drop
@@ -2110,6 +2182,13 @@ impl Sluice<'_> {
         if !line.doc.verified || !unread {
             return Ok(false);
         }
+        // 23, 70, 140: a revision whose covering verdict the records do not
+        // name, as an older sluice left it, lands nothing beside: its work
+        // takes the chain, whose landing names one (record 0083; rule
+        // core.39).
+        let Some(covering) = line.doc.covered_by.clone() else {
+            return Ok(false);
+        };
         let Some(policy) = self.policy_at(base)? else {
             return Ok(false);
         };
@@ -2189,7 +2268,12 @@ impl Sluice<'_> {
                         tree_of: formed.clone(),
                         parent: tip.clone(),
                         head: sub.head.clone(),
-                        message: beside_message(&policy.landing_subject, &line.branch, sub),
+                        message: beside_message(
+                            &policy.landing_subject,
+                            &line.branch,
+                            sub,
+                            &covering,
+                        ),
                     })?;
                     for (r, m) in reading.iter_mut().zip(merged) {
                         r.1 = m;
@@ -2209,6 +2293,7 @@ impl Sluice<'_> {
             s.state = State::Landing;
             s.tested = None;
             s.result = None;
+            s.covered_by = Some(covering.clone());
             commits.push(LandingCommitRecord {
                 id,
                 commit,
@@ -2229,6 +2314,9 @@ impl Sluice<'_> {
             to: tip,
             commits,
             beside: true,
+            // 23, 140: the branch it lands as is covered by the verdict
+            // that covered the revision it landed on (rule core.39).
+            covering: Some(covering),
         });
         Ok(true)
     }
@@ -2416,6 +2504,15 @@ impl Sluice<'_> {
                 });
                 parent = commit;
             }
+            // 23, 70, 140: the branch it lands as is covered by the verdict
+            // its last commit names, the deepest candidate's, at that commit
+            // (core.17; record 0083; rule core.39).
+            let covering = Some(CoveringVerdict {
+                at: parent.clone(),
+                result: deepest.result_word().into(),
+                ran: deepest.ran as u64,
+                replayed: deepest.replayed as u64,
+            });
             let ids: Vec<u64> = commits.iter().map(|c| c.id).collect();
             line.log(
                 now,
@@ -2431,6 +2528,7 @@ impl Sluice<'_> {
                 to: parent,
                 commits,
                 beside: false,
+                covering,
             });
             Ok(true)
         }

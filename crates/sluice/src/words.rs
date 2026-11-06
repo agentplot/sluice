@@ -132,6 +132,15 @@ pub fn landed_beside(landed_as: &Rev) -> String {
     )
 }
 
+/// 122: a waiting submit's last line for a submission whose work
+/// `branch` holds by a landing not its own, as `landed_as`.
+pub fn landed_elsewhere(branch: &str, landed_as: &Rev) -> String {
+    format!(
+        "landed as {}: {branch} holds its work, by a landing not its own",
+        landed_as.short()
+    )
+}
+
 /// 140: what a submission that takes the queue though no check reads its
 /// changes at the branch's revision waits for: entry `behind`, whose
 /// checks would read it or whose work it conflicts with.
@@ -152,6 +161,7 @@ pub fn notice(id: u64, branch: &str, decided: &Decided) -> String {
         Decided::Landed {
             landed_as,
             beside: false,
+            ..
         } => {
             format!(
                 "[sluice] #{id} landed on {branch} as {}.",
@@ -161,6 +171,7 @@ pub fn notice(id: u64, branch: &str, decided: &Decided) -> String {
         Decided::Landed {
             landed_as,
             beside: true,
+            ..
         } => {
             format!(
                 "[sluice] #{id} landed on {branch} as {} beside the queue: {NO_CHECK_READS}.",
@@ -339,6 +350,7 @@ mod tests {
         let landed = Decided::Landed {
             landed_as: Rev::new("abc1234def"),
             beside: false,
+            covered_by: None,
         };
         assert_eq!(
             notice(12, "main", &landed),
@@ -348,6 +360,7 @@ mod tests {
         let beside = Decided::Landed {
             landed_as: Rev::new("abc1234def"),
             beside: true,
+            covered_by: None,
         };
         assert_eq!(
             notice(12, "main", &beside),

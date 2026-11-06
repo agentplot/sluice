@@ -584,6 +584,36 @@ impl Branch for LocalRefs {
         }
     }
 
+    /// 122: the last of `git rev-list --first-parent --ancestry-path
+    /// rev..tip` is the oldest commit of the line descended from `rev`: the
+    /// commit that landed it, or, where its first parent is `rev`, the
+    /// commit after `rev` on the line, which then landed itself.
+    fn landed_by(&self, tip: &Rev, rev: &Rev) -> Result<Option<Rev>> {
+        if !self.contains(tip, rev)? {
+            return Ok(None);
+        }
+        let (top, of) = (self.id(tip)?, self.id(rev)?);
+        let range = format!("{of}..{top}");
+        let out = self.git(&["rev-list", "--first-parent", "--ancestry-path", &range])?;
+        if !out.status.success() {
+            bail!(
+                "git rev-list {range} exited {:?}: {}",
+                out.status.code(),
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        let text = String::from_utf8_lossy(&out.stdout);
+        let Some(oldest) = text.lines().last() else {
+            return Ok(Some(rev.clone()));
+        };
+        let parent = self.git(&["rev-parse", "--verify", "-q", &format!("{oldest}^1")])?;
+        let parent = String::from_utf8_lossy(&parent.stdout);
+        if ObjectId::from_hex(parent.trim().as_bytes()).is_ok_and(|p| p == of) {
+            return Ok(Some(rev.clone()));
+        }
+        Ok(Some(Rev::new(oldest.to_string())))
+    }
+
     fn move_to(&self, branch: &str, expected: &Rev, to: &Rev) -> Result<Moved> {
         let from = self.id(expected)?;
         self.edit(

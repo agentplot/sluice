@@ -1113,6 +1113,14 @@ pub trait Branch {
     /// branch moved again since (24).
     fn contains(&self, tip: &Rev, rev: &Rev) -> Result<bool>;
 
+    /// 122: the commit that landed `rev` on a branch at `tip`: the oldest
+    /// of `tip`'s first-parent line that holds it, `rev` itself where it is
+    /// on that line; `None` when `tip` does not hold it. A profile that
+    /// cannot walk the line answers `tip`, which holds it all the same.
+    fn landed_by(&self, tip: &Rev, rev: &Rev) -> Result<Option<Rev>> {
+        Ok(self.contains(tip, rev)?.then(|| tip.clone()))
+    }
+
     /// 45, 46: move the branch from exactly `expected` to `to`, all or
     /// nothing.
     fn move_to(&self, branch: &str, expected: &Rev, to: &Rev) -> Result<Moved>;
@@ -1171,6 +1179,10 @@ pub struct Session {
     /// The place is on no branch, so it names no session's work (3): a
     /// submission from it is refused.
     pub detached: bool,
+    /// The place is a repository with no work tree, a bare one or a git
+    /// directory: it holds no uncommitted work, and no session works in
+    /// it, so no outcome is delivered there (2, 51).
+    pub bare: bool,
 }
 
 /// One entry contested in a conflict, with what it submitted (65).
@@ -1178,6 +1190,21 @@ pub struct Session {
 pub struct Contested {
     pub id: u64,
     pub from: Submitter,
+}
+
+/// 23, 70, 140: the verdict that covers a branch's revision: the
+/// revision of the branch whose landing named it, and its words. A
+/// combination that lands is the same combination on the revision it
+/// lands as (core.17), so that revision is where the verdict stands on
+/// the branch.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CoveringVerdict {
+    /// The branch's revision that landed on it (core.17).
+    pub at: Rev,
+    /// Its result word, `passed` (22).
+    pub result: String,
+    pub ran: u64,
+    pub replayed: u64,
 }
 
 /// 20, 51: a submission's decided outcome, which a notification carries to
@@ -1188,6 +1215,10 @@ pub enum Decided {
         landed_as: Rev,
         /// 140: landed beside the chain, with no check run.
         beside: bool,
+        /// 140: for a landing beside, the verdict that covers the
+        /// revision it landed on; `None` for a landing through the chain
+        /// and in outcomes recorded before it (record 0083).
+        covered_by: Option<CoveringVerdict>,
     },
     Failed {
         failed: Vec<String>,
@@ -1269,6 +1300,12 @@ pub enum Standing {
         landed_as: Rev,
         /// 140: landed beside the chain, with no check run.
         beside: bool,
+        /// 140: for a landing beside, the verdict that covers the revision
+        /// it landed on, which its report names as its landing commit
+        /// does; `None` otherwise, and in records written before it (70;
+        /// record 0083).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        covered_by: Option<CoveringVerdict>,
     },
     /// Blamed for the failure its rows show (17, 20).
     Blamed {

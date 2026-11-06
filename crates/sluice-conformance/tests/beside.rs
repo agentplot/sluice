@@ -4,7 +4,12 @@
 
 use sluice_conformance::{policy, Crash, Harness, Rig, BRANCH};
 use sluice_core::records::{Beside, BesideWhy, Event, State};
-use sluice_seams::Decided;
+use sluice_seams::{Changes, Decided, Rev, Written};
+
+/// What a landing beside's `Sluice-Result` says before the result that
+/// covers it (23, 140; record 0083).
+const BESIDE: &str =
+    "passed (0 run, 0 replayed) beside the queue: no required check reads its changes";
 
 /// A branch whose revision is covered by a verdict (70): one submission
 /// landed through the chain first.
@@ -15,6 +20,26 @@ fn verified() -> Harness {
     h.settle();
     assert!(h.doc().verified);
     h
+}
+
+/// A landing commit's `Sluice-Result`, read from its message.
+fn result_of(h: &Harness, rev: &Rev) -> String {
+    let m = h.message(rev);
+    let lines: Vec<&str> = m
+        .lines()
+        .filter_map(|l| l.strip_prefix("Sluice-Result: "))
+        .collect();
+    assert_eq!(lines.len(), 1, "{m}");
+    lines[0].to_string()
+}
+
+/// The `Sluice-Result` of a landing beside covered by the result at `at`,
+/// in full, with that landing's own words (23, 140; record 0083).
+fn covered_by(h: &Harness, at: &Rev) -> String {
+    format!(
+        "{BESIDE}; covered by the result at {at}, {}",
+        result_of(h, at)
+    )
 }
 
 /// Two code submissions under test together, held until completed.
@@ -30,10 +55,14 @@ fn two_under_test(h: &Harness) -> (u64, u64) {
     (a, b)
 }
 
-/// satisfies: 140, S68, 10, 23, 24
+/// satisfies: 140, S68, 10, 23, 24; rule core.39: the docs name the
+/// result that covers them, the combination's landing its own, and docs
+/// after it are covered by the combination's.
 #[test]
 fn docs_land_beside_two_code_submissions_under_test_and_they_land_carrying_them() {
     let h = verified();
+    let covering = h.doc().covered_by.expect("the landing names its result");
+    assert_eq!(covering.at, h.tip());
     let (a, b) = two_under_test(&h);
     let started = h.started().len();
     let places = h.made_places().len();
@@ -55,12 +84,14 @@ fn docs_land_beside_two_code_submissions_under_test_and_they_land_carrying_them(
     assert_eq!(h.made_places().len(), places);
     assert_eq!(h.sub(a).state, State::Testing);
     assert_eq!(h.sub(b).state, State::Testing);
-    assert!(h.message(&docs).contains("landed beside the queue"));
+    assert_eq!(result_of(&h, &docs), covered_by(&h, &before));
+    assert_eq!(h.sub(d).covered_by.as_ref(), Some(&covering));
     assert_eq!(
         h.w().delivered_to("agent-d")[0].decided,
         Decided::Landed {
             landed_as: docs.clone(),
             beside: true,
+            covered_by: Some(covering.clone()),
         }
     );
     assert!(h.events().iter().any(|e| matches!(
@@ -85,19 +116,123 @@ fn docs_land_beside_two_code_submissions_under_test_and_they_land_carrying_them(
     assert_eq!(h.file(&la, "docs/guide.md").as_deref(), Some("guide"));
     // Named as the docs' revision extended by its entries (core.17).
     assert_eq!(h.sub(b).tested.unwrap().on, docs);
+    // Each names its own combination and its own result.
+    for l in [&la, &lb] {
+        assert!(
+            h.message(l).contains("\nSluice-Tested: "),
+            "{}",
+            h.message(l)
+        );
+        let words = result_of(&h, l);
+        assert!(words.starts_with("passed ("), "{words}");
+        assert!(!words.contains("beside the queue"), "{words}");
+    }
     assert_eq!(
         h.w().delivered_to("agent-a")[0].decided,
         Decided::Landed {
             landed_as: la,
             beside: false,
+            covered_by: None,
         }
     );
+
+    // Docs after it are covered by the combination's landing, in its words.
+    h.work("unit/e", "agent-e", &[("docs/more.md", Some("more"))]);
+    let e = h.submit("unit/e");
+    h.step();
+    let le = h.sub(e).landed_as.expect("landed beside");
+    assert_eq!(h.sub(e).beside, Some(Beside::Landed));
+    assert_eq!(result_of(&h, &le), covered_by(&h, &lb));
 }
 
-/// satisfies: 140, 23
+/// satisfies: 23, 140, S68; rule core.39: the docs' landing opens with its
+/// own result, passed with nothing run, names no combination, and names
+/// the result that covers it by the revision it landed as, in full, and
+/// that landing's own words.
+#[test]
+fn a_landing_beside_names_its_result_and_the_result_that_covers_it() {
+    let h = verified();
+    let l = h.tip();
+    let words = result_of(&h, &l);
+    assert!(words.starts_with("passed ("), "{words}");
+    h.work("unit/d", "agent-d", &[("docs/guide.md", Some("guide"))]);
+    let d = h.submit("unit/d");
+    h.step();
+    let docs = h.sub(d).landed_as.expect("landed beside");
+    let m = h.message(&docs);
+    assert!(!m.contains("Sluice-Tested"), "{m}");
+    assert!(m.contains(&format!("\nSluice-Submission: {d}\n")), "{m}");
+    assert_eq!(
+        result_of(&h, &docs),
+        format!("{BESIDE}; covered by the result at {l}, {words}")
+    );
+    // The branch is covered by the same result, which the next names.
+    assert_eq!(h.doc().covered_by.map(|c| c.at), Some(l));
+}
+
+/// satisfies: 23, 140, 70; rule core.39: a covered branch whose state
+/// names no covering result, as an older sluice wrote it, lands the docs
+/// through the queue once, and the docs after are covered by that landing.
+#[test]
+fn state_that_names_no_covering_result_takes_the_queue_once() {
+    let h = verified();
+    forget_covering(&h);
+    assert!(h.doc().verified);
+    assert_eq!(h.doc().covered_by, None);
+    h.work("unit/d", "agent-d", &[("docs/one.md", Some("one"))]);
+    let d = h.submit("unit/d");
+    h.step();
+    assert_ne!(h.sub(d).state, State::Landed);
+    h.settle();
+    assert_eq!(h.sub(d).state, State::Landed);
+    assert_eq!(h.sub(d).beside, None);
+    let ld = h.sub(d).landed_as.unwrap();
+    assert!(
+        h.message(&ld).contains("\nSluice-Tested: "),
+        "{}",
+        h.message(&ld)
+    );
+    assert_eq!(h.doc().covered_by.map(|c| c.at), Some(ld.clone()));
+
+    h.work("unit/e", "agent-e", &[("docs/two.md", Some("two"))]);
+    let e = h.submit("unit/e");
+    h.step();
+    assert_eq!(h.sub(e).beside, Some(Beside::Landed));
+    let le = h.sub(e).landed_as.expect("landed beside");
+    assert_eq!(result_of(&h, &le), covered_by(&h, &ld));
+}
+
+/// `branch.json` as a sluice from before record 0083 left it: covered,
+/// naming no result.
+fn forget_covering(h: &Harness) {
+    let s = h.sluice();
+    let _lock = s
+        .seams()
+        .state
+        .wait_lock(BRANCH)
+        .expect("the branch's lock");
+    let snap = s.seams().state.read(BRANCH).expect("records read");
+    let mut doc: serde_json::Value =
+        serde_json::from_slice(&snap.files["branch.json"]).expect("branch.json parses");
+    doc.as_object_mut()
+        .expect("an object")
+        .remove("covered_by")
+        .expect("a landing named its result");
+    let mut changes = Changes::default();
+    changes.put.insert(
+        "branch.json".into(),
+        serde_json::to_vec_pretty(&doc).expect("serializes"),
+    );
+    let written = s.seams().state.write(BRANCH, snap.version, changes);
+    assert!(matches!(written, Ok(Written::Written(_))), "{written:?}");
+}
+
+/// satisfies: 140, 23; rule core.39: both name the one result that
+/// covers them, never the landing beside before.
 #[test]
 fn two_landings_beside_in_a_row_both_land_with_the_combination() {
     let h = verified();
+    let l = h.tip();
     let (_, b) = two_under_test(&h);
     let started = h.started().len();
     h.work("unit/d", "agent-d", &[("docs/one.md", Some("one"))]);
@@ -108,6 +243,11 @@ fn two_landings_beside_in_a_row_both_land_with_the_combination() {
     h.step();
     assert_eq!(h.sub(d).state, State::Landed);
     assert_eq!(h.sub(e).state, State::Landed);
+    let (ld, le) = (h.sub(d).landed_as.unwrap(), h.sub(e).landed_as.unwrap());
+    assert_eq!(h.parents(&le)[0], ld);
+    assert_eq!(result_of(&h, &ld), covered_by(&h, &l));
+    assert_eq!(result_of(&h, &le), covered_by(&h, &l));
+    assert!(!h.message(&le).contains(ld.as_str()), "{}", h.message(&le));
     h.w().complete_all();
     h.settle();
     let lb = h.sub(b).landed_as.unwrap();
@@ -226,10 +366,13 @@ fn the_policy_never_lands_beside() {
 fn nothing_lands_beside_on_a_revision_no_verdict_covers() {
     let h = Harness::bolt();
     assert!(!h.doc().verified);
+    assert_eq!(h.doc().covered_by, None);
     h.work("unit/d", "agent-d", &[("docs/guide.md", Some("guide"))]);
     let d = h.submit("unit/d");
     h.step();
     assert_ne!(h.sub(d).state, State::Landed);
+    assert_eq!(h.doc().covered_by, None);
+    assert_eq!(h.sub(d).covered_by, None);
     assert!(h.w().read_pairs().is_empty(), "nothing asked");
     h.settle();
     assert_eq!(h.sub(d).state, State::Landed);
@@ -315,6 +458,8 @@ fn a_landing_beside_that_finds_the_branch_moved_is_refused_and_read_again() {
         .iter()
         .any(|e| matches!(e, Event::Refused { ids, .. } if *ids == [d])));
     assert_ne!(h.sub(d).state, State::Landed);
+    assert_eq!(h.sub(d).covered_by, None);
+    assert_eq!(h.doc().covered_by, None);
     h.settle();
     assert_eq!(h.sub(d).state, State::Landed);
     assert_eq!(
