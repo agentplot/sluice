@@ -5,12 +5,59 @@ at 63bcb041, which holds main at 3e0ae764, checked on 2026-11-05 against
 this change's proposal, design, its delta spec `landing-beside`, and its
 tasks, with main still at 3e0ae764.
 
-**The work holds.** Every requirement and scenario of the spec is met by
-the code and by the test the design's table names for it, and each of
-those tests passed. All 21 tasks are ticked, each one's condition holds,
-and the checks the tasks name pass. Task 5.2's notes are in the place's
+**The work falls short in one place: archived, its spec fails the
+gate.** Applied to `openspec/specs/landing-beside/spec.md`, the delta's
+modified requirement "The outcome says it landed beside the queue" is
+718 characters of requirement text. `openspec validate --specs --strict`,
+the gate's `root:specs`, fails it ("Requirement text is very long (>500
+characters)"), under the pinned openspec 1.14.3 and under 1.15.0. So the
+change is not archived; see "What fails" below.
+
+The code holds. Every requirement and scenario of the spec is met by the
+code and by the test the design's table names for it, and each of those
+tests passed. All 21 tasks are ticked, each one's condition holds, and
+the checks the tasks name pass. Task 5.2's notes are in the place's
 notes, which are not committed; this report carries them under "After
 the landing" below.
+
+## What fails
+
+`openspec archive a-landing-beside-the-queue-names-the-verdict-that-covers-it`
+applies cleanly (2 added, 2 modified), and then
+
+```
+$ openspec validate --specs --strict --no-interactive
+Totals: 64 passed, 1 failed (65 items)
+$ openspec validate landing-beside --type spec --strict --json
+requirements[6]: WARNING Requirement text is very long (>500 characters). Move examples and edge cases into scenarios, or split it into separate requirements that each state one behavior.
+```
+
+`requirements[6]` is "The outcome says it landed beside the queue". On
+main it is about 330 characters. The delta adds the forge's words, the
+`sluice` check's title, the covering result in its summary and report,
+the report being the check's text and the one comment, and no check per
+required check (118). Those take it to 718. `openspec validate <change>
+--strict`, and so `root:changes`, does not measure a modified
+requirement's text. So the change is valid, and only the archived spec
+fails. The gate did not run `root:specs` at 63bcb041, since no file
+under `openspec/specs` had changed.
+
+The fix is in the delta spec,
+`specs/landing-beside/spec.md`. Keep "The outcome says it landed beside
+the queue" to what submit, wait, the notice and the `sluice` check
+say, and move the forge's report into a requirement of its own, e.g. "A
+request landed beside names the result that covers it": the check's
+summary and the report name the covering result by its revision and
+words, the report is the check's text and the request's one comment
+with no row, and no check per required check is posted (118). Move the
+two forge scenarios under it. Each requirement must stay under 500
+characters. Then `openspec archive` it in a scratch copy and run
+`openspec validate --specs --strict` to show that the archived spec
+passes. Record the fix as a task of the change, ticked. No code changes.
+
+The archive was made and committed (d195e377) before `root:specs` was
+run on its result. It is reverted on the branch, so the change stands
+open again at `openspec/changes/a-landing-beside-the-queue-names-the-verdict-that-covers-it`.
 
 ## Checks
 
@@ -18,6 +65,7 @@ the landing" below.
 |---|---|
 | `sluice exec main` on 63bcb041, against main at 3e0ae764 | 15 of 15 tasks passed in 12m 28s, recorded under their keys for 63bcb04: core:test 131 tests, seams:test 2, fakes:test 7, conformance:test 270, cli:test 569 and cli:tools 527, none failed; cli:e2e 44 checks ok, none not ok; root:format, root:lint, root:adrs, root:changes, root:screenshots-scene, site:prose, site:rules and plugin-sluice:validate. Every test the tables below name passed among them |
 | `openspec validate a-landing-beside-the-queue-names-the-verdict-that-covers-it --strict` | valid |
+| `openspec validate --specs --strict --no-interactive` (`root:specs`) after `openspec archive`, pinned openspec 1.14.3 | **fails**: 64 passed, 1 failed, `landing-beside`'s `requirements[6]` over 500 characters; 65 of 65 pass with the archive reverted |
 | `git merge-base --is-ancestor c7ee329d HEAD` (1.4) | succeeds; main's 3e0ae764 is also in the branch, by 042d327c |
 | `git -C ~/Code/github_agentplot/blueprints/blueprints.git log -1 --format=%s 1b21406` (1.2) | names 23, 140 and S68 |
 | `git -C ~/Code/github_agentplot/blueprints/main log origin/main --format=%s \| grep -c 'record 0083'` (1.3) | 1: eb0d3eb, `design(sluice): a landing beside the chain names as its verdict its own, … (23, 140, S68; sluice record 0083, accepted on the user's word 2026-11-06)` |
