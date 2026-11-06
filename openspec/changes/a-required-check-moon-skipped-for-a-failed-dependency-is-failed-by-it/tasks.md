@@ -4,7 +4,7 @@ Each group is one session's work for an implementer who reads this
 change (proposal, design, specs) and its own group. The groups land in
 order, as one landing. Work in this change's place on its branch, cut
 from main. No code is written until the user has read the design,
-record 0083 and the statement's amendment, and task 1.3 is done. Run
+record 0084 and the statement's amendment, and task 1.3 is done. Run
 suites through sluice (`sluice exec main -- cargo test ...`). A quick
 `cargo check`, `cargo clippy` or one unit test may run directly. No
 test reaches a credential or the host's own sluice state: set
@@ -20,9 +20,9 @@ a new minor version. Every group ends with its check task passing.
 
 ## 1. The decision recorded
 
-- [x] 1.1 Write record 0083, proposed, with the options weighed; add to the details of rule core.7 the check read as left without a result and the task's run left unrecorded, ruled out, and the task recorded only where it failed a check, not ruled out; add to those of rule core.34 the failure weighed under the check's key, and a task's passes recorded only once its key holds a fail, ruled out. The site's rules page carries no details, so it is unchanged. Done in the commit that writes this change. True when `sluice exec main -- moon run root:adrs root:changes site:rules` passes.
-- [x] 1.2 Amend the statement on the agentplot/blueprints branch `design/sluice-a-required-check-skipped-for-a-failed-dependency`, beside `~/Code/github_agentplot/blueprints/main`, cut from main at cd8fd73: the vocabulary's "check", 16, clause 149 after 139, C.2's moon row, and S74. Committed there (c4a227b) and not pushed: the orchestrator pushes it on the user's word, before the code lands (rule core.12). True when `git -C ~/Code/github_agentplot/blueprints/design-sluice-a-required-check-skipped-for-a-failed-dependency log -1 --format=%s` names clause 149.
-- [ ] 1.3 Once the user has given their word and the amendment is on agentplot/blueprints main, mark record 0083 accepted, quoting the user's words and naming the commit on main, and write any change the user asked for into the record, the design, the specs and these tasks before any code; in the details of core.7 and core.34, cite 149 without "(proposed)". True when `sluice exec main -- moon run root:adrs root:changes` passes and `git -C ~/Code/github_agentplot/blueprints/main merge-base --is-ancestor <commit> origin/main` holds for the commit the record names.
+- [x] 1.1 Write record 0084, proposed, with the options weighed; add to the details of rule core.7 the check read as left without a result and the task's run left unrecorded, ruled out, and the task recorded only where it failed a check, not ruled out; add to those of rule core.34 the failure weighed under the check's key, and a task's passes recorded only once its key holds a fail, ruled out. The site's rules page carries no details, so it is unchanged. Done in the commit that writes this change. True when `sluice exec main -- moon run root:adrs root:changes site:rules` passes.
+- [x] 1.2 Amend the statement on the agentplot/blueprints branch `design/sluice-a-required-check-skipped-for-a-failed-dependency`, beside `~/Code/github_agentplot/blueprints/main`, cut from main at cd8fd73: the vocabulary's "check", 16, clause 149 after 139, C.2's moon row, and S74. Committed there (803ccb3) and not pushed: the orchestrator pushes it on the user's word, before the code lands (rule core.12). True when `git -C ~/Code/github_agentplot/blueprints/design-sluice-a-required-check-skipped-for-a-failed-dependency log -1 --format=%s` names clause 149.
+- [ ] 1.3 Once the user has given their word and the amendment is on agentplot/blueprints main, mark record 0084 accepted, quoting the user's words and naming the commit on main, and write any change the user asked for into the record, the design, the specs and these tasks before any code; in the details of core.7 and core.34, cite 149 without "(proposed)". True when `sluice exec main -- moon run root:adrs root:changes` passes and `git -C ~/Code/github_agentplot/blueprints/main merge-base --is-ancestor <commit> origin/main` holds for the commit the record names.
 
 ## 2. The moon runner reads a skipped check through its dependencies
 

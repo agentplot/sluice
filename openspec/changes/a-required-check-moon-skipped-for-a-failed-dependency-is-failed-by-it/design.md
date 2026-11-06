@@ -2,7 +2,7 @@
 
 ## Context
 
-See proposal.md for why, and record 0083 for the decision and the
+See proposal.md for why, and record 0084 for the decision and the
 options weighed. The code reads as below at main 3f5aed5f, where this
 change was cut.
 
@@ -328,9 +328,9 @@ record. Their statements name none.
 
 ### D10. The statement
 
-The amendment is commit c4a227b on the agentplot/blueprints branch
+The amendment is commit 803ccb3 on the agentplot/blueprints branch
 `design/sluice-a-required-check-skipped-for-a-failed-dependency`, cut
-from main at cd8fd73 and not pushed (record 0083):
+from main at cd8fd73 and not pushed (record 0084):
 
 - **Vocabulary, "check":** "A check its runner skipped for a task it
   depends on that failed ends in that task's fail (149)."
@@ -397,6 +397,6 @@ The orchestrator gives crew the words change of D9.
 
 ## Open Questions
 
-None. The user reads this design, record 0083 and the statement's
+None. The user reads this design, record 0084 and the statement's
 amendment before any code. The amendment goes to agentplot/blueprints
 main on the user's word.

@@ -78,7 +78,7 @@ skipped it for a task it depends on.
   agentplot/blueprints branch
   `design/sluice-a-required-check-skipped-for-a-failed-dependency`, for
   the orchestrator to push on the user's word before the code lands
-  (rule core.12). Record 0083 sets the decision down as proposed. The
+  (rule core.12). Record 0084 sets the decision down as proposed. The
   details of rules core.7 and core.34 say where it sits.
 
 ## Capabilities
@@ -161,11 +161,11 @@ skipped it for a task it depends on.
   `plugins/sluice/skills/using-sluice/references/verdicts.md`,
   `plugins/sluice/skills/using-sluice/references/exec.md`,
   `plugins/sluice/skills/setting-up-sluice/references/profiles/moon.md`.
-- Records and rules: record 0083; the details of core.7 and core.34,
+- Records and rules: record 0084; the details of core.7 and core.34,
   which the site's rules page does not carry, so it is unchanged.
 - Sources: clauses 15, 16, 17, 18, 19, 20, 60, 66, 84, 108, 114, 115,
   138, 139, C.2's moon row; 149 and S74 as proposed; records 0031, 0043,
-  0044, 0072, 0074, 0083; rules core.7, core.8, core.9, core.22, core.34,
+  0044, 0072, 0074, 0084; rules core.7, core.8, core.9, core.22, core.34,
   core.35.
 
 ## Touches
@@ -194,7 +194,7 @@ site/src/content/docs/reference/commands.md
 plugins/sluice/skills/using-sluice/references/verdicts.md
 plugins/sluice/skills/using-sluice/references/exec.md
 plugins/sluice/skills/setting-up-sluice/references/profiles/moon.md
-docs/adr/0083-a-required-check-its-runner-skipped-for-a-task-it-depends-on-that-failed-is-failed-by-that-task.md
+docs/adr/0084-a-required-check-its-runner-skipped-for-a-task-it-depends-on-that-failed-is-failed-by-that-task.md
 docs/architecture/core.md
 openspec/changes/a-required-check-moon-skipped-for-a-failed-dependency-is-failed-by-it/**
 ```
