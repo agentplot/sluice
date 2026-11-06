@@ -18,7 +18,7 @@ clauses by number and rules by id.
 
 ## 2. Who submits a branch by name
 
-- [ ] 2.1 `Driver::named(branch) -> Result<Submitter>` in `crates/sluice-seams`, and `Submitter::by_name()`, true where `from.head` equals `from.worktree` (D3). The worktrunk driver's `named` in `crates/sluice/src/profiles/worktrunk/mod.rs`: `SLUICE_AGENT` or the branch as the agent, the branch as work and head, its host, no path, no session, nothing read of the folder it runs in; the fake driver's in `crates/sluice-fakes`, and the conformance rig's. True when `cargo clippy --workspace --all-targets -- -D warnings` is clean and `sluice exec main -- cargo test -p sluice --features tools --test worktrunk -- named_records_no_worktree` passes with herdr's variables set and a dirty worktree as the folder.
+- [x] 2.1 `Driver::named(branch) -> Result<Submitter>` in `crates/sluice-seams`, and `Submitter::by_name()`, true where `from.head` equals `from.worktree` (D3). The worktrunk driver's `named` in `crates/sluice/src/profiles/worktrunk/mod.rs`: `SLUICE_AGENT` or the branch as the agent, the branch as work and head, its host, no path, no session, nothing read of the folder it runs in; the fake driver's in `crates/sluice-fakes`, and the conformance rig's. True when `cargo clippy --workspace --all-targets -- -D warnings` is clean and `sluice exec main -- cargo test -p sluice --features tools --test worktrunk -- named_records_no_worktree` passes with herdr's variables set and a dirty worktree as the folder.
 
 ## 3. The core submits a branch by name
 
