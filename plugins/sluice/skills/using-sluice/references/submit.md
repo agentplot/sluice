@@ -182,6 +182,20 @@ Sluice-Tested: 9ab3d07c11
 Sluice-Result: passed (2 run, 31 replayed)
 ```
 
+A change that landed beside the queue names no combination, since none
+was run. Its result is its own, passed with nothing run, followed by the
+result that covers the revision it landed on, by the revision of the
+branch that result landed as and its own words:
+
+```
+Sluice-Submission: 15
+Sluice-From: agent-4 (guide)
+Sluice-Result: passed (0 run, 0 replayed) beside the queue: no required check reads its changes; covered by the result at b7d2e94f031c5a8e6d2f40b9a7c3e1d58f6a2b47, passed (2 run, 31 replayed)
+```
+
+A tool that reads a branch's head as passed reads the first word of
+`Sluice-Result`, which is `passed` on every landing.
+
 The plain `sluice submit` leaves your worktree and branch in place, and
 so does `sluice wait`; `wt submit` removes them on landing (`--no-remove`
 keeps them), whether it waited from the start, under `--timeout` in
