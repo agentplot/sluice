@@ -4864,7 +4864,11 @@ fn landed_on_another_host() {
     }
     let out = submit.wait_with_output().unwrap();
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
-    assert!(text(&out).contains("passed · landed as "), "{}", text(&out));
+    // B's landing marks the request merged before B's round posts its
+    // check, so A reads `landed as …`, the check's title, or `landed`
+    // where it read the request between the two (this change's sluice
+    // exec main, cli:tools, 2026-11-05): either reports it landed.
+    assert!(text(&out).contains("passed · landed"), "{}", text(&out));
     assert!(g.of(n).is_empty(), "A took nothing in");
 }
 

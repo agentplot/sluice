@@ -698,11 +698,15 @@ fn a_host_whose_engine_does_not_answer_does_not_meet_it() {
     assert!(why.contains("500"), "{why}");
 
     let dir = Scratch::short();
-    let socket = dir.path().join("e.sock");
-    drop(std::os::unix::net::UnixListener::bind(&socket).unwrap());
+    let (socket, why) = support::at_a_closed_socket(
+        dir.path(),
+        |socket| {
+            let c = checks(&repo).with_engine_sockets(vec![socket.to_path_buf()]);
+            c.unmet(&docker()).unwrap().expect("unmet")
+        },
+        |_, why| why.contains("refused"),
+    );
     assert!(socket.exists(), "the socket nothing listens on stays");
-    let c = checks(&repo).with_engine_sockets(vec![socket.clone()]);
-    let why = c.unmet(&docker()).unwrap().expect("unmet");
     assert!(why.contains(&socket.display().to_string()), "{why}");
     assert!(why.contains("refused"), "{why}");
 
