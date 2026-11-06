@@ -119,3 +119,6 @@ None.
   `design/sluice-a-hosts-waits-hold-its-intake-mark-together`, unpushed,
   for the user's yes (record 0089). 45, 122 and C.5 hold as written.
 - Records 0088 and 0089; rule core.33 and its details.
+- Site: the pull requests guide's "One host takes the pull requests
+  in", and the holds and the kept mark in the state reference's
+  `forge/`.

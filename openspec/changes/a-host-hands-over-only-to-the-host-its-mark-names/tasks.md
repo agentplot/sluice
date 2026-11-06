@@ -28,6 +28,10 @@ rules by id.
 
 - [x] 4.1 `hand_over` takes the pass's revision of the branch and passes by a submission whose head it holds (D3). True when `sluice exec main -- cargo test -p sluice --features tools --test pull_requests -- a_request_that_landed_elsewhere_is_not_handed_over handed_over handed_over_by_a_wait a_landing_is_not_handed_over` passes, the first failing with `pulls.rs` as main held it.
 
-## 5. The gate
+## 5. The site
 
-- [ ] 5.1 The whole gate on the committed branch. True when `sluice exec main` passes.
+- [x] 5.1 The pull requests guide says a host's waits hold the mark together and a host withdraws its submissions only on finding another host's mark, never work `main` holds; the state reference lists `forge/intake/`'s mark, holds and lock. True when `sluice exec main -- moon run site:prose` passes.
+
+## 6. The gate
+
+- [ ] 6.1 The whole gate on the committed branch. True when `sluice exec main` passes.
