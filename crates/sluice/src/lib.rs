@@ -726,6 +726,12 @@ pub trait PullRequests {
     fn request_of(&self, _place: &str) -> Option<u64> {
         None
     }
+
+    /// 137: whether `sub` was withdrawn by its host's hand-over of its
+    /// branch's pull requests to another host.
+    fn handed_over(&self, _sub: &Submission) -> bool {
+        false
+    }
 }
 
 /// No branch takes pull requests.
@@ -2662,16 +2668,32 @@ fn carried(
         return Ok(Carried::Outcome(sub));
     }
     let branch = s.seams().branch;
-    if let Some(tip) = branch.read(&sub.branch)? {
-        if let Some(to) = branch.landed_by(&tip, &sub.head)? {
+    // What cannot be read leaves the outcome as the records hold it, and
+    // is said.
+    let unread = |what: &str, e: anyhow::Error| {
+        telemetry::warn(&format!(
+            "sluice: could not read whether #{}'s work went on, from {what}: {e:#}",
+            sub.id
+        ))
+    };
+    let landed = branch.read(&sub.branch).and_then(|tip| match tip {
+        Some(tip) => branch.landed_by(&tip, &sub.head),
+        None => Ok(None),
+    });
+    match landed {
+        Ok(Some(to)) => {
             let mut landed = sub;
             landed.state = State::Landed;
             landed.landed_as = Some(to);
             landed.landed_elsewhere = true;
             return Ok(Carried::Outcome(landed));
         }
+        Ok(None) => {}
+        Err(e) => unread(&sub.branch, e),
     }
-    let holds = |head: &Rev| *head != sub.head && branch.contains(head, &sub.head).unwrap_or(false);
+    // A head that is this one's, or holds it.
+    let carries =
+        |head: &Rev| *head == sub.head || branch.contains(head, &sub.head).unwrap_or(false);
     let by = sub
         .withdrawn
         .as_ref()
@@ -2690,7 +2712,7 @@ fn carried(
         .status(&sub.branch)?
         .submissions
         .into_iter()
-        .rfind(|e| e.id > sub.id && e.from.worktree == sub.from.worktree && holds(&e.head));
+        .rfind(|e| e.id > sub.id && e.from.worktree == sub.from.worktree && carries(&e.head));
     if let Some(e) = later {
         follows(format!("#{}", e.id), out)?;
         return Ok(Carried::Entry(e));
@@ -2701,18 +2723,31 @@ fn carried(
     ) else {
         return Ok(Carried::Outcome(sub));
     };
-    let goes_on = match pulls.follow(s.seams(), waiting.clock, &sub.branch, n)? {
-        Followed::Done(e, _) => (e.id != sub.id && holds(&e.head)).then_some(Some(e)),
-        Followed::Open {
+    let followed = match pulls.follow(s.seams(), waiting.clock, &sub.branch, n) {
+        Ok(f) => f,
+        Err(e) => {
+            unread(&format!("pull request #{n}"), e);
+            return Ok(Carried::Outcome(sub));
+        }
+    };
+    // Its request open on the head it had carries on only where another
+    // host takes it in: a withdrawal by its submitter, its planner or the
+    // operator rests it there (120).
+    let goes_on = match followed {
+        Followed::Done(e, _)
+        | Followed::Open {
             submission: Some(e),
             ..
-        } => (e.id != sub.id && holds(&e.head)).then_some(Some(e)),
+        } => (e.id != sub.id && carries(&e.head)).then_some(Some(e)),
         Followed::Open {
             submission: None,
             draft: false,
             head: Some(h),
             ..
-        } => (h == sub.head.0 || holds(&Rev::new(h))).then_some(None),
+        } => {
+            let moved_on = h != sub.head.0 && carries(&Rev::new(h));
+            (moved_on || pulls.handed_over(&sub)).then_some(None)
+        }
         Followed::Landed { .. } | Followed::SentBack { .. } => Some(None),
         Followed::Open { .. } | Followed::Closed => None,
     };

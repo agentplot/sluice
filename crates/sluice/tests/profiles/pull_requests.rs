@@ -775,6 +775,24 @@ fn a_withdrawn_submission_whose_work_landed_is_reported_landed() {
     assert!(!said.contains("closed without landing"), "{said}");
 }
 
+/// 5, 120: the operator's withdrawal of a hand-opened pull request's
+/// submission rests it on its head, open and ready: no work of it goes
+/// on, so a wait on it exits 4 at once.
+#[test]
+fn a_wait_on_a_request_the_operator_withdrew_exits_withdrawn() {
+    let g = OnGitHub::new("pr-operator-withdrew", "");
+    let (n, _) = g.by_hand("unit/rested", &[("slow", Some("x\n"))], false);
+    g.step();
+    let id = g.of(n)[0]["id"].as_u64().unwrap();
+    let out = g.sluice(&["withdraw", &id.to_string()]);
+    assert!(out.status.success(), "{}", text(&out));
+    let out = g.sluice(&["wait", &id.to_string(), "--timeout", "20s", "--json"]);
+    assert_eq!(out.status.code(), Some(sluice::WITHDRAWN), "{}", text(&out));
+    let doc: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(doc["state"], "withdrawn", "{doc}");
+    assert_eq!(doc["id"], id, "{doc}");
+}
+
 /// 67, 122: a wait on a pull request's submission its own submit withdrew
 /// for a new head follows the request to the submission of that head,
 /// and reports it landed.

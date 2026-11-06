@@ -2638,6 +2638,10 @@ impl crate::PullRequests for Pulls {
         number(place)
     }
 
+    fn handed_over(&self, sub: &Submission) -> bool {
+        handed_over(sub, &sub.branch)
+    }
+
     fn branches(&self, seams: Seams<'_>) -> Result<Vec<String>> {
         let local = self.local()?;
         let Some((default, _)) = crate::profiles::default_branch(local)? else {
