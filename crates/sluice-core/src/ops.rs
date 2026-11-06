@@ -11,7 +11,7 @@ use sluice_seams::{Contested, Decided, Formed, Guard, HostCopy, Rev, Session, Su
 
 use crate::line::Line;
 use crate::order::{self, Entry};
-use crate::overview::{after_landed, BranchView};
+use crate::overview::{after_landed, BranchView, Here};
 use crate::records::{CandidateState, Event, State, Submission, Withdrawal, SUBMISSION_SCHEMA};
 use crate::{Found, Sluice};
 
@@ -1519,9 +1519,9 @@ impl Pending<'_, '_> {
 
 impl<'a> Sluice<'a> {
     /// 51, 135: every outcome of `me`'s submissions on any branch still
-    /// pending: each landed, blamed or conflicting submission whose
-    /// submitter's work, or the branch its pull request was opened from,
-    /// is `me`'s, and whose `delivered` is unset. Read from the live
+    /// pending: each landed, blamed or conflicting submission that is the
+    /// worktree on `me`'s branch's by [`Here::made`], and whose
+    /// `delivered` is unset; never one by name (124). Read from the live
     /// records and from the finished records of `me`'s own landings alone
     /// (131), then read again under the lock of each branch holding one,
     /// taken in the branches' order so two collectors never wait on each
@@ -1532,10 +1532,11 @@ impl<'a> Sluice<'a> {
         let mut branches = self.seams.state.branches()?;
         branches.sort();
         branches.dedup();
+        let here = Here::on(&me.worktree);
         let mut unread = Vec::new();
         let mut holding = Vec::new();
         for b in branches {
-            match self.pending_on(&b, me, None) {
+            match self.pending_on(&b, &here, None) {
                 Ok(found) if found.is_empty() => {}
                 Ok(_) => holding.push(b),
                 Err(e) => unread.push(Unread {
@@ -1549,7 +1550,7 @@ impl<'a> Sluice<'a> {
         let mut outcomes = Vec::new();
         for b in holding {
             locks.push(state.wait_lock(&b)?);
-            match self.pending_on(&b, me, None) {
+            match self.pending_on(&b, &here, None) {
                 Ok(found) => outcomes.extend(found),
                 Err(e) => unread.push(Unread {
                     branch: b,
@@ -1577,11 +1578,12 @@ impl<'a> Sluice<'a> {
         id: u64,
         me: &Submitter,
     ) -> Result<Pending<'s, 'a>> {
+        let here = Here::on(&me.worktree);
         let mut locks = Vec::new();
         let mut outcomes = Vec::new();
-        if !self.pending_on(branch, me, Some(id))?.is_empty() {
+        if !self.pending_on(branch, &here, Some(id))?.is_empty() {
             locks.push(self.seams.state.wait_lock(branch)?);
-            outcomes = self.pending_on(branch, me, Some(id))?;
+            outcomes = self.pending_on(branch, &here, Some(id))?;
         }
         Ok(Pending {
             sluice: self,
@@ -1592,24 +1594,21 @@ impl<'a> Sluice<'a> {
         })
     }
 
-    /// `me`'s pending outcomes on `branch`, in submission order: only
-    /// submission `only`, when it is given.
+    /// The pending outcomes on `branch` of the worktree `here`, in
+    /// submission order: only submission `only`, when it is given.
     fn pending_on(
         &self,
         branch: &str,
-        me: &Submitter,
+        here: &Here<'_>,
         only: Option<u64>,
     ) -> Result<Vec<PendingOutcome>> {
         let line = self.read_line(branch)?;
         let mut found = Vec::new();
-        let mine = |from: &Submitter| {
-            from.worktree == me.worktree || from.head.as_deref() == Some(me.worktree.as_str())
-        };
         let named = |id: u64| only.is_none_or(|o| o == id);
         for s in line
             .subs
             .values()
-            .filter(|s| named(s.id) && s.delivered.is_none() && mine(&s.from))
+            .filter(|s| named(s.id) && s.delivered.is_none() && self.made(here, &s.from))
         {
             if !matches!(s.state, State::Landed | State::Failed | State::Conflict) {
                 continue;
@@ -1629,11 +1628,13 @@ impl<'a> Sluice<'a> {
             });
         }
         // 130: a blame or a conflict stays live, so only a landing is read
-        // from the finished records, each by its own name (131).
+        // from the finished records, each by its own name (131), and taken
+        // by the same reading as a live one: never one by name, whose work
+        // its index line names as a worktree's is named (124).
         for f in line.finished.values() {
             if !named(f.id)
                 || f.state != State::Landed
-                || f.worktree != me.worktree
+                || f.worktree != here.branch()
                 || line.subs.contains_key(&f.id)
             {
                 continue;
@@ -1641,7 +1642,7 @@ impl<'a> Sluice<'a> {
             let Some(s) = self.finished_sub(branch, f.id)? else {
                 continue;
             };
-            if s.delivered.is_some() {
+            if s.delivered.is_some() || !self.made(here, &s.from) {
                 continue;
             }
             let (Some(decided), Some(notification)) = (s.decided(), s.notification()) else {
