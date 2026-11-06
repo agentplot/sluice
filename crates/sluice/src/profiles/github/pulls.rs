@@ -52,8 +52,8 @@ use sluice_core::{
     Clock, Forecast, GroupRequest, Requester, Seams, Sluice, SubmitRefusal, SubmitRequest, Withdrew,
 };
 use sluice_seams::{
-    Branch, Decided, Delivery, Formed, HostCopy, LandingCommit, Moved, Notification, Rev, Session,
-    Submitter,
+    Branch, CoveringVerdict, Decided, Delivery, Formed, HostCopy, LandingCommit, Moved,
+    Notification, Rev, Session, Submitter,
 };
 
 use super::app::Repo;
@@ -1142,6 +1142,12 @@ impl Pulls {
                 r.report_said = Some(said);
             }
             None => {}
+        }
+
+        // 118, 140: a landing beside had no check run or replayed on its
+        // head, so no check per required check says one was.
+        if matches!(view.standing, Stands::Landed { beside: true, .. }) {
+            return Ok(());
         }
 
         // A check per required check per system (many-hosts-3's C.5
@@ -2314,6 +2320,10 @@ enum Outcome {
         landed_as: Rev,
         /// 140: beside the queue, with no check run.
         beside: bool,
+        /// 140: beside the queue, the result that covers the revision it
+        /// landed on; `None` otherwise, and in outcomes recorded before it
+        /// (record 0083).
+        covered_by: Option<CoveringVerdict>,
     },
     Failed {
         tasks: Vec<String>,
@@ -2334,6 +2344,7 @@ impl Outcome {
             State::Landed => Outcome::Landed {
                 landed_as: sub.landed_as.clone().unwrap_or_else(|| sub.head.clone()),
                 beside: sub.beside == Some(sluice_core::records::Beside::Landed),
+                covered_by: sub.covered_by.clone(),
             },
             State::Failed => {
                 let t = sub
@@ -2369,8 +2380,14 @@ impl Outcome {
     fn decided(decided: &Decided) -> Outcome {
         match decided.clone() {
             Decided::Landed {
-                landed_as, beside, ..
-            } => Outcome::Landed { landed_as, beside },
+                landed_as,
+                beside,
+                covered_by,
+            } => Outcome::Landed {
+                landed_as,
+                beside,
+                covered_by,
+            },
             Decided::Failed {
                 failed,
                 combination,
@@ -2397,22 +2414,34 @@ fn outcome_shown(branch: &str, o: &Outcome, names: &BTreeMap<u64, String>) -> Sh
         Outcome::Landed {
             landed_as,
             beside: false,
+            ..
         } => (
             Status::Success,
             format!("landed as {}", landed_as.short()),
             format!("Landed on {branch} as `{}`.", landed_as.short()),
         ),
-        // 140: no required check reads its changes.
+        // 140: no required check reads its changes; the result that
+        // covers it named as its landing commit names it (23; record
+        // 0083), where the outcome carries it.
         Outcome::Landed {
             landed_as,
             beside: true,
+            covered_by,
         } => (
             Status::Success,
             format!("landed as {} beside the queue", landed_as.short()),
             format!(
                 "Landed on {branch} as `{}` beside the queue, with no check run: no required \
-                 check reads its changes.",
-                landed_as.short()
+                 check reads its changes.{}",
+                landed_as.short(),
+                covered_by
+                    .as_ref()
+                    .map(|c| format!(
+                        " Covered by the result at `{}`, {}.",
+                        c.at.short(),
+                        sluice_core::text::verdict_words(&c.result, c.ran, c.replayed)
+                    ))
+                    .unwrap_or_default()
             ),
         ),
         Outcome::Failed {
@@ -3369,6 +3398,148 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// 140, "A request's earlier report is brought up to date": a request
+    /// whose earlier head was blamed, and whose new head lands beside the
+    /// queue, has its one report comment edited to the landing beside's,
+    /// which is also its `sluice` check's text, and no check per required
+    /// check on its new head, since none was run or replayed there (118;
+    /// record 0083).
+    #[test]
+    fn a_landing_beside_edits_the_requests_report() {
+        let dir = std::env::temp_dir().join(format!("sluice-pulls-beside-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let repo = Repo::from_url("https://github.com/o/r.git").unwrap();
+        let forge = Rc::new(FileForge::new(&dir.join("github.json"), &repo));
+        let pulls = Pulls::new(
+            &dir,
+            &dir,
+            Some(forge.clone()),
+            None,
+            Rc::new(retry::Policy::command()),
+            Kept::new(&dir.join("state")),
+            crate::instance::DISCOVERY,
+            sluice_core::Peer::default(),
+        );
+        let mut reading = Reading::default();
+        let names = BTreeMap::from([(12, "#12".to_string())]);
+        let mut failed = row("linux-x64", false);
+        failed.result = RowResult::Failed;
+        let blamed = VerdictView {
+            branch: "main".into(),
+            id: 12,
+            standing: Stands::Blamed { timed_out: false },
+            combination: Some(Rev::new("c1")),
+            on: Some(Rev::new("m0")),
+            submissions: vec![12],
+            runs: Vec::new(),
+            rows: vec![failed],
+            tasks: Vec::new(),
+            pending: Vec::new(),
+        };
+        let sent_back = outcome_shown(
+            "main",
+            &Outcome::Failed {
+                tasks: vec!["cli:build".into()],
+                logs: Vec::new(),
+                combination: Rev::new("c1"),
+                ids: vec![12],
+                timed_out: false,
+            },
+            &names,
+        );
+        pulls
+            .show_report(
+                &*forge,
+                &repo,
+                12,
+                "h1",
+                None,
+                &names,
+                sent_back,
+                Some(&blamed),
+                &mut reading,
+            )
+            .unwrap();
+        let held = forge.held().unwrap();
+        let [first] = held.comments[&12].as_slice() else {
+            panic!("one report comment: {:?}", held.comments);
+        };
+        assert!(
+            first.body.contains("failed on main, #12 is to blame"),
+            "{}",
+            first.body
+        );
+        assert!(held.posted["h1"].iter().any(|p| p.name != SLUICE_CHECK));
+
+        let covered_by = Some(CoveringVerdict {
+            at: Rev::new("e25fea4c0ffee0000000000000000000000000ab"),
+            result: "passed".into(),
+            ran: 141,
+            replayed: 0,
+        });
+        let beside = VerdictView {
+            standing: Stands::Landed {
+                landed_as: Rev::new("0cef58d1234"),
+                beside: true,
+                covered_by: covered_by.clone(),
+            },
+            combination: None,
+            on: None,
+            submissions: Vec::new(),
+            rows: Vec::new(),
+            ..blamed
+        };
+        let landed = outcome_shown(
+            "main",
+            &Outcome::Landed {
+                landed_as: Rev::new("0cef58d1234"),
+                beside: true,
+                covered_by,
+            },
+            &names,
+        );
+        pulls
+            .show_report(
+                &*forge,
+                &repo,
+                12,
+                "h2",
+                None,
+                &names,
+                landed,
+                Some(&beside),
+                &mut reading,
+            )
+            .unwrap();
+        let held = forge.held().unwrap();
+        let [comment] = held.comments[&12].as_slice() else {
+            panic!("still one report comment: {:?}", held.comments);
+        };
+        assert_eq!(comment.id, first.id);
+        assert_eq!(held.edits.len(), 1);
+        assert!(
+            comment.body.contains(
+                "## sluice: landed on main as 0cef58d with no check run: no required check \
+                 reads its changes\n\nCovered by the result at \
+                 [`e25fea4`](https://github.com/o/r/commit/e25fea4c0ffee0000000000000000000000000ab), \
+                 passed (141 run, 0 replayed).\n"
+            ),
+            "{}",
+            comment.body
+        );
+        let [check] = held.posted["h2"].as_slice() else {
+            panic!(
+                "only sluice's check on the new head: {:?}",
+                held.posted["h2"]
+            );
+        };
+        assert_eq!(check.name, SLUICE_CHECK);
+        assert_eq!(check.posting.status, Status::Success);
+        assert_eq!(check.posting.text.as_deref(), Some(comment.body.as_str()));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     /// reader-tick, "A refused policy stays refused at its revision", of
     /// the branches intake takes in: the default branch's policy sluice
     /// refuses is read from git once while its revision stands, each pass
@@ -3750,6 +3921,7 @@ mod tests {
             &Outcome::Landed {
                 landed_as: Rev::new("l1"),
                 beside: false,
+                covered_by: None,
             },
             &names,
             Some("unit/review")
@@ -3758,14 +3930,40 @@ mod tests {
     }
 
     /// 140: the `sluice` check of a request landed beside the queue says
-    /// so, and that no check ran.
+    /// so, that no check ran, and the result that covers it, as its
+    /// landing commit names it (23; record 0083); an outcome recorded
+    /// with none says what it said before.
     #[test]
     fn a_landing_beside_the_queue_says_no_check_ran() {
+        let covered = outcome_shown(
+            "main",
+            &Outcome::Landed {
+                landed_as: Rev::new("0cef58d1234"),
+                beside: true,
+                covered_by: Some(CoveringVerdict {
+                    at: Rev::new("e25fea4c0ffee0000000000000000000000000ab"),
+                    result: "passed".into(),
+                    ran: 141,
+                    replayed: 0,
+                }),
+            },
+            &BTreeMap::new(),
+        );
+        assert_eq!(covered.posting.status, Status::Success);
+        assert_eq!(covered.posting.title, "landed as 0cef58d beside the queue");
+        assert_eq!(
+            covered.posting.summary,
+            "Landed on main as `0cef58d` beside the queue, with no check run: no required \
+             check reads its changes. Covered by the result at `e25fea4`, passed (141 run, 0 \
+             replayed)."
+        );
+
         let shown = outcome_shown(
             "main",
             &Outcome::Landed {
                 landed_as: Rev::new("l1abcdef0"),
                 beside: true,
+                covered_by: None,
             },
             &BTreeMap::new(),
         );

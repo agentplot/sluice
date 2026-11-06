@@ -1288,6 +1288,12 @@ pub enum Standing {
         landed_as: Rev,
         /// 140: landed beside the chain, with no check run.
         beside: bool,
+        /// 140: for a landing beside, the verdict that covers the revision
+        /// it landed on, which its report names as its landing commit
+        /// does; `None` otherwise, and in records written before it (70;
+        /// record 0083).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        covered_by: Option<CoveringVerdict>,
     },
     /// Blamed for the failure its rows show (17, 20).
     Blamed {

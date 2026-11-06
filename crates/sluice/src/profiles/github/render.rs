@@ -53,9 +53,20 @@ pub fn marker(branch: &str) -> String {
 }
 
 /// Whether `view` shows anything a comment carries: a combination tested,
-/// or one formed again after it was.
+/// one formed again after it was, or a landing beside the result that
+/// covers it (140; record 0083).
 pub fn has_report(view: &VerdictView) -> bool {
-    !view.rows.is_empty() || !view.tasks.is_empty() || view.standing == Standing::FormedAgain
+    !view.rows.is_empty()
+        || !view.tasks.is_empty()
+        || view.standing == Standing::FormedAgain
+        || matches!(
+            view.standing,
+            Standing::Landed {
+                beside: true,
+                covered_by: Some(_),
+                ..
+            }
+        )
 }
 
 /// The head line: the branch, where the submission stands, and the blamed
@@ -79,11 +90,13 @@ pub fn head(view: &VerdictView, cx: &Context) -> String {
         Standing::Landed {
             landed_as,
             beside: false,
+            ..
         } => format!("landed on {b} as {}", landed_as.short()),
         // 140: nothing was run, so the report has no rows.
         Standing::Landed {
             landed_as,
             beside: true,
+            ..
         } => format!(
             "landed on {b} as {} with no check run: no required check reads its changes",
             landed_as.short()
@@ -129,6 +142,24 @@ fn draw(view: &VerdictView, cx: &Context, fit: Fit) -> String {
             "\nIts combination is formed again and will be tested again. \
              Nothing of the one it left is shown here.\n",
         );
+        return s;
+    }
+    // 23, 140: a landing beside names the result that covers it, as its
+    // landing commit does, and no row, since no check was run or replayed
+    // on it (118; record 0083).
+    if let Standing::Landed {
+        beside: true,
+        covered_by: Some(c),
+        ..
+    } = &view.standing
+    {
+        s.push_str(&format!(
+            "\nCovered by the result at [`{}`]({}/commit/{}), {}.\n",
+            c.at.short(),
+            cx.repo_url,
+            c.at,
+            sluice_core::text::verdict_words(&c.result, c.ran, c.replayed)
+        ));
         return s;
     }
     if let (Some(c), Some(on)) = (&view.combination, &view.on) {
@@ -494,7 +525,7 @@ pub fn pending_check(status: Status, word: &str) -> Posting {
 mod tests {
     use super::*;
     use sluice_core::verdict_view::{Contradicted, RunShown};
-    use sluice_seams::{Rev, RunDetail};
+    use sluice_seams::{CoveringVerdict, Rev, RunDetail};
 
     fn row(task: &str, result: RowResult) -> Row {
         Row {
@@ -671,28 +702,49 @@ mod tests {
             Standing::Landed {
                 landed_as: Rev::new("0cef58d1234"),
                 beside: false,
+                covered_by: None,
             },
             vec![row("app:lint", RowResult::Passed)],
         );
         let s = with(None, |cx| report(&v, cx));
         assert!(s.contains("## sluice: landed on main as 0cef58d\n"), "{s}");
 
-        // 140: landed beside the queue: no check ran, no row is shown.
-        let beside = view(
+        // 140: landed beside the queue: no check ran, no row is shown,
+        // and the report names the result that covers it, its revision
+        // linked to its commit (23; record 0083).
+        let at = "e25fea4c0ffee0000000000000000000000000ab";
+        let mut beside = view(
             Standing::Landed {
                 landed_as: Rev::new("0cef58d1234"),
                 beside: true,
+                covered_by: Some(CoveringVerdict {
+                    at: Rev::new(at),
+                    result: "passed".into(),
+                    ran: 141,
+                    replayed: 0,
+                }),
             },
             Vec::new(),
         );
+        assert!(has_report(&beside));
         let s = with(None, |cx| report(&beside, cx));
-        assert!(
-            s.contains(
-                "## sluice: landed on main as 0cef58d with no check run: no required check \
-                 reads its changes\n"
-            ),
-            "{s}"
+        assert_eq!(
+            s,
+            format!(
+                "<!-- sluice-report: main -->\n## sluice: landed on main as 0cef58d with no \
+                 check run: no required check reads its changes\n\nCovered by the result at \
+                 [`e25fea4`](https://github.com/o/r/commit/{at}), passed (141 run, 0 \
+                 replayed).\n"
+            )
         );
+        // One recorded before the result that covers it was kept has no
+        // report: its check's summary alone says it landed beside.
+        beside.standing = Standing::Landed {
+            landed_as: Rev::new("0cef58d1234"),
+            beside: true,
+            covered_by: None,
+        };
+        assert!(!has_report(&beside));
 
         v.standing = Standing::Testing;
         v.rows.clear();
