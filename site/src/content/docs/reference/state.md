@@ -116,6 +116,16 @@ every repository on the host and never pushed:
                        touched by a submit that opened, updated or marked
                        ready a pull request into the branch, so the next
                        round asks at once
+  forge/intake/<owner>/<repository>/<branch>.json
+                       the branch's intake mark as this host last saw it on
+                       the remote, when it first saw it there, and when it
+                       last pushed it
+  forge/intake/<owner>/<repository>/<branch>.waits/<process>.hold
+                       held by each wait on the host that reads the
+                       branch's pull requests, for as long as it runs: the
+                       last of them to end removes the mark
+  forge/intake/<owner>/<repository>/<branch>.waits/.lock
+                       held while a wait's hold is made or let go
   ports/<n>            a block of ports, naming the checkout that holds it
   readers/<repository>.lock
                        held by the repository's `sluice run`, or else by the
