@@ -1807,6 +1807,17 @@ mod tests {
                 .ok_or_else(|| anyhow::anyhow!("no place {worktree}"))
         }
 
+        fn named(&self, branch: &str) -> Result<Submitter> {
+            Ok(Submitter {
+                agent: branch.into(),
+                worktree: branch.into(),
+                path: None,
+                head: Some(branch.into()),
+                host: None,
+                session: None,
+            })
+        }
+
         fn notify(&self, _: &Notification) -> Result<Delivery> {
             unreachable!("a submit tells no one")
         }

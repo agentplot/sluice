@@ -15,6 +15,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
+use sluice::profiles::worktrunk::Worktrunk;
+use sluice_seams::{Driver as _, Submitter};
 use support::Repo;
 
 const POLICY: &str = "[tests]\nrunner = \"command\"\ncommand = \"sh check.sh\"\n\n\
@@ -416,6 +418,101 @@ fn the_submitter_is_the_agent_or_the_branch() {
     assert_eq!(s.status(one)["from"]["worktree"], "unit/a");
     assert_eq!(s.status(two)["from"]["agent"], "crw-1-unit-1");
     assert_eq!(s.status(two)["from"]["worktree"], "unit/b");
+}
+
+/// What [`name_a_branchs_submitter`] prints its answer after.
+const NAMED: &str = "named: ";
+
+/// The child of [`named_records_no_worktree`]: the worktrunk driver's
+/// submitter of the branch `SLUICE_TEST_NAMED` names, on the host
+/// `box-1`, as JSON, in the folder and the session its parent gave it.
+/// Run any other way, it does nothing.
+#[test]
+fn name_a_branchs_submitter() {
+    let Ok(branch) = std::env::var("SLUICE_TEST_NAMED") else {
+        return;
+    };
+    let from = Worktrunk::new("box-1").named(&branch).unwrap();
+    println!("{NAMED}{}", serde_json::to_string(&from).unwrap());
+}
+
+/// 124: a branch submitted by name records no worktree and no session.
+/// Run in a herdr pane, in a worktree on another branch holding work
+/// beyond its commits, with no git on the path that answers, the driver
+/// names the harness's agent or else the branch, the branch as its work
+/// and its head, its host, and no path or pane (record 0090; rule
+/// core.50).
+#[test]
+fn named_records_no_worktree() {
+    let s = Scratch::new("wt-named");
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    std::fs::write(a.join("a.txt"), "changed\n").unwrap();
+    std::fs::write(a.join("held.txt"), "held\n").unwrap();
+    // A git that keeps each call and answers none, first on the path.
+    let git = s.repo.dir().with_extension("named-git");
+    std::fs::create_dir_all(&git).unwrap();
+    let calls = git.join("calls");
+    std::fs::write(
+        git.join("git"),
+        format!("#!/bin/sh\necho \"$*\" >> {}\nexit 1\n", calls.display()),
+    )
+    .unwrap();
+    std::fs::set_permissions(
+        git.join("git"),
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .unwrap();
+    let socket = s.repo.dir().with_extension("herdr.sock");
+    let named = |agent: Option<&str>| -> Submitter {
+        let mut c = s.command_under(Command::new(std::env::current_exe().unwrap()), &a);
+        c.args(["--exact", "name_a_branchs_submitter", "--nocapture"])
+            .env("SLUICE_TEST_NAMED", "bolt/x")
+            .env(
+                "PATH",
+                format!("{}:{}", git.display(), std::env::var("PATH").unwrap()),
+            );
+        for v in support::HERDR {
+            c.env(v, "set");
+        }
+        c.env("HERDR_PANE_ID", "w1:p2")
+            .env("HERDR_SOCKET_PATH", &socket);
+        if let Some(agent) = agent {
+            c.env("SLUICE_AGENT", agent);
+        }
+        let out = c.output().unwrap();
+        assert!(out.status.success(), "{}", text(&out));
+        let answer = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .find_map(|l| l.strip_prefix(NAMED).map(str::to_string))
+            .unwrap_or_else(|| panic!("no answer: {}", text(&out)));
+        serde_json::from_str(&answer).unwrap()
+    };
+
+    let from = named(None);
+    assert_eq!(
+        from,
+        Submitter {
+            agent: "bolt/x".into(),
+            worktree: "bolt/x".into(),
+            path: None,
+            head: Some("bolt/x".into()),
+            host: Some("box-1".into()),
+            session: None,
+        }
+    );
+    assert!(from.by_name());
+    let from = named(Some("flume-base-1"));
+    assert_eq!(from.agent, "flume-base-1");
+    assert_eq!(
+        (from.worktree.as_str(), from.head.as_deref()),
+        ("bolt/x", Some("bolt/x"))
+    );
+    assert_eq!((from.path, from.session), (None, None));
+    assert!(
+        !calls.exists(),
+        "git ran: {}",
+        std::fs::read_to_string(&calls).unwrap()
+    );
 }
 
 /// 51: a submit in a herdr pane records the pane on its server, and the

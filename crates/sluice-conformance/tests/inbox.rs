@@ -5,7 +5,7 @@ use anyhow::{bail, Result};
 use sluice_conformance::{policy, Harness, Rig, BRANCH};
 use sluice_core::records::{Event, State};
 use sluice_core::{Sluice, SubmitRequest};
-use sluice_seams::{Delivery, Driver, Notification, Session};
+use sluice_seams::{Delivery, Driver, Notification, Session, Submitter};
 
 /// The session in place `worktree` collects its pending outcomes and has
 /// each marked delivered to it, as `sluice inbox` does: to the session its
@@ -95,6 +95,10 @@ struct FailsOnce<'a> {
 impl Driver for FailsOnce<'_> {
     fn session(&self, worktree: &str) -> Result<Session> {
         self.inner.session(worktree)
+    }
+
+    fn named(&self, branch: &str) -> Result<Submitter> {
+        self.inner.named(branch)
     }
 
     fn notify(&self, n: &Notification) -> Result<Delivery> {
@@ -218,6 +222,10 @@ struct NoSession<'a> {
 impl Driver for NoSession<'_> {
     fn session(&self, worktree: &str) -> Result<Session> {
         self.inner.session(worktree)
+    }
+
+    fn named(&self, branch: &str) -> Result<Submitter> {
+        self.inner.named(branch)
     }
 
     fn notify(&self, n: &Notification) -> Result<Delivery> {

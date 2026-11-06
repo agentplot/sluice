@@ -75,6 +75,15 @@ pub fn dirty(status: &[u8]) -> Vec<String> {
     out
 }
 
+/// Who submitted: the session's own name when its harness sets one
+/// (`SLUICE_AGENT`), else `branch` (3).
+fn agent_or(branch: &str) -> String {
+    std::env::var("SLUICE_AGENT")
+        .ok()
+        .filter(|a| !a.is_empty())
+        .unwrap_or_else(|| branch.to_string())
+}
+
 impl Driver for Worktrunk {
     fn session(&self, worktree: &str) -> Result<Session> {
         let dir = Path::new(worktree);
@@ -113,12 +122,7 @@ impl Driver for Worktrunk {
             let path = (top.status.success() && !path.is_empty()).then_some(path);
             (path, dirty(&status.stdout))
         };
-        // Who submitted: the session's own name when its harness sets one
-        // (`SLUICE_AGENT`), else its branch.
-        let agent = std::env::var("SLUICE_AGENT")
-            .ok()
-            .filter(|a| !a.is_empty())
-            .unwrap_or_else(|| branch.clone());
+        let agent = agent_or(&branch);
         Ok(Session {
             head: Rev::new(head),
             from: Submitter {
@@ -133,6 +137,22 @@ impl Driver for Worktrunk {
             dirty,
             detached: branch.is_empty(),
             bare,
+        })
+    }
+
+    /// 124: a branch submitted by name, from anywhere in the repository:
+    /// the agent the session's harness names, else the branch; the branch
+    /// as its work and its head; this host. No path, no pane, and nothing
+    /// read of the folder the command runs in, so no `git status` (rule
+    /// core.48): its outcome is pushed into no session (record 0090).
+    fn named(&self, branch: &str) -> Result<Submitter> {
+        Ok(Submitter {
+            agent: agent_or(branch),
+            worktree: branch.into(),
+            path: None,
+            head: Some(branch.into()),
+            host: Some(self.host.clone()),
+            session: None,
         })
     }
 
