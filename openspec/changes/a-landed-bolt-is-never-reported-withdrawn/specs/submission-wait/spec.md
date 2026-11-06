@@ -72,10 +72,18 @@ to its outcome and report it (67).
 ### Requirement: A wait follows the pull request that carries a withdrawn submission's work
 
 For a pull request's submission withdrawn while the pull request is
-open and no draft on a head that holds its head, a waiting `sluice
-submit` and `sluice wait` SHALL follow the pull request as `sluice wait
-<branch>` does, to its submission on this host or to what GitHub shows
-of it while another host takes it in (137).
+open and no draft on a new head that holds its head, or on its own head
+after this host handed it over (137), a waiting `sluice submit` and
+`sluice wait` SHALL follow the pull request as `sluice wait <branch>`
+does. A withdrawal that leaves it on its own head otherwise SHALL be
+reported withdrawn (120).
+
+#### Scenario: Withdrawn by the operator, still open
+
+- **WHEN** the operator withdraws the submission `<a>` of a pull request
+  a person opened, which stays open and ready on its head, and `sluice
+  wait <a>` runs
+- **THEN** it exits 4 at once
 
 #### Scenario: A pull request's new head
 

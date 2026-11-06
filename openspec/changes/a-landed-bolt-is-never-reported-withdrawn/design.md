@@ -143,12 +143,19 @@ submission withdrawn, look for where its work went, in order:
    resubmission does (67): the wait says `#<a> withdrawn by <who>: #<b>
    carries its work, so this wait follows it`, and follows `#<b>` to its
    outcome, reporting `#<b>`'s record.
-3. **Its request carries it**, for a pull request's submission: the
-   request is open and no draft on a head that holds its head, waiting
-   to be taken in again after its submit's new head, or taken in on
-   another host (137), or its latest submission holds the head. The wait
-   says so and follows the request as `sluice wait <branch>` does, to
-   its submission here or to what the forge shows of it there.
+3. **Its request carries it**, for a pull request's submission: its
+   latest submission holds the head; or the request is open and no
+   draft on a new head that holds it, waiting to be taken in again after
+   its submit's new head; or it is open on its own head after this host
+   handed it over, or another host takes it in (137). The wait says so
+   and follows the request as `sluice wait <branch>` does, to its
+   submission here or to what the forge shows of it there. A request
+   left open on its own head by its submitter's, its planner's or the
+   operator's withdrawal is rested (120), and the wait reports it
+   withdrawn.
+
+A branch or a request the wait cannot read leaves the outcome as the
+records hold it, and the wait says what it could not read.
 
 Otherwise, a withdrawal by its submitter, its planner or the operator
 with no work going on, it is reported withdrawn and exits 4.
