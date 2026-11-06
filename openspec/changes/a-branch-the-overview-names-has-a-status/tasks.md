@@ -11,7 +11,7 @@ citing clauses by number and rules by id.
 
 ## 1. The decision recorded
 
-- [x] 1.1 Amend clause 105 on `agentplot/blueprints` branch `design/sluice-a-removed-branch-answers-its-status`, cut from main at c94c496, unpushed. True when the branch holds the commit.
+- [x] 1.1 Amend clause 105 on `agentplot/blueprints`. True when main holds it: e8225aa, on the user's yes of 2026-11-06.
 - [x] 1.2 Write record 0091, the decisions D1 to D4 with the options weighed, and the details of rule core.11 citing 105 and the record; write the site's rules page with `node site/scripts/rules.mjs`. True when `sluice exec main -- moon run root:adrs root:changes site:rules` passes.
 
 ## 2. A status answers a branch whose records exist

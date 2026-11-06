@@ -90,5 +90,5 @@ None.
   while false, and `sluice status --json` gains `gone`.
 - Statement: 105 amended to say a removed branch's records are read as
   any branch's and the branch named gone, on `agentplot/blueprints`
-  branch `design/sluice-a-removed-branch-answers-its-status`, unpushed.
-  Record 0091; the details of rule core.11.
+  main at e8225aa, on the user's yes of 2026-11-06. Record 0091; the
+  details of rule core.11.

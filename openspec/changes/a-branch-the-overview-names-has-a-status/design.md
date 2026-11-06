@@ -19,8 +19,8 @@ state readable (26) and the records read given a branch (61), and has a
 status of a branch read the live records and the index (131). It does
 not say how a status names a branch that is gone, nor whether the
 overview shows one with the others. Clause 105 is amended on
-`agentplot/blueprints` branch
-`design/sluice-a-removed-branch-answers-its-status`: a removed branch's
+`agentplot/blueprints` main at e8225aa, on the user's yes of
+2026-11-06: a removed branch's
 records are read as any branch's, a status of it answers from them and
 says the branch is gone, a view of the repository's branches reads it
 and names it gone, and only a branch with neither records nor a
