@@ -27,7 +27,7 @@ task passing.
 
 - [x] 2.1 In `crates/sluice-seams/src/lib.rs`, add `CoveringVerdict` as design D3 gives it, its doc comment citing 23, 70, 140 and core.17, and give `Decided::Landed` `covered_by: Option<CoveringVerdict>` (D4); update every match on `Decided::Landed`. True when `cargo clippy --workspace --all-targets -- -D warnings` is clean.
 - [x] 2.2 In `crates/sluice-core/src/records.rs`, give `BranchDoc` `covered_by`, `LandingIntent` `covering`, `Submission` `covered_by` and `DecidedRecord::Landed` `covered_by`, each `Option<CoveringVerdict>` with `serde(default, skip_serializing_if = "Option::is_none")`, their doc comments citing 70, 140 and record 0083; `DecidedRecord::to_decided` carries it. Add `a_branch_and_an_outcome_from_before_covered_by_still_read`: a `branch.json` with `verified: true` and no `covered_by`, an intent with no `covering`, a submission and an outbox item with none, each read and written back unchanged. True when `sluice exec main -- cargo test -p sluice-core records` passes.
-- [ ] 2.3 Check the group: commit, then run `sluice exec main -- moon run core:test`. True when it passes.
+- [x] 2.3 Check the group: commit, then run `sluice exec main -- moon run core:test`. True when it passes.
 
 ## 3. The landing commit names its verdict and the one that covers it
 
