@@ -177,9 +177,10 @@ quiet branch's refusal ends. Rule core.15's details rule out a read of
 the policy, for a status, a view or intake, at the revision the state
 last saw rather than the branch's revision as the host holds it, citing
 flywheel-next's `main` from 2026-10-28 to 2026-11-06 and the signal.
-These are the design agent's, inside the rules, and cheap to change.
-Record 0046 was accepted by the user, so its amendment is proposed
-until they see it.
+These are this change's construct stage's own, inside the rules, and
+cheap to change. Record 0046's amendment keeps what the user decided
+there, a status read that fetches nothing, and changes only the
+revision the policy is read at.
 
 ## Risks / Trade-offs
 
