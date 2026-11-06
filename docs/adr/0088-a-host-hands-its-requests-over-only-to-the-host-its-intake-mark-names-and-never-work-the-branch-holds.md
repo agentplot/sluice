@@ -60,7 +60,7 @@ Status: accepted on 2026-11-06 by madswan-design, the design agent: clause 137 a
 
 Deciders: madswan-design.
 
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 120 and 137 as amended at 73ed779; the signals `afterthought/crew-state:madswan/main signals/2026-10-30-madswan-ops-8e042647/01-sluice-intake-handover-withdraws-a-tested-submission` and `signals/2026-11-06-madswan-operator-0da8ddac/01-sluice-intake-handover-strands-submitted-requests`; GitHub's timelines of agentplot/sluice pull 171 and of WilldanGroup/switchboard-kit's pull requests 268 and 269; `crates/sluice/src/profiles/github/pulls.rs` at 6e16063f (`is_held`, `left_unlanded`); records 0052, 0071 and 0085.
+Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 120 and 137 as amended on agentplot/blueprints main at 84c7a01; the signals `afterthought/crew-state:madswan/main signals/2026-10-30-madswan-ops-8e042647/01-sluice-intake-handover-withdraws-a-tested-submission` and `signals/2026-11-06-madswan-operator-0da8ddac/01-sluice-intake-handover-strands-submitted-requests`; GitHub's timelines of agentplot/sluice pull 171 and of WilldanGroup/switchboard-kit's pull requests 268 and 269; `crates/sluice/src/profiles/github/pulls.rs` at 6e16063f (`is_held`, `left_unlanded`); records 0052, 0071 and 0085.
 
 ### Context
 
@@ -83,3 +83,11 @@ Option 1. Rule core.33 holds it. A hand-over's withdrawal is told by what its re
 - A request withdrawn for a hand-over is taken in again wherever the mark stands, with no person's act and no draft.
 - The hold for a submitter's act still follows a failure, a conflict, a culprit's removal, the operator's withdrawal and the request's own draft or closing (120, S56).
 - crew's draft of a withdrawn landing's request stays crew's; with record 0085 a wait follows a handed-over request and gives crew no withdrawal to draft for.
+
+### Construction, 2026-11-06
+
+By the code stage of `fix/a-hand-overs-withdrawal-holds-no-request`, under the amendment above and the change `a-hand-overs-withdrawal-holds-no-request`. Cheap to change.
+
+- **The field.** A hand-over's withdrawal names the host the intake mark named, as `handed_over_to`, in its record (`"withdrawn": {"by", "at", "handed_over_to"}`) and its log line, both optional and absent from every other withdrawal. Every reader of a withdrawal tells a hand-over by it: intake's latest submission of a request, the hold for a submitter's act, who withdrew a hand-opened request, the submit's ready mark, the wait that follows the request (record 0085), and `sluice status`, which shows `handed over to <host>`. The options weighed were a marker naming no host, which gives a reader nothing to follow; a new state, which `sluice/submission@1`'s nine stable states rule out; and the log line alone, which the record's readers never read.
+- **A record from before.** sluice 0.60.0 to 0.70.2 wrote a hand-over's withdrawal naming no host. It used words those versions gave every hand-over and no other withdrawal, `<host> takes <branch>'s pull requests in` (`another host takes ...` before 0.70.1), and they read such a record by those words. This one reads it the same way, only where the record names no host, so it holds no request (120), and a wait on it follows its request (core.48). Any other record naming no host reads as before, held and let go by a ready mark. Reading every record naming no host as any other withdrawal was weighed. It would hold and draft the requests the hosts on 0.68.1 and 0.70.x handed over, switchboard-kit's 241 to 243, 268 and 269 among them, once the mark came back to the host that withdrew them.
+- **pull 171.** deneb's records of agentplot/sluice `main` show #345 withdrawn at 16:18:13Z by `mac-studio takes main's pull requests in`, and taken in again as #347 at 16:23:16Z on those words. The merge queue's App drafted pull 171 at 16:30:08Z and 16:41:49Z after #347 and #348 were blamed on `cli:tools`, at 16:29:53Z and 16:41:45Z. That is the hold after a blame (120, S56), which stands.
