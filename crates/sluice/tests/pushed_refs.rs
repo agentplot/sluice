@@ -220,6 +220,48 @@ fn a_read_sees_what_another_clone_pushed() {
     assert_eq!(p.read("none").unwrap(), None);
 }
 
+/// Rules core.28, core.29: one fetch at a time in a repository. A fetch
+/// waits while another process holds the repository's fetch lock, and
+/// reads the branch once it is let go.
+#[test]
+fn a_fetch_waits_for_another_fetch_of_its_repository() {
+    let repo = Repo::new("fetch-lock");
+    let bare = repo.bare_origin();
+    let other = Repo::clone_of(bare.path(), "fetch-lock-other");
+    let pushed = other.push_change("b", "2\n");
+    let lock = std::fs::File::create(repo.dir().join(".git/sluice-fetch.lock")).unwrap();
+    lock.lock().unwrap();
+    let dir = repo.dir().to_path_buf();
+    let reader = std::thread::spawn(move || {
+        let p = PushedRefs::open_as(&dir, "origin", None, recorded()).unwrap();
+        p.read("main").map_err(|e| format!("{e:#}"))
+    });
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(!reader.is_finished(), "the fetch ran beside another");
+    drop(lock);
+    assert_eq!(reader.join().unwrap(), Ok(Some(rev(pushed))));
+}
+
+/// Rules core.28, core.29: a fetch that loses a race for a ref of this
+/// repository's, as one beside a fetch that holds no lock does, is no
+/// refused read: the branch reads as that fetch left it, and the next
+/// fetch brings it.
+#[test]
+fn a_race_lost_on_a_fetched_ref_is_no_refused_read() {
+    let repo = Repo::new("fetch-race");
+    let bare = repo.bare_origin();
+    let p = open(&repo);
+    let before = p.read("main").unwrap().unwrap();
+    let other = Repo::clone_of(bare.path(), "fetch-race-other");
+    let pushed = other.push_change("b", "2\n");
+    let held = repo.dir().join(".git/refs/remotes/origin/main.lock");
+    std::fs::write(&held, format!("{before}\n")).unwrap();
+    let read = p.read("main");
+    std::fs::remove_file(&held).unwrap();
+    assert_eq!(read.map_err(|e| format!("{e:#}")), Ok(Some(before)));
+    assert_eq!(p.read("main").unwrap(), Some(rev(pushed)));
+}
+
 /// 45, 46, 124: a push the lease allows lands on the remote, and leaves
 /// the host's copy where it was, for a round to level.
 #[test]

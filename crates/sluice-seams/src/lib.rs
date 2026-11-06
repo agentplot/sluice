@@ -1113,6 +1113,14 @@ pub trait Branch {
     /// branch moved again since (24).
     fn contains(&self, tip: &Rev, rev: &Rev) -> Result<bool>;
 
+    /// 122: the commit that landed `rev` on a branch at `tip`: the oldest
+    /// of `tip`'s first-parent line that holds it, `rev` itself where it is
+    /// on that line; `None` when `tip` does not hold it. A profile that
+    /// cannot walk the line answers `tip`, which holds it all the same.
+    fn landed_by(&self, tip: &Rev, rev: &Rev) -> Result<Option<Rev>> {
+        Ok(self.contains(tip, rev)?.then(|| tip.clone()))
+    }
+
     /// 45, 46: move the branch from exactly `expected` to `to`, all or
     /// nothing.
     fn move_to(&self, branch: &str, expected: &Rev, to: &Rev) -> Result<Moved>;
@@ -1171,6 +1179,10 @@ pub struct Session {
     /// The place is on no branch, so it names no session's work (3): a
     /// submission from it is refused.
     pub detached: bool,
+    /// The place is a repository with no work tree, a bare one or a git
+    /// directory: it holds no uncommitted work, and no session works in
+    /// it, so no outcome is delivered there (2, 51).
+    pub bare: bool,
 }
 
 /// One entry contested in a conflict, with what it submitted (65).

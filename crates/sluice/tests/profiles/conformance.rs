@@ -257,6 +257,10 @@ impl Branch for RecordedRefs {
         self.inner.contains(tip, rev)
     }
 
+    fn landed_by(&self, tip: &Rev, rev: &Rev) -> Result<Option<Rev>> {
+        self.inner.landed_by(tip, rev)
+    }
+
     fn move_to(&self, branch: &str, expected: &Rev, to: &Rev) -> Result<Moved> {
         let moved = self.inner.move_to(branch, expected, to)?;
         if moved == Moved::Moved {
@@ -830,6 +834,7 @@ scenarios! {
     every_submission_is_tested_on_top_of_every_one_ahead: bolt();
     state_and_status_read_the_records_with_no_step_running: bolt();
     a_resubmission_withdraws_the_earlier_submission_which_stays_readable: bolt();
+    work_another_landing_took_is_landed_as_the_commit_that_landed_it: bolt();
     a_submission_waits_for_its_after_and_holds_no_one: bolt();
     a_submission_names_its_after_priority_and_submitter_and_does_nothing_more: bolt();
     a_place_holding_more_than_its_commits_is_refused_and_named: bolt();

@@ -24,6 +24,48 @@ fn a_resubmission_withdraws_the_earlier_submission_which_stays_readable() {
     shared::a_resubmission_withdraws_the_earlier_submission_which_stays_readable(&Harness::bolt());
 }
 
+/// satisfies: 122, 5, 6
+#[test]
+fn work_another_landing_took_is_landed_as_the_commit_that_landed_it() {
+    shared::work_another_landing_took_is_landed_as_the_commit_that_landed_it(&Harness::bolt());
+}
+
+/// satisfies: 122, 5, 6, 10: a combination under test whose work another
+/// queue's landing took is dropped and its checkout released; its
+/// submission is landed as that landing, and the one behind it is formed
+/// again on the branch as moved.
+#[test]
+fn a_combination_whose_work_another_landing_took_is_dropped() {
+    let h = Harness::bolt();
+    h.w().hold_runs(true);
+    let head = h.work("unit/a", "agent-a", &[("a/one", Some("1"))]);
+    h.work("unit/b", "agent-b", &[("a/two", Some("2"))]);
+    let one = h.submit("unit/a");
+    let two = h.submit("unit/b");
+    h.step();
+    assert_eq!(h.tested(), vec![vec![one], vec![one, two]]);
+    let landing = match h.sluice().seams().branch.form(&h.tip(), &head).unwrap() {
+        sluice_seams::Formed::Revision(rev) => rev,
+        other => panic!("{other:?}"),
+    };
+    h.branch_at(BRANCH, &landing);
+    h.step();
+    let sub = h.sub(one);
+    assert_eq!(sub.state, State::Landed);
+    assert_eq!(sub.landed_as, Some(landing.clone()));
+    let doc = h.doc();
+    assert!(doc
+        .candidates
+        .iter()
+        .all(|c| c.on == landing && c.submissions == vec![two]));
+    assert_eq!(h.sub(two).state, State::Testing);
+    h.w().hold_runs(false);
+    h.w().complete_all();
+    h.settle();
+    assert_eq!(h.sub(two).state, State::Landed);
+    assert!(!h.sub(two).landed_elsewhere);
+}
+
 /// satisfies: 6
 #[test]
 fn priority_never_displaces_a_combination_under_test() {

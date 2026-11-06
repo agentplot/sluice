@@ -664,6 +664,162 @@ fn closed_while_queued() {
     assert_eq!(g.of(n)[0]["state"], "withdrawn", "{:?}", g.subs());
 }
 
+/// Another queue of `main` lands `head`: a merge commit onto main on
+/// GitHub, as a second copy of the repository on the host lands it, which
+/// GitHub reads as the pull request merged. Returns the landing.
+fn landed_elsewhere(g: &OnGitHub, head: &str) -> String {
+    let git = |args: &[&str]| -> String {
+        let out = crate::support::git_command()
+            .arg("--git-dir")
+            .arg(g.bare.path())
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "another queue")
+            .env("GIT_AUTHOR_EMAIL", "queue@example.com")
+            .env("GIT_COMMITTER_NAME", "another queue")
+            .env("GIT_COMMITTER_EMAIL", "queue@example.com")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    let main = g.main_on_github();
+    let tree = git(&["merge-tree", "--write-tree", &main, head]);
+    let landing = git(&[
+        "commit-tree",
+        &tree,
+        "-p",
+        &main,
+        "-p",
+        head,
+        "-m",
+        "chore(land): elsewhere",
+    ]);
+    git(&["update-ref", "refs/heads/main", &landing, &main]);
+    landing
+}
+
+/// 122, 5; pull-request-intake, "Landed by another queue": a submitted pull
+/// request another queue of `main` lands, under test here, leaves GitHub's
+/// open list as merged; its submission here is landed as that landing,
+/// never withdrawn, its run ended, and a wait on it exits 0.
+#[test]
+fn landed_by_another_queue_while_queued() {
+    let g = OnGitHub::new("pr-landed-elsewhere", "");
+    let (n, head) = g.by_hand("unit/elsewhere", &[("slow", Some("x\n"))], false);
+    g.step();
+    let id = g.of(n)[0]["id"].as_u64().unwrap();
+    assert_eq!(g.of(n)[0]["state"], "testing", "{:?}", g.of(n));
+    let landing = landed_elsewhere(&g, &head);
+    g.discovery_passes();
+    g.step();
+    let a = g.of(n);
+    assert_eq!(a.len(), 1, "{a:?}");
+    assert_eq!(a[0]["state"], "landed", "{a:?}");
+    assert_eq!(a[0]["landed_as"], landing.as_str());
+    assert_eq!(a[0]["landed_elsewhere"], true);
+    let log = g.log();
+    assert!(!log.iter().any(|l| l["event"] == "withdrawn"), "{log:?}");
+    assert!(
+        log.iter()
+            .any(|l| l["event"] == "found_landed" && l["to"] == landing.as_str()),
+        "{log:?}"
+    );
+    assert_eq!(g.main_on_github(), landing, "nothing more is landed of it");
+    let out = g.sluice(&["wait", &id.to_string(), "--json"]);
+    assert_eq!(out.status.code(), Some(sluice::LANDED), "{}", text(&out));
+    let doc: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(doc["state"], "landed");
+    assert_eq!(doc["landed_as"], landing.as_str());
+}
+
+/// 122: a submission withdrawn whose work the branch then took, as a copy
+/// whose intake withdrew a request another queue landed left its records,
+/// is reported landed as the commit that landed it, by `sluice wait <id>`
+/// and by `sluice wait main` from its session, never as withdrawn.
+#[test]
+fn a_withdrawn_submission_whose_work_landed_is_reported_landed() {
+    let g = OnGitHub::new("pr-withdrawn-landed", "");
+    let w = g.session("withdrawn-landed", &[("slow", "x\n")]);
+    let out = g.wt_submit(&w, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let pull = g.pull_from("unit/withdrawn-landed");
+    let id = g.of(pull.number)[0]["id"].as_u64().unwrap();
+    let out = g.sluice(&["withdraw", &id.to_string()]);
+    assert!(out.status.success(), "{}", text(&out));
+    let landing = landed_elsewhere(&g, &pull.head);
+    let out = g.sluice(&["wait", &id.to_string(), "--json"]);
+    assert_eq!(out.status.code(), Some(sluice::LANDED), "{}", text(&out));
+    let doc: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(doc["state"], "landed", "{doc}");
+    assert_eq!(doc["landed_as"], landing.as_str());
+    assert_eq!(
+        g.of(pull.number)[0]["state"],
+        "withdrawn",
+        "its record stands"
+    );
+    let out = g
+        .command(env!("CARGO_BIN_EXE_sluice"), &w)
+        .args(["wait", "main"])
+        .output()
+        .unwrap();
+    let said = text(&out);
+    assert_eq!(out.status.code(), Some(sluice::LANDED), "{said}");
+    assert!(
+        said.contains(&format!("landed as {}", &landing[..7])),
+        "{said}"
+    );
+    assert!(!said.contains("closed without landing"), "{said}");
+}
+
+/// 5, 120: the operator's withdrawal of a hand-opened pull request's
+/// submission rests it on its head, open and ready: no work of it goes
+/// on, so a wait on it exits 4 at once.
+#[test]
+fn a_wait_on_a_request_the_operator_withdrew_exits_withdrawn() {
+    let g = OnGitHub::new("pr-operator-withdrew", "");
+    let (n, _) = g.by_hand("unit/rested", &[("slow", Some("x\n"))], false);
+    g.step();
+    let id = g.of(n)[0]["id"].as_u64().unwrap();
+    let out = g.sluice(&["withdraw", &id.to_string()]);
+    assert!(out.status.success(), "{}", text(&out));
+    let out = g.sluice(&["wait", &id.to_string(), "--timeout", "20s", "--json"]);
+    assert_eq!(out.status.code(), Some(sluice::WITHDRAWN), "{}", text(&out));
+    let doc: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(doc["state"], "withdrawn", "{doc}");
+    assert_eq!(doc["id"], id, "{doc}");
+}
+
+/// 67, 122: a wait on a pull request's submission its own submit withdrew
+/// for a new head follows the request to the submission of that head,
+/// and reports it landed.
+#[test]
+fn a_wait_follows_the_new_head_its_submit_withdrew_it_for() {
+    let g = OnGitHub::new("pr-follow-new-head", "");
+    let w = g.session("follow", &[("slow", "x\n")]);
+    let out = g.wt_submit(&w, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let n = g.pull_from("unit/follow").number;
+    let first = g.of(n)[0]["id"].as_u64().unwrap();
+    let new = g.commit_in(&w, &[("more.txt", "more\n")]);
+    let out = g.wt_submit(&w, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let out = g
+        .command(env!("CARGO_BIN_EXE_sluice"), &w)
+        .args(["wait", &first.to_string(), "--timeout", "60s", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(sluice::LANDED), "{}", text(&out));
+    let doc: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(doc["state"], "landed", "{doc}");
+    assert_eq!(doc["head"], new.as_str(), "{doc}");
+    assert_ne!(doc["id"], first, "{doc}");
+    assert_eq!(g.of(n)[0]["state"], "withdrawn");
+}
+
 /// A blamed pull request whose author marks it a draft and then ready
 /// again, with no new commits, is submitted again on the same head.
 #[test]
@@ -4691,7 +4847,9 @@ fn handed_over() {
 /// request-intake-host, "Handed over mid-test by a wait": host A, with no
 /// driver, is testing `pull/<n>` when B takes main's mark; a wait on A
 /// withdraws it, ends its run and releases its checkout, and runs no round
-/// for `main`, which would read main moved since A last read it.
+/// for `main`, which would read main moved since A last read it. The
+/// request carries the submission's work on B, so the wait follows the
+/// request and is never told it was withdrawn (122, 137).
 #[test]
 fn handed_over_by_a_wait() {
     let g = OnGitHub::new("intake-handed-wait", "");
@@ -4703,7 +4861,9 @@ fn handed_over_by_a_wait() {
         .git(&["push", "-q", "origin", &format!("{moved}:refs/heads/main")]);
     let posts = g.posts();
     let out = g.sluice(&["wait", &id.to_string(), "--timeout", "2s", "--json"]);
-    assert_eq!(out.status.code(), Some(sluice::WITHDRAWN), "{}", text(&out));
+    assert_eq!(out.status.code(), Some(sluice::WAITING), "{}", text(&out));
+    let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(doc["pull_request"], n, "{doc}");
     let a = g.of(n);
     assert_eq!(a[0]["withdrawn"]["by"], "b takes main's pull requests in");
     assert_eq!(g.posts(), posts, "A posts nothing");

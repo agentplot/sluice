@@ -888,7 +888,10 @@ impl Pulls {
         let mut names = names(&status.submissions);
 
         // A submitted pull request closed, back in draft or on another
-        // head leaves the queue.
+        // head leaves the queue. One that left the open list because the
+        // branch as fetched holds its head, as another queue's landing
+        // leaves it and GitHub reads as merged, has landed (122, 5): it is
+        // never withdrawn, and the round finds it landed.
         let mut withdrew = false;
         for sub in &status.submissions {
             let Some(n) = number(&sub.from.worktree) else {
@@ -898,7 +901,7 @@ impl Pulls {
                 continue;
             }
             let gone = match pulls.iter().find(|p| p.number == n) {
-                None => true,
+                None => !s.seams().branch.contains(&t.tip, &sub.head)?,
                 Some(p) => p.draft || p.head != sub.head.0,
             };
             if gone {
@@ -2605,6 +2608,10 @@ impl Branch for ReadOnce<'_> {
         self.branch.contains(tip, rev)
     }
 
+    fn landed_by(&self, tip: &Rev, rev: &Rev) -> Result<Option<Rev>> {
+        self.branch.landed_by(tip, rev)
+    }
+
     fn move_to(&self, branch: &str, expected: &Rev, to: &Rev) -> Result<Moved> {
         self.branch.move_to(branch, expected, to)
     }
@@ -2627,6 +2634,14 @@ fn once<'a>(seams: Seams<'a>, memo: &'a ReadOnce<'a>) -> Seams<'a> {
 }
 
 impl crate::PullRequests for Pulls {
+    fn request_of(&self, place: &str) -> Option<u64> {
+        number(place)
+    }
+
+    fn handed_over(&self, sub: &Submission) -> bool {
+        handed_over(sub, &sub.branch)
+    }
+
     fn branches(&self, seams: Seams<'_>) -> Result<Vec<String>> {
         let local = self.local()?;
         let Some((default, _)) = crate::profiles::default_branch(local)? else {
@@ -2851,6 +2866,19 @@ impl crate::PullRequests for Pulls {
             }
         }
         if !pull.as_ref().is_some_and(|p| p.open) {
+            // 122: closed as the branch took its head, whichever landing
+            // took it: landed, as the commit that landed it.
+            if let Some(e) = latest.filter(|e| e.state != State::Landed) {
+                if let Some(to) = s.seams().branch.landed_by(&t.tip, &e.head)? {
+                    let landed = Submission {
+                        state: State::Landed,
+                        landed_as: Some(to),
+                        landed_elsewhere: true,
+                        ..e
+                    };
+                    return Ok(Followed::Done(landed, names(&status.submissions)));
+                }
+            }
             return Ok(Followed::Closed);
         }
         // Taken in on the head it has now, and undecided: the submission
@@ -3207,6 +3235,7 @@ impl Pulls {
             },
             dirty: Vec::new(),
             detached: false,
+            bare: false,
         })
     }
 

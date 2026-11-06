@@ -132,6 +132,15 @@ pub fn landed_beside(landed_as: &Rev) -> String {
     )
 }
 
+/// 122: a waiting submit's last line for a submission whose work
+/// `branch` holds by a landing not its own, as `landed_as`.
+pub fn landed_elsewhere(branch: &str, landed_as: &Rev) -> String {
+    format!(
+        "landed as {}: {branch} holds its work, by a landing not its own",
+        landed_as.short()
+    )
+}
+
 /// 140: what a submission that takes the queue though no check reads its
 /// changes at the branch's revision waits for: entry `behind`, whose
 /// checks would read it or whose work it conflicts with.
