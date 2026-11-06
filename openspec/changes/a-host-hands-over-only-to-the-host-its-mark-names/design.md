@@ -134,8 +134,8 @@ never letting go, so a host that stopped waiting holds the branch a
 lease longer; the intake lock held over the let-go, which keeps a drop
 out of another wait's pass but not out of the time between its passes.
 This reads 137's "a wait that holds it lets it go when it ends" as the
-host's last wait; record 0089 is proposed with the amendment that says
-so.
+host's last wait; record 0089 is accepted with the amendment that says
+so, on agentplot/blueprints main at 421c77e.
 
 ### D3. The hand-over passes by work the branch holds
 
@@ -167,6 +167,5 @@ lands, and the holder's submission of that head is then found landed
   wait, or lapses after the lease where none is left.
 - **The holds are written by every wait on a branch whose records each
   host keeps** → one file a wait, made once, under the host's state.
-- **D2 rests on a reading of 137** → the amendment is proposed for the
-  user's yes; were it refused, D2 goes back to each wait letting go what
-  it holds, and D1 still keeps a host's queue through the drop.
+- **D2 rests on a reading of 137** → 137 says it, as amended on
+  agentplot/blueprints main at 421c77e.

@@ -1,7 +1,7 @@
 ---
 number: 89
 title: A host's waits hold its intake mark together, and the last of them to end lets it go
-status: proposed
+status: accepted
 date: 2026-11-06
 decision-makers:
 - the code stage of fix/a-hosts-intake-never-withdraws-anothers-submission
@@ -10,10 +10,10 @@ decision-makers:
 
 # A host's waits hold its intake mark together, and the last of them to end lets it go
 
-Status: proposed. It reads 137's "a wait that holds it lets it go when it ends" for a host with several waits at once, and is built here on that reading. The amendment that says it in 137 is on agentplot/blueprints's branch `design/sluice-a-hosts-waits-hold-its-intake-mark-together`, unpushed, for the user's yes; it is accepted with it.
+Status: accepted with the amendment of 137 that says it, which the user approved on 2026-11-06 and which is on agentplot/blueprints main at 421c77e. It reads 137's "a wait that holds it lets it go when it ends" for a host with several waits at once, and is built here on that reading.
 
 Deciders: the code stage of `fix/a-hosts-intake-never-withdraws-anothers-submission`; the user, on the amendment.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 73, 135 and 137, at c94c496; rule core.33; record 0088; chuck-herdr-alpha's records of WilldanGroup/switchboard-kit's `main` for 2026-11-06 and its processes, crew's `sluice wait <id> --timeout 9m --json` run again while it times out, one per landing; `crates/sluice/src/profiles/github/pulls.rs` (`held`, `let_go_marks`) as main held it at b2263f63; `crates/sluice/src/host_count.rs`, whose runs are counted by files locked while they live.
+Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 73, 135 and 137, at c94c496, and 137 as main words it at 421c77e; rule core.33; record 0088; chuck-herdr-alpha's records of WilldanGroup/switchboard-kit's `main` for 2026-11-06 and its processes, crew's `sluice wait <id> --timeout 9m --json` run again while it times out, one per landing; `crates/sluice/src/profiles/github/pulls.rs` (`held`, `let_go_marks`) as main held it at b2263f63; `crates/sluice/src/host_count.rs`, whose runs are counted by files locked while they live.
 
 ## Context and problem statement
 
@@ -28,7 +28,7 @@ Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 73, 135 an
 
 ## Decision outcome
 
-Option 1, on 137's reading that the host holds the mark and a branch keeps none between waits, so none while one of its host's waits still runs. The amendment proposed on agentplot/blueprints says so in 137: "and a host's waits hold it together: the last of them to end lets it go".
+Option 1, on 137's reading that the host holds the mark and a branch keeps none between waits, so none while one of its host's waits still runs. The amendment of 137, on agentplot/blueprints main at 421c77e, says so: "a host's waits hold it together, the last of them to end letting it go".
 
 ### Consequences
 
