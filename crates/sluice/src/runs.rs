@@ -212,6 +212,19 @@ impl Runs {
         remove_dir(&self.root.join(flat_name(place)))
     }
 
+    /// Whether a supervisor holds any run of the session's place `place`.
+    /// [`Runs::start`] returns once its supervisor holds the run, so a run
+    /// started before, under the branch's lock, reads as going.
+    pub fn any_going(&self, place: &str) -> Result<bool> {
+        assert!(is_session(place), "{place} is no session's place");
+        for (_, dir) in numbered(&self.root.join(flat_name(place)))? {
+            if self.supervised(&dir)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     /// End every run of the session's place `place` and wait for their
     /// supervisors to let go; the runs, numbered.
     fn end_all(&self, place: &str) -> Result<Vec<(u64, PathBuf)>> {

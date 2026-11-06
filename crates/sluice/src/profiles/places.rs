@@ -78,10 +78,13 @@
 //! user's or open to others is refused and left as it is. A place's record
 //! names its scratch before it is made, and every run, release and gone
 //! release reads it from there, making it again where the system emptied
-//! it (rule core.30). A place made before keeps its scratch where its
-//! record names, under the repository's `<common>/sluice/.tmp/`, or, on a
-//! record an older sluice wrote, which names none, at `.tmp/` and the
-//! place's name as one directory name, until the place is released.
+//! it (rule core.30). A candidate's or a preview's place made before keeps
+//! its scratch where its record names, under the repository's
+//! `<common>/sluice/.tmp/`, or, on a record an older sluice wrote, which
+//! names none, at `.tmp/` and the place's name as one directory name,
+//! until the place is released. A session's place so made takes the short
+//! path at its first run with none of its runs going, its former scratch
+//! moved there (record 0063 as amended 2026-11-05).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
@@ -178,7 +181,8 @@ struct Made {
     /// where its checkout or the repository is (35 as amended, rule
     /// core.30); under the repository's `sluice/.tmp/` for a place made
     /// before; none on a record an older sluice wrote, whose scratch is
-    /// where that sluice put it.
+    /// where that sluice put it. A session's place's former scratch is
+    /// replaced at its next run with none going ([`Places::adopt`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     scratch: Option<PathBuf>,
 }
@@ -212,7 +216,7 @@ impl Made {
 /// is the same length for every place of the repository. Never a former
 /// scratch's name: every place's name holds a `/`, which a `dir_name`
 /// writes `+2F`, or is shortened with `+~`.
-fn scratch_name(name: &str) -> String {
+pub fn scratch_name(name: &str) -> String {
     let mut hasher = gix::hash::hasher(gix::hash::Kind::Sha1);
     hasher.update(name.as_bytes());
     hasher
@@ -942,6 +946,14 @@ impl Places {
     /// or refused; a scratch elsewhere, under the repository's
     /// `sluice/.tmp/` for a place made before, is made as it was.
     fn make_scratch(&self, path: &Path) -> Result<()> {
+        self.make_parents(path)?;
+        std::fs::create_dir_all(path).with_context(|| format!("creating {}", path.display()))
+    }
+
+    /// The directories above the scratch `path`: under the user's
+    /// directory, that directory and each under it, made the user's own,
+    /// or refused; none for a scratch elsewhere.
+    fn make_parents(&self, path: &Path) -> Result<()> {
         let user = self.user_dir()?;
         if let Some(parent) = path.parent().filter(|p| p.starts_with(&user)) {
             let mut dir = user.clone();
@@ -954,7 +966,49 @@ impl Places {
                 make_own(&dir)?;
             }
         }
-        std::fs::create_dir_all(path).with_context(|| format!("creating {}", path.display()))
+        Ok(())
+    }
+
+    /// 35 as amended, rule core.30 (record 0063 as amended 2026-11-05):
+    /// the former scratch of the session's place `name`, whose record
+    /// `made` names one outside the user's directory or none, when none of
+    /// its runs is going; none otherwise. A run going was given the former
+    /// scratch, which its sandbox alone writes, and keeps it to its end.
+    fn former_scratch(&self, name: &str, made: &Made) -> Result<Option<PathBuf>> {
+        let tmp = self.scratch(name, made);
+        if tmp.starts_with(self.user_dir()?) || self.runs.any_going(name)? {
+            return Ok(None);
+        }
+        Ok(Some(tmp))
+    }
+
+    /// 35 as amended, rule core.30 (record 0063 as amended 2026-11-05):
+    /// give a session's place the scratch `to` its record now names, in
+    /// place of its former scratch `from`: `from` renamed to `to`, what
+    /// its checks keep between runs going with it, or, where `from` is
+    /// gone, `to` made. Where the system cannot rename it, from one file
+    /// system to another or onto a directory that is not empty, `to` is
+    /// made and `from` removed, since a check keeps nothing in its scratch
+    /// it cannot make again; one that cannot be removed is warned of and
+    /// left to [`Places::remove_unnamed`], since no record names it.
+    fn move_scratch(&self, from: &Path, to: &Path) -> Result<()> {
+        self.make_parents(to)?;
+        match std::fs::rename(from, to) {
+            Ok(()) => return Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                tracing::warn!(
+                    "moving the scratch {} to {}: {e}; it is removed and {} made",
+                    from.display(),
+                    to.display(),
+                    to.display()
+                );
+                if let Err(e) = std::fs::remove_dir_all(from) {
+                    tracing::warn!("removing {}, which no checkout names: {e}", from.display());
+                }
+            }
+        }
+        std::fs::create_dir_all(to).with_context(|| format!("creating {}", to.display()))
     }
 
     /// 35 as amended, 123, rule core.30: every directory in the
@@ -1654,8 +1708,11 @@ impl Checkout for Places {
     fn adopt(&self, worktree: &str, branch: &str, checkout: &Settings, at: &str) -> Result<Place> {
         let (path, name) = Places::session_name(worktree)?;
         let record = self.record(&name);
-        let mut made = match self.read_record(&name)? {
-            Some(made) if made.kind == Kind::Session => made,
+        let (mut made, former) = match self.read_record(&name)? {
+            Some(made) if made.kind == Kind::Session => {
+                let former = self.former_scratch(&name, &made)?;
+                (made, former)
+            }
             Some(_) => bail!("place {name} is a candidate's, not a session's"),
             None => {
                 let mut made = Made {
@@ -1678,16 +1735,24 @@ impl Checkout for Places {
                     }
                     self.write_record(&name, &made)?;
                 }
-                made
+                (made, None)
             }
         };
+        // 35 as amended, rule core.30: a place made before takes the short
+        // path, its record naming it before its former scratch is moved.
+        if former.is_some() {
+            made.scratch = Some(self.new_scratch(&name)?);
+        }
         made.last_run = Some(at.into());
         // 97: a run under way, or one whose starter was killed, has no
         // result; the one before is not this run's.
         made.last_result = None;
         self.write_record(&name, &made)?;
         let tmp = self.scratch(&name, &made);
-        self.make_scratch(&tmp)?;
+        match &former {
+            Some(from) => self.move_scratch(from, &tmp)?,
+            None => self.make_scratch(&tmp)?,
+        }
         let mut env = made.ports.clone();
         env.insert(
             "SLUICE_PLACE".to_string(),
