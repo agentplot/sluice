@@ -3499,7 +3499,9 @@ fn no_work_tree(worktree: &str) -> String {
 /// 51: `sub`, decided, locked and ready to mark delivered with the name to
 /// mark, when it is `worktree`'s own and pending; None otherwise, and
 /// when what it needs could not be read, which is said and leaves it
-/// pending for the next carrier.
+/// pending for the next carrier. A submission by name is pending nowhere,
+/// so nothing is said of it staying pending (124; design D5; record 0085;
+/// rule core.50).
 fn delivering<'s, 'a>(
     s: &'s Sluice<'a>,
     worktree: &str,
@@ -3508,7 +3510,7 @@ fn delivering<'s, 'a>(
     let found = recipient(s, worktree).and_then(|r| match r {
         Recipient::To(me, to) => Ok(Some((s.pending_one(&sub.branch, sub.id, &me)?, to))),
         Recipient::Bare => {
-            if sub.delivered.is_none() {
+            if sub.delivered.is_none() && !sub.from.by_name() {
                 telemetry::warn(&format!(
                     "sluice: #{} stays pending for its session's sluice inbox: {}",
                     sub.id,

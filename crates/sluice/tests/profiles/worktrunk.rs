@@ -1586,6 +1586,92 @@ fn a_wait_with_no_work_tree_says_plainly_what_it_cannot_deliver() {
     assert_eq!(e["id"], n);
 }
 
+/// What [`submit_a_branch_by_name`] prints its submission's number after.
+const SUBMITTED: &str = "submitted: ";
+
+/// The child of [`a_wait_by_name_in_a_bare_clone_says_nothing_pending`]:
+/// the branch `SLUICE_TEST_SUBMIT_NAMED` names submitted by name to
+/// `bolt/x` through the core over the profiles bound in the folder its
+/// parent gave it, as the submit by name does. Run any other way, it does
+/// nothing.
+#[test]
+fn submit_a_branch_by_name() {
+    let Ok(branch) = std::env::var("SLUICE_TEST_SUBMIT_NAMED") else {
+        return;
+    };
+    let dir = std::env::current_dir().unwrap();
+    let retry = std::rc::Rc::new(sluice::retry::Policy::command());
+    let bound = sluice::profiles::Bound::open(&dir, retry).unwrap();
+    let accepted = sluice_core::Sluice::new(bound.seams(), &sluice_core::SystemClock)
+        .submit(&sluice_core::SubmitRequest {
+            head: sluice_core::SubmitHead::Branch(branch),
+            branch: "bolt/x".into(),
+            after: Vec::new(),
+            priority: 0,
+            subject: None,
+        })
+        .unwrap()
+        .unwrap();
+    println!("{SUBMITTED}{}", accepted.id);
+}
+
+/// 124, 51, 2: a branch sluice lands on submitted by name, from the
+/// repository's git directory, is pending in no inbox: a wait on it there
+/// reports it landed and exits 0, saying nothing of it staying pending,
+/// and marks nothing; no inbox, there or in a worktree on the branch,
+/// collects it (design D5; record 0085; rule core.50).
+#[test]
+fn a_wait_by_name_in_a_bare_clone_says_nothing_pending() {
+    let s = Scratch::new("wt-named-bare");
+    let head = s.repo.branch("bolt/w", "bolt/x", &[("w.txt", Some("w\n"))]);
+    let git_dir = s.repo.dir().join(".git");
+    let mut c = s.command_under(Command::new(std::env::current_exe().unwrap()), &git_dir);
+    c.args(["--exact", "submit_a_branch_by_name", "--nocapture"])
+        .env("SLUICE_TEST_SUBMIT_NAMED", "bolt/w");
+    let out = c.output().unwrap();
+    assert!(out.status.success(), "{}", text(&out));
+    let n: u64 = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .find_map(|l| l.strip_prefix(SUBMITTED).map(str::to_string))
+        .unwrap_or_else(|| panic!("no submission: {}", text(&out)))
+        .parse()
+        .unwrap();
+    let record = s.status(n);
+    assert_eq!(record["head"], head.as_str(), "{record}");
+    assert_eq!(record["from"]["head"], "bolt/w", "{record}");
+    assert_eq!(record["from"]["worktree"], "bolt/w", "{record}");
+    s.land(n);
+
+    let out = s
+        .command(env!("CARGO_BIN_EXE_sluice"), &git_dir)
+        .args(["wait", &n.to_string()])
+        .output()
+        .unwrap();
+    let said = text(&out);
+    assert_eq!(out.status.code(), Some(0), "{said}");
+    assert!(said.contains("landed as"), "{said}");
+    assert!(!said.contains("pending"), "{said}");
+    assert!(!said.contains("no files checked out"), "{said}");
+    assert_eq!(s.status(n)["delivered"], serde_json::Value::Null);
+    assert!(s.logged("delivered").is_empty());
+    assert!(s.logged("pending").is_empty());
+
+    let out = inbox(&s, &git_dir, &["--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v, serde_json::json!({ "outcomes": [] }));
+    // A worktree that has checked out the branch collects nothing of it.
+    let w = s.repo.dir().with_extension("s-w");
+    let _ = std::fs::remove_dir_all(&w);
+    s.repo
+        .git(&["worktree", "add", "-q", w.to_str().unwrap(), "bolt/w"]);
+    let out = inbox(&s, &w, &["--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v, serde_json::json!({ "outcomes": [] }));
+    assert_eq!(s.status(n)["delivered"], serde_json::Value::Null);
+}
+
 /// 3, 135: a worktree on no branch has submitted nothing, and collects
 /// nothing.
 #[test]
