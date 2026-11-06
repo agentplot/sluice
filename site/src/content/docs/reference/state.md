@@ -298,6 +298,18 @@ All three are left out when there is nothing to say, so
 `sluice/branch@1` is unchanged, and an older sluice reading them passes
 over them.
 
+`covered_by` names the result that covers the revision the combinations
+are formed on, which each landing beside the queue names in its commit:
+`{"at": "b7d2e94f031c5a8e6d2f40b9a7c3e1d58f6a2b47", "result": "passed",
+"ran": 2, "replayed": 31}`. `at` is the revision of the branch that
+result landed as, in full, and the rest are its own words. A landing
+through the queue sets it to its own result, and a landing beside keeps
+it, so landings beside in a row all name the same result. It is left
+out when something other than sluice moved the branch, or a landing
+changed the gate. A record an older sluice wrote has none;
+the branch then lands nothing beside the queue until its next landing
+through the queue names a result.
+
 `refused_writes` holds the writes sluice's protection refused on the
 branch, one for each host, ref and command, each host writing its own:
 `[{"host": "build-1", "ref": "refs/heads/main", "command": "git -C
@@ -383,7 +395,9 @@ holding it under the key `told`, which an older sluice on another host
 still reads.
 
 A submission that landed beside the queue, because no required check
-reads its changes, has `"beside": true`. Its notice reads `[sluice] #15
+reads its changes, has `"beside": true`, and `covered_by`, the result
+that covered the revision it landed on, in the form `branch.json` gives
+it. Its notice reads `[sluice] #15
 landed on feature/concurrent-units as 4e1a07c beside the queue: no
 required check reads its changes.` A submission can wait all the same,
 though no check reads its changes on the branch as it is. Then it has
@@ -567,6 +581,27 @@ Author: sluice <sluice@localhost>
     Sluice-Tested: 9ab3d07c11
     Sluice-Result: passed (2 run, 31 replayed)
 ```
+
+A landing beside the queue names no combination, since none was run.
+Its `Sluice-Result` says so, then names the result it stands on:
+
+```console
+$ git log -1 --format=%B feature/concurrent-units
+chore(land): #15 guide
+
+Sluice-Submission: 15
+Sluice-From: agent-4 (guide)
+Sluice-Result: passed (0 run, 0 replayed) beside the queue: no required check reads its changes; covered by the result at b7d2e94f031c5a8e6d2f40b9a7c3e1d58f6a2b47, passed (2 run, 31 replayed)
+```
+
+The first word of `Sluice-Result` is the landing's own result. It is
+`passed` on every landing, since a branch moves only on a result that
+passed, and the counts after it are what that landing ran and replayed.
+A landing beside ran nothing, because no required check reads its
+changes. The rest of the trailer names the result that covers the
+revision it landed on: the revision of the branch that result landed
+as, in full, and that landing's own words. A tool that reads a
+branch's head as passed reads the first word.
 
 The landing commit carries exactly the tree that was tested
 ([ADR 0006](/sluice/decisions/0006/)), so when the submissions ahead of a

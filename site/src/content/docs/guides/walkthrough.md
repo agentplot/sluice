@@ -241,6 +241,19 @@ submission 15 to feature/concurrent-units · 2 queued ahead (#12, #13)
 landed as 4e1a07c beside the queue: no required check reads its changes
 ```
 
+Its landing commit says it passed with nothing run. It names the result
+that covers the revision it landed on, by the revision that result
+landed as and its own words.
+
+```console
+$ git log -1 --format=%B 4e1a07c
+chore(land): #15 guide
+
+Sluice-Submission: 15
+Sluice-From: agent-4 (guide)
+Sluice-Result: passed (0 run, 0 replayed) beside the queue: no required check reads its changes; covered by the result at c41e8f2d7a09b3e5f1c6284d0a9e7b3c5f18d2a6, passed (3 run, 28 replayed)
+```
+
 And before submitting, an agent can ask whether its work would conflict:
 
 ```console
