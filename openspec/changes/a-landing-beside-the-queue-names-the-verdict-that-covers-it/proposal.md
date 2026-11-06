@@ -59,11 +59,9 @@ one way.
   pull requests guide, and the plugin's submit reference show the new
   trailer; `branch.json` and a submission's document gain `covered_by`.
 - **The statement and the record.** Clauses 23, 140 and S68 are amended
-  on blueprints' branch
-  `design/a-landing-beside-the-queue-names-the-verdict-that-covers-it`
-  at 1b21406, to be pushed to agentplot/blueprints main on the user's
-  word before the code lands (core.12). Record 0083 is written as
-  proposed, and rule core.39 with its details names the landing
+  on agentplot/blueprints main at eb0d3eb, pushed on the user's word of
+  2026-11-06 before the code lands (core.12). Record 0083 is accepted
+  on that word, and rule core.39 with its details names the landing
   commit's verdict.
 
 ## Capabilities

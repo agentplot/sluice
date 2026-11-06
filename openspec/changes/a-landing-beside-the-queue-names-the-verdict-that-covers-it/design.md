@@ -319,10 +319,11 @@ or tool of ours (rule core.26):
 
 Nothing to migrate: `covered_by` and `covering` are optional, set at the
 next landing. A landing beside already in a history keeps its words
-(23). The statement's amendment is pushed to agentplot/blueprints main
-on the user's word before the code lands (core.12).
+(23). The statement's amendment is on agentplot/blueprints main at
+eb0d3eb, pushed on the user's word of 2026-11-06 before the code lands
+(core.12).
 
 ## Open Questions
 
-None for the build. Whether the trailer's words stand is the user's
-read of record 0083, which the code waits for.
+None. The user accepted record 0083, and with it the trailer's words,
+on 2026-11-06.
