@@ -18,11 +18,11 @@ Where the records and the mark are:
   deneb runs no sluice on switchboard-kit, so its clone holds no
   `sluice/` and no records of it.
 - The mark is `refs/sluice/intake/main` on GitHub. A wait pushes it
-  and lets it go when it ends, so between waits there is none: deneb's
-  `git ls-remote origin` read in such a gap. At 18:15:04Z
+  and lets it go when it ends, so between a host's waits none stands,
+  and an `ls-remote` made then lists no `refs/sluice/*`. At 18:15:04Z
   chuck-herdr-alpha's wait pushed it again, `54dad0a8`,
   `{"host":"chuck-herdr-alpha","holder":"wait","sluice":"0.68.1"}`,
-  which deneb's `ls-remote` lists.
+  which `git ls-remote origin 'refs/sluice/*'` on deneb lists after.
 
 What chuck-herdr-alpha's log says:
 

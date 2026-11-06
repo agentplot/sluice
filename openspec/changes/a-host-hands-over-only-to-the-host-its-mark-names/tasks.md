@@ -34,4 +34,4 @@ rules by id.
 
 ## 6. The gate
 
-- [ ] 6.1 The whole gate on the committed branch. True when `sluice exec main` passes.
+- [x] 6.1 The whole gate on the committed branch. True when `sluice exec main` passes.
