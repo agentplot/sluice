@@ -3071,6 +3071,7 @@ mod tests {
             decided: Decided::Landed {
                 landed_as: head.clone(),
                 beside: false,
+                covered_by: None,
             },
             report: None,
         };

@@ -152,6 +152,7 @@ pub fn notice(id: u64, branch: &str, decided: &Decided) -> String {
         Decided::Landed {
             landed_as,
             beside: false,
+            ..
         } => {
             format!(
                 "[sluice] #{id} landed on {branch} as {}.",
@@ -161,6 +162,7 @@ pub fn notice(id: u64, branch: &str, decided: &Decided) -> String {
         Decided::Landed {
             landed_as,
             beside: true,
+            ..
         } => {
             format!(
                 "[sluice] #{id} landed on {branch} as {} beside the queue: {NO_CHECK_READS}.",
@@ -339,6 +341,7 @@ mod tests {
         let landed = Decided::Landed {
             landed_as: Rev::new("abc1234def"),
             beside: false,
+            covered_by: None,
         };
         assert_eq!(
             notice(12, "main", &landed),
@@ -348,6 +351,7 @@ mod tests {
         let beside = Decided::Landed {
             landed_as: Rev::new("abc1234def"),
             beside: true,
+            covered_by: None,
         };
         assert_eq!(
             notice(12, "main", &beside),

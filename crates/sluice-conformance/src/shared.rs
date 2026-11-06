@@ -51,6 +51,7 @@ pub fn s1_two_heads_pass_and_land_in_order(h: &impl Rig) {
         Decided::Landed {
             landed_as: k1.clone(),
             beside: false,
+            covered_by: None,
         }
     );
     assert_eq!(h.delivered_to("agent-b")[0].submission, two);

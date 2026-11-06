@@ -338,6 +338,7 @@ impl Submission {
             State::Landed => Some(Decided::Landed {
                 landed_as: self.landed_as.clone()?,
                 beside: self.beside == Some(Beside::Landed),
+                covered_by: None,
             }),
             State::Failed => {
                 let tested = self.tested.as_ref()?;
@@ -691,7 +692,11 @@ pub enum DecidedRecord {
 impl DecidedRecord {
     pub fn to_decided(&self) -> Decided {
         match self.clone() {
-            DecidedRecord::Landed { landed_as, beside } => Decided::Landed { landed_as, beside },
+            DecidedRecord::Landed { landed_as, beside } => Decided::Landed {
+                landed_as,
+                beside,
+                covered_by: None,
+            },
             DecidedRecord::Failed {
                 failed,
                 combination,
@@ -1360,7 +1365,8 @@ mod tests {
             s.decided(),
             Some(Decided::Landed {
                 landed_as: Rev::new("abc"),
-                beside: true
+                beside: true,
+                covered_by: None,
             })
         );
     }
@@ -1933,6 +1939,7 @@ mod tests {
             Some(Decided::Landed {
                 landed_as: Rev::new("abc1234"),
                 beside: false,
+                covered_by: None,
             })
         );
         assert_eq!(landed.notification().as_deref(), Some("12:landed"));

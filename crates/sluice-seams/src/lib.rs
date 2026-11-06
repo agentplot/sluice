@@ -1180,6 +1180,21 @@ pub struct Contested {
     pub from: Submitter,
 }
 
+/// 23, 70, 140: the verdict that covers a branch's revision: the
+/// revision of the branch whose landing named it, and its words. A
+/// combination that lands is the same combination on the revision it
+/// lands as (core.17), so that revision is where the verdict stands on
+/// the branch.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CoveringVerdict {
+    /// The branch's revision that landed on it (core.17).
+    pub at: Rev,
+    /// Its result word, `passed` (22).
+    pub result: String,
+    pub ran: u64,
+    pub replayed: u64,
+}
+
 /// 20, 51: a submission's decided outcome, which a notification carries to
 /// its session.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1188,6 +1203,10 @@ pub enum Decided {
         landed_as: Rev,
         /// 140: landed beside the chain, with no check run.
         beside: bool,
+        /// 140: for a landing beside, the verdict that covers the
+        /// revision it landed on; `None` for a landing through the chain
+        /// and in outcomes recorded before it (record 0083).
+        covered_by: Option<CoveringVerdict>,
     },
     Failed {
         failed: Vec<String>,

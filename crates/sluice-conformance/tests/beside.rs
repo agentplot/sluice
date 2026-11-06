@@ -61,6 +61,7 @@ fn docs_land_beside_two_code_submissions_under_test_and_they_land_carrying_them(
         Decided::Landed {
             landed_as: docs.clone(),
             beside: true,
+            covered_by: None,
         }
     );
     assert!(h.events().iter().any(|e| matches!(
@@ -90,6 +91,7 @@ fn docs_land_beside_two_code_submissions_under_test_and_they_land_carrying_them(
         Decided::Landed {
             landed_as: la,
             beside: false,
+            covered_by: None,
         }
     );
 }

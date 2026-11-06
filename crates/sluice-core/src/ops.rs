@@ -2208,6 +2208,7 @@ mod tests {
             Decided::Landed {
                 landed_as: Rev::new("landed-5"),
                 beside: false,
+                covered_by: None,
             }
         );
         pending.mark("/w/unit-a").unwrap();

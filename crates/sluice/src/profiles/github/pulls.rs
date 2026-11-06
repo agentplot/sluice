@@ -2368,7 +2368,9 @@ impl Outcome {
 
     fn decided(decided: &Decided) -> Outcome {
         match decided.clone() {
-            Decided::Landed { landed_as, beside } => Outcome::Landed { landed_as, beside },
+            Decided::Landed {
+                landed_as, beside, ..
+            } => Outcome::Landed { landed_as, beside },
             Decided::Failed {
                 failed,
                 combination,
