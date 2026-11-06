@@ -137,8 +137,9 @@ the ref `refs/sluice/intake/main` on the remote:
   every third of `[peers] lease`, never each round. A second host's
   `sluice run` finds it and takes nothing in.
 - A `sluice wait` or waiting submit on a host where `sluice run` isn't
-  running pushes the mark where none stands, and removes it when it
-  ends. A `sluice run` takes the mark from a wait at once.
+  running pushes the mark where none stands. The host's waits hold it
+  together: the last of them to end removes it. A `sluice run` takes the
+  mark from a wait at once.
 - Any host takes the mark once it has stood unchanged for `[peers]
   lease` as that host has watched it, as when the host that held it
   stopped.
@@ -146,10 +147,12 @@ the ref `refs/sluice/intake/main` on the remote:
   waits and steps alone keeps none between them.
 
 A host that doesn't hold the mark asks GitHub nothing about `main`'s
-pull requests. It withdraws its own queued submissions of them, naming
-the host that holds the mark, and that host takes each in again. A
-submission that is landing finishes, and work submitted from the host's
-own worktrees stays in its queue. A wait on that host follows its pull
+pull requests. Once it finds another host's mark, it withdraws its own
+queued submissions of them, naming that host, and that host takes each
+in again. A host withdraws nothing where its push of the mark was
+refused and the mark names no other host. A submission that is landing
+finishes, one whose work `main` already holds is recorded landed, and
+work submitted from the host's own worktrees stays in its queue. A wait on that host follows its pull
 request on GitHub, as [`sluice wait`](/sluice/reference/commands/#sluice-wait)
 says.
 
