@@ -503,7 +503,7 @@ pub fn untimed(doc: &Value) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use super::*;
 
@@ -574,6 +574,51 @@ mod tests {
         super::leased(&files(r).lease).unwrap()
     }
 
+    /// Whether `done` holds within two seconds. A lock or a lease a reader
+    /// let go, or held for an instant, may still be held for a moment by a
+    /// process another thread of this binary starts meanwhile, until it
+    /// runs its program, as a run's supervisor is started (runs.rs): a
+    /// check that a reader takes what was let go, or finds it free, allows
+    /// that moment, as a watch tries again at its next tick; a check that
+    /// one is held, or that a reader follows, allows nothing (129).
+    fn soon(mut done: impl FnMut() -> bool) -> bool {
+        let until = Instant::now() + Duration::from_secs(2);
+        loop {
+            if done() {
+                return true;
+            }
+            if Instant::now() >= until {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// Whether `r`, stepped as `drives` says at each try, is as `done`
+    /// says within two seconds, as [`soon`] allows.
+    fn soon_stepped(
+        r: &mut Reader,
+        may_lease: bool,
+        drives: impl Fn() -> Drives,
+        done: impl Fn(&Reader) -> bool,
+    ) -> bool {
+        soon(|| {
+            r.step(may_lease, drives()).unwrap();
+            done(r)
+        })
+    }
+
+    /// The lead `follow` becomes once the lock is free, within two
+    /// seconds, as [`soon`] allows.
+    fn soon_led(follow: &Follow) -> Option<Lead> {
+        let mut lead = None;
+        soon(|| {
+            lead = follow.try_lead().unwrap();
+            lead.is_some()
+        });
+        lead
+    }
+
     /// 129: a probe of the lease that a process started meanwhile still
     /// holds, as one inherits it until it runs its program, is no lease:
     /// the lead keeps reading, and a follower beside the free lock leads.
@@ -589,8 +634,7 @@ mod tests {
         }
         drop(lead);
         let mut next = Reader::take(&s.0, REPO, OLD).unwrap();
-        next.step(true, Drives::Nobody).unwrap();
-        assert!(is_lead(&next));
+        assert!(soon_stepped(&mut next, true, || Drives::Nobody, is_lead));
         drop(probe);
     }
 
@@ -615,14 +659,13 @@ mod tests {
         let mut old = Reader::take(&s.0, REPO, OLD).unwrap();
         let mut new = Reader::take(&s.0, REPO, NEW).unwrap();
         assert!(is_lead(&old) && !is_lead(&new));
-        new.step(true, Drives::Nobody).unwrap();
-        assert!(holds_lease(&new));
+        assert!(soon_stepped(&mut new, true, || Drives::Nobody, holds_lease));
         assert!(is_lead(&old) && !is_lead(&new));
         old.step(true, Drives::Nobody).unwrap();
         assert!(!is_lead(&old) && !is_lead(&new));
-        new.step(true, Drives::Nobody).unwrap();
-        assert!(!is_lead(&old) && is_lead(&new));
-        assert!(!leased(&new));
+        assert!(soon_stepped(&mut new, true, || Drives::Nobody, is_lead));
+        assert!(!is_lead(&old));
+        assert!(soon(|| !leased(&new)));
         assert_eq!(files(&new).reader_version().as_deref(), Some(NEW));
         for _ in 0..3 {
             old.step(true, Drives::Nobody).unwrap();
@@ -634,15 +677,14 @@ mod tests {
     /// 129: a process forked while the lead held its lock holds it until it
     /// runs its program, after the lead let go: the follower holding the
     /// lease keeps it, and nobody leads, for as long as that process holds
-    /// the lock; once it lets go, the lease holder leads at its next step
-    /// and lets the lease go.
+    /// the lock; once it lets go, the lease holder leads at its step and
+    /// lets the lease go.
     #[test]
     fn a_lease_holder_leads_once_a_forked_process_lets_the_lock_go() {
         let s = Scratch::new("forked-lock");
         let mut old = Reader::take(&s.0, REPO, OLD).unwrap();
         let mut new = Reader::take(&s.0, REPO, NEW).unwrap();
-        new.step(true, Drives::Nobody).unwrap();
-        assert!(holds_lease(&new));
+        assert!(soon_stepped(&mut new, true, || Drives::Nobody, holds_lease));
         // A fork's copy of the lead's descriptor of its lock.
         let forked = match &old {
             Reader::Lead(l) => l.lock.try_clone().unwrap(),
@@ -656,8 +698,8 @@ mod tests {
             assert!(holds_lease(&new));
         }
         drop(forked);
-        new.step(true, Drives::Nobody).unwrap();
-        assert!(is_lead(&new) && !leased(&new));
+        assert!(soon_stepped(&mut new, true, || Drives::Nobody, is_lead));
+        assert!(soon(|| !leased(&new)));
         assert_eq!(files(&new).reader_version().as_deref(), Some(NEW));
     }
 
@@ -709,15 +751,14 @@ mod tests {
         let mut old = Reader::take(&s.0, REPO, OLD).unwrap();
         let mut other = Reader::take(&s.0, REPO, OLD).unwrap();
         let mut new = Reader::take(&s.0, REPO, NEW).unwrap();
-        new.step(true, Drives::Nobody).unwrap();
+        assert!(soon_stepped(&mut new, true, || Drives::Nobody, holds_lease));
         old.step(true, Drives::Nobody).unwrap();
         assert!(!is_lead(&old));
         other.step(true, Drives::Nobody).unwrap();
         assert!(!is_lead(&other));
         drop(new);
-        assert!(!leased(&other));
-        other.step(true, Drives::Nobody).unwrap();
-        assert!(is_lead(&other));
+        assert!(soon(|| !leased(&other)));
+        assert!(soon_stepped(&mut other, true, || Drives::Nobody, is_lead));
         assert_eq!(files(&other).reader_version().as_deref(), Some(OLD));
     }
 
@@ -730,7 +771,7 @@ mod tests {
         let s = Scratch::new("take-left");
         let mut old = Reader::take(&s.0, REPO, OLD).unwrap();
         let mut new = Reader::take(&s.0, REPO, NEW).unwrap();
-        new.step(true, Drives::Nobody).unwrap();
+        assert!(soon_stepped(&mut new, true, || Drives::Nobody, holds_lease));
         old.step(true, Drives::Nobody).unwrap();
         assert!(!is_lead(&old) && holds_lease(&new));
         for version in [OLD, NEW, "0.54.0"] {
@@ -738,8 +779,8 @@ mod tests {
             assert!(!is_lead(&started) && !holds_lease(&started), "{version}");
         }
         drop(new);
-        let next = Reader::take(&s.0, REPO, OLD).unwrap();
-        assert!(is_lead(&next));
+        let mut next = Reader::take(&s.0, REPO, OLD).unwrap();
+        assert!(soon_stepped(&mut next, false, || Drives::Nobody, is_lead));
         assert_eq!(files(&next).reader_version().as_deref(), Some(OLD));
     }
 
@@ -750,14 +791,13 @@ mod tests {
         let s = Scratch::new("back");
         let mut old = Reader::take(&s.0, REPO, OLD).unwrap();
         let mut new = Reader::take(&s.0, REPO, NEW).unwrap();
-        new.step(true, Drives::Nobody).unwrap();
+        assert!(soon_stepped(&mut new, true, || Drives::Nobody, holds_lease));
         old.step(true, Drives::Nobody).unwrap();
         for _ in 0..3 {
             old.step(true, Drives::Nobody).unwrap();
             assert!(!is_lead(&old) && !holds_lease(&old));
         }
-        new.step(true, Drives::Nobody).unwrap();
-        assert!(is_lead(&new));
+        assert!(soon_stepped(&mut new, true, || Drives::Nobody, is_lead));
         old.step(true, Drives::Nobody).unwrap();
         assert!(!is_lead(&old) && !holds_lease(&old));
     }
@@ -794,8 +834,7 @@ mod tests {
         let repository = format!("/{}", "x".repeat(243));
         let old = Reader::take(&s.0, &repository, OLD).unwrap();
         let mut new = Reader::take(&s.0, &repository, NEW).unwrap();
-        new.step(true, Drives::Nobody).unwrap();
-        assert!(holds_lease(&new));
+        assert!(soon_stepped(&mut new, true, || Drives::Nobody, holds_lease));
         let f = files(&old);
         assert_eq!(f.reader_version().as_deref(), Some(OLD));
         std::fs::write(&f.vtmp, b"{}").unwrap();
@@ -815,7 +854,7 @@ mod tests {
     }
 
     /// 129: once the reader is dropped, as its process ends, a follower's
-    /// next try takes the lock.
+    /// try takes the lock.
     #[test]
     fn the_lock_is_taken_again_once_its_holder_is_dropped() {
         let s = Scratch::new("again");
@@ -823,7 +862,7 @@ mod tests {
         let next = follow(Reader::take(&s.0, REPO, NEW).unwrap());
         assert!(next.try_lead().unwrap().is_none());
         drop(first);
-        let _lead = next.try_lead().unwrap().expect("the lock, its holder gone");
+        let _lead = soon_led(&next).expect("the lock, its holder gone");
         assert!(next.try_lead().unwrap().is_none());
     }
 
@@ -886,13 +925,14 @@ mod tests {
         let next = follow(Reader::take(&s.0, REPO, NEW).unwrap());
         assert_eq!(next.read(), Some(ended.clone()));
         drop(first);
-        let mut second = next.try_lead().unwrap().expect("the lock, its holder gone");
+        let mut second = soon_led(&next).expect("the lock, its holder gone");
         assert_eq!(next.read(), None);
         assert!(!next.files.doc.exists());
 
         second.write(&doc("2026-10-25T09:00:01Z", 1)).unwrap();
         drop(second);
-        let _third = lead(Reader::take(&s.0, REPO, NEW).unwrap());
+        let mut third = Reader::take(&s.0, REPO, NEW).unwrap();
+        assert!(soon_stepped(&mut third, false, || Drives::Nobody, is_lead));
         assert_eq!(next.read(), Some(doc("2026-10-25T09:00:01Z", 1)));
     }
 
@@ -953,9 +993,10 @@ mod tests {
             None
         );
         drop(lead);
-        assert_eq!(current(&s.0, REPO, now).unwrap(), None);
+        assert!(soon(|| current(&s.0, REPO, now).unwrap().is_none()));
         // The lock it took for an instant is free again.
-        lead_of(&s);
+        let mut next = Reader::take(&s.0, REPO, NEW).unwrap();
+        assert!(soon_stepped(&mut next, false, || Drives::Nobody, is_lead));
     }
 
     fn lead_of(s: &Scratch) -> Lead {
@@ -1069,7 +1110,7 @@ mod tests {
         assert!(driver_live(&s.0, REPO));
         assert!(!driver_live(&s.0, "/Users/someone/other/.git"));
         drop(driver);
-        assert!(!driver_live(&s.0, REPO));
+        assert!(soon(|| !driver_live(&s.0, REPO)));
     }
 
     /// 135: a second driver taken while one is held is another's: `None`,
@@ -1092,7 +1133,7 @@ mod tests {
         let s = Scratch::new("driver-probe");
         drop(Driver::take(&s.0, REPO).unwrap().expect("the driver"));
         let probe = File::open(driver_file(&s.0, REPO)).unwrap();
-        probe.try_lock_shared().unwrap();
+        assert!(soon(|| probe.try_lock_shared().is_ok()));
         let held = std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(200));
             drop(probe);
@@ -1122,7 +1163,13 @@ mod tests {
         let s = Scratch::new("take-beside");
         let _driver = Driver::take(&s.0, REPO).unwrap().expect("the driver");
         follow(Reader::take(&s.0, REPO, NEW).unwrap());
-        let _lead = lead(Reader::take_given(&s.0, REPO, NEW, Drives::Itself).unwrap());
+        let mut driving = Reader::take_given(&s.0, REPO, NEW, Drives::Itself).unwrap();
+        assert!(soon_stepped(
+            &mut driving,
+            false,
+            || Drives::Itself,
+            is_lead
+        ));
     }
 
     /// 135: a reader lets the lock go at its step once another process
@@ -1145,7 +1192,7 @@ mod tests {
         };
         assert_eq!(f.read(), Some(doc("2026-10-28T09:00:00Z", 1)));
         assert_eq!(other.read(), Some(doc("2026-10-28T09:00:00Z", 1)));
-        let _lead = other.try_lead().unwrap().expect("the lock, let go");
+        let _lead = soon_led(&other).expect("the lock, let go");
     }
 
     /// 135: a follower leaves a free lock while another process drives,
@@ -1162,11 +1209,15 @@ mod tests {
         let driver = Driver::take(&s.0, REPO).unwrap().expect("the driver");
         waiter.step(false, Drives::probe(&s.0, REPO)).unwrap();
         assert!(matches!(waiter, Reader::Follow(_)));
-        driving.step(false, Drives::Itself).unwrap();
-        assert!(matches!(driving, Reader::Lead(_)));
+        assert!(soon_stepped(
+            &mut driving,
+            false,
+            || Drives::Itself,
+            is_lead
+        ));
         drop((driving, driver));
-        waiter.step(false, Drives::probe(&s.0, REPO)).unwrap();
-        assert!(matches!(waiter, Reader::Lead(_)));
+        let probe = || Drives::probe(&s.0, REPO);
+        assert!(soon_stepped(&mut waiter, false, probe, is_lead));
     }
 
     /// 135 with 129: the driver ranks above a lease. A reader whose lease
@@ -1180,8 +1231,7 @@ mod tests {
         let mut old = Reader::take(&s.0, REPO, OLD).unwrap();
         let mut other = Reader::take(&s.0, REPO, OLD).unwrap();
         let mut new = Reader::take(&s.0, REPO, NEW).unwrap();
-        new.step(true, Drives::Nobody).unwrap();
-        assert!(holds_lease(&new));
+        assert!(soon_stepped(&mut new, true, || Drives::Nobody, holds_lease));
         let driver = Driver::take(&s.0, REPO).unwrap().expect("the driver");
         let mut driving = Reader::take_given(&s.0, REPO, OLD, Drives::Itself).unwrap();
         assert!(!is_lead(&driving));
@@ -1189,8 +1239,13 @@ mod tests {
         assert!(!is_lead(&old));
         new.step(true, Drives::probe(&s.0, REPO)).unwrap();
         assert!(!is_lead(&new) && holds_lease(&new));
-        driving.step(false, Drives::Itself).unwrap();
-        assert!(is_lead(&driving) && leased(&driving));
+        assert!(soon_stepped(
+            &mut driving,
+            false,
+            || Drives::Itself,
+            is_lead
+        ));
+        assert!(leased(&driving));
         for _ in 0..3 {
             for r in [&mut old, &mut other, &mut new] {
                 r.step(true, Drives::probe(&s.0, REPO)).unwrap();
@@ -1202,8 +1257,9 @@ mod tests {
         drop((driving, driver));
         other.step(true, Drives::probe(&s.0, REPO)).unwrap();
         assert!(!is_lead(&other));
-        new.step(true, Drives::probe(&s.0, REPO)).unwrap();
-        assert!(is_lead(&new) && !leased(&new));
+        let probe = || Drives::probe(&s.0, REPO);
+        assert!(soon_stepped(&mut new, true, probe, is_lead));
+        assert!(soon(|| !leased(&new)));
         assert_eq!(files(&new).reader_version().as_deref(), Some(NEW));
     }
 }
