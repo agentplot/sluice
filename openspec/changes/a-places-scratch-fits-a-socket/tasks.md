@@ -31,4 +31,4 @@ clauses by number and rules by id.
 
 ## 5. The gate
 
-- [ ] 5.1 Run the gate's checks on the committed work with `sluice exec main`, and `devenv shell -- moon run cli:sandbox` outside any sandbox. True when every task passes and `openspec validate a-places-scratch-fits-a-socket --strict` passes.
+- [x] 5.1 Run the gate's checks on the committed work with `sluice exec main`, and `devenv shell -- moon run cli:sandbox` outside any sandbox. True when every task passes and `openspec validate a-places-scratch-fits-a-socket --strict` passes.
