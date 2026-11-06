@@ -169,7 +169,21 @@ impl PushedRefs {
                     }
                 },
             };
-            let out = match self.git_as(speaker.as_ref(), given.as_ref(), &line) {
+            // One fetch at a time in this repository, held for the try
+            // alone, never over a pause between tries.
+            let fetching = match args.first() == Some(&"fetch") {
+                true => match self.fetching() {
+                    Ok(held) => Some(held),
+                    Err(e) => {
+                        fault = Some(e);
+                        return Err(Failed::new(Judged::Answered, ()));
+                    }
+                },
+                false => None,
+            };
+            let out = self.git_as(speaker.as_ref(), given.as_ref(), &line);
+            drop(fetching);
+            let out = match out {
                 Ok(out) if out.status.success() => return Ok(out),
                 Ok(out) => out,
                 Err(e) => {
@@ -217,6 +231,24 @@ impl PushedRefs {
         })
     }
 
+    /// The lock that makes one fetch at a time of this repository's, by any
+    /// process: two at once race to write the refs a fetch writes here,
+    /// sluice's under `refs/sluice-fetched/` and the remote-tracking refs,
+    /// and the one that loses would read its own lock's words as the
+    /// remote's refusal (rules core.28, core.29).
+    fn fetching(&self) -> Result<std::fs::File> {
+        let path = self.local.common_dir()?.join(FETCH_LOCK);
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)
+            .with_context(|| format!("opening {}", path.display()))?;
+        file.lock()
+            .with_context(|| format!("locking {}", path.display()))?;
+        Ok(file)
+    }
+
     /// Fetch `refspec`, whose source is `asked`, with `flags` before the
     /// remote. `Ok(false)` when the remote has no such ref; a fetch that
     /// fails otherwise is a [`ReadRefused`] (133).
@@ -255,6 +287,12 @@ impl PushedRefs {
         let said = String::from_utf8_lossy(&out.stderr);
         if said.contains(NO_SUCH_REF) {
             return Ok(false);
+        }
+        // A race lost to a fetch no lock held, a person's or an older
+        // sluice's, as each try was: the remote refused nothing, and the
+        // refs hold what that fetch brought.
+        if lost_race(&said) {
+            return Ok(true);
         }
         Err(ReadRefused {
             remote: self.remote.clone(),
@@ -592,7 +630,9 @@ impl Pushed {
 /// (`renewable` false), a refused push is answered.
 fn judged(out: &Output, kind: Kind, renewable: bool) -> Judged {
     let err = String::from_utf8_lossy(&out.stderr);
-    if answered(out) || ANSWERED.iter().any(|w| err.contains(w)) {
+    if kind == Kind::Read && lost_race(&err) {
+        Judged::Never
+    } else if answered(out) || ANSWERED.iter().any(|w| err.contains(w)) {
         Judged::Answered
     } else if refused(out) {
         match renewable || kind == Kind::Read {
@@ -610,6 +650,24 @@ fn judged(out: &Output, kind: Kind, renewable: bool) -> Judged {
 
 /// What git prints when the remote has no ref a fetch asks for.
 const NO_SUCH_REF: &str = "couldn't find remote ref";
+
+/// The file in the repository's git directory whose lock one fetch holds
+/// at a time ([`PushedRefs::fetching`]).
+const FETCH_LOCK: &str = "sluice-fetch.lock";
+
+/// Whether git says a fetch could not write a ref of this repository's,
+/// as when another fetch wrote it first: `cannot lock ref '<name>': is at
+/// <a> but expected <b>`, or its lock file standing. A local race, which
+/// the remote never judged: nothing of a remote's is a local ref's lock.
+fn lost_race(err: &str) -> bool {
+    err.lines().any(|l| {
+        let l = l
+            .trim_start_matches("error: ")
+            .trim_start_matches("fatal: ");
+        l.starts_with("cannot lock ref '")
+            || l.starts_with("Unable to create '") && l.contains(".lock': File exists")
+    })
+}
 
 /// What git prints for a call the remote answered with no line for a ref:
 /// a fetch's ref the remote lacks, and a removal of one it lacks, which
@@ -863,5 +921,32 @@ impl PushedRefs {
             None => Ok(Moved::Moved),
             Some(why) => bail!("pushing {branch} to {} failed: {why}", self.remote),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::lost_race;
+
+    /// Rules core.28, core.29: a fetch that lost a race for a ref of this
+    /// repository's is told from a remote's refusal by git's own words.
+    #[test]
+    fn a_lost_race_is_told_by_gits_words() {
+        // deneb, 2026-11-06, the runner's copy of swancloud.
+        assert!(lost_race(
+            "error: cannot lock ref 'refs/sluice-fetched/origin/intake/main': is at \
+             08a038f7b4c564805aea19d394784850e6a76580 but expected \
+             36bceb3675e9d6a79ec9ab94f67ec63111c22fcc"
+        ));
+        assert!(lost_race(
+            "error: cannot lock ref 'refs/remotes/origin/main': Unable to create \
+             '/r/.git/refs/remotes/origin/main.lock': File exists."
+        ));
+        assert!(!lost_race(
+            "remote: Repository not found.\nfatal: repository 'https://github.com/o/r/' not found"
+        ));
+        assert!(!lost_race(
+            "fatal: unable to access 'https://github.com/o/r/': Could not resolve host"
+        ));
     }
 }
