@@ -88,20 +88,31 @@ impl Driver for Worktrunk {
         let head = String::from_utf8_lossy(&head.stdout).trim().to_string();
         let branch = self.git(dir, &["symbolic-ref", "-q", "--short", "HEAD"])?;
         let branch = String::from_utf8_lossy(&branch.stdout).trim().to_string();
-        // Where it was submitted from, for a reader to find the session
-        // by its worktree.
-        let top = self.git(dir, &["rev-parse", "--show-toplevel"])?;
-        let path = String::from_utf8_lossy(&top.stdout).trim().to_string();
-        let status = self.git(
-            dir,
-            &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
-        )?;
-        if !status.status.success() {
-            bail!(
-                "git status in {worktree}: {}",
-                String::from_utf8_lossy(&status.stderr).trim()
-            );
-        }
+        // 2: a repository with no work tree, a bare one or a git directory,
+        // holds no uncommitted work, and git status refuses to run there;
+        // nor has it a top level to find a session by.
+        let inside = self.git(dir, &["rev-parse", "--is-inside-work-tree"])?;
+        let bare = String::from_utf8_lossy(&inside.stdout).trim() != "true";
+        let (path, dirty) = if bare {
+            (None, Vec::new())
+        } else {
+            // Where it was submitted from, for a reader to find the session
+            // by its worktree.
+            let top = self.git(dir, &["rev-parse", "--show-toplevel"])?;
+            let path = String::from_utf8_lossy(&top.stdout).trim().to_string();
+            let status = self.git(
+                dir,
+                &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+            )?;
+            if !status.status.success() {
+                bail!(
+                    "git status in {worktree}: {}",
+                    String::from_utf8_lossy(&status.stderr).trim()
+                );
+            }
+            let path = (top.status.success() && !path.is_empty()).then_some(path);
+            (path, dirty(&status.stdout))
+        };
         // Who submitted: the session's own name when its harness sets one
         // (`SLUICE_AGENT`), else its branch.
         let agent = std::env::var("SLUICE_AGENT")
@@ -113,14 +124,15 @@ impl Driver for Worktrunk {
             from: Submitter {
                 agent,
                 worktree: branch.clone(),
-                path: (top.status.success() && !path.is_empty()).then_some(path),
+                path,
                 head: None,
                 // 51: where the outcome is pushed once it is decided.
                 host: Some(self.host.clone()),
                 session: herdr::session_here(),
             },
-            dirty: dirty(&status.stdout),
+            dirty,
             detached: branch.is_empty(),
+            bare,
         })
     }
 

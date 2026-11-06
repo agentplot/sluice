@@ -795,6 +795,10 @@ impl Branch for PushedRefs {
         self.local.contains(tip, rev)
     }
 
+    fn landed_by(&self, tip: &Rev, rev: &Rev) -> Result<Option<Rev>> {
+        self.local.landed_by(tip, rev)
+    }
+
     /// 45, 46: push `to`, accepted only while the remote's branch is
     /// `expected`. A push the remote never judged, its credential refused
     /// among them, is tried again under the retry policy with the same

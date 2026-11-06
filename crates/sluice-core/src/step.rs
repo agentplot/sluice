@@ -1101,6 +1101,9 @@ impl Sluice<'_> {
             listed,
             &now,
         )?;
+        // 122: work the branch already holds, landed by a landing this
+        // queue did not make, is landed there; nothing is formed of it.
+        self.land_found(&mut line, &tip, &now)?;
         // 140: work no required check reads lands beside the chain, before
         // anything is formed; a round that lands so does nothing else, and
         // the next forms on the revision it made.
@@ -1154,6 +1157,54 @@ impl Sluice<'_> {
         } else {
             Decided::Contended
         })
+    }
+
+    /// 122: every submission in the queue, not landing and in no candidate
+    /// formed on `base`, whose work `base` already holds, as another
+    /// queue's landing or a hand's left it there, is landed as the commit
+    /// that landed it, logged as found so; its outcome is delivered as any
+    /// landing's (51), and nothing is formed, run or landed of it (6, 22).
+    /// Only the submissions a round is about to form are read, once each.
+    fn land_found(&self, line: &mut Line, base: &Rev, now: &str) -> Result<()> {
+        let unformed: Vec<(u64, Rev)> = line
+            .subs
+            .values()
+            .filter(|s| !s.state.is_out() && s.state != State::Landing)
+            .filter(|s| {
+                !line
+                    .doc
+                    .candidates
+                    .iter()
+                    .any(|c| c.on == *base && c.submissions.contains(&s.id))
+            })
+            .map(|s| (s.id, s.head.clone()))
+            .collect();
+        let mut found: BTreeMap<Rev, Vec<u64>> = BTreeMap::new();
+        for (id, head) in unformed {
+            if let Some(to) = self.seams.branch.landed_by(base, &head)? {
+                found.entry(to).or_default().push(id);
+            }
+        }
+        for (to, ids) in found {
+            for &id in &ids {
+                let s = line.sub_mut(id);
+                s.state = State::Landed;
+                s.landed_as = Some(to.clone());
+                s.landed_elsewhere = true;
+                s.held = None;
+                line.doc.outbox.push(OutboxItem {
+                    id: format!("{id}:landed"),
+                    submission: id,
+                    outcome: DecidedRecord::Landed {
+                        landed_as: to.clone(),
+                        beside: false,
+                        covered_by: None,
+                    },
+                });
+            }
+            line.log(now, Event::FoundLanded { ids, to });
+        }
+        Ok(())
     }
 
     /// Design D1, D2 (25, 32, 81; rules core.10, core.16, core.23): drop

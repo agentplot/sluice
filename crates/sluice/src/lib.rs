@@ -721,6 +721,11 @@ pub trait PullRequests {
         branch: &str,
         number: u64,
     ) -> Result<Followed>;
+
+    /// The pull request a submission's place names, where it names one.
+    fn request_of(&self, _place: &str) -> Option<u64> {
+        None
+    }
 }
 
 /// No branch takes pull requests.
@@ -2281,6 +2286,8 @@ fn submit_group(
                 after.extend(e);
                 subs.push(sub);
             }
+            // A group of worktrees follows no pull request.
+            Waited::Request(sub, _) => subs.push(sub),
             Waited::Undecided(sub, code, _) => {
                 stopped = Some(code);
                 subs.push(sub);
@@ -2520,6 +2527,31 @@ fn await_submission(
             let again = format!("sluice wait {}", sub.id);
             return could_not_read(&e, &format!("#{}", sub.id), &again, waiting.json, out);
         }
+        Waited::Request(sub, number) => {
+            let Some(pulls) = waiting.pulls else {
+                anyhow::bail!(
+                    "#{} names pull request #{number}, and its branch takes none",
+                    sub.id
+                );
+            };
+            let mode = PullMode::Follow {
+                number,
+                deadline: waiting.deadline,
+            };
+            let worktree = waiting.worktree.unwrap_or(".");
+            return submit_pull(
+                s,
+                waiting.host,
+                pulls,
+                waiting.clock,
+                worktree,
+                &sub.branch,
+                mode,
+                waiting.json,
+                waiting.pause,
+                out,
+            );
+        }
         Waited::Undecided(sub, code, waits) => (sub, code, waits),
     };
     if waiting.json {
@@ -2595,6 +2627,106 @@ enum Waited {
     /// As last read, when a round failed as the forge could not answer
     /// for the retry policy's time.
     Unread(Submission, anyhow::Error),
+    /// Withdrawn, while pull request `n`, on a head that carries its work,
+    /// is still to be taken in or is taken in on another host: the wait
+    /// follows the request (67, 137).
+    Request(Submission, u64),
+}
+
+/// What a wait does with a submission it read decided.
+enum Carried {
+    /// Its outcome, to report.
+    Outcome(Submission),
+    /// A later submission from its place that carries its work, to follow
+    /// in its stead (67).
+    Entry(Submission),
+    /// Its pull request, to follow (137).
+    Request(Submission, u64),
+}
+
+/// 122, 67, 137: a submission withdrawn whose work goes on is never
+/// reported withdrawn. Its branch holds its head: it landed, as the commit
+/// that landed it, whichever landing that was. A later submission from
+/// its place holds its head: the wait follows that one. Its pull request
+/// is open, no draft, on a head that holds its head: the wait follows the
+/// request, taken in again here or on another host, or the submission it
+/// was taken in as. Any other outcome, and a withdrawal no work goes on
+/// from, is reported as it stands.
+fn carried(
+    s: &Sluice<'_>,
+    waiting: &Waiting<'_>,
+    sub: Submission,
+    out: &mut dyn Write,
+) -> Result<Carried> {
+    if sub.state != State::Withdrawn {
+        return Ok(Carried::Outcome(sub));
+    }
+    let branch = s.seams().branch;
+    if let Some(tip) = branch.read(&sub.branch)? {
+        if let Some(to) = branch.landed_by(&tip, &sub.head)? {
+            let mut landed = sub;
+            landed.state = State::Landed;
+            landed.landed_as = Some(to);
+            landed.landed_elsewhere = true;
+            return Ok(Carried::Outcome(landed));
+        }
+    }
+    let holds = |head: &Rev| *head != sub.head && branch.contains(head, &sub.head).unwrap_or(false);
+    let by = sub
+        .withdrawn
+        .as_ref()
+        .map_or("its submitter", |w| w.by.as_str());
+    let follows = |what: String, out: &mut dyn Write| -> Result<()> {
+        if !waiting.json {
+            writeln!(
+                out,
+                "#{} withdrawn by {by}: {what} carries its work, so this wait follows it",
+                sub.id
+            )?;
+        }
+        Ok(())
+    };
+    let later = s
+        .status(&sub.branch)?
+        .submissions
+        .into_iter()
+        .rfind(|e| e.id > sub.id && e.from.worktree == sub.from.worktree && holds(&e.head));
+    if let Some(e) = later {
+        follows(format!("#{}", e.id), out)?;
+        return Ok(Carried::Entry(e));
+    }
+    let (Some(pulls), Some(n)) = (
+        waiting.pulls,
+        waiting.pulls.and_then(|p| p.request_of(&sub.from.worktree)),
+    ) else {
+        return Ok(Carried::Outcome(sub));
+    };
+    let goes_on = match pulls.follow(s.seams(), waiting.clock, &sub.branch, n)? {
+        Followed::Done(e, _) => (e.id != sub.id && holds(&e.head)).then_some(Some(e)),
+        Followed::Open {
+            submission: Some(e),
+            ..
+        } => (e.id != sub.id && holds(&e.head)).then_some(Some(e)),
+        Followed::Open {
+            submission: None,
+            draft: false,
+            head: Some(h),
+            ..
+        } => (h == sub.head.0 || holds(&Rev::new(h))).then_some(None),
+        Followed::Landed { .. } | Followed::SentBack { .. } => Some(None),
+        Followed::Open { .. } | Followed::Closed => None,
+    };
+    Ok(match goes_on {
+        Some(Some(e)) => {
+            follows(format!("#{}", e.id), out)?;
+            Carried::Entry(e)
+        }
+        Some(None) => {
+            follows(format!("its pull request #{n}"), out)?;
+            Carried::Request(sub, n)
+        }
+        None => Carried::Outcome(sub),
+    })
 }
 
 /// Whether `e` is a spent allowance of GitHub's calls the retry policy
@@ -2662,7 +2794,7 @@ fn wait_on(
     said_before: Option<State>,
     out: &mut dyn Write,
 ) -> Result<Waited> {
-    let (id, branch) = (sub.id, sub.branch.clone());
+    let branch = sub.branch.clone();
     type Moved = (State, Option<progress::Moved>);
     let mut said: Option<Moved> = said_before.map(|t| (t, None));
     // 121: the branch's hold as last said, so each is said once.
@@ -2670,15 +2802,28 @@ fn wait_on(
     let mut first = true;
     // Decided already: nothing read again, and no round run.
     if sub.state.is_out() {
-        return Ok(Waited::Decided(sub, None));
+        match carried(s, waiting, sub, out)? {
+            Carried::Outcome(sub) => return Ok(Waited::Decided(sub, None)),
+            Carried::Request(sub, n) => return Ok(Waited::Request(sub, n)),
+            Carried::Entry(e) => sub = e,
+        }
     }
     let mut reading = Reading::take(waiting.host)?;
     let _let_go = LetGo(waiting.pulls);
     reading.read(s, waiting, &mut sub)?;
     loop {
         if sub.state.is_out() {
-            return Ok(Waited::Decided(sub, None));
+            match carried(s, waiting, sub, out)? {
+                Carried::Outcome(sub) => return Ok(Waited::Decided(sub, None)),
+                Carried::Request(sub, n) => return Ok(Waited::Request(sub, n)),
+                Carried::Entry(e) => {
+                    sub = e;
+                    reading.read(s, waiting, &mut sub)?;
+                    continue;
+                }
+            }
         }
+        let id = sub.id;
         if !waiting.json {
             // How far it has got decides nothing: a read that fails says
             // nothing this time.
@@ -3011,6 +3156,10 @@ fn report(
         State::Landed => {
             let to = sub.landed_as.clone().expect("a landed submission");
             match sub.beside {
+                // 122: no verdict of its own landed it.
+                _ if sub.landed_elsewhere => {
+                    writeln!(out, "{}", words::landed_elsewhere(branch, &to))?
+                }
                 // 140: nothing was run, so nothing passed.
                 Some(Beside::Landed) => writeln!(out, "{}", words::landed_beside(&to))?,
                 _ => writeln!(out, "passed · landed as {}", to.short())?,
@@ -3184,11 +3333,17 @@ fn report(
 /// delivered again; each branch it collects from is locked meanwhile, so
 /// no round pushes the same outcome.
 fn inbox(s: &Sluice<'_>, worktree: &str, json: bool, out: &mut dyn Write) -> Result<i32> {
-    let Some((me, to)) = recipient(s, worktree)? else {
-        if json {
-            writeln!(out, "{}", serde_json::json!({ "outcomes": [] }))?;
+    let (me, to) = match recipient(s, worktree)? {
+        Recipient::To(me, to) => (me, to),
+        none => {
+            if let Recipient::Bare = none {
+                telemetry::warn(&format!("sluice: {}", no_work_tree(worktree)));
+            }
+            if json {
+                writeln!(out, "{}", serde_json::json!({ "outcomes": [] }))?;
+            }
+            return Ok(0);
         }
-        return Ok(0);
     };
     let pending = s.pending(&me)?;
     let marked = pending.marked(&to);
@@ -3238,14 +3393,26 @@ fn inbox(s: &Sluice<'_>, worktree: &str, json: bool, out: &mut dyn Write) -> Res
     Ok(if unread { INTERNAL } else { 0 })
 }
 
+/// 51: whom an outcome read in a worktree is delivered to.
+enum Recipient {
+    /// Who works there, and the name an outcome is delivered to there.
+    To(Submitter, String),
+    /// A worktree on no branch, which names no work and submitted nothing
+    /// (3).
+    Detached,
+    /// A repository with no work tree, which no session works in (2).
+    Bare,
+}
+
 /// 51: who works in `worktree`, and the name an outcome is delivered to
 /// there: the session as its driver names it, else the worktree's path.
-/// None for a worktree on no branch, which names no work and submitted
-/// nothing (3).
-fn recipient(s: &Sluice<'_>, worktree: &str) -> Result<Option<(Submitter, String)>> {
+fn recipient(s: &Sluice<'_>, worktree: &str) -> Result<Recipient> {
     let session = s.seams().driver.session(worktree)?;
+    if session.bare {
+        return Ok(Recipient::Bare);
+    }
     if session.detached {
-        return Ok(None);
+        return Ok(Recipient::Detached);
     }
     let me = session.from;
     let to = me
@@ -3253,7 +3420,16 @@ fn recipient(s: &Sluice<'_>, worktree: &str) -> Result<Option<(Submitter, String
         .clone()
         .or_else(|| me.path.clone())
         .unwrap_or_else(|| me.worktree.clone());
-    Ok(Some((me, to)))
+    Ok(Recipient::To(me, to))
+}
+
+/// 2, 51: what a delivery read in `worktree`, a repository with no files
+/// checked out, could not read.
+fn no_work_tree(worktree: &str) -> String {
+    format!(
+        "{worktree} is a repository with no files checked out, so no session works in it and no \
+         outcome is delivered there"
+    )
 }
 
 /// 51: `sub`, decided, locked and ready to mark delivered with the name to
@@ -3266,8 +3442,18 @@ fn delivering<'s, 'a>(
     sub: &Submission,
 ) -> Option<(Pending<'s, 'a>, String)> {
     let found = recipient(s, worktree).and_then(|r| match r {
-        Some((me, to)) => Ok(Some((s.pending_one(&sub.branch, sub.id, &me)?, to))),
-        None => Ok(None),
+        Recipient::To(me, to) => Ok(Some((s.pending_one(&sub.branch, sub.id, &me)?, to))),
+        Recipient::Bare => {
+            if sub.delivered.is_none() {
+                telemetry::warn(&format!(
+                    "sluice: #{} stays pending for its session's sluice inbox: {}",
+                    sub.id,
+                    no_work_tree(worktree)
+                ));
+            }
+            Ok(None)
+        }
+        Recipient::Detached => Ok(None),
     });
     match found {
         Ok(Some((pending, to))) if !pending.outcomes.is_empty() => Some((pending, to)),
@@ -3431,6 +3617,27 @@ enum PullMode<'a> {
     Wait {
         deadline: Option<chrono::DateTime<chrono::Utc>>,
     },
+    /// Follow pull request `number` as [`PullMode::Wait`] follows the one
+    /// open: a wait whose submission was withdrawn while the request
+    /// carries its work on (67, 137).
+    Follow {
+        number: u64,
+        deadline: Option<chrono::DateTime<chrono::Utc>>,
+    },
+}
+
+impl PullMode<'_> {
+    /// Only follows what stands: `sluice wait`, whatever it follows.
+    fn waits(&self) -> bool {
+        matches!(self, PullMode::Wait { .. } | PullMode::Follow { .. })
+    }
+
+    fn deadline(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        match self {
+            PullMode::Wait { deadline } | PullMode::Follow { deadline, .. } => *deadline,
+            _ => None,
+        }
+    }
 }
 
 /// `sluice submit` to a branch with pull requests (C.5 pull request):
@@ -3465,7 +3672,9 @@ fn submit_pull(
     let again = format!("sluice wait {branch}");
     // 124: how the host's copy differed from what the submit opened.
     let mut copy = None;
-    let number = if !opens {
+    let number = if let PullMode::Follow { number, .. } = mode {
+        number
+    } else if !opens {
         let found = match pulls.find(seams, clock, branch, worktree) {
             Ok(found) => found,
             Err(e) => {
@@ -3529,7 +3738,7 @@ fn submit_pull(
         // other, and all of `sluice wait <branch>`'s, is the driver's
         // while it lives.
         let driven = probe();
-        if !driven || first && !matches!(mode, PullMode::Wait { .. }) {
+        if !driven || first && !mode.waits() {
             // 137: a wait on a host where no driver lives shows itself by
             // the intake mark; a submit that does not wait, `--status`, and
             // a submit's first pass beside a live driver push none.
@@ -3701,7 +3910,7 @@ fn submit_pull(
         if INTERRUPTED.load(Ordering::SeqCst) {
             return still(out, STOPPED);
         }
-        if let PullMode::Wait { deadline: Some(d) } = mode {
+        if let Some(d) = mode.deadline() {
             if clock.now() >= d {
                 return still(out, WAITING);
             }

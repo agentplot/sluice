@@ -250,6 +250,11 @@ pub struct Submission {
     pub delivered_to: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub landed_as: Option<Rev>,
+    /// 122: landed by a landing this queue did not make, found when the
+    /// branch it was formed on already held its work; `landed_as` is the
+    /// commit that landed it there.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub landed_elsewhere: bool,
     /// Its id in this host's own records, before the branch's records
     /// moved to the remote and it was submitted again there (design D10).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -929,6 +934,13 @@ pub enum Event {
     /// The branch was found at a revision sluice did not move it to.
     Moved {
         from: Rev,
+        to: Rev,
+    },
+    /// 122: submissions whose work the branch already held when a round
+    /// came to form them, landed by a landing this queue did not make, at
+    /// `to`, the commit that landed it.
+    FoundLanded {
+        ids: Vec<u64>,
         to: Rev,
     },
     Conflict {

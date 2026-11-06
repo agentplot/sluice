@@ -1659,6 +1659,7 @@ fn admit(
             delivered: None,
             delivered_to: None,
             landed_as: None,
+            landed_elsewhere: false,
             was: None,
             held: None,
             subject,
@@ -1753,6 +1754,7 @@ mod tests {
                     },
                     dirty: Vec::new(),
                     detached: false,
+                    bare: false,
                 },
             );
         }
