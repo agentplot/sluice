@@ -8,8 +8,9 @@ use sluice_seams::{Changes, Rev, Snapshot};
 
 use crate::records::{
     finished_file, parse_lines, submission_file, to_document, to_line, BranchDoc, Candidate, Event,
-    FinishedLine, LogLine, State, Submission, BRANCH_FILE, FINISHED_INDEX, LOG_FILE,
+    FinishedLine, LogLine, RefusedWrite, State, Submission, BRANCH_FILE, FINISHED_INDEX, LOG_FILE,
 };
+use crate::refused_writes::{command_of, ends, stands, STANDING};
 
 #[derive(Clone, Debug)]
 pub struct Line {
@@ -169,6 +170,105 @@ impl Line {
 
     pub fn candidate_mut(&mut self, id: &str) -> Option<&mut Candidate> {
         self.doc.candidates.iter_mut().find(|c| c.id == id)
+    }
+
+    /// 148: take out every cause of refused writes, of any host, that no
+    /// longer stands at `now`, and log the end of each at its last refused
+    /// write and a day, in the order they ended; one whose last cannot be
+    /// read ends at `now` (design D4).
+    pub fn end_refused_writes(&mut self, now: &str) {
+        let (standing, mut ended): (Vec<_>, Vec<_>) = std::mem::take(&mut self.doc.refused_writes)
+            .into_iter()
+            .partition(|c| stands(c, now));
+        self.doc.refused_writes = standing;
+        ended.sort_by_key(ends);
+        for cause in ended {
+            let at = ends(&cause).map_or_else(
+                || now.to_string(),
+                |t| t.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            );
+            self.end_refused_write(&at, cause);
+        }
+    }
+
+    /// 124, 148: a write to `reference` on `host` the protection refused at
+    /// `now`, by `by` as git ran it, from `from` to `to`, `None` for a
+    /// deletion. Causes past their day are ended first. A standing cause
+    /// counts it with no line; any other is logged as `protected` and
+    /// stands, putting out the host's cause refused longest ago when it is
+    /// past the twenty (design D3; rule core.47).
+    pub fn refuse_write(
+        &mut self,
+        now: &str,
+        host: &str,
+        reference: &str,
+        by: &str,
+        from: &Rev,
+        to: Option<&Rev>,
+    ) {
+        self.end_refused_writes(now);
+        let command = command_of(by);
+        if let Some(cause) = self
+            .doc
+            .refused_writes
+            .iter_mut()
+            .find(|c| c.key() == (host, reference, command.as_str()))
+        {
+            cause.times += 1;
+            cause.last = now.into();
+            cause.from = from.clone();
+            cause.to = to.cloned();
+            return;
+        }
+        self.log(
+            now,
+            Event::Protected {
+                reference: reference.into(),
+                from: from.clone(),
+                to: to.cloned(),
+                by: by.into(),
+                host: Some(host.into()),
+            },
+        );
+        self.doc.refused_writes.push(RefusedWrite {
+            host: host.into(),
+            reference: reference.into(),
+            command,
+            times: 1,
+            first: now.into(),
+            last: now.into(),
+            from: from.clone(),
+            to: to.cloned(),
+        });
+        let held = self.doc.refused_writes.iter().filter(|c| c.host == host);
+        if held.count() > STANDING {
+            let oldest = self
+                .doc
+                .refused_writes
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| c.host == host)
+                .min_by_key(|(_, c)| c.last_at())
+                .map(|(i, _)| i);
+            if let Some(i) = oldest {
+                let cause = self.doc.refused_writes.remove(i);
+                self.end_refused_write(now, cause);
+            }
+        }
+    }
+
+    fn end_refused_write(&mut self, at: &str, cause: RefusedWrite) {
+        self.log(
+            at,
+            Event::ProtectedEnded {
+                host: cause.host,
+                reference: cause.reference,
+                command: cause.command,
+                times: cause.times,
+                first: cause.first,
+                last: cause.last,
+            },
+        );
     }
 
     /// Every file whose bytes changed, and the log lines appended. A write

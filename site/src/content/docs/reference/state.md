@@ -298,6 +298,19 @@ All three are left out when there is nothing to say, so
 `sluice/branch@1` is unchanged, and an older sluice reading them passes
 over them.
 
+`refused_writes` holds the writes sluice's protection refused on the
+branch, one for each host, ref and command, each host writing its own:
+`[{"host": "build-1", "ref": "refs/heads/main", "command": "git -C
+/home/me/app update-ref refs/heads/main <revision> <revision>",
+"times": 2024, "first": "2026-10-30T05:50:23Z", "last":
+"2026-11-02T16:01:20Z", "from": "10e4791a2b", "to": "8079db3c55"}]`.
+`command` is the command as git ran it, each full revision in it
+written as `<revision>`. `from` and `to` are the last refused write's,
+`to` `null` for a deletion. A command leaves the list with its
+`protected-ended` event. `sluice status <branch>` and `sluice overview`
+show those refused in the last day; read them there, since this form
+is sluice's own. The field is left out when it is empty.
+
 ## A submission
 
 ```json
@@ -467,6 +480,22 @@ that host's rounds it refused:
 ```json
 {"schema":"sluice/log@1","event":"read-refused","host":"build-1","remote":"origin","asked":"refs/heads/main","said":"remote: Repository not found.\nfatal: repository 'https://github.com/acme/app.git/' not found"}
 {"schema":"sluice/log@1","event":"read-again","host":"build-1","remote":"origin","since":"2026-10-26T09:16:40Z","stood":1800,"rounds":12}
+```
+
+`protected` is logged once for each command a host's protection
+refused, with the `host`, the `ref`, its `from` and `to`, and `by`, the
+command as git ran it. `to` is `null` for a deletion. Each later write
+of that command refused on that host is counted in `branch.json`'s
+`refused_writes`, with no event. A day after the last of them,
+`protected-ended` is logged with `times`, how many were refused, and
+the `first` and the `last`. The next write to the state logs it, at
+the time the day ended, and the command's next refused write is logged
+as `protected` again. When one host has more than twenty commands
+counted on the branch, the one refused longest ago ends at once:
+
+```json
+{"schema":"sluice/log@1","event":"protected","ref":"refs/heads/main","from":"10e4791a2b","to":"8079db3c55","by":"git -C /home/me/app update-ref refs/heads/main 8079db3c55e9d71f5ee7c92d6dc9e92ffdad17b8 10e4791a2b86f7e437faa5a7fce15d1ddcb9eaea","host":"build-1"}
+{"schema":"sluice/log@1","event":"protected-ended","host":"build-1","ref":"refs/heads/main","command":"git -C /home/me/app update-ref refs/heads/main <revision> <revision>","times":2024,"first":"2026-10-30T05:50:23Z","last":"2026-11-02T16:01:20Z"}
 ```
 
 A round that can't read the branch or its state forms, starts and lands

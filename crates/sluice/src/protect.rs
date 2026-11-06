@@ -1,7 +1,14 @@
 //! Branch protection on one host: a `reference-transaction` hook refuses
 //! any update to a branch the policy names that sluice did not make, and
-//! reports it in the branch's log (1, 124; C.4 local refs; rule core.4;
-//! `docs/plans/phase-1-integrations.md` section 2).
+//! reports it in the branch's records (1, 124; C.4 local refs; rule
+//! core.4; `docs/plans/phase-1-integrations.md` section 2).
+//!
+//! A refusal is recorded once per cause, the command that tried it on
+//! this host with each full revision in it read as `<revision>`: its
+//! first is a `protected` line in the branch's log, and every later one
+//! of a cause that stands is counted in the branch's state, with no line
+//! (148; rule core.47). What the caller is told of each refusal is the
+//! same, the first or the thousandth.
 //!
 //! It judges a write by the value the branch's ref holds on this host,
 //! never by a fetch of its remote: for a branch kept on a remote that ref
@@ -380,7 +387,10 @@ fn pruned(common: &Path, branch: &str, cur: &Rev) -> Result<bool> {
 /// any update to a protected branch that is not a creation or leaves its
 /// value on this host as it was (1, 124). Returns the exit: 0 allows, 1
 /// refuses. A transaction it cannot read for a reason of its own passes,
-/// said once.
+/// said once. Each refusal is told to the caller, then recorded under the
+/// branch's lock: logged where its cause does not stand, and otherwise
+/// counted with its cause (148). One whose lock does not come within a
+/// second is told and recorded nowhere.
 pub fn hook(s: &Sluice<'_>, host: &dyn Host, state: &str, input: &mut dyn Read) -> Result<i32> {
     // Symbolic refs are resolved only in `prepared`: in `preparing` a
     // commit on a checked-out branch arrives as HEAD.
