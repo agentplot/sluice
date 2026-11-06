@@ -44,7 +44,7 @@ submission Flume names.
   the agent the harness names, or the branch. A submission by name and
   one from a worktree on that branch are one work: each withdraws the
   other's earlier entry on the same target, and the attempts are the
-  branch's (54; 67 and 120 as amended on a blueprints branch).
+  branch's (54; 67 and 120 as amended at f9455e7).
 - **Its outcome is delivered by nothing.** The round queues no notice
   for it, pushes nothing, logs no `pending` line and never marks it
   delivered. `sluice inbox` anywhere answers nothing for it, and a wait
@@ -115,10 +115,8 @@ submission Flume names.
 - The site's commands and state references and the `using-sluice` skill
   give `--head` without `--check` and the status documents' `notice`.
 - Statement: 124 as amended at agentplot/blueprints 51b6316; 67 and 120
-  amended on the branch
-  `design/sluice-a-submit-names-its-head-from-no-worktree` (97c76e8),
-  cut from main and unpushed. Record 0090 and rule core.50 hold the
-  decisions.
+  as amended at agentplot/blueprints f9455e7. Record 0090 and rule
+  core.50 hold the decisions.
 - Release: the minor release CI tags at this change's landing (git-cliff,
   a `feat`): v0.71.0 where it lands next, otherwise the next minor after
   the latest tag then. Flume's task 5.2 moves its pin to that tag.

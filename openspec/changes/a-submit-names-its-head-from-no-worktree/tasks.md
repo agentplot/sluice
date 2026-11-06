@@ -13,7 +13,8 @@ clauses by number and rules by id.
 
 ## 1. The decision recorded
 
-- [x] 1.1 Record 0090, rule core.50 with its details, and the site's rules page written by `node site/scripts/rules.mjs`; 67 and 120 amended on agentplot/blueprints `design/sluice-a-submit-names-its-head-from-no-worktree` (97c76e8, unpushed, for the orchestrator to push). True when `sluice exec main -- moon run root:adrs root:changes site:rules` passes.
+- [x] 1.1 Record 0090, rule core.50 with its details, and the site's rules page written by `node site/scripts/rules.mjs`; 67 and 120 amended on agentplot/blueprints main at f9455e7. True when `sluice exec main -- moon run root:adrs root:changes site:rules` passes.
+- [x] 1.2 The amendment of 67 and 120 cited at agentplot/blueprints main f9455e7, the user's approval of 2026-11-06, wherever the proposal, the design, record 0090 and rule core.50 cite it, and main merged with records 0088 and 0089 beside 0090. True when `git grep 97c76e8` finds nothing and `sluice exec main -- moon run root:adrs root:changes site:rules` passes.
 
 ## 2. Who submits a branch by name
 

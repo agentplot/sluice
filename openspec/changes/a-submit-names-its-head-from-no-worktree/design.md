@@ -229,9 +229,8 @@ submissions. A failed or conflicting submission by name stays live
 does after a fix lands on the branch (flume 203), or the operator
 withdraws it.
 
-67 says "a submission from a place". The amendment on
-`design/sluice-a-submit-names-its-head-from-no-worktree` (97c76e8, cut
-from main at 51b6316, unpushed) adds: "A submission that names a branch
+67 says "a submission from a place". Its amendment on
+agentplot/blueprints main at f9455e7 adds: "A submission that names a branch
 as its head (124) is that branch's work, as one from a worktree on that
 branch is. Each withdraws the other's entry on the same branch, and the
 count 54 shows is the branch's." 120 gains that an entry is submitted
@@ -338,9 +337,9 @@ lands on.
 
 ### D11. How it is held
 
-- **The statement.** 124 as amended at 51b6316. 67 and 120 amended on
-  `design/sluice-a-submit-names-its-head-from-no-worktree` at 97c76e8,
-  cut from main, unpushed; the orchestrator pushes it.
+- **The statement.** 124 as amended at agentplot/blueprints 51b6316;
+  67 and 120 as amended at agentplot/blueprints f9455e7, on the user's
+  approval of this design, 2026-11-06.
 - **Record 0090**: "A submission by name is its branch's work, records no
   worktree and no session, and is delivered by nothing", with the
   options weighed for D3, D5 and D6.
@@ -414,5 +413,4 @@ names the tag, for Flume's task 5.2 to pin.
 
 ## Open Questions
 
-None. The blueprints branch's amendment of 67 and 120 waits on the
-orchestrator's push.
+None.
