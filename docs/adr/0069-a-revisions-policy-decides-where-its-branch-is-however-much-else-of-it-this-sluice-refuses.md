@@ -49,3 +49,5 @@ Neutral: rule core.27 is amended with the narrow reading; statement clause 124 a
 ## More information
 
 The unit this record calls for, queued on its acceptance: the routing reads each revision's policy only as far as it needs, and a revision this sluice refuses elsewhere decides the remote all the same. The companion unit under clause 26, that a branch sluice cannot read is refused alone, is queued from the clause and waits on no card.
+
+On a quiet branch nothing runs that next round. Record 0046, as amended on 2026-11-06, has every read outside a round read the policy at the branch's revision as the host holds it, so a clean policy pushed to the remote ends the refusal at the first read or tick after the host holds it, with no round run.
