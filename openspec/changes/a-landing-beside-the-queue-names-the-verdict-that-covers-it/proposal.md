@@ -74,10 +74,12 @@ None.
 
 - `landing-beside`: "What never lands beside" adds a revision whose
   covering result the branch's state does not name; "The outcome says it
-  landed beside the queue" has the request's check and report name the
-  covering result; two new requirements, "A landing beside's result
-  reads as passed with nothing run" and "A landing beside names the
-  result that covers it", set the trailer's words.
+  landed beside the queue" titles the request's `sluice` check; two new
+  requirements, "A landing beside's result reads as passed with nothing
+  run" and "A landing beside names the result that covers it", set the
+  trailer's words; and a third, "A request landed beside names the
+  result that covers it", has the request's check and report name the
+  covering result, with no row and no check per required check (118).
 
 ## What each reader reads once this lands
 
