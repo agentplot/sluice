@@ -214,6 +214,12 @@ pub struct ConflictRecord {
 pub struct Withdrawal {
     pub by: String,
     pub at: String,
+    /// 120, 137: the host that takes the branch's pull requests in, where
+    /// this host withdrew the submission at a hand-over of its intake to
+    /// it, which holds no request; `None` for any other withdrawal, and in
+    /// records written before it (record 0088 as amended).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handed_over_to: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -925,6 +931,9 @@ pub enum Event {
     Withdrawn {
         id: u64,
         by: String,
+        /// As the submission's [`Withdrawal`] names it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        handed_over_to: Option<String>,
     },
     Amended {
         id: u64,
@@ -2191,6 +2200,7 @@ mod tests {
             withdrawn: Some(Withdrawal {
                 by: "a".into(),
                 at: "t".into(),
+                handed_over_to: None,
             }),
             ..submission(None)
         };
@@ -2198,6 +2208,47 @@ mod tests {
             (withdrawn.decided(), withdrawn.notification()),
             (None, None)
         );
+    }
+
+    /// 120, 137: a hand-over's withdrawal names the host it handed over
+    /// to, in the record and in the log line; one written before it, and
+    /// any other withdrawal, names none and is written back as it was read
+    /// (record 0088 as amended).
+    #[test]
+    fn a_hand_overs_withdrawal_names_its_host_and_an_older_one_reads_as_it_was() {
+        let old = r#"{"by":"b takes main's pull requests in","at":"2026-10-30T16:18:13Z"}"#;
+        let w: Withdrawal = serde_json::from_str(old).unwrap();
+        assert_eq!(w.handed_over_to, None);
+        assert_eq!(serde_json::to_string(&w).unwrap(), old);
+
+        let new = r#"{"by":"b takes main's pull requests in","at":"t","handed_over_to":"b"}"#;
+        let w: Withdrawal = serde_json::from_str(new).unwrap();
+        assert_eq!(w.handed_over_to.as_deref(), Some("b"));
+        assert_eq!(serde_json::to_string(&w).unwrap(), new);
+
+        let old =
+            r#"{"schema":"sluice/log@1","at":"t","event":"withdrawn","id":4,"by":"operator"}"#;
+        let l: LogLine = serde_json::from_str(old).unwrap();
+        assert!(matches!(
+            &l.event,
+            Event::Withdrawn {
+                handed_over_to: None,
+                ..
+            }
+        ));
+        assert_eq!(serde_json::to_string(&l).unwrap(), old);
+        let new = LogLine {
+            schema: "sluice/log@1".into(),
+            at: "t".into(),
+            event: Event::Withdrawn {
+                id: 4,
+                by: "b takes main's pull requests in".into(),
+                handed_over_to: Some("b".into()),
+            },
+        };
+        let written = serde_json::to_string(&new).unwrap();
+        assert!(written.ends_with(r#""handed_over_to":"b"}"#), "{written}");
+        assert_eq!(serde_json::from_str::<LogLine>(&written).unwrap(), new);
     }
 
     /// A flaky failure recorded before its times and hosts reads with
