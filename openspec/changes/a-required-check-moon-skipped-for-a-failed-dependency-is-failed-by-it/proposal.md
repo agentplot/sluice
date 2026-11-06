@@ -104,6 +104,14 @@ skipped it for a task it depends on.
   reads"). Its `verdict_of` would call the skipped check "not run",
   since it has no hash. Reading `failed_by` there is crew's change, to
   make in afterthought/crew when this lands, and it decides nothing.
+- **Flume's and Boomdrive's readings.** Flume's sluice profile names
+  every failed row's task in a failed submission's words, so it says
+  both tasks, which decides nothing. Boomdrive's runner carries each
+  failed row to the hosted control plane with its task, hash, flaky and
+  system alone, so the skipped check reaches it with no hash and no
+  `failed_by`, read as not run. No decision changes. Carrying
+  `failed_by` is Boomdrive's change to make when this lands, for the
+  orchestrator to give it (design, "What crew reads").
 - **A required check moon skipped for any other reason.** It stays
   missing and no pass (15), as today, and blames as today. Whether a
   skip that is the host's should blame nobody waits on a change that

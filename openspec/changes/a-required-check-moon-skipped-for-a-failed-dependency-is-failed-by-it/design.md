@@ -323,8 +323,19 @@ it is not. Reading `failed_by` there is a change of crew's words alone,
 for the orchestrator to give crew when this lands (proposal, "Out of
 scope").
 
-Flume, Boomdrive, timber, weir and boom read no failed check of sluice's
-record. Their statements name none.
+Two more of the family read the failed list, and neither decides
+anything by it. Flume's sluice profile (`said`, in
+`crates/flume/src/profiles/merge_queue/sluice/mod.rs`) names every
+failed row's task in a failed submission's words, so it says both
+`tests/integration:api` and `root:integration`. Boomdrive's runner
+(`carried`, in `crates/boomdrive/src/sluice.rs`, its Decision 13)
+carries each failed row to the hosted control plane with `task`,
+`hash`, `flaky` and `system` alone, so `root:integration` reaches it
+with no hash and no `failed_by`, read there as not run, while the
+dependency reaches it with its hash. Carrying `failed_by` is
+Boomdrive's change to make when this lands, for the orchestrator to
+give it, as crew's words are (proposal, "Out of scope"). Timber, weir
+and boom read no failed check of sluice's record.
 
 ### D10. The statement
 
