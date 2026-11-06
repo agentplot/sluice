@@ -60,7 +60,7 @@ Status: accepted on 2026-11-06 by madswan-design, the design agent: clause 137 a
 
 Deciders: madswan-design.
 
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 120 and 137 as amended at 73ed779; the signals `afterthought/crew-state:madswan/main signals/2026-10-30-madswan-ops-8e042647/01-sluice-intake-handover-withdraws-a-tested-submission` and `signals/2026-11-06-madswan-operator-0da8ddac/01-sluice-intake-handover-strands-submitted-requests`; GitHub's timelines of agentplot/sluice pull 171 and of WilldanGroup/switchboard-kit's pull requests 268 and 269; `crates/sluice/src/profiles/github/pulls.rs` at 6e16063f (`is_held`, `left_unlanded`); records 0052, 0071 and 0085.
+Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 120 and 137 as amended at 84c7a01; the signals `afterthought/crew-state:madswan/main signals/2026-10-30-madswan-ops-8e042647/01-sluice-intake-handover-withdraws-a-tested-submission` and `signals/2026-11-06-madswan-operator-0da8ddac/01-sluice-intake-handover-strands-submitted-requests`; GitHub's timelines of agentplot/sluice pull 171 and of WilldanGroup/switchboard-kit's pull requests 268 and 269; `crates/sluice/src/profiles/github/pulls.rs` at 6e16063f (`is_held`, `left_unlanded`); records 0052, 0071 and 0085.
 
 ### Context
 
