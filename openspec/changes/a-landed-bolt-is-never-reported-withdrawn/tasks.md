@@ -30,6 +30,11 @@ number and rules by id.
 
 - [x] 5.1 `Session::bare`; the worktrunk driver's `session` asks `--is-inside-work-tree` first and runs no `git status` where there is none; `Recipient` in `crates/sluice/src/lib.rs` delivers nothing there and says why (D4). True when `sluice exec main -- cargo test -p sluice --features tools --test worktrunk -- no_work_tree` passes.
 
-## 6. The gate
+## 6. One fetch at a time in a repository
 
-- [x] 6.1 The whole gate on the committed branch. True when `sluice exec main` passes.
+- [x] 6.1 Record 0086; the details of rules core.28 and core.29 name the lost race (D6). True when `sluice exec main -- moon run root:adrs root:changes site:rules` passes.
+- [x] 6.2 `PushedRefs::fetching`, held by each fetch's try in `call`; `lost_race` read as never judged by `judged`, and as nothing refused by `fetch_specs` (D6). True when `sluice exec main -- cargo test -p sluice --features tools --test pushed_refs -- fetch_waits race_lost` and `cargo test -p sluice --lib lost_race` pass.
+
+## 7. The gate
+
+- [x] 7.1 The whole gate on the committed branch. True when `sluice exec main` passes.

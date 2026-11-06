@@ -77,6 +77,17 @@ reported the withdrawal though the work landed (50, 51). Its driver ran
   inbox`, delivers nothing and says plainly why: no session works in a
   repository with no work tree, and the outcome stays pending for its
   session's `sluice inbox`.
+- **One fetch at a time in a repository.** After #23, swanclouds-bumps-of-the-5th,
+  landed in the runner's copy as `f24499c9`, a sluice command exited 3
+  on a fetch, and the copy's `main` log holds `read-refused` twice, at
+  12:57:13Z and 13:56:33Z: `cannot lock ref
+  'refs/sluice-fetched/origin/intake/main': is at <a> but expected <b>`.
+  Two processes of the one repository fetched at once and raced for
+  sluice's own fetched ref; the remote refused nothing. Each fetch now
+  holds the repository's fetch lock for its try, and a fetch that still
+  loses a race for a ref of the repository's, to a git no lock holds, is
+  tried again as a call the remote never judged and then read as
+  nothing refused, logged nowhere (133, 134; rules core.28, core.29).
 - **Two copies of one repository on one host.** The design says what
   sluice should do when a second copy reads the intake mark as its own,
   with the readings, and names what waits for the one-copy design
@@ -116,17 +127,21 @@ reported the withdrawal though the work landed (50, 51). Its driver ran
   request to the host that takes it in.
 - `outcome-delivery`: a delivery read where no work tree is says so and
   delivers nothing.
+- `remote-retry`: one fetch at a time in a repository, and a race lost
+  for a ref of its own is no refusal.
 
 ## Impact
 
 - `crates/sluice-seams`: `Branch::landed_by`; `Session::bare`.
 - `crates/sluice-core`: `Submission::landed_elsewhere`,
   `Event::FoundLanded`, the round's `land_found`.
-- `crates/sluice`: `LocalRefs::landed_by` (`git rev-list --first-parent
+- `crates/sluice`: `PushedRefs::fetching` and `lost_race` in
+  `profiles/pushed_refs.rs`; `LocalRefs::landed_by` (`git rev-list --first-parent
   --ancestry-path`); the worktrunk driver's session read; intake's
   closing of requests; the wait's `carried`, `PullMode::Follow`,
   `PullRequests::request_of`; the delivery read's `Recipient`.
 - Records: `landed_elsewhere` on a submission and `found_landed` in the
   log are new; a record written before reads as it was.
-- Statement: none. 2, 5, 6, 22, 50, 51, 67, 122, 137 and C.5 hold as
-  written; record 0085 and rule core.48 cite them.
+- Statement: none. 2, 5, 6, 22, 50, 51, 67, 122, 133, 134, 137 and C.5
+  hold as written; records 0085 and 0086, rule core.48 and the details
+  of rules core.28 and core.29 cite them.

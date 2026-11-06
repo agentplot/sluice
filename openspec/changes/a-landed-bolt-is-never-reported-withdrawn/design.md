@@ -223,6 +223,29 @@ landing pushed by the other copy between one pass's fetch and its list
 of open requests, which that pass reads as a closing and withdraws,
 though a wait on it answers landed.
 
+### D6. One fetch at a time in a repository
+
+The runner's copy logged `read-refused` twice on `main`, at 12:57:13Z
+and 13:56:33Z: `cannot lock ref 'refs/sluice-fetched/origin/intake/main':
+is at <a> but expected <b>`. Two of its processes fetched at once, a
+waiting submit beside a Flume settle's `sluice step` or a reader, and
+the one that lost read its own lock's words as the remote's refusal
+(`fetch_specs`), logged it (133) and never tried again (134). After
+#23 landed as `f24499c9`, one such fetch failed a command, exit 3.
+
+Each fetch, in `PushedRefs::call`, holds the lock of `sluice-fetch.lock`
+in the repository's git directory for its try alone, so sluice's
+fetches of one repository, in any of its worktrees, run one after
+another, and none holds the lock over the retry policy's pause. A fetch
+beside a git that holds no lock, a person's or an older sluice's, can
+still lose: git's `cannot lock ref '<name>'`, or a ref's lock file
+standing, names a ref of this repository and never a remote's, so
+`judged` reads it as a call the remote never judged, tried again, and
+`fetch_specs` reads one still lost as nothing refused, the refs holding
+what the other fetch brought. Record 0086 weighs fetching into refs of
+each process's own, which every reader of the fetched refs would have
+to tell apart.
+
 ## Risks / Trade-offs
 
 - **A round reads containment for each unformed submission** → one
