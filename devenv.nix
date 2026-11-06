@@ -426,6 +426,26 @@ in
     convco = {
       enable = true;
       settings.configPath = ".versionrc";
+      # A message `git revert` wrote is taken, as CI's `convco check
+      # --ignore-reverts` takes its commit. git revert commits without the
+      # hook, but a revert it stopped on a conflict or made --no-commit, or
+      # one amended, is committed through it. convco reads a revert as a
+      # message that opens `Revert "`, and its --from-stdin, the hook's,
+      # reads no --ignore-reverts. A revert of a revert, `Reapply "`, is
+      # refused by both and reworded.
+      entry =
+        let
+          convco = config.git-hooks.hooks.convco;
+        in
+        lib.mkForce (
+          toString (
+            pkgs.writeShellScript "precommit-convco" ''
+              IFS= read -r subject < "$1" || true
+              case "$subject" in 'Revert "'*) exit 0 ;; esac
+              exec ${convco.package}/bin/convco check --from-stdin --config ${convco.settings.configPath} < "$1"
+            ''
+          )
+        );
     };
     treefmt.enable = true;
     clippy-gate = {
