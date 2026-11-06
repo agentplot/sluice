@@ -27,7 +27,7 @@ clauses by number and rules by id.
 
 ## 4. Say it to the operator
 
-- [ ] 4.1 In `site/src/content/docs/reference/state.md`, say the repository's `.tmp/` holds the scratch of a candidate's checkout or a preview an older sluice made, removed when it is released, and that a worktree's moves to the user's directory at its next run. Name no host, tool or team of ours (rule core.26). True when `sluice exec main -- moon run site:prose` passes with no warning on the page.
+- [x] 4.1 In `site/src/content/docs/reference/state.md`, say the repository's `.tmp/` holds the scratch of a candidate's checkout or a preview an older sluice made, removed when it is released, and that a worktree's moves to the user's directory at its next run. Name no host, tool or team of ours (rule core.26). True when `sluice exec main -- moon run site:prose` passes with no warning on the page.
 
 ## 5. The gate
 

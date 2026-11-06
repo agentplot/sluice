@@ -43,9 +43,12 @@ readable with plain tools whether or not sluice is running.
   .previews/<preview>/ a preview's checkout, kept until it is released
   .tmp/<code>/         the scratch of a checkout an older sluice made, at the
                        code its record names, or at the checkout's name where
-                       the record names none; removed when the checkout is
-                       released. A directory here that no record names is
-                       removed by the next round or sluice exec on the host
+                       the record names none. A candidate's or a preview's is
+                       removed when it is released. A worktree's moves to the
+                       user's directory, with what is in it, at the worktree's
+                       next run once none of its runs is going. A directory
+                       here that no record names is removed by the next round
+                       or sluice exec on the host
   .runs/<checkout>/    a candidate's run, or a preview's command
   .runs/<worktree>/<n>/
                        each run an agent started in its worktree, numbered;
