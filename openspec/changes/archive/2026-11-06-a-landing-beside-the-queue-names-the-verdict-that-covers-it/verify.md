@@ -19,6 +19,7 @@ them under "After the landing" below.
 | Check | Result |
 |---|---|
 | `sluice exec main` on 4d23e00d, against main at 3e0ae764 | 15 of 15 tasks passed in 12m 25s, recorded under their keys for 4d23e00: core:test 131 tests, seams:test 2, fakes:test 7, conformance:test 270, cli:test 569 and cli:tools 527, none failed; cli:e2e 44 checks ok, none not ok; root:format, root:lint, root:adrs, root:changes, root:screenshots-scene, site:prose, site:rules and plugin-sluice:validate. Every test the tables below name passed among them |
+| `sluice exec main` on 10fbe674, the archive's commit, against main at ef7a63b | 16 of 16 tasks passed in 10m 13s, recorded under their keys for 10fbe67, `root:specs` among them, 65 of 65 specs, and `root:changes` |
 | `openspec validate a-landing-beside-the-queue-names-the-verdict-that-covers-it --strict`, pinned openspec 1.14.3 | valid; `openspec validate --changes --strict` passes 8 of 8 |
 | `openspec archive a-landing-beside-the-queue-names-the-verdict-that-covers-it --yes`, then `openspec validate --specs --strict --no-interactive` (`root:specs`), in a scratch copy of `openspec/` at 4d23e00d, pinned openspec 1.14.3 (5.3) | archive applies 3 added and 2 modified to `landing-beside`; 65 of 65 specs pass, `landing-beside` with no issue |
 | The archived `landing-beside`'s requirement text, in characters | 416, 376, 265, 374, 185, 261; and the change's: "The outcome says it landed beside the queue" 341, "A landing beside's result reads as passed with nothing run" 332, "A landing beside names the result that covers it" 382, "A request landed beside names the result that covers it" 426 |
@@ -166,12 +167,9 @@ verify and submission stages:
    23, 140 and S68 "(record 0083, proposed 2026-11-05)", though record
    0083 is accepted. Updating the markers is a blueprints commit for the
    orchestrator, not this change.
-5. **A flaky test on main, outside this change.** The code stage's
-   first gate at 699b9c37 failed cli:test on
-   `reader::tests::a_free_lock_is_left_to_the_lease_holder`
-   (`crates/sluice/src/reader.rs`, `assert!(is_lead(&other))`), a file
-   this branch never touched; alone it passed 15 times in 15. The code
-   stage's notes give the likely cause, another test thread's started
-   process holding a copy of the reader's lock between its fork and its
-   exec, as cae8bc26 fixed for the lease probe. It wants its own fix on
-   main.
+5. **Main has moved.** Main is at ef7a63b (#384), which merges into
+   the branch cleanly and touches none of this change's files. It holds
+   ffe691c5, the fix of
+   `reader::tests::a_free_lock_is_left_to_the_lease_holder`, the test
+   that failed cli:test in the code stage's first gate at 699b9c37 and
+   that this branch never touched, so no fix is owed there.
