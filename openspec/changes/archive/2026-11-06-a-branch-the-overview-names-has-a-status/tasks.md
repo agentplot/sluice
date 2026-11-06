@@ -26,4 +26,4 @@ citing clauses by number and rules by id.
 
 ## 4. The gate
 
-- [ ] 4.1 The whole gate on the committed branch, main merged. True when `sluice exec main` passes.
+- [x] 4.1 The whole gate on the committed branch, main merged. True when `sluice exec main` passes: 13 tasks passing on 387b202.
