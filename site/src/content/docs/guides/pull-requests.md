@@ -149,7 +149,11 @@ the ref `refs/sluice/intake/main` on the remote:
 A host that doesn't hold the mark asks GitHub nothing about `main`'s
 pull requests. Once it finds another host's mark, it withdraws its own
 queued submissions of them, naming that host, and that host takes each
-in again. A host withdraws nothing where its push of the mark was
+in again. Such a withdrawal marks no pull request a draft and waits for
+no one's submit or ready mark: whichever host holds the mark takes each
+in again at its latest commit, this host too once the mark comes back
+to it, and `sluice status` shows the submission `handed over to` the
+host. A host withdraws nothing where its push of the mark was
 refused and the mark names no other host. A submission that is landing
 finishes, one whose work `main` already holds is recorded landed, and
 work submitted from the host's own worktrees stays in its queue. A wait on that host follows its pull
