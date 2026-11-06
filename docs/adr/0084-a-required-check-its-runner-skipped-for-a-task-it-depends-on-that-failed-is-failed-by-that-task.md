@@ -1,7 +1,7 @@
 ---
 number: 84
 title: A required check its runner skipped for a task it depends on that failed is failed by that task
-status: proposed
+status: accepted
 date: 2026-11-05
 decision-makers:
 - Chuck Swanberg
@@ -9,10 +9,10 @@ decision-makers:
 
 # A required check its runner skipped for a task it depends on that failed is failed by that task
 
-Status: proposed on 2026-11-05 by the construct stage of the change `a-required-check-moon-skipped-for-a-failed-dependency-is-failed-by-it`, on the brief the orchestrator gave it, which asks that such a check read "failed, by that dependency", with "which dependency, its key and its log" in the record, "never 'left without a result' where moon's report shows a dependency that ran and failed", and its failure "weighed under that dependency's key". The user reads this record, the change's design and the statement's amendment before any code, and accepts it, or not, on that read. The choices within it are the construct stage's own: how sluice finds a check's dependencies, which of them are recorded, how a key that reads passed is read, and the record's field. Each is cheap to change until a release carries it.
+Status: accepted by the user on 2026-11-06, in the words "go ahead into code", given on agentplot-planner's card at 22:42Z on the design of the change `a-required-check-moon-skipped-for-a-failed-dependency-is-failed-by-it`, this record and the statement's amendment, now on agentplot/blueprints main at a4eeec3 (the vocabulary's "check", 16, 149, C.2's moon row, S74). Proposed on 2026-11-05 by that change's construct stage, on the brief the orchestrator gave it, which asks that such a check read "failed, by that dependency", with "which dependency, its key and its log" in the record, "never 'left without a result' where moon's report shows a dependency that ran and failed", and its failure "weighed under that dependency's key". The choices within it are the construct stage's own: how sluice finds a check's dependencies, which of them are recorded, how a key that reads passed is read, and the record's field. Each is cheap to change until a release carries it.
 
-Deciders: the construct stage of the change named above, on the orchestrator's brief, until the user's read.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 15, 16, 17, 18, 19, 20, 60, 66, 84, 108, 114, 115, 138, 139, C.2's moon row, as main words them at cd8fd73, and the vocabulary's "check", 16, 149, C.2's moon row and S74 as commit 803ccb3 on the branch `design/sluice-a-required-check-skipped-for-a-failed-dependency` amends them, not pushed; records 0031, 0043, 0044, 0072, 0074; rules core.7, core.8, core.9, core.22, core.34, core.35; on sluice's main at 3f5aed5f, `crates/sluice/src/profiles/moon.rs` (`plan`, `read_report`), `crates/sluice/src/profiles/checks.rs` (`progress`, `logs`), `crates/sluice-core/src/verdict.rs` (`read`), `crates/sluice-core/src/step.rs` (`finish_run`, `after_run`) and `crates/sluice-core/src/records.rs` (`FailedTask`); afterthought/crew at f3c5abd4, `plugin/lib/plan.py` `landing_blame` and `verdict_of`; switchboard-kit's submission #1305 under sluice 0.66.0, 2026-11-05, and the misfilings #1176, #1252 and #1267 before it.
+Deciders: the user, accepting on 2026-11-06; the construct stage of the change named above, proposing on the orchestrator's brief.
+Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 15, 16, 17, 18, 19, 20, 60, 66, 84, 108, 114, 115, 138, 139, C.2's moon row, as main words them at cd8fd73, and the vocabulary's "check", 16, 149, C.2's moon row and S74 as agentplot/blueprints main words them at a4eeec3; records 0031, 0043, 0044, 0072, 0074; rules core.7, core.8, core.9, core.22, core.34, core.35; on sluice's main at 3f5aed5f, `crates/sluice/src/profiles/moon.rs` (`plan`, `read_report`), `crates/sluice/src/profiles/checks.rs` (`progress`, `logs`), `crates/sluice-core/src/verdict.rs` (`read`), `crates/sluice-core/src/step.rs` (`finish_run`, `after_run`) and `crates/sluice-core/src/records.rs` (`FailedTask`); afterthought/crew at f3c5abd4, `plugin/lib/plan.py` `landing_blame` and `verdict_of`; switchboard-kit's submission #1305 under sluice 0.66.0, 2026-11-05, and the misfilings #1176, #1252 and #1267 before it.
 
 ## Context and problem statement
 

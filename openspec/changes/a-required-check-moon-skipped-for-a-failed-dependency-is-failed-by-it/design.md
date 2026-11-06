@@ -339,9 +339,8 @@ and boom read no failed check of sluice's record.
 
 ### D10. The statement
 
-The amendment is commit 803ccb3 on the agentplot/blueprints branch
-`design/sluice-a-required-check-skipped-for-a-failed-dependency`, cut
-from main at cd8fd73 and not pushed (record 0084):
+The amendment is on agentplot/blueprints main at a4eeec3 (record
+0084):
 
 - **Vocabulary, "check":** "A check its runner skipped for a task it
   depends on that failed ends in that task's fail (149)."
@@ -408,6 +407,6 @@ The orchestrator gives crew the words change of D9.
 
 ## Open Questions
 
-None. The user reads this design, record 0084 and the statement's
-amendment before any code. The amendment goes to agentplot/blueprints
-main on the user's word.
+None. The user accepted this design, record 0084 and the statement's
+amendment on 2026-11-06, and the amendment is on agentplot/blueprints
+main at a4eeec3.

@@ -39,7 +39,7 @@ skipped it for a task it depends on.
   dependencies, at any depth, from moon's task graph, which the plan
   already queries. A target with no result of its own whose
   dependencies include a task that ran and failed is failed by that
-  task (149, proposed).
+  task (149).
 - **The task's run is recorded under its own key.** The failed
   dependency's result is recorded as any check's run is: `ran` in the
   log, a line in the results under its task and hash, with the run's
@@ -74,11 +74,9 @@ skipped it for a task it depends on.
   from it, list the dependency failed with its key, and the check
   failed by it.
 - **The statement.** Clause 149, the vocabulary's "check", clause 16
-  and C.2's moon row are amended, with S74. They are committed on the
-  agentplot/blueprints branch
-  `design/sluice-a-required-check-skipped-for-a-failed-dependency`, for
-  the orchestrator to push on the user's word before the code lands
-  (rule core.12). Record 0084 sets the decision down as proposed. The
+  and C.2's moon row are amended, with S74, on agentplot/blueprints
+  main at a4eeec3, before the code lands (rule core.12). Record 0084
+  sets the decision down, accepted by the user on 2026-11-06. The
   details of rules core.7 and core.34 say where it sits.
 
 ## Capabilities
@@ -172,7 +170,7 @@ skipped it for a task it depends on.
 - Records and rules: record 0084; the details of core.7 and core.34,
   which the site's rules page does not carry, so it is unchanged.
 - Sources: clauses 15, 16, 17, 18, 19, 20, 60, 66, 84, 108, 114, 115,
-  138, 139, C.2's moon row; 149 and S74 as proposed; records 0031, 0043,
+  138, 139, C.2's moon row; 149 and S74 at agentplot/blueprints a4eeec3; records 0031, 0043,
   0044, 0072, 0074, 0084; rules core.7, core.8, core.9, core.22, core.34,
   core.35.
 
