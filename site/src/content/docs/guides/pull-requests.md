@@ -350,7 +350,7 @@ check reads:
 | `failed: app:test` | its combination failed and it is to blame; the comment names the failed tests and where their logs are |
 | `conflict: plan.py` | it no longer merges with what is ahead of it; the comment names the files and the pull requests |
 | `landed as b7d2e94` | on `main`; GitHub marks the pull request merged |
-| `landed as 4e1a07c beside the queue` | no required check reads its changes, so it landed on `main` at once with no check run, ahead of the queue; the report says so |
+| `landed as 4e1a07c beside the queue` | no required check reads its changes, so it landed on `main` at once with no check run, ahead of the queue. The check and the report say so, and name the result that covers it, as its landing commit does: "Covered by the result at `b7d2e94`, passed (2 run, 31 replayed)." |
 
 While a pull request waits or is queued, the check shows as pending on
 GitHub; while it is tested, in progress; failed and conflict fail it,

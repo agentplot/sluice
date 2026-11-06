@@ -1,6 +1,8 @@
 //! What a landing commit says (23; ADR 0006; walkthrough section 8), and
 //! how a subject is shown on a person's line (26).
 
+use sluice_seams::CoveringVerdict;
+
 use crate::records::{Candidate, Submission};
 
 /// The landing commit's message: the policy's subject, with the submission
@@ -16,33 +18,54 @@ pub fn landing_message(subject: &str, to: &str, sub: &Submission, verdict: &Cand
          Sluice-Submission: {id}\n\
          Sluice-From: {agent} ({worktree})\n\
          Sluice-Tested: {tested}\n\
-         Sluice-Result: {result} ({ran} run, {replayed} replayed)\n",
+         Sluice-Result: {result}\n",
         first = first_line(subject, to, sub),
         id = sub.id,
         worktree = sub.from.worktree,
         agent = sub.from.agent,
         tested = verdict.revision,
-        result = verdict.result_word(),
-        ran = verdict.ran,
-        replayed = verdict.replayed,
+        result = verdict_words(
+            verdict.result_word(),
+            verdict.ran as u64,
+            verdict.replayed as u64
+        ),
     )
 }
 
-/// 140, 23: the message of a landing beside the chain: the policy's
-/// subject as [`landing_message`] fills it, and in place of a verdict the
-/// word that no required check reads its changes, so nothing was run.
-pub fn beside_message(subject: &str, to: &str, sub: &Submission) -> String {
+/// 15, 23, 70, 140: the message of a landing beside the chain: the
+/// policy's subject as [`landing_message`] fills it, and as its result its
+/// own verdict, passed with nothing run, since its work affects no required
+/// check on a revision a verdict covers, then the verdict that covers it,
+/// named by the branch's revision it landed as and its own words (record
+/// 0083). No `Sluice-Tested`: its candidate was never run.
+pub fn beside_message(
+    subject: &str,
+    to: &str,
+    sub: &Submission,
+    covering: &CoveringVerdict,
+) -> String {
     format!(
         "{first}\n\
          \n\
          Sluice-Submission: {id}\n\
          Sluice-From: {agent} ({worktree})\n\
-         Sluice-Result: landed beside the queue (no required check reads its changes)\n",
+         Sluice-Result: {own} beside the queue: no required check reads its changes; \
+         covered by the result at {at}, {covered}\n",
         first = first_line(subject, to, sub),
         id = sub.id,
         worktree = sub.from.worktree,
         agent = sub.from.agent,
+        own = verdict_words("passed", 0, 0),
+        at = covering.at,
+        covered = verdict_words(&covering.result, covering.ran, covering.replayed),
     )
+}
+
+/// 23: a verdict's words as a landing commit's `Sluice-Result` opens with
+/// them, the one form every landing's and every covering verdict's take
+/// (record 0083).
+pub fn verdict_words(result: &str, ran: u64, replayed: u64) -> String {
+    format!("{result} ({ran} run, {replayed} replayed)")
 }
 
 /// The policy's subject with the submission filled in, in one pass.
@@ -123,22 +146,29 @@ mod tests {
         m.lines().next().unwrap().to_string()
     }
 
-    /// 140: a landing beside the chain names its work as any landing does,
-    /// and in place of a verdict says no required check reads it.
+    /// 15, 23, 70, 140: a landing beside the chain names its work as any
+    /// landing does, its own result passed with nothing run, and the
+    /// result that covers it by its revision in full and its words; no
+    /// `Sluice-Tested` (record 0083; rule core.39).
     #[test]
-    fn a_landing_beside_names_no_verdict() {
+    fn a_landing_beside_names_passed_and_what_covers_it() {
         let s = sub(Some("Guide the reader"));
-        let m = beside_message(crate::policy::LANDING_SUBJECT, "bolt/x", &s);
-        assert!(
-            m.starts_with(&first_line(crate::policy::LANDING_SUBJECT, &s)),
-            "{m}"
-        );
-        assert!(!m.contains("Sluice-Tested"), "{m}");
-        assert!(
-            m.ends_with(
-                "Sluice-Result: landed beside the queue (no required check reads its changes)\n"
-            ),
-            "{m}"
+        let at = "e25fea4c0ffee5e25fea4c0ffee5e25fea4c0ffe";
+        assert_eq!(at.len(), 40);
+        let covering = CoveringVerdict {
+            at: sluice_seams::Rev(at.into()),
+            result: "passed".into(),
+            ran: 141,
+            replayed: 0,
+        };
+        let m = beside_message(crate::policy::LANDING_SUBJECT, "bolt/x", &s, &covering);
+        assert_eq!(
+            m,
+            "chore(land): #7 Guide the reader\n\nSluice-Submission: 7\n\
+             Sluice-From: crw-1-unit-1 (unit/review)\n\
+             Sluice-Result: passed (0 run, 0 replayed) beside the queue: no required check \
+             reads its changes; covered by the result at \
+             e25fea4c0ffee5e25fea4c0ffee5e25fea4c0ffe, passed (141 run, 0 replayed)\n"
         );
     }
 
