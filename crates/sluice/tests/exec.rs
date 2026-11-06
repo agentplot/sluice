@@ -491,6 +491,65 @@ fn exec_under_the_sandbox_binds_a_socket_in_a_folder_under_its_scratch() {
     assert!(socket.len() < 104, "{socket}: {} bytes", socket.len());
 }
 
+/// 35 as amended, the C.4 sandbox row, rule core.30: under the sandbox, a
+/// landing's check binds a tool's session socket in a folder under its
+/// candidate's scratch, which is under the host user's own directory, the
+/// binary given none of the tests', so the socket's path fits macOS's 104
+/// bytes for a submission from a worktree at a long path. The check fails
+/// where its scratch is elsewhere or the socket's path is longer, so the
+/// submission lands only where it fits.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_landing_under_the_sandbox_binds_a_socket_in_a_folder_under_its_scratch() {
+    let deep = ["a-rather-long-directory-name"; 10].join("/");
+    let s = Setup::at("land-sandbox-socket", &deep);
+    let user = sluice::profiles::places::user_scratch().unwrap();
+    s.repo.write(
+        "check.sh",
+        &format!(
+            "case \"$SLUICE_TMP\" in '{user}'/*) ;; \
+             *) echo \"$SLUICE_TMP is not under {user}\" >&2; exit 1 ;; esac\n\
+             d=\"$SLUICE_TMP/x/sessions/work\"\n\
+             mkdir -p \"$d\"\n\
+             s=\"$d/x-client.sock\"\n\
+             [ ${{#s}} -lt 104 ] || {{ echo \"$s: ${{#s}} bytes\" >&2; exit 1; }}\n\
+             /usr/bin/perl -MIO::Socket::UNIX -e \
+             'IO::Socket::UNIX->new(Local => $ARGV[0], Listen => 1) or die \"binding $ARGV[0]: $!\\n\"' \
+             \"$s\"\n",
+            user = user.display()
+        ),
+    );
+    s.policy(&format!(
+        "{}\n[executor]\nkind = \"sandbox\"\nnetwork = \"localhost\"\n",
+        portless()
+    ));
+
+    // No session run first, so no pass of one stands for the candidate's.
+    let out = s
+        .command(&["submit", "bolt/x", "--json"])
+        .env_remove(sluice::profiles::places::USER_SCRATCH_VAR)
+        .env("SLUICE_ROUND_SLEEP", "record")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", text(&out));
+    let head = s.repo.git(&["rev-parse", "unit/a"]);
+    let landed = s
+        .repo
+        .git_raw(&["merge-base", "--is-ancestor", head.trim(), "bolt/x"]);
+    assert!(landed.status.success(), "not landed: {}", text(&out));
+    let results = s.results();
+    let ran: Vec<serde_json::Value> = results
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert!(
+        ran.iter().any(|l| l["outcome"] == "pass"
+            && l["executor"]["kind"] == "sandbox"
+            && l.get("worktree").is_none()),
+        "no candidate's pass under the sandbox: {results}"
+    );
+}
+
 /// 92: a clean worktree's run of the checks is recorded under its keys
 /// with its executor and host, as a run on its head from its worktree; a
 /// dirty one runs and records nothing.

@@ -23,7 +23,7 @@ clauses by number and rules by id.
 
 ## 3. A landing's check binds a socket under its scratch
 
-- [ ] 3.1 In `crates/sluice/tests/exec.rs`, add `#[cfg(target_os = "macos")]` `a_landing_under_the_sandbox_binds_a_socket_in_a_folder_under_its_scratch`, as the design's "The landing's socket test" says. True when `devenv shell -- moon run cli:sandbox` passes, run outside any sandbox as the pre-merge hook runs it, since macOS refuses a sandbox inside another and sluice's own gate runs under the sandbox.
+- [x] 3.1 In `crates/sluice/tests/exec.rs`, add `#[cfg(target_os = "macos")]` `a_landing_under_the_sandbox_binds_a_socket_in_a_folder_under_its_scratch`, as the design's "The landing's socket test" says. True when `devenv shell -- moon run cli:sandbox` passes, run outside any sandbox as the pre-merge hook runs it, since macOS refuses a sandbox inside another and sluice's own gate runs under the sandbox.
 
 ## 4. Say it to the operator
 
