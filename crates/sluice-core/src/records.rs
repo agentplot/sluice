@@ -767,6 +767,10 @@ pub struct BranchDoc {
     /// entry, and each host writes only its own.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub copies: BTreeMap<String, CopyBehind>,
+    /// 148: each write the protection refused whose cause stands, one entry
+    /// per host, ref and command; each host writes its own.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub refused_writes: Vec<RefusedWrite>,
 }
 
 /// 121: a branch read at a revision that lacks the landing its records
@@ -789,6 +793,28 @@ pub struct CopyBehind {
     pub since: String,
 }
 
+/// 148: a cause of writes the protection refused, standing until a day
+/// passes with none of its writes refused, counted here and never from the
+/// log (rule core.47).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RefusedWrite {
+    /// The instance whose ref was tried.
+    pub host: String,
+    #[serde(rename = "ref")]
+    pub reference: String,
+    /// The command, each full object name in it as `<revision>`
+    /// ([`crate::refused_writes::command_of`]).
+    pub command: String,
+    /// How many of its writes were refused while it stood.
+    pub times: u64,
+    pub first: String,
+    pub last: String,
+    /// The last refused write's: the value the ref held on the host, and
+    /// the one it would have set, `None` for a deletion.
+    pub from: Rev,
+    pub to: Option<Rev>,
+}
+
 impl BranchDoc {
     pub fn new(branch: &str) -> Self {
         BranchDoc {
@@ -809,6 +835,7 @@ impl BranchDoc {
             landed: None,
             held: None,
             copies: BTreeMap::new(),
+            refused_writes: Vec::new(),
         }
     }
 }
@@ -1080,15 +1107,34 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         failed: Option<String>,
     },
-    /// An update to the branch made by anything but sluice, refused (1).
+    /// An update to the branch made by anything but sluice, refused (1);
+    /// 148: once for each cause while it stands, the rest counted in the
+    /// branch's document.
     Protected {
         #[serde(rename = "ref")]
         reference: String,
         from: Rev,
         /// `None` for a deletion.
         to: Option<Rev>,
-        /// The command that tried it.
+        /// The command that tried it, as git ran it.
         by: String,
+        /// 148: the instance whose ref was tried; `None` on a line written
+        /// before it was named.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        host: Option<String>,
+    },
+    /// 148: a cause of refused writes that stood a day with none refused,
+    /// or put out by a newer one past the twenty: how many it refused, the
+    /// first and the last.
+    #[serde(rename = "protected-ended")]
+    ProtectedEnded {
+        host: String,
+        #[serde(rename = "ref")]
+        reference: String,
+        command: String,
+        times: u64,
+        first: String,
+        last: String,
     },
     /// 51: an outcome a carrier delivered to its session. Read under
     /// `told` too, the name an earlier sluice wrote it under (record 0070).
@@ -1512,6 +1558,119 @@ mod tests {
             [
                 "{\"schema\":\"sluice/log@1\",\"at\":\"2026-10-26T09:16:40Z\",\"event\":\"read-refused\",\"host\":\"build-1\",\"remote\":\"origin\",\"asked\":\"refs/heads/main\",\"said\":\"remote: Repository not found.\\nfatal: repository 'https://github.com/acme/app.git/' not found\"}\n",
                 "{\"schema\":\"sluice/log@1\",\"at\":\"2026-10-26T09:46:40Z\",\"event\":\"read-again\",\"host\":\"build-1\",\"remote\":\"origin\",\"since\":\"2026-10-26T09:16:40Z\",\"stood\":1800,\"rounds\":12}\n",
+            ]
+        );
+        let back: Vec<LogLine> = parse_lines(text.concat().as_bytes()).unwrap();
+        assert_eq!(back, lines);
+    }
+
+    /// 148: a branch's document written before refused writes were counted
+    /// reads with none standing and writes back unchanged, and a
+    /// `protected` line written before it named its host reads as before.
+    #[test]
+    fn records_written_before_refused_writes_still_read() {
+        let old = r#"{
+  "schema": "sluice/branch@1",
+  "branch": "main",
+  "log": "sluice/log@1",
+  "base": "c43609b",
+  "verified": true,
+  "window": 4,
+  "next_place": 3,
+  "next_candidate": 5,
+  "candidates": [],
+  "landing": null,
+  "release": [],
+  "outbox": []
+}
+"#;
+        let doc: BranchDoc = serde_json::from_str(old).unwrap();
+        assert!(doc.refused_writes.is_empty());
+        assert_eq!(String::from_utf8(to_document(&doc)).unwrap(), old);
+        let line = "{\"schema\":\"sluice/log@1\",\"at\":\"2026-10-30T05:50:23Z\",\
+                    \"event\":\"protected\",\"ref\":\"refs/heads/main\",\
+                    \"from\":\"10e4791\",\"to\":\"8079db3\",\
+                    \"by\":\"git update-ref refs/heads/main 8079db3 10e4791\"}\n";
+        let read: Vec<LogLine> = parse_lines(line.as_bytes()).unwrap();
+        assert_eq!(
+            read[0].event,
+            Event::Protected {
+                reference: "refs/heads/main".into(),
+                from: Rev::new("10e4791"),
+                to: Some(Rev::new("8079db3")),
+                by: "git update-ref refs/heads/main 8079db3 10e4791".into(),
+                host: None,
+            }
+        );
+        assert_eq!(String::from_utf8(to_line(&read[0])).unwrap(), line);
+    }
+
+    /// 148: a cause in the branch's document, a deletion's `to` written as
+    /// `null`, and the `protected` and `protected-ended` lines are the
+    /// spec's.
+    #[test]
+    fn a_refused_write_and_its_end_are_the_documents_and_the_logs() {
+        let mut doc = BranchDoc::new("main");
+        doc.refused_writes.push(RefusedWrite {
+            host: "build-1".into(),
+            reference: "refs/heads/main".into(),
+            command: "git branch -D main".into(),
+            times: 3,
+            first: "2026-10-30T05:50:23Z".into(),
+            last: "2026-11-02T16:01:20Z".into(),
+            from: Rev::new("10e4791"),
+            to: None,
+        });
+        let v = serde_json::to_value(&doc).unwrap();
+        assert_eq!(
+            v["refused_writes"],
+            serde_json::json!([{
+                "host": "build-1",
+                "ref": "refs/heads/main",
+                "command": "git branch -D main",
+                "times": 3,
+                "first": "2026-10-30T05:50:23Z",
+                "last": "2026-11-02T16:01:20Z",
+                "from": "10e4791",
+                "to": null,
+            }])
+        );
+        let back: BranchDoc = serde_json::from_value(v).unwrap();
+        assert_eq!(back, doc);
+        let lines = [
+            LogLine {
+                schema: LOG_SCHEMA.into(),
+                at: "2026-10-30T05:50:23Z".into(),
+                event: Event::Protected {
+                    reference: "refs/heads/main".into(),
+                    from: Rev::new("10e4791"),
+                    to: None,
+                    by: "git branch -D main".into(),
+                    host: Some("build-1".into()),
+                },
+            },
+            LogLine {
+                schema: LOG_SCHEMA.into(),
+                at: "2026-11-03T16:01:20Z".into(),
+                event: Event::ProtectedEnded {
+                    host: "build-1".into(),
+                    reference: "refs/heads/main".into(),
+                    command: "git branch -D main".into(),
+                    times: 3,
+                    first: "2026-10-30T05:50:23Z".into(),
+                    last: "2026-11-02T16:01:20Z".into(),
+                },
+            },
+        ];
+        let text: Vec<String> = lines
+            .iter()
+            .map(|l| String::from_utf8(to_line(l)).unwrap())
+            .collect();
+        assert_eq!(
+            text,
+            [
+                "{\"schema\":\"sluice/log@1\",\"at\":\"2026-10-30T05:50:23Z\",\"event\":\"protected\",\"ref\":\"refs/heads/main\",\"from\":\"10e4791\",\"to\":null,\"by\":\"git branch -D main\",\"host\":\"build-1\"}\n",
+                "{\"schema\":\"sluice/log@1\",\"at\":\"2026-11-03T16:01:20Z\",\"event\":\"protected-ended\",\"host\":\"build-1\",\"ref\":\"refs/heads/main\",\"command\":\"git branch -D main\",\"times\":3,\"first\":\"2026-10-30T05:50:23Z\",\"last\":\"2026-11-02T16:01:20Z\"}\n",
             ]
         );
         let back: Vec<LogLine> = parse_lines(text.concat().as_bytes()).unwrap();

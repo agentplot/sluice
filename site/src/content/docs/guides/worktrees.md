@@ -108,6 +108,22 @@ refused, and git's error starts with sluice's lines naming the command,
 the revision the branch holds and the one the write would set. Bring
 the worktree level with `git merge --abort` or `git reset --hard`.
 
+sluice counts each command it refuses once for each host, however many
+times it runs, and logs it once. A command that names full revisions
+counts as one command, whatever revisions it names. So a script or a
+timer that sets this host's branch itself shows once, with how many of
+its writes were refused. `sluice status <branch>` and `sluice overview`
+show it until a day passes with none:
+
+```console
+$ sluice status main
+main at c43609b · 0 in the queue · testing 0 at once (up to 4)
+sluice refused writes to main in the last day, by commands that are not sluice's:
+  git -C /home/me/app update-ref refs/heads/main <revision> <revision>
+    on build-1: 2024 times, first 2026-10-30T05:50:23Z, last 2026-11-02T16:01:20Z, from 10e4791 to 8079db3
+sluice sets each host's main to each landing itself: stop what runs these
+```
+
 `sluice status`, `sluice overview` and `sluice protect` warn of such a
 worktree, and nothing else changes: the landing goes through. To fix
 one, switch it to a detached checkout once its changes are committed

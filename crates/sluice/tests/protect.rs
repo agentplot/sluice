@@ -78,6 +78,8 @@ fn git_in(repo: &Repo, dir: &Path, args: &[&str]) -> Output {
     repo.git_raw(&a)
 }
 
+/// The `protected` lines of `bolt/x`'s log: one for each cause, at its
+/// first refusal (148).
 fn protected_events(repo: &Repo) -> Vec<serde_json::Value> {
     let log = repo.dir().join(".git/sluice/bolt/x/log.jsonl");
     std::fs::read_to_string(log)
@@ -88,8 +90,21 @@ fn protected_events(repo: &Repo) -> Vec<serde_json::Value> {
         .collect()
 }
 
+/// The causes of refused writes `bolt/x`'s state keeps standing, from its
+/// `branch.json`, each with how many times it was refused (148).
+fn causes(repo: &Repo) -> Vec<serde_json::Value> {
+    let doc = repo.dir().join(".git/sluice/bolt/x/branch.json");
+    std::fs::read(doc)
+        .map(|b| serde_json::from_slice::<serde_json::Value>(&b).unwrap())
+        .ok()
+        .and_then(|v| v["refused_writes"].as_array().cloned())
+        .unwrap_or_default()
+}
+
 /// 1, S1, rule core.4: every way a session's git moves a branch is
-/// refused, the branch unmoved, and each refusal reported in its log.
+/// refused, the branch unmoved, and each refusal reported in its log:
+/// each command is a cause of its own, logged once and counted once (148;
+/// rule core.47).
 #[test]
 fn every_way_git_moves_a_protected_branch_is_refused() {
     let (repo, held) = protected("protect-caught");
@@ -144,6 +159,9 @@ fn every_way_git_moves_a_protected_branch_is_refused() {
     assert_eq!(e["ref"], "refs/heads/bolt/x");
     assert_eq!(e["from"], tip.as_str());
     assert!(e["by"].as_str().unwrap().contains("git"), "{e}");
+    let causes = causes(&repo);
+    assert_eq!(causes.len(), attempts.len(), "{causes:?}");
+    assert!(causes.iter().all(|c| c["times"] == 1), "{causes:?}");
 }
 
 /// What a session does in its own work, and git's own no-op updates,
@@ -231,7 +249,9 @@ fn a_branch_with_submissions_in_its_queue_is_not_deleted() {
 /// git's `pack-refs`, which `git fetch` runs in its maintenance, writes
 /// a protected branch into `packed-refs` and prunes its loose file, its
 /// value unchanged: allowed, its queue full or not. A deletion of the
-/// loose file alone, or a move or deletion once it is packed, is refused.
+/// loose file alone, or a move or deletion once it is packed, is refused,
+/// the deletion tried twice one cause, logged once and counted twice
+/// (148).
 #[test]
 fn packing_a_protected_branch_is_allowed() {
     let repo = queued("protect-pack");
@@ -253,6 +273,15 @@ fn packing_a_protected_branch_is_allowed() {
     refused(&["update-ref", "refs/heads/bolt/x", "unit/a"]);
     refused(&["update-ref", "-d", "refs/heads/bolt/x", &tip]);
     refused(&["branch", "-D", "bolt/x"]);
+    assert_eq!(protected_events(&repo).len(), events + 2);
+    let causes = causes(&repo);
+    let deleting: Vec<_> = causes
+        .iter()
+        .filter(|c| c["command"].as_str().unwrap().contains("update-ref -d"))
+        .collect();
+    assert_eq!(deleting.len(), 1, "{causes:?}");
+    assert_eq!(deleting[0]["times"], 2, "{causes:?}");
+    assert_eq!(deleting[0]["to"], serde_json::Value::Null, "{causes:?}");
 }
 
 /// 3: a hook already there still runs, with the same updates, and its
@@ -327,6 +356,165 @@ fn sluices_own_move_is_not_refused() {
     assert_eq!(refs.move_to("bolt/x", &tip, &to).unwrap(), Moved::Moved);
     assert_eq!(repo.rev("bolt/x"), to.as_str());
     assert!(protected_events(&repo).is_empty());
+}
+
+/// Where the commands a test of refused writes runs keep the host's
+/// state: the test's own, never the host's.
+fn state_of(repo: &Repo) -> PathBuf {
+    repo.dir().join(".git/no-state")
+}
+
+/// `sluice` in the repository, under the test's own state.
+fn sl_with_state(repo: &Repo, args: &[&str]) -> Output {
+    support::isolated(&mut Command::new(sluice()))
+        .current_dir(repo.dir())
+        .args(args)
+        .env("XDG_CONFIG_HOME", repo.dir().join(".git/no-config"))
+        .env("XDG_STATE_HOME", state_of(repo))
+        .stdin(Stdio::null())
+        .output()
+        .unwrap()
+}
+
+/// A timer's write, `git -C <repository> update-ref refs/heads/bolt/x
+/// <new> <old>`, refused twice, each time with full revisions of its own:
+/// sluice moves `bolt/x` between the two, as its landings move a branch
+/// between a timer's runs. Returns the revisions `bolt/x` was at for each
+/// refusal and the one the second would have set.
+fn a_timer_refused_twice(repo: &Repo) -> [String; 3] {
+    let tip = repo.rev("bolt/x");
+    let a = repo.rev("unit/a");
+    let b = repo.branch("unit/b", "main", &[("b.txt", Some("b\n"))]);
+    let timer = |new: &str, old: &str| {
+        let dir = repo.dir().to_str().unwrap();
+        let out = support::git_command()
+            .args(["-C", dir, "update-ref", "refs/heads/bolt/x", new, old])
+            .env("XDG_CONFIG_HOME", repo.dir().join(".git/no-config"))
+            .env("XDG_STATE_HOME", state_of(repo))
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(128), "{}", text(&out));
+        assert!(
+            text(&out).contains("bolt/x is protected by sluice"),
+            "{}",
+            text(&out)
+        );
+    };
+    timer(&a, &tip);
+    let refs = LocalRefs::open(repo.dir()).unwrap();
+    assert_eq!(
+        refs.move_to("bolt/x", &Rev::new(tip.as_str()), &Rev::new(a.as_str()))
+            .unwrap(),
+        Moved::Moved
+    );
+    timer(&b, &a);
+    assert_eq!(repo.rev("bolt/x"), a);
+    [tip, a, b]
+}
+
+/// The causes `sluice status bolt/x --json` and `sluice overview --json`
+/// give `bolt/x`.
+fn shown(repo: &Repo) -> (serde_json::Value, serde_json::Value) {
+    let out = sl_with_state(repo, &["status", "bolt/x", "--json"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let status: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let out = sl_with_state(repo, &["overview", "--json"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let overview: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let branch = overview["branches"]
+        .as_array()
+        .and_then(|b| b.iter().find(|b| b["branch"] == "bolt/x"))
+        .unwrap_or_else(|| panic!("no bolt/x in {overview}"));
+    (
+        status["refused_writes"].clone(),
+        branch["refused_writes"].clone(),
+    )
+}
+
+/// 124, 148, rule core.47: a timer's `git -C <repository> update-ref
+/// refs/heads/bolt/x <new> <old>`, refused twice with full revisions of
+/// its own each time, is one cause: one `protected` line, naming the host
+/// and the first write as git ran it, and one cause in `branch.json`
+/// refused twice, the last write's revisions on it, which status and the
+/// overview give as it stands.
+#[test]
+fn a_timers_writes_are_one_cause() {
+    let (repo, _held) = protected("protect-timer");
+    let [tip, a, b] = a_timer_refused_twice(&repo);
+    let host = sluice::profiles::checks::hostname();
+
+    let lines = protected_events(&repo);
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    let line = &lines[0];
+    assert_eq!(line["host"], host.as_str(), "{line}");
+    assert_eq!(line["ref"], "refs/heads/bolt/x", "{line}");
+    assert_eq!(
+        (&line["from"], &line["to"]),
+        (&tip.as_str().into(), &a.as_str().into())
+    );
+    let by = line["by"].as_str().unwrap();
+    assert!(
+        by.ends_with(&format!("update-ref refs/heads/bolt/x {a} {tip}")),
+        "{line}"
+    );
+
+    let causes = causes(&repo);
+    assert_eq!(causes.len(), 1, "{causes:?}");
+    let cause = &causes[0];
+    assert_eq!(cause["host"], host.as_str(), "{cause}");
+    assert_eq!(cause["ref"], "refs/heads/bolt/x", "{cause}");
+    assert_eq!(
+        cause["command"],
+        format!(
+            "{} update-ref refs/heads/bolt/x <revision> <revision>",
+            by.strip_suffix(&format!(" update-ref refs/heads/bolt/x {a} {tip}"))
+                .unwrap()
+        ),
+        "{cause}"
+    );
+    assert!(
+        cause["command"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("-C {}", repo.dir().display())),
+        "{cause}"
+    );
+    assert_eq!(cause["times"], 2, "{cause}");
+    assert_eq!(cause["first"], line["at"], "{cause}");
+    assert!(cause["last"].as_str() >= cause["first"].as_str(), "{cause}");
+    assert_eq!(
+        (&cause["from"], &cause["to"]),
+        (&a.as_str().into(), &b.as_str().into())
+    );
+
+    let (status, overview) = shown(&repo);
+    assert_eq!(status, serde_json::json!(causes), "{status}");
+    assert_eq!(overview, serde_json::json!(causes), "{overview}");
+}
+
+/// 131, 132, 148, rule core.41: the count is kept in the branch's state,
+/// never counted from the log: with `log.jsonl` moved to `log/1.jsonl`,
+/// as a part's close moves it, status and the overview still give the
+/// timer's cause refused twice.
+#[test]
+fn a_refused_writes_count_is_in_the_state_not_the_log() {
+    let (repo, _held) = protected("protect-count-kept");
+    a_timer_refused_twice(&repo);
+    let records = repo.dir().join(".git/sluice/bolt/x");
+    std::fs::create_dir_all(records.join("log")).unwrap();
+    std::fs::rename(records.join("log.jsonl"), records.join("log/1.jsonl")).unwrap();
+    assert!(protected_events(&repo).is_empty());
+
+    let (status, overview) = shown(&repo);
+    for (from, causes) in [("status", &status), ("overview", &overview)] {
+        assert_eq!(causes.as_array().map(Vec::len), Some(1), "{from}: {causes}");
+        assert_eq!(causes[0]["times"], 2, "{from}: {causes}");
+    }
+    assert_eq!(status, overview);
 }
 
 /// Installing twice changes nothing; a moved binary's path is rewritten.
