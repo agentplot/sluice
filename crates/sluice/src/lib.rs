@@ -4460,13 +4460,22 @@ fn write_status(
         .filter(|s| s.state == sluice_core::records::State::Queued)
         .count();
     let held = overview::held_clause(room, queued, status.testing, status.window);
-    writeln!(
-        out,
-        "{} at {at} · {} in the queue · testing {} at once{up_to}{held}",
-        status.branch,
-        status.depth(),
-        status.testing
-    )?;
+    if status.gone {
+        // 105: its records stay and are read; nothing is formed on it.
+        writeln!(
+            out,
+            "{}",
+            overview::gone_line(&status.branch, status.at.as_ref())
+        )?;
+    } else {
+        writeln!(
+            out,
+            "{} at {at} · {} in the queue · testing {} at once{up_to}{held}",
+            status.branch,
+            status.depth(),
+            status.testing
+        )?;
+    }
     match pusher {
         None => {}
         Some(Pusher {
@@ -4598,6 +4607,7 @@ fn status_json(status: &Status, submissions: &[Submission]) -> serde_json::Value
     let mut json = serde_json::json!({
         "branch": status.branch,
         "at": status.at,
+        "gone": status.gone,
         "depth": status.depth(),
         "testing": status.testing,
         "window": status.window,

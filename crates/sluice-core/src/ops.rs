@@ -346,6 +346,14 @@ impl Queue {
 pub struct Status {
     pub branch: String,
     pub at: Option<Rev>,
+    /// 105: the branch itself is gone: the host holds no revision of it,
+    /// read with no fetch where the records have seen one. Its records
+    /// stay, and are read as any branch's.
+    pub gone: bool,
+    /// 26, 105: the branch has records: its read found some, or, where it
+    /// found none of a branch the host holds no revision of, the records
+    /// list it, as the overview does.
+    pub recorded: bool,
     pub testing: usize,
     pub window: usize,
     pub parallel: Option<usize>,
@@ -403,9 +411,11 @@ impl Status {
         crate::overview::in_queue(&self.submissions).count()
     }
 
-    /// No such branch, and no records of one: nothing sluice lands on.
+    /// No such branch, and no records of one: nothing sluice lands on
+    /// and nothing a status reads (105). A branch gone whose records stay
+    /// is known by them.
     pub fn is_unknown(&self) -> bool {
-        self.at.is_none() && self.submissions.is_empty() && self.finished == 0
+        self.at.is_none() && !self.recorded
     }
 }
 
@@ -1246,14 +1256,27 @@ impl Sluice<'_> {
     /// last saw, as the overview reads it (ADR 0046): a remote branch is
     /// not fetched for a read. Only a branch whose records have seen no
     /// revision yet is read from the branch itself.
+    ///
+    /// 105: a branch removed is read from its records as any other, and
+    /// said to be gone: by that read where it was made, and otherwise by
+    /// the revision the host holds of it, with no fetch (record 0091).
     pub fn status(&self, branch: &str) -> Result<Status> {
         let snapshot = self.seams.state.read(branch)?;
+        let found = snapshot.version > 0 || !snapshot.files.is_empty();
         let kept_out = kept_out(&Line::read_log(&snapshot)?);
         let line = Line::load(branch, snapshot)?;
-        let at = match &line.doc.base {
-            Some(base) => Some(base.clone()),
-            None => self.seams.branch.read(branch)?,
+        let (at, gone) = match &line.doc.base {
+            Some(base) => (
+                Some(base.clone()),
+                self.seams.branch.held(branch)?.is_none(),
+            ),
+            None => {
+                let read = self.seams.branch.read(branch)?;
+                let gone = read.is_none();
+                (read, gone)
+            }
         };
+        let recorded = found || (gone && self.seams.state.branches()?.iter().any(|b| b == branch));
         let policy = match &at {
             Some(rev) => self.policy_at(rev)?,
             None => None,
@@ -1284,6 +1307,8 @@ impl Sluice<'_> {
         Ok(Status {
             branch: branch.into(),
             at,
+            gone,
+            recorded,
             testing: line
                 .doc
                 .candidates
