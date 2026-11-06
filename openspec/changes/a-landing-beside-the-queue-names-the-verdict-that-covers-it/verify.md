@@ -1,85 +1,43 @@
 # Verify
 
 The work on `change/a-landing-beside-the-queue-names-the-verdict-that-covers-it`
-at 63bcb041, which holds main at 3e0ae764, checked on 2026-11-05 against
+at 4d23e00d, which holds main at 3e0ae764, checked on 2026-11-05 against
 this change's proposal, design, its delta spec `landing-beside`, and its
 tasks, with main still at 3e0ae764.
 
-**The work falls short in one place: archived, its spec fails the
-gate.** Applied to `openspec/specs/landing-beside/spec.md`, the delta's
-modified requirement "The outcome says it landed beside the queue" is
-718 characters of requirement text. `openspec validate --specs --strict`,
-the gate's `root:specs`, fails it ("Requirement text is very long (>500
-characters)"), under the pinned openspec 1.14.3 and under 1.15.0. So the
-change is not archived; see "What fails" below.
-
-The code holds. Every requirement and scenario of the spec is met by the
-code and by the test the design's table names for it, and each of those
-tests passed. All 21 tasks are ticked, each one's condition holds, and
-the checks the tasks name pass. Task 5.2's notes are in the place's
-notes, which are not committed; this report carries them under "After
-the landing" below.
-
-## What fails
-
-`openspec archive a-landing-beside-the-queue-names-the-verdict-that-covers-it`
-applies cleanly (2 added, 2 modified), and then
-
-```
-$ openspec validate --specs --strict --no-interactive
-Totals: 64 passed, 1 failed (65 items)
-$ openspec validate landing-beside --type spec --strict --json
-requirements[6]: WARNING Requirement text is very long (>500 characters). Move examples and edge cases into scenarios, or split it into separate requirements that each state one behavior.
-```
-
-`requirements[6]` is "The outcome says it landed beside the queue". On
-main it is about 330 characters. The delta adds the forge's words, the
-`sluice` check's title, the covering result in its summary and report,
-the report being the check's text and the one comment, and no check per
-required check (118). Those take it to 718. `openspec validate <change>
---strict`, and so `root:changes`, does not measure a modified
-requirement's text. So the change is valid, and only the archived spec
-fails. The gate did not run `root:specs` at 63bcb041, since no file
-under `openspec/specs` had changed.
-
-The fix is in the delta spec,
-`specs/landing-beside/spec.md`. Keep "The outcome says it landed beside
-the queue" to what submit, wait, the notice and the `sluice` check
-say, and move the forge's report into a requirement of its own, e.g. "A
-request landed beside names the result that covers it": the check's
-summary and the report name the covering result by its revision and
-words, the report is the check's text and the request's one comment
-with no row, and no check per required check is posted (118). Move the
-two forge scenarios under it. Each requirement must stay under 500
-characters. Then `openspec archive` it in a scratch copy and run
-`openspec validate --specs --strict` to show that the archived spec
-passes. Record the fix as a task of the change, ticked. No code changes.
-
-The archive was made and committed (d195e377) before `root:specs` was
-run on its result. It is reverted on the branch, so the change stands
-open again at `openspec/changes/a-landing-beside-the-queue-names-the-verdict-that-covers-it`.
+**The work holds.** Every requirement and scenario of the delta spec is
+met by the code and by the test the design's table names for it, and
+each of those tests passed in the gate. All 22 tasks are ticked and each
+one's condition holds. The gate's checks pass on 4d23e00d, the change is
+valid, and, archived, every spec passes `root:specs`, each requirement
+of `landing-beside` under openspec's 500 characters. Task 5.2's notes
+are in the place's notes, which are not committed; this report carries
+them under "After the landing" below.
 
 ## Checks
 
 | Check | Result |
 |---|---|
-| `sluice exec main` on 63bcb041, against main at 3e0ae764 | 15 of 15 tasks passed in 12m 28s, recorded under their keys for 63bcb04: core:test 131 tests, seams:test 2, fakes:test 7, conformance:test 270, cli:test 569 and cli:tools 527, none failed; cli:e2e 44 checks ok, none not ok; root:format, root:lint, root:adrs, root:changes, root:screenshots-scene, site:prose, site:rules and plugin-sluice:validate. Every test the tables below name passed among them |
-| `openspec validate a-landing-beside-the-queue-names-the-verdict-that-covers-it --strict` | valid |
-| `openspec validate --specs --strict --no-interactive` (`root:specs`) after `openspec archive`, pinned openspec 1.14.3 | **fails**: 64 passed, 1 failed, `landing-beside`'s `requirements[6]` over 500 characters; 65 of 65 pass with the archive reverted |
+| `sluice exec main` on 4d23e00d, against main at 3e0ae764 | 15 of 15 tasks passed in 12m 25s, recorded under their keys for 4d23e00: core:test 131 tests, seams:test 2, fakes:test 7, conformance:test 270, cli:test 569 and cli:tools 527, none failed; cli:e2e 44 checks ok, none not ok; root:format, root:lint, root:adrs, root:changes, root:screenshots-scene, site:prose, site:rules and plugin-sluice:validate. Every test the tables below name passed among them |
+| `openspec validate a-landing-beside-the-queue-names-the-verdict-that-covers-it --strict`, pinned openspec 1.14.3 | valid; `openspec validate --changes --strict` passes 8 of 8 |
+| `openspec archive a-landing-beside-the-queue-names-the-verdict-that-covers-it --yes`, then `openspec validate --specs --strict --no-interactive` (`root:specs`), in a scratch copy of `openspec/` at 4d23e00d, pinned openspec 1.14.3 (5.3) | archive applies 3 added and 2 modified to `landing-beside`; 65 of 65 specs pass, `landing-beside` with no issue |
+| The archived `landing-beside`'s requirement text, in characters | 416, 376, 265, 374, 185, 261; and the change's: "The outcome says it landed beside the queue" 341, "A landing beside's result reads as passed with nothing run" 332, "A landing beside names the result that covers it" 382, "A request landed beside names the result that covers it" 426 |
 | `git merge-base --is-ancestor c7ee329d HEAD` (1.4) | succeeds; main's 3e0ae764 is also in the branch, by 042d327c |
 | `git -C ~/Code/github_agentplot/blueprints/blueprints.git log -1 --format=%s 1b21406` (1.2) | names 23, 140 and S68 |
 | `git -C ~/Code/github_agentplot/blueprints/main log origin/main --format=%s \| grep -c 'record 0083'` (1.3) | 1: eb0d3eb, `design(sluice): a landing beside the chain names as its verdict its own, … (23, 140, S68; sluice record 0083, accepted on the user's word 2026-11-06)` |
 | `git log --format=%s main..HEAD` | two `feat` commits, eaa5968a `feat(seams)` and 6f8e54b8 `feat(core)`, so the release is a minor one; the trailer's change is 0358d486 `fix(core)`, the forge's f5eed6bc `fix(cli)` |
 
 The report was written outside the worktree while the gate ran, so the
-run was recorded under its keys (rule core.18).
+run was recorded under its keys (rule core.18). The gate does not run
+`root:specs` on 4d23e00d, since no file under `openspec/specs` changes
+there; the archive's own commit does, and the scratch archive above
+shows it passing.
 
 moon warned 33 times across the run. 28 warnings say it could not store
 a task's outputs or a blob under its caches, four that it was asked to
 hash a directory as an input, and one that it skipped an install for
 want of a network. Every task still passed. None of these warnings comes
-from this change; the code stage's notes name the same two cache
-warnings.
+from this change.
 
 `git grep "landed beside the queue"` outside the archive, the records
 and this change finds no reader of the old trailer's words: only doc
@@ -101,17 +59,17 @@ it.
 
 | Requirement | Scenario | Where it is met | Test, and the task it passes in |
 |---|---|---|---|
-| A landing beside's result reads as passed with nothing run (added) | A reader of the head reads it as passed | `beside_message` in `crates/sluice-core/src/text.rs` writes `Sluice-Submission`, `Sluice-From` and `Sluice-Result: passed (0 run, 0 replayed) beside the queue: no required check reads its changes; …`, no `Sluice-Tested` | `a_landing_beside_reads_as_passed_to_git`, against real git through the local refs profile: both trailer readings give one line, first word `passed`, whole as written, and `Sluice-Tested` empty; cli:tools |
+| A landing beside's result reads as passed with nothing run (added) | A reader of the head reads it as passed | `beside_message` in `crates/sluice-core/src/text.rs` writes `Sluice-Submission`, `Sluice-From` and `Sluice-Result: passed (0 run, 0 replayed) beside the queue: no required check reads its changes; …`, no `Sluice-Tested` | `a_landing_beside_reads_as_passed_to_git` (`crates/sluice/tests/local_refs.rs`), against real git through the local refs profile: both trailer readings give one line, first word `passed`, whole as written, and `Sluice-Tested` empty; cli:tools |
 | | A combination lands after a landing beside | `landing_message` unchanged in form, its result through `verdict_words` | `docs_land_beside_two_code_submissions_under_test_and_they_land_carrying_them`, extended: both of the combination's landings carry `Sluice-Tested` and their own `passed (`, no `beside the queue`; conformance:test. The through-queue message whole: `shared.rs`'s S1 and `text.rs`'s tests, conformance:test and core:test |
 | A landing beside names the result that covers it (added) | Docs landed beside after a tested landing | `choose_beside` passes `line.doc.covered_by` to `beside_message`, which writes `covered by the result at <at>, <verdict_words>`; the chain's landing writes the intent's `covering` at its last commit with the deepest candidate's words, which that commit's own `Sluice-Result` names (`step.rs`) | `a_landing_beside_names_its_result_and_the_result_that_covers_it`, conformance:test: no `Sluice-Tested`, and the result `<BESIDE>; covered by the result at <L in full>, <L's own words>`; `a_landing_beside_names_passed_and_what_covers_it`, the whole message for a 40-digit revision, `passed`, 141 run, 0 replayed, core:test |
 | | Two landings beside in a row | `perform_landing` for a landing beside sets `covered_by` to the intent's `covering`, which is the branch's `covered_by` as it stood | `two_landings_beside_in_a_row_both_land_with_the_combination`, extended: both covered by the result at `L`, the second naming no revision of the first; conformance:test |
 | | Covered by a combination that landed after a landing beside | the chain's landing's `covering` | `docs_land_beside_two_code_submissions_…`, extended: a further docs submission is covered by the result at the combination's last landing, in its words; conformance:test |
+| A request landed beside names the result that covers it (added) | The request's check names the covering result | `outcome_shown` in `crates/sluice/src/profiles/github/pulls.rs` titles the check "landed as <short> beside the queue" and writes "Landed on <branch> as `<short>` beside the queue, with no check run: no required check reads its changes." then ` Covered by the result at \`<short>\`, <words>.` where `covered_by` is set; `render::has_report` is true for a landing beside with `covered_by`, and `draw` writes the head "landed on <branch> as <short> with no check run: no required check reads its changes", then the line with the revision linked to its commit, and no row | `a_landing_beside_the_queue_says_no_check_ran`, the title and both summaries, the covering one at `e25fea4`, `passed (141 run, 0 replayed)`; `landed_testing_and_formed_again` (`render.rs`): a landing beside with a covering verdict has the head and the linked line, one with none no report; cli:test |
+| | A request's earlier report is brought up to date | `show_report` edits the comment found by the host's id or its marker, and returns before the checks per required check for any landing beside | `a_landing_beside_edits_the_requests_report`, over a `FileForge`: the blamed report posted, then the same comment edited once to the landing beside's report, no second comment, the `sluice` check's text that report, and only the `sluice` check on the new head; cli:test |
 | What never lands beside (modified) | The policy; A runner that reads every check; The reading fails | unchanged | `the_policy_never_lands_beside` and the tests beside it in `beside.rs`, conformance:test |
 | | A revision no result covers | `choose_beside` returns where `verified` does not hold; a moved branch clears `covered_by` with `verified` | `nothing_lands_beside_on_a_revision_no_verdict_covers`, asserting `covered_by` unset on the branch and the submission; conformance:test |
 | | State that names no covering result | `choose_beside` returns where `covered_by` is `None`, `verified` or not | `state_that_names_no_covering_result_takes_the_queue_once`: `covered_by` removed from `branch.json` under the branch's lock, the docs land through the queue with `Sluice-Tested`, the branch then covered at that landing, and the next docs land beside covered by it; conformance:test |
-| The outcome says it landed beside the queue (modified) | The waiting submit's words; JSON; The notice | unchanged: `words.rs`'s `landed_beside` and `notice` pass `covered_by` by with `..`, the only change to them, so the words and `beside: true` are as record 0075's change built and tested them | `beside_the_queue_in_words` and the notice test in `words.rs`, the notice's built with `covered_by: None`; cli:test |
-| | The request's check names the covering result | `outcome_shown` in `crates/sluice/src/profiles/github/pulls.rs` appends ` Covered by the result at \`<short>\`, <words>.` where `covered_by` is set, today's summary where not; `render::has_report` is true for a landing beside with `covered_by`, and `draw` writes the head, then the line with the revision linked to its commit, and no row | `a_landing_beside_the_queue_says_no_check_ran`, extended with both summaries, and `landed_testing_and_formed_again`, extended: a landing beside with a covering verdict has the head and the line, one with none no report; cli:test |
-| | A request's earlier report is brought up to date | `show_report` edits the comment found by the host's id or its marker, and returns before the checks per required check for any landing beside | `a_landing_beside_edits_the_requests_report`, over a `FileForge`: the blamed report posted, then the same comment edited once to the landing beside's report, no second comment, the `sluice` check's text that report, and only the `sluice` check on the new head; cli:test |
+| The outcome says it landed beside the queue (modified) | The waiting submit's words; JSON; The notice | unchanged: `words.rs`'s `landed_beside` and `notice` pass `covered_by` by with `..`, the only change to them, so the words and `beside: true` are as record 0075's change built and tested them. The `sluice` check's title, "landed as <rev> beside the queue", is `outcome_shown`'s | `beside_the_queue_in_words` and the notice test in `words.rs`, the notice's built with `covered_by: None`; the title in `a_landing_beside_the_queue_says_no_check_ran`; cli:test |
 
 The records written before the change read and write back unchanged:
 `a_branch_and_an_outcome_from_before_covered_by_still_read`, core:test,
@@ -127,7 +85,7 @@ change did not touch, and `shared.rs`'s S1 asserts it whole.
 
 ## Tasks
 
-21 of 21 are ticked, and each one's condition holds:
+22 of 22 are ticked, and each one's condition holds:
 
 - 1.1, 1.3: record 0083 is accepted on the user's words of 2026-11-06,
   "Approve: push the statement change and start its code", citing
@@ -171,6 +129,10 @@ change did not touch, and `shared.rs`'s S1 asserts it whole.
   change lands (for the orchestrator)". They are not committed, as the
   code stage is told; this report carries them below. No task of the
   change waits on the landing.
+- 5.3: the delta spec gives the forge's report a requirement of its
+  own, "A request landed beside names the result that covers it", with
+  the two forge scenarios under it, and the proposal names it; archived,
+  the specs pass, as the checks above.
 
 ## After the landing
 
