@@ -28,6 +28,8 @@ postprocessors = [
 
 [git]
 conventional_commits = true
+# A commit that is not conventional, a `Revert "..."` that git revert
+# wrote among them, is in no release's notes and bumps no version.
 filter_unconventional = true
 split_commits = false
 protect_breaking_commits = true
