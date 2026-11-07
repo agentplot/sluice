@@ -76,13 +76,7 @@ pub fn run(
     let from = s.seams().driver.session(worktree).ok().map(|x| x.from);
     let path = from.as_ref().and_then(|f| f.path.clone());
     let sub = match (&from, &path) {
-        (Some(f), Some(p)) => s.home(
-            &branches,
-            Here {
-                path: p,
-                branch: &f.worktree,
-            },
-        )?,
+        (Some(f), Some(p)) => s.home(&branches, &Here::at(p, &f.worktree))?,
         _ => None,
     };
     let place: Option<SessionPlace> = match &path {

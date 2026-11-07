@@ -32,7 +32,8 @@ use sluice_core::records::State as Entry;
 use sluice_core::{Seams, Sluice, Step, SystemClock};
 use sluice_seams::{
     Branch, Checkout, Delivery, Driver, Formed, HostCopy, LandingCommit, Moved, Notification,
-    Place, Progress, Rev, RunHandle, RunRequest, Session, Settings, TaskLog, TaskProgress, Tests,
+    Place, Progress, Rev, RunHandle, RunRequest, Session, Settings, Submitter, TaskLog,
+    TaskProgress, Tests,
 };
 use support::{Repo, Scratch};
 
@@ -296,6 +297,16 @@ impl Driver for Sessions {
         // would name the one this test runs in (51).
         s.from.session = None;
         Ok(s)
+    }
+
+    /// 124: the real driver's submitter of a branch by name, its agent
+    /// the one the rig names for the branch.
+    fn named(&self, branch: &str) -> Result<Submitter> {
+        let mut from = self.inner.named(branch)?;
+        if let Some(agent) = self.agents.borrow().get(branch) {
+            from.agent = agent.clone();
+        }
+        Ok(from)
     }
 
     fn notify(&self, n: &Notification) -> Result<Delivery> {

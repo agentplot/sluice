@@ -4,7 +4,7 @@
 
 use sluice_core::records::{BesideWhy, FlakyKey, Recorded};
 use sluice_core::KeptOut;
-use sluice_seams::{Decided, Outcome, Rev};
+use sluice_seams::{Decided, Outcome, Rev, Submitter};
 
 /// `passed` or `failed`.
 pub fn outcome(o: Outcome) -> &'static str {
@@ -76,10 +76,42 @@ pub fn agent_in(branch: &str) -> String {
     format!("the agent working in {branch}")
 }
 
-/// Time-limit-1 66: the way on after a run its time limit ended, for the
-/// agent working in `worktree`. Nothing was recorded for a test it cut
-/// off, so the same head is tested afresh, a pull request's too (120).
-pub fn timed_out_way_on(worktree: &str, tasks: &[&str]) -> String {
+/// Who moves a submission on, as its way on names them (D10).
+#[derive(Clone, Copy, Debug)]
+pub enum Mover<'a> {
+    /// The agent working in the worktree it came from, named by that
+    /// worktree's branch, a pull request's the one it was opened from.
+    Agent(&'a str),
+    /// For `branch` submitted by name to `target`, in which no agent
+    /// works: whoever submits it by name, once a fix lands on the branch
+    /// (124; record 0090; flume 203).
+    ByName { branch: &'a str, target: &'a str },
+}
+
+impl<'a> Mover<'a> {
+    /// Who moves on the submission to `target` that `from` made.
+    pub fn of(from: &'a Submitter, target: &'a str) -> Mover<'a> {
+        if from.by_name() {
+            Mover::ByName {
+                branch: &from.worktree,
+                target,
+            }
+        } else {
+            Mover::Agent(from.head.as_deref().unwrap_or(&from.worktree))
+        }
+    }
+}
+
+/// 124, D10: the submit that moves `branch`'s submission to `target` on,
+/// once a fix lands on the branch.
+fn submit_by_name(branch: &str, target: &str) -> String {
+    format!("sluice submit {target} --head {branch}")
+}
+
+/// Time-limit-1 66: the way on after a run its time limit ended, for
+/// `mover`. Nothing was recorded for a test it cut off, so the same head
+/// is tested afresh, a pull request's too (120).
+pub fn timed_out_way_on(mover: Mover<'_>, tasks: &[&str]) -> String {
     let (recorded, which) = match tasks {
         [] => (String::new(), "a test".to_string()),
         [one] => (format!("nothing was recorded for {one}: "), one.to_string()),
@@ -88,36 +120,67 @@ pub fn timed_out_way_on(worktree: &str, tasks: &[&str]) -> String {
             "one".to_string(),
         ),
     };
-    format!(
-        "{recorded}if the host was slow, {} submits the same head again; \
-         if {which} never ends, it fixes it there and submits again",
-        agent_in(worktree)
-    )
+    match mover {
+        Mover::Agent(worktree) => format!(
+            "{recorded}if the host was slow, {} submits the same head again; \
+             if {which} never ends, it fixes it there and submits again",
+            agent_in(worktree)
+        ),
+        Mover::ByName { branch, target } => format!(
+            "{recorded}if the host was slow, {} submits the same head again; \
+             if {which} never ends, a fix lands on {branch} first",
+            submit_by_name(branch, target)
+        ),
+    }
 }
 
-/// The way on after a check failed on this submission, for the agent
-/// working in `worktree`.
-pub fn fix_way_on(worktree: &str) -> String {
-    format!("{} fixes it there and submits again", agent_in(worktree))
+/// The way on after a check failed on this submission, for `mover`.
+pub fn fix_way_on(mover: Mover<'_>) -> String {
+    match mover {
+        Mover::Agent(worktree) => {
+            format!("{} fixes it there and submits again", agent_in(worktree))
+        }
+        Mover::ByName { branch, target } => format!(
+            "once a fix lands on {branch}, {} submits it again",
+            submit_by_name(branch, target)
+        ),
+    }
 }
 
 /// Could-not-run-1 115: the way on after the host could not run `tasks`,
-/// for the agent working in `worktree`.
-pub fn could_not_run_way_on(worktree: &str, tasks: &[&str]) -> String {
+/// for `mover`.
+pub fn could_not_run_way_on(mover: Mover<'_>, tasks: &[&str]) -> String {
+    let again = match mover {
+        Mover::Agent(worktree) => format!("{} submits again", agent_in(worktree)),
+        Mover::ByName { branch, target } => {
+            format!("{} submits it again", submit_by_name(branch, target))
+        }
+    };
     format!(
-        "the host could not run {}: once it can, {} submits again",
-        tasks.join(", "),
-        agent_in(worktree)
+        "the host could not run {}: once it can, {again}",
+        tasks.join(", ")
     )
 }
 
-/// The way on after a conflict with what is ahead of it on `branch`, for
-/// the agent working in `worktree`.
-pub fn conflict_way_on(worktree: &str, branch: &str) -> String {
-    format!(
-        "{} merges or rebases onto {branch} there and submits again",
-        agent_in(worktree)
-    )
+/// The way on after a conflict with what is ahead of it on `onto`, for
+/// `mover`. A fix to a branch submitted by name merges `onto` at `at`, the
+/// revision it was tested on, or the branch's where it was not tested
+/// (D10); an agent merges or rebases in its own worktree, and `at` is not
+/// read for it.
+pub fn conflict_way_on(mover: Mover<'_>, onto: &str, at: Option<&Rev>) -> String {
+    match mover {
+        Mover::Agent(worktree) => format!(
+            "{} merges or rebases onto {onto} there and submits again",
+            agent_in(worktree)
+        ),
+        Mover::ByName { branch, target } => {
+            let at = at.map_or(String::new(), |r| format!(" at {}", r.short()));
+            format!(
+                "once a fix that merges {onto}{at} lands on {branch}, {} submits it again",
+                submit_by_name(branch, target)
+            )
+        }
+    }
 }
 
 /// 140: why a submission landed beside the queue with nothing run.
@@ -240,7 +303,7 @@ pub fn kept_out_refusal(branch: &str, worktree: &str, kept: &[KeptOut]) -> Strin
 
 #[cfg(test)]
 mod tests {
-    use sluice_seams::{Contested, Submitter};
+    use sluice_seams::Contested;
 
     use super::*;
 
@@ -257,13 +320,15 @@ mod tests {
     /// sluice takes, a pull request's included; none names a draft.
     #[test]
     fn the_ways_on_name_a_submit_and_no_draft() {
+        let a = Mover::Agent("unit/a");
+        let at = Rev::new("abc1234def");
         let ways = [
-            timed_out_way_on("unit/a", &[]),
-            timed_out_way_on("unit/a", &["cli:test"]),
-            timed_out_way_on("unit/a", &["cli:test", "cli:tools"]),
-            fix_way_on("unit/a"),
-            could_not_run_way_on("unit/a", &["cli:tools"]),
-            conflict_way_on("unit/a", "main"),
+            timed_out_way_on(a, &[]),
+            timed_out_way_on(a, &["cli:test"]),
+            timed_out_way_on(a, &["cli:test", "cli:tools"]),
+            fix_way_on(a),
+            could_not_run_way_on(a, &["cli:tools"]),
+            conflict_way_on(a, "main", Some(&at)),
         ];
         for w in &ways {
             assert!(w.contains("submit"), "{w}");
@@ -274,30 +339,90 @@ mod tests {
             assert!(!w.contains("your worktree"), "{w}");
         }
         assert_eq!(
-            fix_way_on("unit/a"),
+            fix_way_on(a),
             "the agent working in unit/a fixes it there and submits again"
         );
         assert_eq!(
-            could_not_run_way_on("unit/a", &["cli:tools"]),
+            could_not_run_way_on(a, &["cli:tools"]),
             "the host could not run cli:tools: once it can, the agent working in unit/a submits \
              again"
         );
         assert_eq!(
-            conflict_way_on("unit/a", "main"),
+            conflict_way_on(a, "main", Some(&at)),
             "the agent working in unit/a merges or rebases onto main there and submits again"
         );
+    }
+
+    fn from(worktree: &str, head: Option<&str>) -> Submitter {
+        Submitter {
+            agent: "a".into(),
+            worktree: worktree.into(),
+            path: None,
+            head: head.map(str::to_string),
+            host: None,
+            session: None,
+        }
+    }
+
+    /// 124, D10: the way on of a branch submitted by name is its caller's:
+    /// a fix landed on the branch, then the submit by name again; for a
+    /// conflict, the fix merges the target at the revision named first. No
+    /// agent works in a branch sluice lands on, so none is named; a
+    /// worktree's own submission and a pull request's still name theirs.
+    #[test]
+    fn the_way_on_by_name_is_its_callers() {
+        let named = from("bolt/x", Some("bolt/x"));
+        let by_name = Mover::of(&named, "main");
+        let at = Rev::new("abc1234def");
+        assert_eq!(
+            fix_way_on(by_name),
+            "once a fix lands on bolt/x, sluice submit main --head bolt/x submits it again"
+        );
+        assert_eq!(
+            conflict_way_on(by_name, "main", Some(&at)),
+            "once a fix that merges main at abc1234 lands on bolt/x, sluice submit main --head \
+             bolt/x submits it again"
+        );
+        assert_eq!(
+            timed_out_way_on(by_name, &["cli:test"]),
+            "nothing was recorded for cli:test: if the host was slow, sluice submit main --head \
+             bolt/x submits the same head again; if cli:test never ends, a fix lands on bolt/x \
+             first"
+        );
+        assert_eq!(
+            could_not_run_way_on(by_name, &["cli:tools"]),
+            "the host could not run cli:tools: once it can, sluice submit main --head bolt/x \
+             submits it again"
+        );
+        for w in [
+            fix_way_on(by_name),
+            conflict_way_on(by_name, "main", Some(&at)),
+            conflict_way_on(by_name, "main", None),
+            timed_out_way_on(by_name, &[]),
+            could_not_run_way_on(by_name, &["cli:tools"]),
+        ] {
+            assert!(!w.contains("agent"), "{w}");
+            assert!(w.contains("sluice submit main --head bolt/x"), "{w}");
+        }
+        let own = from("unit/a", None);
+        assert!(matches!(Mover::of(&own, "main"), Mover::Agent("unit/a")));
+        let request = from("pull/9", Some("feature/a"));
+        assert!(matches!(
+            Mover::of(&request, "main"),
+            Mover::Agent("feature/a")
+        ));
     }
 
     #[test]
     fn a_time_limit_names_the_agent_in_the_worktree() {
         assert_eq!(
-            timed_out_way_on("unit/a", &["tests:t-cards"]),
+            timed_out_way_on(Mover::Agent("unit/a"), &["tests:t-cards"]),
             "nothing was recorded for tests:t-cards: if the host was slow, the agent working \
              in unit/a submits the same head again; if tests:t-cards never ends, it fixes it \
              there and submits again"
         );
         assert_eq!(
-            timed_out_way_on("unit/a", &["tests:a", "tests:b"]),
+            timed_out_way_on(Mover::Agent("unit/a"), &["tests:a", "tests:b"]),
             "nothing was recorded for tests:a, tests:b: if the host was slow, the agent \
              working in unit/a submits the same head again; if one never ends, it fixes it \
              there and submits again"

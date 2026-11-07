@@ -15,6 +15,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
+use sluice::profiles::worktrunk::Worktrunk;
+use sluice_seams::{Driver as _, Submitter};
 use support::Repo;
 
 const POLICY: &str = "[tests]\nrunner = \"command\"\ncommand = \"sh check.sh\"\n\n\
@@ -416,6 +418,101 @@ fn the_submitter_is_the_agent_or_the_branch() {
     assert_eq!(s.status(one)["from"]["worktree"], "unit/a");
     assert_eq!(s.status(two)["from"]["agent"], "crw-1-unit-1");
     assert_eq!(s.status(two)["from"]["worktree"], "unit/b");
+}
+
+/// What [`name_a_branchs_submitter`] prints its answer after.
+const NAMED: &str = "named: ";
+
+/// The child of [`named_records_no_worktree`]: the worktrunk driver's
+/// submitter of the branch `SLUICE_TEST_NAMED` names, on the host
+/// `box-1`, as JSON, in the folder and the session its parent gave it.
+/// Run any other way, it does nothing.
+#[test]
+fn name_a_branchs_submitter() {
+    let Ok(branch) = std::env::var("SLUICE_TEST_NAMED") else {
+        return;
+    };
+    let from = Worktrunk::new("box-1").named(&branch).unwrap();
+    println!("{NAMED}{}", serde_json::to_string(&from).unwrap());
+}
+
+/// 124: a branch submitted by name records no worktree and no session.
+/// Run in a herdr pane, in a worktree on another branch holding work
+/// beyond its commits, with no git on the path that answers, the driver
+/// names the harness's agent or else the branch, the branch as its work
+/// and its head, its host, and no path or pane (record 0090; rule
+/// core.50).
+#[test]
+fn named_records_no_worktree() {
+    let s = Scratch::new("wt-named");
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    std::fs::write(a.join("a.txt"), "changed\n").unwrap();
+    std::fs::write(a.join("held.txt"), "held\n").unwrap();
+    // A git that keeps each call and answers none, first on the path.
+    let git = s.repo.dir().with_extension("named-git");
+    std::fs::create_dir_all(&git).unwrap();
+    let calls = git.join("calls");
+    std::fs::write(
+        git.join("git"),
+        format!("#!/bin/sh\necho \"$*\" >> {}\nexit 1\n", calls.display()),
+    )
+    .unwrap();
+    std::fs::set_permissions(
+        git.join("git"),
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .unwrap();
+    let socket = s.repo.dir().with_extension("herdr.sock");
+    let named = |agent: Option<&str>| -> Submitter {
+        let mut c = s.command_under(Command::new(std::env::current_exe().unwrap()), &a);
+        c.args(["--exact", "name_a_branchs_submitter", "--nocapture"])
+            .env("SLUICE_TEST_NAMED", "bolt/x")
+            .env(
+                "PATH",
+                format!("{}:{}", git.display(), std::env::var("PATH").unwrap()),
+            );
+        for v in support::HERDR {
+            c.env(v, "set");
+        }
+        c.env("HERDR_PANE_ID", "w1:p2")
+            .env("HERDR_SOCKET_PATH", &socket);
+        if let Some(agent) = agent {
+            c.env("SLUICE_AGENT", agent);
+        }
+        let out = c.output().unwrap();
+        assert!(out.status.success(), "{}", text(&out));
+        let answer = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .find_map(|l| l.strip_prefix(NAMED).map(str::to_string))
+            .unwrap_or_else(|| panic!("no answer: {}", text(&out)));
+        serde_json::from_str(&answer).unwrap()
+    };
+
+    let from = named(None);
+    assert_eq!(
+        from,
+        Submitter {
+            agent: "bolt/x".into(),
+            worktree: "bolt/x".into(),
+            path: None,
+            head: Some("bolt/x".into()),
+            host: Some("box-1".into()),
+            session: None,
+        }
+    );
+    assert!(from.by_name());
+    let from = named(Some("flume-base-1"));
+    assert_eq!(from.agent, "flume-base-1");
+    assert_eq!(
+        (from.worktree.as_str(), from.head.as_deref()),
+        ("bolt/x", Some("bolt/x"))
+    );
+    assert_eq!((from.path, from.session), (None, None));
+    assert!(
+        !calls.exists(),
+        "git ran: {}",
+        std::fs::read_to_string(&calls).unwrap()
+    );
 }
 
 /// 51: a submit in a herdr pane records the pane on its server, and the
@@ -1489,6 +1586,66 @@ fn a_wait_with_no_work_tree_says_plainly_what_it_cannot_deliver() {
     assert_eq!(e["id"], n);
 }
 
+/// 124, 51, 2: a branch sluice lands on submitted by name, from the
+/// repository's git directory, is pending in no inbox: a wait on it there
+/// reports it landed and exits 0, saying nothing of it staying pending,
+/// and marks nothing; no inbox, there or in a worktree on the branch,
+/// collects it (design D5; record 0085; rule core.50).
+#[test]
+fn a_wait_by_name_in_a_bare_clone_says_nothing_pending() {
+    let s = Scratch::new("wt-named-bare");
+    let head = s.repo.branch("bolt/w", "bolt/x", &[("w.txt", Some("w\n"))]);
+    let git_dir = s.repo.dir().join(".git");
+    let out = s
+        .command(env!("CARGO_BIN_EXE_sluice"), &git_dir)
+        .args([
+            "submit",
+            "bolt/x",
+            "--head",
+            "bolt/w",
+            "--no-wait",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", text(&out));
+    let n = id(&out);
+    let record = s.status(n);
+    assert_eq!(record["head"], head.as_str(), "{record}");
+    assert_eq!(record["from"]["head"], "bolt/w", "{record}");
+    assert_eq!(record["from"]["worktree"], "bolt/w", "{record}");
+    s.land(n);
+
+    let out = s
+        .command(env!("CARGO_BIN_EXE_sluice"), &git_dir)
+        .args(["wait", &n.to_string()])
+        .output()
+        .unwrap();
+    let said = text(&out);
+    assert_eq!(out.status.code(), Some(0), "{said}");
+    assert!(said.contains("landed as"), "{said}");
+    assert!(!said.contains("pending"), "{said}");
+    assert!(!said.contains("no files checked out"), "{said}");
+    assert_eq!(s.status(n)["delivered"], serde_json::Value::Null);
+    assert!(s.logged("delivered").is_empty());
+    assert!(s.logged("pending").is_empty());
+
+    let out = inbox(&s, &git_dir, &["--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v, serde_json::json!({ "outcomes": [] }));
+    // A worktree that has checked out the branch collects nothing of it.
+    let w = s.repo.dir().with_extension("s-w");
+    let _ = std::fs::remove_dir_all(&w);
+    s.repo
+        .git(&["worktree", "add", "-q", w.to_str().unwrap(), "bolt/w"]);
+    let out = inbox(&s, &w, &["--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v, serde_json::json!({ "outcomes": [] }));
+    assert_eq!(s.status(n)["delivered"], serde_json::Value::Null);
+}
+
 /// 3, 135: a worktree on no branch has submitted nothing, and collects
 /// nothing.
 #[test]
@@ -1721,4 +1878,359 @@ fn a_caller_that_never_waits_collects_a_failure_and_a_landing_by_inbox() {
     let again = inbox(&s, &a, &["--json"]);
     let v: serde_json::Value = serde_json::from_slice(&again.stdout).unwrap();
     assert_eq!(v, serde_json::json!({ "outcomes": [] }));
+}
+
+/// 124: a branch sluice lands on submitted by name, `sluice submit
+/// <target> --head <branch>`, from wherever in the repository the command
+/// runs, its head the branch's revision and its record no worktree's
+/// (design D1, D2, D3, D9; record 0090; rule core.50).
+mod by_name {
+    use super::*;
+
+    /// `sluice submit bolt/x --head bolt/w`, then `args`, run in `dir`.
+    pub(super) fn submit(s: &Scratch, dir: &Path, args: &[&str]) -> Command {
+        let mut c = s.command(env!("CARGO_BIN_EXE_sluice"), dir);
+        c.args(["submit", "bolt/x", "--head", "bolt/w"]).args(args);
+        c
+    }
+
+    /// From a bare clone's git directory, which has no files checked out
+    /// and no worktree on `bolt/w`: answered as any submit that does not
+    /// wait, its head `bolt/w`'s revision, and its record the branch as its
+    /// work and its head, with no path and no session; no git status is
+    /// run there (rule core.48).
+    #[test]
+    fn submits_from_a_bare_clone() {
+        let s = Scratch::new("wt-by-name-bare");
+        let head = s.repo.branch("bolt/w", "bolt/x", &[("w.txt", Some("w\n"))]);
+        let bare = s.repo.dir().with_extension("bare");
+        let _ = std::fs::remove_dir_all(&bare);
+        s.repo.git(&[
+            "clone",
+            "-q",
+            "--bare",
+            s.repo.dir().to_str().unwrap(),
+            bare.to_str().unwrap(),
+        ]);
+        let out = submit(&s, &bare, &["--no-wait", "--json"])
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+        assert!(!text(&out).contains("work tree"), "{}", text(&out));
+        let n = id(&out);
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!({ "id": n, "branch": "bolt/x", "ahead": [] })
+        );
+        let out = s
+            .command(env!("CARGO_BIN_EXE_sluice"), &bare)
+            .args(["status", &n.to_string(), "--json"])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", text(&out));
+        let record: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(record["head"], head.as_str(), "{record}");
+        let from = &record["from"];
+        assert_eq!(from["worktree"], "bolt/w", "{from}");
+        assert_eq!(from["head"], "bolt/w", "{from}");
+        assert_eq!(from["agent"], "bolt/w", "{from}");
+        assert!(from.get("path").is_none(), "{from}");
+        assert!(from.get("session").is_none(), "{from}");
+    }
+
+    /// From a worktree on another branch that holds work beyond its
+    /// commits, in a herdr pane: the head is `bolt/w`'s revision, not the
+    /// worktree's, nothing the worktree holds refuses it, and its record
+    /// names the branch as its agent, its work and its head, and the host,
+    /// with no path and no pane.
+    #[test]
+    fn submits_from_a_worktree_on_another_branch() {
+        let s = Scratch::new("wt-by-name-elsewhere");
+        std::fs::write(
+            s.config.join("sluice/config.toml"),
+            "[runs]\nmax = 2\n\n[peers]\nname = \"box-1\"\n",
+        )
+        .unwrap();
+        let head = s.repo.branch("bolt/w", "bolt/x", &[("w.txt", Some("w\n"))]);
+        let a = s.session("a", &[("a.txt", "a\n")]);
+        std::fs::write(a.join("a.txt"), "changed\n").unwrap();
+        std::fs::write(a.join("held.txt"), "held\n").unwrap();
+        let socket = s.repo.dir().with_extension("herdr.sock");
+        let out = submit(&s, &a, &["--no-wait", "--json"])
+            .env("HERDR_PANE_ID", "w1:p2")
+            .env("HERDR_SOCKET_PATH", &socket)
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+        let record = s.status(id(&out));
+        assert_eq!(record["head"], head.as_str(), "{record}");
+        assert_ne!(record["head"], s.repo.rev("unit/a").as_str());
+        assert_eq!(
+            record["from"],
+            serde_json::json!({
+                "agent": "bolt/w",
+                "worktree": "bolt/w",
+                "head": "bolt/w",
+                "host": "box-1",
+            })
+        );
+    }
+
+    /// 64, 67: a forecast of `bolt/w` and its submit by name read one head
+    /// and one work: the forecast's `head` is the revision the submit then
+    /// sends, and it leaves out the earlier submission by name, which the
+    /// submit withdraws as a resubmission.
+    #[test]
+    fn the_forecast_names_what_the_submit_sends() {
+        let s = Scratch::new("wt-by-name-forecast");
+        s.repo.branch("bolt/w", "bolt/x", &[("w.txt", Some("w\n"))]);
+        // A fix to land on bolt/w once it is submitted, made on a branch no
+        // policy protects.
+        let fix = s
+            .repo
+            .branch("next/w", "bolt/w", &[("w.txt", Some("fixed\n"))]);
+        let a = s.session("a", &[("a.txt", "a\n")]);
+        let first = id(&submit(&s, &a, &["--no-wait", "--json"]).output().unwrap());
+        s.repo.git(&[
+            "-c",
+            "core.hooksPath=/dev/null",
+            "update-ref",
+            "refs/heads/bolt/w",
+            &fix,
+        ]);
+        let out = s
+            .command(env!("CARGO_BIN_EXE_sluice"), &a)
+            .args(["submit", "bolt/x", "--check", "--head", "bolt/w", "--json"])
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+        let forecast: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(forecast["head"], fix.as_str(), "{forecast}");
+        assert_eq!(forecast["ahead"], serde_json::json!([]), "{forecast}");
+        let out = submit(&s, &a, &["--no-wait", "--json"]).output().unwrap();
+        assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(v["ahead"], serde_json::json!([]), "{v}");
+        let n = id(&out);
+        assert_eq!(s.status(n)["head"], forecast["head"]);
+        let withdrawn = s.status(first);
+        assert_eq!(withdrawn["state"], "withdrawn", "{withdrawn}");
+        assert_eq!(withdrawn["withdrawn"]["by"], "resubmission", "{withdrawn}");
+    }
+
+    /// D9, 135: a submit by name that waits runs `bolt/x`'s rounds while it
+    /// waits, with no `sluice run` on the host, says `submission <n> to
+    /// <target> from <branch>`, reports the landing and exits 0. It
+    /// delivers nothing: nothing is typed into its pane, no `pending` or
+    /// `delivered` line is logged, and the submission shows no `delivered`.
+    #[test]
+    fn a_waiting_submit_by_name_lands() {
+        let s = Scratch::new("wt-by-name-waits");
+        s.repo.branch("bolt/w", "bolt/x", &[("w.txt", Some("w\n"))]);
+        let socket = s.repo.dir().with_extension("herdr.sock");
+        let out = submit(&s, s.repo.dir(), &[])
+            .env("HERDR_PANE_ID", "w1:p2")
+            .env("HERDR_SOCKET_PATH", &socket)
+            .output()
+            .unwrap();
+        let said = text(&out);
+        assert_eq!(out.status.code(), Some(0), "{said}");
+        let first = said.lines().next().unwrap_or_default();
+        let n: u64 = first
+            .strip_prefix("submission ")
+            .and_then(|l| l.strip_suffix(" to bolt/x from bolt/w · nothing queued ahead"))
+            .unwrap_or_else(|| panic!("{said}"))
+            .parse()
+            .unwrap();
+        let record = s.status(n);
+        assert_eq!(record["state"], "landed", "{record}");
+        let landed = record["landed_as"].as_str().unwrap();
+        assert!(
+            said.contains(&format!("passed · landed as {}", &landed[..7])),
+            "{said}"
+        );
+        assert_eq!(s.tip(), landed);
+        assert_eq!(record["delivered"], serde_json::Value::Null);
+        assert!(s.logged("pending").is_empty());
+        assert!(s.logged("delivered").is_empty());
+        assert!(s.herdr.calls().is_empty(), "{:?}", s.herdr.calls());
+    }
+
+    /// 26, core.43: a submit by name with `--subject`, run in the git
+    /// directory, lands `bolt/w` with the subject as its landing commit's
+    /// first line, as any submit's subject names its landing, never the
+    /// branch's own commit message; the record keeps the subject.
+    #[test]
+    fn a_subject_names_the_landing_by_name() {
+        let s = Scratch::new("wt-by-name-subject");
+        s.repo.branch("bolt/w", "bolt/x", &[("w.txt", Some("w\n"))]);
+        let made = s.repo.git(&["log", "-1", "--format=%s", "bolt/w"]);
+        let out = submit(&s, &s.repo.dir().join(".git"), &["--subject", "The w work"])
+            .output()
+            .unwrap();
+        let said = text(&out);
+        assert_eq!(out.status.code(), Some(0), "{said}");
+        let record = s.status(1);
+        assert_eq!(record["state"], "landed", "{record}");
+        assert_eq!(record["subject"], "The w work", "{record}");
+        let landed = record["landed_as"].as_str().unwrap();
+        assert_eq!(s.tip(), landed);
+        let first = s.repo.git(&["log", "-1", "--format=%s", landed]);
+        assert_eq!(first, "chore(land): #1 The w work");
+        assert!(!first.contains(made.trim()), "{first}");
+    }
+}
+
+/// 124, D10: the way on of a branch submitted by name that failed or
+/// conflicts is its caller's, a fix landed on the branch and the submit by
+/// name again, in a waiting submit's report and in its status; never an
+/// agent working in the branch, where none works.
+mod by_name_way_on {
+    use super::*;
+
+    /// A check failing on `bolt/w`'s work: the waiting submit by name exits
+    /// 1 and names a fix landed on `bolt/w`, then `sluice submit bolt/x
+    /// --head bolt/w`; `sluice status <n>` names the same.
+    #[test]
+    fn a_failure() {
+        let s = Scratch::new("wt-by-name-fails");
+        s.repo
+            .branch("bolt/w", "bolt/x", &[("broken", Some("broken\n"))]);
+        let out = by_name::submit(&s, s.repo.dir(), &[]).output().unwrap();
+        let said = text(&out);
+        assert_eq!(out.status.code(), Some(1), "{said}");
+        let way = "once a fix lands on bolt/w, sluice submit bolt/x --head bolt/w submits it again";
+        assert!(said.contains(way), "{said}");
+        assert!(!said.contains("agent working"), "{said}");
+        let n = s.subs_by_name()[0]["id"].as_u64().unwrap();
+        let out = s.sluice(&["status", &n.to_string()]);
+        let said = text(&out);
+        assert!(out.status.success(), "{said}");
+        assert!(said.contains(way), "{said}");
+        assert!(!said.contains("agent working"), "{said}");
+    }
+
+    /// `bolt/w`, cut before a landing on `bolt/x` that changed the same
+    /// file: the waiting submit by name exits 2, and its way on, found
+    /// while its combination was formed and so never tested, merges
+    /// `bolt/x` at its revision before the submit by name again.
+    #[test]
+    fn a_conflict() {
+        let s = Scratch::new("wt-by-name-conflicts");
+        s.repo
+            .branch("bolt/w", "bolt/x", &[("same.txt", Some("w\n"))]);
+        let a = s.session("a", &[("same.txt", "a\n")]);
+        let out = s.wt_submit(&a, &["--no-remove"]);
+        assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+        let tip = s.tip();
+        let out = by_name::submit(&s, s.repo.dir(), &[]).output().unwrap();
+        let said = text(&out);
+        assert_eq!(out.status.code(), Some(2), "{said}");
+        assert!(said.contains("conflict: same.txt"), "{said}");
+        let way = format!(
+            "once a fix that merges bolt/x at {} lands on bolt/w, sluice submit bolt/x --head \
+             bolt/w submits it again",
+            &tip[..7]
+        );
+        assert!(said.contains(&way), "{said}");
+        assert!(!said.contains("agent working"), "{said}");
+        let n = s.subs_by_name()[0]["id"].as_u64().unwrap();
+        let out = s.sluice(&["status", &n.to_string()]);
+        assert!(text(&out).contains(&way), "{}", text(&out));
+    }
+
+    impl Scratch {
+        /// Every submission `bolt/x` has had of `bolt/w` by name.
+        pub(super) fn subs_by_name(&self) -> Vec<serde_json::Value> {
+            let out = self.sluice(&["status", "bolt/x", "--json", "--all"]);
+            assert!(out.status.success(), "{}", text(&out));
+            let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+            v["submissions"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|x| x["from"]["head"] == "bolt/w" && x["from"]["worktree"] == "bolt/w")
+                .collect()
+        }
+    }
+}
+
+/// 51, 124, D8: a status gives each decided submission the words `sluice
+/// inbox` gives it, beside its record as it is; a submission by name,
+/// which no inbox takes, is read so.
+mod status_gives_the_inbox_words {
+    use super::*;
+
+    /// `bolt/w` by name, blamed for `sh check.sh`: queued, it has no
+    /// notice; decided, `sluice status bolt/x --all --json` and `sluice
+    /// status <n> --json` give it the inbox's notice, its `failed` and the
+    /// revision of `bolt/x` it was tested on.
+    #[test]
+    fn a_failure_by_name() {
+        let s = Scratch::new("wt-status-words-fails");
+        s.repo
+            .branch("bolt/w", "bolt/x", &[("broken", Some("broken\n"))]);
+        let tip = s.tip();
+        let out = by_name::submit(&s, s.repo.dir(), &["--no-wait", "--json"])
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+        let n = id(&out);
+        let queued = s.status(n);
+        assert_eq!(queued["state"], "queued", "{queued}");
+        assert!(queued.get("notice").is_none(), "{queued}");
+        s.decide(n);
+        let notice =
+            format!("[sluice] #{n} failed on bolt/x: sh check.sh. sluice wait {n} shows why.");
+        let e = s.subs_by_name().into_iter().find(|x| x["id"] == n).unwrap();
+        assert_eq!(e["state"], "failed", "{e}");
+        assert_eq!(e["from"]["head"], "bolt/w", "{e}");
+        assert_eq!(e["notice"], notice.as_str(), "{e}");
+        assert_eq!(e["failed"][0]["task"], "sh check.sh", "{e}");
+        assert_eq!(e["tested"]["on"], tip.as_str(), "{e}");
+        let one = s.status(n);
+        assert_eq!(one["notice"], notice.as_str(), "{one}");
+        assert_eq!(one["tested"]["on"], tip.as_str(), "{one}");
+    }
+
+    /// `bolt/w` by name, conflicting in `same.txt` with a session's landing:
+    /// `sluice status <n> --json` gives it the inbox's notice and its
+    /// `conflict.paths`; the session's landing has the inbox's notice too.
+    #[test]
+    fn a_conflict_by_name() {
+        let s = Scratch::new("wt-status-words-conflicts");
+        s.repo
+            .branch("bolt/w", "bolt/x", &[("same.txt", Some("w\n"))]);
+        let a = s.session("a", &[("same.txt", "a\n")]);
+        let out = s.wt_submit(&a, &["--no-remove"]);
+        assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+        let out = by_name::submit(&s, s.repo.dir(), &[]).output().unwrap();
+        assert_eq!(out.status.code(), Some(2), "{}", text(&out));
+        let n = s.subs_by_name()[0]["id"].as_u64().unwrap();
+        let e = s.status(n);
+        assert_eq!(e["state"], "conflict", "{e}");
+        assert_eq!(
+            e["conflict"]["paths"],
+            serde_json::json!(["same.txt"]),
+            "{e}"
+        );
+        let notice = e["notice"]
+            .as_str()
+            .unwrap_or_else(|| panic!("no notice: {e}"));
+        assert!(
+            notice.starts_with(&format!("[sluice] #{n} conflicts on bolt/x")),
+            "{e}"
+        );
+        assert!(notice.contains("in same.txt"), "{e}");
+        let landed = &s.subs_from("a")[0];
+        let words = format!("[sluice] #{} landed on bolt/x as ", landed["id"]);
+        assert!(
+            landed["notice"]
+                .as_str()
+                .is_some_and(|w| w.starts_with(&words)),
+            "{landed}"
+        );
+    }
 }

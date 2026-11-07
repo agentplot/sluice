@@ -6069,7 +6069,7 @@ impl sluice::PullRequests for Pull7 {
         &self,
         _: sluice_core::Seams<'_>,
         _: &dyn sluice_core::Clock,
-        _: &str,
+        _: &sluice_core::SubmitHead,
         _: &str,
         subject: Option<&str>,
     ) -> anyhow::Result<Result<sluice::Opened, sluice_core::SubmitRefusal>> {
@@ -7405,6 +7405,134 @@ fn several_worktrees_take_neither_check_nor_status() {
     assert!(queued(&f).is_empty());
 }
 
+/// 124, D1: a submit by name reads no worktree, so `--head` with
+/// `--worktree`, with `--status` or with two subjects is a command line
+/// sluice cannot read, saying why, which submits nothing; `--check
+/// --head` still forecasts, as before.
+#[test]
+fn head_takes_no_worktree_and_no_status() {
+    let f = setup();
+    f.world.set_branch("bolt/w", &f.world.tip(BRANCH));
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    let head = ["submit", BRANCH, "--head", "bolt/w", "--no-wait"];
+    for (args, said) in [
+        (
+            vec!["--worktree", "unit/a"],
+            "--head names what is submitted, from anywhere in the repository; give no \
+             --worktree with it",
+        ),
+        (
+            vec!["--status"],
+            "--status reads a worktree's last submission; a branch's are in sluice status \
+             <target> --all",
+        ),
+        (
+            vec!["--subject", "a", "--subject", "b"],
+            "--head submits one branch; give one --subject with it, or none",
+        ),
+    ] {
+        let args = [&head[..], &args].concat();
+        let (code, out) = sluice(&f, &args);
+        assert_eq!(code, sluice::USAGE, "{args:?}: {out}");
+        assert_eq!(out, format!("sluice submit: {said}\n"), "{args:?}");
+    }
+    assert!(queued(&f).is_empty());
+    let (code, out) = sluice(
+        &f,
+        &[
+            "submit",
+            BRANCH,
+            "--check",
+            "--head",
+            "bolt/w",
+            "--worktree",
+            "unit/a",
+        ],
+    );
+    assert_eq!(code, LANDED, "{out}");
+    assert_eq!(
+        out,
+        format!("no conflict with {BRANCH} or anything queued\n")
+    );
+    assert!(queued(&f).is_empty());
+}
+
+/// 124, D2: only a branch sluice lands on is submitted by name: a branch
+/// that does not exist, the target itself and a branch no table names
+/// are each refused, exit 2, naming why, with nothing written; under
+/// `--json`, as the error document.
+#[test]
+fn head_takes_only_a_branch_sluice_lands_on() {
+    let f = setup();
+    f.world.set_branch("unit/a", &f.world.tip(BRANCH));
+    for (head, said) in [
+        (
+            "bolt/gone",
+            "refused: no branch bolt/gone to submit".to_string(),
+        ),
+        (
+            BRANCH,
+            format!("refused: {BRANCH} is not submitted to itself"),
+        ),
+        (
+            "unit/a",
+            "refused: unit/a is no branch sluice lands on: a branch of a worktree's own is \
+             submitted from that worktree"
+                .to_string(),
+        ),
+    ] {
+        let (code, out) = sluice(&f, &["submit", BRANCH, "--head", head, "--no-wait"]);
+        assert_eq!(code, CONFLICT, "{head}: {out}");
+        assert_eq!(out.lines().next(), Some(said.as_str()), "{head}: {out}");
+        let (code, out) = sluice(
+            &f,
+            &["submit", BRANCH, "--head", head, "--no-wait", "--json"],
+        );
+        assert_eq!(code, CONFLICT, "{head}: {out}");
+        let doc = json(&out);
+        let message = said.strip_prefix("refused: ").unwrap();
+        assert_eq!(doc["error"]["message"], message, "{doc}");
+    }
+    assert!(queued(&f).is_empty());
+}
+
+/// 124, D9: a branch submitted by name is said by its name, `submission
+/// <n> to <target> from <branch> · <ahead>`, and under `--no-wait
+/// --json` answered as any submit that does not wait; its head is the
+/// branch's revision and its record names no worktree and no session.
+#[test]
+fn head_takes_a_branch_by_name_and_says_it() {
+    let f = setup();
+    let w = f
+        .world
+        .work(&f.world.tip(BRANCH), &[("plugin/w", Some("w"))]);
+    f.world.set_branch("bolt/w", &w);
+    let (code, out) = sluice(&f, &["submit", BRANCH, "--head", "bolt/w", "--no-wait"]);
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(
+        out,
+        format!("submission 1 to {BRANCH} from bolt/w · nothing queued ahead\n")
+    );
+    let v = f.world.work(&w, &[("plugin/v", Some("v"))]);
+    f.world.set_branch("bolt/v", &v);
+    let (code, out) = sluice(
+        &f,
+        &["submit", BRANCH, "--head", "bolt/v", "--no-wait", "--json"],
+    );
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(
+        json(&out),
+        serde_json::json!({ "id": 2, "branch": BRANCH, "ahead": [1] })
+    );
+    let subs = queued(&f);
+    assert_eq!(subs[0]["head"], w.0.as_str());
+    assert_eq!(subs[1]["head"], v.0.as_str());
+    assert_eq!(subs[1]["from"]["worktree"], "bolt/v");
+    assert_eq!(subs[1]["from"]["head"], "bolt/v");
+    assert!(subs[1]["from"].get("path").is_none(), "{}", subs[1]);
+    assert!(subs[1]["from"].get("session").is_none(), "{}", subs[1]);
+}
+
 /// S59: on a branch that batches, a waiting act of three is tested once as
 /// one combination of all three and lands in one move, in the order given;
 /// it reports each one's outcome in that order and exits 0. Under
@@ -8607,7 +8735,7 @@ mod read_once {
     use sluice::profiles::local_files::LocalFiles;
     use sluice::{run, Cli, Pause};
     use sluice_core::policy::POLICY_PATH;
-    use sluice_core::{Seams, Sluice, SubmitRequest};
+    use sluice_core::{Seams, Sluice, SubmitHead, SubmitRequest};
     use sluice_fakes::Fakes;
     use sluice_seams::State as _;
 
@@ -8730,7 +8858,7 @@ mod read_once {
         let files = LocalFiles::new(dir);
         let s = Sluice::new(with_files(f, &files), &f.clock);
         s.submit(&SubmitRequest {
-            worktree: worktree.into(),
+            head: SubmitHead::Worktree(worktree.into()),
             branch: BRANCH.into(),
             after: vec![],
             priority: 0,

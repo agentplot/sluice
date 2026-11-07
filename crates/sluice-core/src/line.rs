@@ -8,7 +8,8 @@ use sluice_seams::{Changes, Rev, Snapshot};
 
 use crate::records::{
     finished_file, parse_lines, submission_file, to_document, to_line, BranchDoc, Candidate, Event,
-    FinishedLine, LogLine, RefusedWrite, State, Submission, BRANCH_FILE, FINISHED_INDEX, LOG_FILE,
+    FinishedLine, LogLine, OutboxItem, RefusedWrite, State, Submission, BRANCH_FILE,
+    FINISHED_INDEX, LOG_FILE,
 };
 use crate::refused_writes::{command_of, ends, stands, STANDING};
 
@@ -149,6 +150,24 @@ impl Line {
             at: at.into(),
             event,
         }));
+    }
+
+    /// 50, 51: queue `item`, an outcome a round decided, to be pushed into
+    /// its submitter's session; every outcome a round decides is queued
+    /// here. A submission by name has no session and no worktree to carry
+    /// it, so nothing is queued for it: no driver is asked, no `pending`
+    /// line is logged, and it is never marked delivered, and once landed
+    /// it leaves the live records as any finished submission does (124,
+    /// 130; design D5; rule core.50).
+    pub fn push_outcome(&mut self, item: OutboxItem) {
+        if self
+            .subs
+            .get(&item.submission)
+            .is_some_and(|s| s.from.by_name())
+        {
+            return;
+        }
+        self.doc.outbox.push(item);
     }
 
     pub fn sub(&self, id: u64) -> Result<&Submission> {

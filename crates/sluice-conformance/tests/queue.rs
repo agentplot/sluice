@@ -324,3 +324,181 @@ fn a_refused_start_starts_no_further_run_that_round() {
     h.step();
     assert_eq!(h.w().started().len(), 2);
 }
+
+/// 124: a branch sluice lands on, submitted by name from no worktree, as
+/// its policy holds it, and the branches it is refused for, writing
+/// nothing (record 0090; rule core.50).
+mod by_name {
+    use sluice_conformance::{policy, Harness, Rig, BRANCH};
+    use sluice_core::records::State;
+    use sluice_core::SubmitRefusal;
+    use sluice_seams::{Rev, Submitter};
+
+    /// Another bolt, a branch sluice lands on by the policy's `bolt/*`.
+    const NAMED: &str = "bolt/w";
+
+    /// `NAMED` at a commit on the target's revision applying `changes`;
+    /// its revision.
+    fn named_at(h: &Harness, changes: &[(&str, Option<&str>)]) -> Rev {
+        let at = h.w().work(&h.tip(), changes);
+        h.branch_at(NAMED, &at);
+        at
+    }
+
+    /// The target's records as they stand, to show a refusal wrote none.
+    fn records(h: &Harness) -> (u64, std::collections::BTreeMap<String, Vec<u8>>) {
+        (h.version(), h.files())
+    }
+
+    /// satisfies: 124, 1, 47, 51, core.50
+    #[test]
+    fn a_branch_by_name_is_submitted_at_its_revision() {
+        let h = Harness::bolt();
+        let at = named_at(&h, &[("a/lib", Some("a2"))]);
+        // A worktree beside it holding changes beyond its commits: nothing
+        // of any worktree is read for a branch named.
+        h.work("unit/a", "agent-a", &[("b/lib", Some("b2"))]);
+        h.dirty("unit/a", &["untracked"]);
+        let tip = h.tip();
+        let accepted = h.try_submit_by_name(NAMED).expect("accepted");
+        assert_eq!(accepted.ahead, Vec::<u64>::new());
+        assert_eq!(accepted.withdrew, Vec::<u64>::new());
+        assert_eq!(accepted.warnings, Vec::<String>::new());
+        assert_eq!(accepted.copy, None);
+        let sub = h.sub(accepted.id);
+        assert_eq!(sub.head, at);
+        assert_eq!(sub.state, State::Queued);
+        assert_eq!(sub.attempt, 1);
+        assert_eq!(
+            sub.from,
+            Submitter {
+                agent: NAMED.into(),
+                worktree: NAMED.into(),
+                path: None,
+                head: Some(NAMED.into()),
+                host: Some(h.host()),
+                session: None,
+            }
+        );
+        assert!(sub.from.by_name());
+        assert_eq!(h.tip(), tip, "the target is where it was");
+        assert_eq!(h.moves(), 0);
+
+        // The agent the session's harness names, where it names one.
+        h.w().harness_names(Some("planner"));
+        let again = h.try_submit_by_name(NAMED).expect("accepted");
+        assert_eq!(h.sub(again.id).from.agent, "planner");
+        assert_eq!(again.withdrew, vec![accepted.id]);
+
+        h.settle();
+        assert_eq!(h.sub(again.id).state, State::Landed);
+        assert_eq!(h.file(&h.tip(), "a/lib").as_deref(), Some("a2"));
+        assert_eq!(h.w().tip(NAMED), at, "the branch named is where it was");
+    }
+
+    /// satisfies: 124, 1, core.4, core.50: kept on a remote, the remote's
+    /// revision, with nothing said of this host's copy and nothing moved.
+    #[test]
+    fn a_branch_by_name_on_a_remote_is_submitted_at_the_remotes_revision() {
+        let h = Harness::new(&policy(false, "fail", 4).replace(
+            "trust = [\"open\", \"sandbox\", \"container\"]\n",
+            "trust = [\"open\", \"sandbox\", \"container\"]\nremote = \"origin\"\n",
+        ));
+        h.w().on_remote(BRANCH);
+        let copy = named_at(&h, &[("a/lib", Some("a2"))]);
+        h.w().on_remote(NAMED);
+        h.w().set_copy(NAMED, Some(&copy));
+        let remote = h.w().work(&copy, &[("b/lib", Some("b2"))]);
+        h.branch_at(NAMED, &remote);
+        let accepted = h.try_submit_by_name(NAMED).expect("accepted");
+        assert_eq!(h.sub(accepted.id).head, remote);
+        assert_eq!(accepted.copy, None, "nothing said of this host's copy");
+        assert_eq!(h.w().copy_of(NAMED), Some(copy), "this host's copy unmoved");
+        assert_eq!(h.w().tip(NAMED), remote, "the remote's branch unmoved");
+        assert_eq!(h.moves(), 0);
+    }
+
+    /// satisfies: 124, 2, core.50
+    #[test]
+    fn a_branch_sluice_lands_on_nowhere_is_refused_by_name() {
+        let h = Harness::bolt();
+        let at = h.w().work(&h.tip(), &[("a/lib", Some("a2"))]);
+        h.branch_at("unit/a", &at);
+        let before = records(&h);
+        assert_eq!(
+            h.try_submit_by_name("unit/a"),
+            Err(SubmitRefusal::NotLandedOn)
+        );
+        assert_eq!(records(&h), before, "nothing written");
+    }
+
+    /// satisfies: 124, core.50
+    #[test]
+    fn a_branch_is_not_submitted_to_itself() {
+        let h = Harness::bolt();
+        let before = records(&h);
+        assert_eq!(h.try_submit_by_name(BRANCH), Err(SubmitRefusal::ToItself));
+        assert_eq!(records(&h), before, "nothing written");
+    }
+
+    /// satisfies: 124, core.50
+    #[test]
+    fn no_branch_to_submit_by_name() {
+        let h = Harness::bolt();
+        let before = records(&h);
+        assert_eq!(
+            h.try_submit_by_name("bolt/gone"),
+            Err(SubmitRefusal::NoHead("bolt/gone".into()))
+        );
+        assert_eq!(records(&h), before, "nothing written");
+    }
+
+    /// satisfies: 67, 54, 5, 124: a retry by name after a fix lands on the
+    /// branch withdraws the blamed submission, and counts its attempt.
+    #[test]
+    fn a_retry_by_name_withdraws_the_blamed_one() {
+        let h = Harness::bolt();
+        h.fails_with("a:test", "a/lib", "broken");
+        let broken = named_at(&h, &[("a/lib", Some("broken"))]);
+        let first = h.submit_by_name(NAMED);
+        h.settle();
+        assert_eq!(h.sub(first).state, State::Failed);
+
+        let fixed = h.w().work(&broken, &[("a/lib", Some("fixed"))]);
+        h.branch_at(NAMED, &fixed);
+        let again = h.try_submit_by_name(NAMED).expect("accepted");
+        assert_eq!(again.withdrew, vec![first]);
+        let old = h.sub(first);
+        assert_eq!(old.state, State::Withdrawn);
+        assert_eq!(old.withdrawn.map(|w| w.by).as_deref(), Some("resubmission"));
+        let new = h.sub(again.id);
+        assert_eq!(new.head, fixed);
+        assert_eq!(new.attempt, 2);
+        h.settle();
+        assert_eq!(h.sub(again.id).state, State::Landed);
+    }
+
+    /// satisfies: 67, 54, 124: a submission by name and one from a
+    /// worktree on its branch are one work, each withdrawing the other's.
+    #[test]
+    fn a_worktree_on_the_branch_withdraws_a_submission_by_name() {
+        let h = Harness::bolt();
+        let at = named_at(&h, &[("a/lib", Some("a2"))]);
+        let by_name = h.submit_by_name(NAMED);
+        // A worktree that has checked out the branch named.
+        h.w().session(NAMED, "agent-w", &at);
+        let from_worktree = h.try_submit(NAMED, &[], 0).expect("accepted");
+        assert_eq!(from_worktree.withdrew, vec![by_name]);
+        let old = h.sub(by_name);
+        assert_eq!(old.state, State::Withdrawn);
+        assert_eq!(old.withdrawn.map(|w| w.by).as_deref(), Some("resubmission"));
+        assert_eq!(h.sub(from_worktree.id).attempt, 2);
+        assert!(!h.sub(from_worktree.id).from.by_name());
+
+        // And by name again, after it.
+        let again = h.try_submit_by_name(NAMED).expect("accepted");
+        assert_eq!(again.withdrew, vec![from_worktree.id]);
+        assert_eq!(h.sub(from_worktree.id).state, State::Withdrawn);
+        assert_eq!(h.sub(again.id).attempt, 3);
+    }
+}

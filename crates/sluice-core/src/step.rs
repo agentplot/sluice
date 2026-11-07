@@ -486,7 +486,7 @@ impl Sluice<'_> {
                                 covered_by,
                             },
                         };
-                        l.doc.outbox.push(item);
+                        l.push_outcome(item);
                     }
                     l.log(
                         &now,
@@ -1192,7 +1192,7 @@ impl Sluice<'_> {
                 s.landed_as = Some(to.clone());
                 s.landed_elsewhere = true;
                 s.held = None;
-                line.doc.outbox.push(OutboxItem {
+                line.push_outcome(OutboxItem {
                     id: format!("{id}:landed"),
                     submission: id,
                     outcome: DecidedRecord::Landed {
@@ -2086,7 +2086,7 @@ impl Sluice<'_> {
                 with: with.iter().map(|c| c.id).collect(),
             },
         );
-        line.doc.outbox.push(OutboxItem {
+        line.push_outcome(OutboxItem {
             id: format!("{id}:conflict"),
             submission: id,
             outcome: DecidedRecord::Conflict { paths, with },
@@ -2121,7 +2121,7 @@ impl Sluice<'_> {
                 combination: c.revision.clone(),
             },
         );
-        line.doc.outbox.push(OutboxItem {
+        line.push_outcome(OutboxItem {
             id: format!("{id}:failed"),
             submission: id,
             outcome: DecidedRecord::Failed {
@@ -3889,7 +3889,7 @@ mod tests {
     use sluice_fakes::Fakes;
 
     use super::*;
-    use crate::{Clock, Requester, Seams, SubmitRequest};
+    use crate::{Clock, Requester, Seams, SubmitHead, SubmitRequest};
 
     const POLICY: &str = "[branches.main]\nrequired = [\"#gate\"]\nparallel = 4\n";
 
@@ -3914,7 +3914,7 @@ mod tests {
 
     fn submit(s: &Sluice<'_>, worktree: &str) -> u64 {
         let req = SubmitRequest {
-            worktree: worktree.into(),
+            head: SubmitHead::Worktree(worktree.into()),
             branch: "main".into(),
             after: Vec::new(),
             priority: 0,
