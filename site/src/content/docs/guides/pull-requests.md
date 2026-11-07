@@ -154,7 +154,11 @@ refused and the mark names no other host. A submission that is landing
 finishes, one whose work `main` already holds is recorded landed, and
 work submitted from the host's own worktrees stays in its queue. A wait on that host follows its pull
 request on GitHub, as [`sluice wait`](/sluice/reference/commands/#sluice-wait)
-says.
+says. `sluice status main` and
+[`sluice overview`](/sluice/reference/commands/#sluice-overview) there
+list each pull request the host submitted, handed over or waited on,
+with the host that holds the mark and where the request stands in that
+host's queue.
 
 The mark is safe to remove, as after moving to another host:
 

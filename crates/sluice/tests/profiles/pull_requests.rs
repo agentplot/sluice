@@ -5906,6 +5906,152 @@ fn a_status_says_a_merged_request_landed_once() {
     assert!(g.status_document()["pull_requests"].is_null());
 }
 
+// ---------------------------------------------------------------------------
+// overview: a branch lists the pull requests another host takes in that
+// this host follows (137, design D5)
+// ---------------------------------------------------------------------------
+
+/// `main`'s part of an overview document.
+fn main_of(doc: &Value) -> &Value {
+    doc["branches"]
+        .as_array()
+        .and_then(|b| b.iter().find(|b| b["branch"] == "main"))
+        .unwrap_or_else(|| panic!("{doc}"))
+}
+
+/// overview, "A one-shot overview": host B's `sluice run` holds main's
+/// mark and holds host A's pull request as submission 1406, and `sluice
+/// overview --json` on A, which follows it, gives main `taken_in_by`
+/// naming B and a row for the request whose queue names 1406, read from
+/// GitHub as status reads it, with its `read_at`; its words list the same
+/// row under main.
+#[test]
+fn a_one_shot_overview_lists_requests_taken_in_elsewhere() {
+    let g = OnGitHub::new("overview-there", "");
+    let (_w, pull) = g.opened_here_held_by_b("listed");
+    let n = pull.number;
+    g.held_there(n, &pull.head, 1406);
+    let out = g.sluice(&["overview", "--json"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let doc: Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
+    let main = main_of(&doc);
+    assert_eq!(
+        main["taken_in_by"],
+        serde_json::json!({ "host": "b", "holder": "driver" }),
+        "{doc}"
+    );
+    let row = row_of(main, n);
+    assert_eq!(
+        (&row["queue"]["host"], &row["queue"]["submission"]),
+        (&"b".into(), &1406.into()),
+        "{doc}"
+    );
+    assert_eq!(
+        (&row["state"], &row["from"], &row["head"]),
+        (
+            &"queued: next on main".into(),
+            &"unit/listed".into(),
+            &pull.head.as_str().into()
+        ),
+        "{doc}"
+    );
+    assert!(row["read_at"].is_string(), "{doc}");
+    let out = g.sluice(&["overview"]);
+    assert!(out.status.success(), "{}", text(&out));
+    // Under main's line, `main at …` or `main · no records` where this
+    // host has no records of it.
+    let said = String::from_utf8_lossy(&out.stdout).to_string();
+    let under: Vec<&str> = said
+        .lines()
+        .skip_while(|l| !l.starts_with("main "))
+        .collect();
+    let rows = format!(
+        "\n  pull requests b takes in, by its sluice run:\n    \
+         #{n} {} · submission 1406 there · queued: next on main",
+        pull.title
+    );
+    assert!(under.join("\n").contains(&rows), "{said}");
+    assert!(g.of(n).is_empty(), "A took nothing in");
+}
+
+/// overview, "A watch reads none of them itself": `sluice overview --json
+/// --watch` is host A's reader while A follows its pull request, which
+/// host B holds, and nothing else on A runs. Its documents carry the
+/// request's row as A last kept it, and carry it again once what A keeps
+/// of it moves; and A reads neither the request nor its check from GitHub
+/// meanwhile, though the kept row is due to be read again (core.31).
+#[test]
+fn a_watch_reads_no_followed_request_itself() {
+    let g = OnGitHub::new("overview-watch-there", "");
+    let (_w, pull) = g.opened_here_held_by_b("watched");
+    let n = pull.number;
+    g.held_there(n, &pull.head, 1406);
+    // A status reads it from GitHub, so A keeps its check; then the row is
+    // due again, so a process that asked GitHub would ask at once.
+    assert_eq!(row_of(&g.status_document(), n)["queue"]["submission"], 1406);
+    g.follow_due(n);
+    let (pulls, checks) = (g.pull_reads(n), g.posted_reads(&pull.head));
+    let mut watch = g
+        .command(env!("CARGO_BIN_EXE_sluice"), g.repo.dir())
+        .args(["overview", "--json", "--watch"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stdout = std::io::BufReader::new(watch.stdout.take().unwrap());
+    let (send, lines) = std::sync::mpsc::channel::<Value>();
+    std::thread::spawn(move || {
+        use std::io::BufRead as _;
+        for line in stdout.lines().map_while(Result::ok) {
+            let Ok(doc) = serde_json::from_str(&line) else {
+                continue;
+            };
+            if send.send(doc).is_err() {
+                break;
+            }
+        }
+    });
+    // The first document whose row for the request `holds` says so.
+    let row_until = |holds: &dyn Fn(&Value) -> bool| -> Value {
+        let until = Instant::now() + Duration::from_secs(30);
+        let mut seen = Vec::new();
+        while let Some(left) = until.checked_duration_since(Instant::now()) {
+            let Ok(doc) = lines.recv_timeout(left) else {
+                break;
+            };
+            let row = doc["branches"]
+                .as_array()
+                .and_then(|b| b.iter().find(|b| b["branch"] == "main"))
+                .and_then(|m| m["pull_requests"].as_array())
+                .and_then(|rows| rows.iter().find(|r| r["pull_request"] == n))
+                .cloned();
+            match row {
+                Some(row) if holds(&row) => return row,
+                _ => seen.push(doc),
+            }
+        }
+        panic!("no such row: {seen:?}");
+    };
+    let row = row_until(&|r| r["queue"]["submission"] == 1406);
+    assert_eq!(row["state"], "queued: next on main", "{row}");
+    // What A keeps of it moves, as another process's read would move it:
+    // the next document carries it.
+    let path = g.state.path().join("sluice/forge/follows/o/r/main.json");
+    let mut kept: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    kept["requests"][n.to_string()]["title"] = "Renamed while watched".into();
+    std::fs::write(&path, kept.to_string()).unwrap();
+    row_until(&|r| r["title"] == "Renamed while watched");
+    // A few ticks more, the row still due.
+    std::thread::sleep(Duration::from_secs(3));
+    let _ = watch.kill();
+    let out = watch.wait_with_output().unwrap();
+    assert_eq!(g.pull_reads(n), pulls, "{}", text(&out));
+    assert_eq!(g.posted_reads(&pull.head), checks, "{}", text(&out));
+    assert!(g.of(n).is_empty(), "A took nothing in");
+}
+
 /// request-intake-host, "A wait lets go", stopped by Ctrl-C: a wait on
 /// host B, where no `sluice run` lives, holds main's mark, and once Ctrl-C
 /// stops it the mark is gone from the remote.

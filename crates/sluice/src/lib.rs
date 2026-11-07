@@ -34,6 +34,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use overview::Follows;
 use reader::{Driver, Drives, Reader};
 use sluice_core::overview::{in_queue, BranchView, Held};
 use sluice_core::records::{Beside, BranchHold, CopyBehind, Event, FailedTask, State, Submission};
@@ -886,6 +887,20 @@ pub trait PullRequests {
         Ok(None)
     }
 
+    /// 137, design D5: as [`PullRequests::across`], as the host last kept
+    /// them, reading GitHub for none of them and following none no longer:
+    /// for a reader's document, which reads them again only once what the
+    /// host keeps of them, or the intake mark, moved (129; rules core.25,
+    /// core.31).
+    fn kept_across(
+        &self,
+        _seams: Seams<'_>,
+        _clock: &dyn Clock,
+        _branch: &str,
+    ) -> Result<Option<Across>> {
+        Ok(None)
+    }
+
     /// The pull request a submission's place names, where it names one.
     fn request_of(&self, _place: &str) -> Option<u64> {
         None
@@ -1249,7 +1264,7 @@ pub fn run(
                     );
                 }
                 return submit_group(
-                    &s, host, pushers, clock, req, no_wait, json, pause, tick, out,
+                    &s, host, pushers, pulls, clock, req, no_wait, json, pause, tick, out,
                 );
             }
             let worktree = worktree.into_iter().next().unwrap_or_else(|| ".".into());
@@ -1287,6 +1302,7 @@ pub fn run(
                 &s,
                 host,
                 pushers,
+                pulls,
                 clock,
                 SubmitRequest {
                     worktree,
@@ -1343,6 +1359,7 @@ pub fn run(
                 host,
                 clock,
                 pulls: intake,
+                follows: pulls,
                 deadline,
                 json,
                 pause,
@@ -1507,9 +1524,10 @@ pub fn run(
                     // queues'.
                     if let Some(Reader::Lead(lead)) = &mut reader {
                         let doc =
-                            overview::read_held(&s, host, clock, &mut asked).unwrap_or_else(|e| {
-                                told::document(Kind::Internal, &format!("{e:#}"), &[])
-                            });
+                            overview::read_held(&s, host, clock, Follows::Kept(pulls), &mut asked)
+                                .unwrap_or_else(|e| {
+                                    told::document(Kind::Internal, &format!("{e:#}"), &[])
+                                });
                         let doc = overview::ticked(doc, tick);
                         if !INTERRUPTED.load(Ordering::SeqCst) {
                             // The last document stands for a write that failed
@@ -1686,7 +1704,7 @@ pub fn run(
             }
         },
         Command::Overview { json, watch } => {
-            overview::run(&s, host, clock, json, watch, pause, tick, out)
+            overview::run(&s, host, clock, pulls, json, watch, pause, tick, out)
         }
         Command::Amend {
             id,
@@ -2315,6 +2333,7 @@ fn submit(
     s: &Sluice<'_>,
     host: &dyn exec::Host,
     pushers: &dyn Pushers,
+    pulls: &dyn PullRequests,
     clock: &dyn Clock,
     req: SubmitRequest,
     no_wait: bool,
@@ -2364,6 +2383,7 @@ fn submit(
         host,
         clock,
         pulls: None,
+        follows: pulls,
         deadline: None,
         json,
         pause,
@@ -2397,6 +2417,7 @@ fn submit_group(
     s: &Sluice<'_>,
     host: &dyn exec::Host,
     pushers: &dyn Pushers,
+    pulls: &dyn PullRequests,
     clock: &dyn Clock,
     req: GroupRequest,
     no_wait: bool,
@@ -2450,6 +2471,7 @@ fn submit_group(
         host,
         clock,
         pulls: None,
+        follows: pulls,
         deadline: None,
         json,
         pause,
@@ -2662,6 +2684,9 @@ struct Waiting<'a> {
     /// On a branch that takes pull requests: taken in before each round,
     /// as a waiting pull-request submit does.
     pulls: Option<&'a dyn PullRequests>,
+    /// 137, design D5: the pull requests the host follows, which the
+    /// reader's document the wait writes carries as the host kept them.
+    follows: &'a dyn PullRequests,
     /// When `sluice wait --timeout` runs out.
     deadline: Option<chrono::DateTime<chrono::Utc>>,
     json: bool,
@@ -3195,7 +3220,8 @@ impl Reading {
                 // A read whose start it could not mark leaves a forecast
                 // reading past this reader, which decides nothing (64).
                 let _ = lead.begin();
-                match overview::document(s, waiting.host, waiting.clock) {
+                let follows = Follows::Kept(waiting.follows);
+                match overview::document(s, waiting.host, waiting.clock, follows) {
                     Ok((branches, doc)) => {
                         // Ctrl-C reaching the git a branch's read runs is no
                         // refusal of that branch's (26).

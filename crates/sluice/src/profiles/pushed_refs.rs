@@ -410,7 +410,7 @@ impl PushedRefs {
     /// reads as a driver's of a host named by its commit, which no wait's
     /// rule takes at once.
     pub fn intake_mark(&self, branch: &str) -> Result<Option<(Rev, Mark)>> {
-        let Some(rev) = self.local.read_ref(&self.fetched_mark(branch))? else {
+        let Some(rev) = self.intake_mark_at(branch)? else {
             return Ok(None);
         };
         let out = git(
@@ -424,6 +424,13 @@ impl PushedRefs {
             sluice: String::new(),
         });
         Ok(Some((rev, mark)))
+    }
+
+    /// 137: the commit of `branch`'s intake mark as the branch's last fetch
+    /// brought it, read with no process (129); `None` when the remote held
+    /// none.
+    pub fn intake_mark_at(&self, branch: &str) -> Result<Option<Rev>> {
+        self.local.read_ref(&self.fetched_mark(branch))
     }
 
     /// 137: push `mark` as `branch`'s intake mark, leased on the remote's

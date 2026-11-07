@@ -329,6 +329,19 @@ pub struct Pulls {
     /// The host that takes each branch's pull requests in, by branch, as
     /// this process's last intake found it, where that is another host.
     away: RefCell<BTreeMap<String, String>>,
+    /// 137, design D5: what this process's reader's documents last carried
+    /// of the pull requests into each branch the host follows, by branch,
+    /// read again only once the kept file or the mark moved.
+    kept_across: RefCell<BTreeMap<String, KeptAcross>>,
+}
+
+/// 137, design D5: a branch's followed pull requests as a reader's
+/// document carries them, and the kept file's modified time and the
+/// mark's commit they were read at.
+struct KeptAcross {
+    modified: std::time::SystemTime,
+    mark: Option<Rev>,
+    across: Option<Across>,
 }
 
 /// A pull request as a wait last read it from GitHub, and its timeline
@@ -423,6 +436,7 @@ impl Pulls {
             peer,
             holds: RefCell::default(),
             away: RefCell::default(),
+            kept_across: RefCell::default(),
         }
     }
 
@@ -2950,66 +2964,69 @@ impl crate::PullRequests for Pulls {
         if follows.is_empty() {
             return Ok(None);
         }
-        let places: Vec<String> = follows.keys().map(|n| place(*n)).collect();
-        let latest = self.latest_of(&s, branch, &places)?;
-        let held = |n: u64, head: &str| latest.get(&place(n)).is_some_and(|e| e.head.0 == head);
         // A read that cannot be made is warned of, and the request shown as
         // the host last read it.
         let warn = |e: &anyhow::Error| crate::telemetry::warn(&format!("sluice: warning: {e:#}"));
         let forge = self.forge(branch).map_err(|e| warn(&e)).ok();
         let now = clock.now();
-        let (mut rows, mut gone) = (Vec::new(), Vec::new());
-        for (n, kept) in follows {
-            if held(n, &kept.head) {
-                continue;
-            }
-            let read = match forge.map(|forge| self.read_followed(forge, repo, branch, n, now)) {
-                Some(Ok(read)) => read,
-                Some(Err(e)) => {
-                    warn(&e.context(format!("reading #{n} into {branch}")));
-                    Some(kept.clone())
-                }
-                None => Some(kept.clone()),
-            };
-            let f = match read {
-                Some(f) if held(n, &f.head) => continue,
-                Some(f) => f,
+        let read = |n: u64, kept: Follow| {
+            match forge.map(|forge| self.read_followed(forge, repo, branch, n, now)) {
+                Some(Ok(Some(f))) => f,
                 // GitHub has no such pull request: followed no longer.
-                None => Follow {
+                Some(Ok(None)) => Follow {
                     open: false,
                     ..kept
                 },
-            };
-            let posting = f.check.as_ref().map(|p| &p.posting);
-            let state = if f.merged || told(posting) == Told::Landed {
-                gone.push(n);
-                crate::ACROSS_LANDED.to_string()
-            } else if !f.open {
-                gone.push(n);
-                crate::ACROSS_CLOSED.to_string()
-            } else {
-                posting.map_or_else(|| "waiting".into(), |p| p.title.clone())
-            };
-            rows.push(AcrossRow {
-                pull_request: n,
-                queue: posting.and_then(|p| queue_of(&p.summary)),
-                state,
-                title: f.title,
-                from: f.from,
-                head: f.head,
-                draft: f.draft,
-                read_at: f.read_at,
-            });
-        }
+                Some(Err(e)) => {
+                    warn(&e.context(format!("reading #{n} into {branch}")));
+                    kept
+                }
+                None => kept,
+            }
+        };
+        let (rows, gone) = self.across_rows(&s, branch, follows, read)?;
         // Design D3: one read merged or closed is said once, here.
         self.unfollow(repo, branch, &gone);
-        if rows.is_empty() {
+        Ok(self.across_of(&t, branch, rows))
+    }
+
+    fn kept_across(
+        &self,
+        seams: Seams<'_>,
+        clock: &dyn Clock,
+        branch: &str,
+    ) -> Result<Option<Across>> {
+        // 129: the branch's policy read from git once while its revision
+        // stands, across the reader's ticks.
+        let s = Sluice::new(seams, clock).keeping(&self.policies);
+        let target = self.target(&s, branch)?.filter(|t| !t.signed);
+        let Some((t, modified)) = target.and_then(|t| {
+            let modified = self.kept.follows_modified(&t.repo, branch)?;
+            Some((t, modified))
+        }) else {
+            self.kept_across.borrow_mut().remove(branch);
             return Ok(None);
+        };
+        // The mark's commit, read with no process: what it says is read
+        // again only once it moved (rule core.31).
+        let mark = self.pushed(&t.remote)?.intake_mark_at(branch)?;
+        if let Some(k) = self.kept_across.borrow().get(branch) {
+            if k.modified == modified && k.mark == mark {
+                return Ok(k.across.clone());
+            }
         }
-        Ok(Some(Across {
-            taken_in_by: self.taken_in_by(&t.remote, branch),
-            pull_requests: rows,
-        }))
+        let follows = self.kept.follows(&t.repo, branch).requests;
+        let (rows, _) = self.across_rows(&s, branch, follows, |_, kept| kept)?;
+        let across = self.across_of(&t, branch, rows);
+        self.kept_across.borrow_mut().insert(
+            branch.to_string(),
+            KeptAcross {
+                modified,
+                mark,
+                across: across.clone(),
+            },
+        );
+        Ok(across)
     }
 
     fn branches(&self, seams: Seams<'_>) -> Result<Vec<String>> {
@@ -3462,6 +3479,65 @@ impl Pulls {
         if let Err(e) = kept {
             crate::telemetry::warn(&format!("sluice: warning: {e:#}"));
         }
+    }
+
+    /// 137, design D5: a row for each of `follows` into `branch` whose
+    /// submission this host's queue does not hold at its head, as `read`
+    /// gives it from what was kept of it, and the numbers of those found
+    /// merged or closed, which are shown `landed` or `closed without
+    /// landing`. "Held" is the request's latest submission here at its
+    /// head, in any state, past one this host handed over.
+    fn across_rows(
+        &self,
+        s: &Sluice<'_>,
+        branch: &str,
+        follows: BTreeMap<u64, Follow>,
+        mut read: impl FnMut(u64, Follow) -> Follow,
+    ) -> Result<(Vec<AcrossRow>, Vec<u64>)> {
+        let places: Vec<String> = follows.keys().map(|n| place(*n)).collect();
+        let latest = self.latest_of(s, branch, &places)?;
+        let held = |n: u64, head: &str| latest.get(&place(n)).is_some_and(|e| e.head.0 == head);
+        let (mut rows, mut gone) = (Vec::new(), Vec::new());
+        for (n, kept) in follows {
+            if held(n, &kept.head) {
+                continue;
+            }
+            let f = read(n, kept);
+            if held(n, &f.head) {
+                continue;
+            }
+            // Design D6: the check's fields decide over its words.
+            let posting = f.check.as_ref().map(|p| &p.posting);
+            let state = if f.merged || told(posting) == Told::Landed {
+                gone.push(n);
+                crate::ACROSS_LANDED.to_string()
+            } else if !f.open {
+                gone.push(n);
+                crate::ACROSS_CLOSED.to_string()
+            } else {
+                posting.map_or_else(|| "waiting".into(), |p| p.title.clone())
+            };
+            rows.push(AcrossRow {
+                pull_request: n,
+                queue: posting.and_then(|p| queue_of(&p.summary)),
+                state,
+                title: f.title,
+                from: f.from,
+                head: f.head,
+                draft: f.draft,
+                read_at: f.read_at,
+            });
+        }
+        Ok((rows, gone))
+    }
+
+    /// 137, design D2: `rows` with the host `t`'s intake mark names for
+    /// `branch`; `None` where there are none.
+    fn across_of(&self, t: &Target, branch: &str, rows: Vec<AcrossRow>) -> Option<Across> {
+        (!rows.is_empty()).then(|| Across {
+            taken_in_by: self.taken_in_by(&t.remote, branch),
+            pull_requests: rows,
+        })
     }
 
     /// 137, design D3: follow `numbers` into `branch` no longer, writing

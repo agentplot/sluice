@@ -499,6 +499,17 @@ the last day, the three refused last, each with how many times, the
 host, the last time and the command. Where more were refused, a last
 line says how many and to run `sluice status <branch>` for them all.
 
+When another host takes the branch's pull requests in, the branch's
+lines end with the pull requests this host follows, as `sluice status
+<branch>` lists them: a heading naming the
+host the intake mark names and its holder, then each request beneath
+it, such as `#41 Add the export · submission 1406 there · queued
+behind #38`. `sluice overview` alone reads them as status does, each
+from GitHub at most once in a quarter of `[forge] discovery` whichever
+process on the host asks. A watch, and the reader every other watch and
+wait follows, shows them as this host last kept them, and never asks
+GitHub for them.
+
 A branch whose policy, revision or state couldn't be read is shown as
 `<branch> could not be read:` and what refused it, in its own words,
 such as a policy sluice no longer accepts. Every other branch is shown
@@ -522,6 +533,8 @@ line or a script. Fields are only ever added to it.
 | `branches[].held` | while the branch is held ([`sluice branch`](#sluice-branch)): `read`, the revision it is read at, `lacks`, the landing that revision lacks, and `since`; left out otherwise |
 | `branches[].held_checkouts[]` | the branch's checkouts whose release failed, as `sluice status <branch> --json` lists them: `place`, `failed`, `tries`, `at`, `stopped` (tried no more: held) and, on a branch whose state is on its remote, the `host` that made it. Read from the branch's state, so every host's overview lists them. It's `[]` when there are none |
 | `branches[].refused_writes[]` | the writes sluice's protection refused on the branch in the last day, one for each command and host, the last refused first, as `sluice status <branch> --json` lists them. Each has `host`, `ref`, `command`, `times`, `first` and `last`, and the last refused write's `from` and `to` (`null` for a deletion). `command` is the command as git ran it, each full revision in it as `<revision>`, and `times` how many of its writes were refused. Read from the branch's state, so every host's overview lists them. It's `[]` when there are none. A tool that watches the host reads them here, or from `sluice status <branch> --json`, and never from `log.jsonl` or `branch.json`: the log says each command once, and the state's form is sluice's own |
+| `branches[].taken_in_by` | when another host takes the branch's pull requests in and this host follows any of them: the `host` the branch's intake mark names and its `holder`, `driver` for its `sluice run` or `wait`, as this host's last fetch brought it, or `null` where no host holds the mark, as `sluice status <branch> --json` gives it. Left out otherwise |
+| `branches[].pull_requests[]` | beside `taken_in_by`, each pull request this host follows into the branch whose submission its own queue doesn't hold, as `sluice status <branch> --json` lists them: `pull_request`, `title`, `from` (the branch it's opened from), `head`, `draft`, `state` (the check's title, `waiting` where none stands, or `landed` or `closed without landing` once found so), `queue` (the check's [`sluice:queue` block](/sluice/guides/pull-requests/#what-sluice-posts), or `null`) and `read_at`, when a process on the host last read it from GitHub. A watch's documents carry them as this host last kept them, and `read_at` says how old each is. Left out with `taken_in_by` |
 | `branches[].unread` | when the branch's policy, revision or state couldn't be read: what refused it, in its own words. Nothing else of the branch is read, so its other fields are empty; left out otherwise |
 | `sessions[]` | the worktrees held, each with how its last run ended (`last_result`), and those that have checked out a branch sluice lands on (`holds_queued_branch`), as `sluice status --json` lists them |
 | `sessions[].run` | while a `sluice exec` runs in the worktree: `started`, `command` for a run of a command, and `tasks`, as a combination's, while the moon runner says them |

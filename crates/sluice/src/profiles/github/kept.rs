@@ -336,6 +336,15 @@ impl Kept {
         read(&self.follows_path(repo, base, "json")).unwrap_or_default()
     }
 
+    /// 137, design D5: when the pull requests into `base` of `repo` the
+    /// host follows were last written, so a reader's document carries them
+    /// again only once it moved; `None` where none are kept.
+    pub fn follows_modified(&self, repo: &Repo, base: &str) -> Option<SystemTime> {
+        std::fs::metadata(self.follows_path(repo, base, "json"))
+            .and_then(|m| m.modified())
+            .ok()
+    }
+
     /// 137: change the pull requests into `base` of `repo` the host follows
     /// by `f`, under their lock, and keep what it leaves, written whole.
     pub fn change_follows<T>(
