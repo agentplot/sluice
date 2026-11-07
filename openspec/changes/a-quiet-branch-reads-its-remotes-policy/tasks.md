@@ -24,7 +24,7 @@ id.
 
 ## 3. Intake takes a quiet branch's requests in after its own fetch
 
-- [ ] 3.1 A forge-double case, `a_quiet_branch_that_takes_pull_requests_takes_them_in_after_intakes_fetch`, in `crates/sluice/tests/profiles/pull_requests.rs`. It sets up flywheel-next's shape: `main` on origin with its state on the host, `[branches.main.pull_requests]`, the state's `base` at a revision with a `[[checkout.cache]]` table, and origin's `main` clean. One `sluice run --rounds 1` pass, discovery due, takes the open request in, with no round run before it. Intake needs no code of its own, since it reads the queue through `status` (D2). True when `sluice exec main -- cargo test -p sluice --features tools --test pull_requests -- a_quiet_branch_that_takes_pull_requests` passes, failing with 2.1 undone.
+- [x] 3.1 A forge-double case, `a_quiet_branch_that_takes_pull_requests_takes_them_in_after_intakes_fetch`, in `crates/sluice/tests/profiles/pull_requests.rs`. It sets up flywheel-next's shape: `main` on origin with its state on the host, `[branches.main.pull_requests]`, the state's `base` at a revision with a `[[checkout.cache]]` table, and origin's `main` clean. One `sluice run --rounds 1` pass, discovery due, takes the open request in, with no round run before it. Intake needs no code of its own, since it reads the queue through `status` (D2). True when `sluice exec main -- cargo test -p sluice --features tools --test pull_requests -- a_quiet_branch_that_takes_pull_requests` passes, failing with 2.1 undone.
 
 ## 4. The reader's tick
 
