@@ -33,7 +33,7 @@ id.
 
 ## 5. The overview's order
 
-- [ ] 5.1 `overview()` in `crates/sluice-core/src/overview.rs` reads the order from the default branch's policy at the revision its view read, `held`, then `base`, then its local revision (D3). Add `overview_orders_branches_by_the_revision_this_host_holds` in `crates/sluice/tests/cli.rs`, beside `overview_orders_branches_as_the_policy_names_them`. True when `sluice exec main -- cargo test -p sluice --test cli -- overview_orders_branches` passes, the new case failing with `overview()` as `0b15d250` holds it.
+- [x] 5.1 `overview()` in `crates/sluice-core/src/overview.rs` reads the order from the default branch's policy at the revision its view read, `held`, then `base`, then its local revision (D3). Add `overview_orders_branches_by_the_revision_this_host_holds` in `crates/sluice/tests/cli.rs`, beside `overview_orders_branches_as_the_policy_names_them`. True when `sluice exec main -- cargo test -p sluice --test cli -- overview_orders_branches` passes, the new case failing with `overview()` as `0b15d250` holds it.
 
 ## 6. The site
 
