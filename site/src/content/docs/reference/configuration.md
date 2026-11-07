@@ -111,6 +111,15 @@ nobody. After three runs in a row in which its tests could not run, its
 newest submission is blamed, and each test is named with why. A command
 given to `sluice exec` after `--` is not held to `not_run`.
 
+On a host whose system Nix manages, NixOS or nix-darwin, sluice notes
+the system `/run/current-system` links to as a run begins. A test that
+did not pass in a run during which the host's system was switched has no
+result and blames nobody, whatever the branch asks of the host. Its
+combination is tested again in a new checkout, once the old one's
+release has run, and the run counts as one whose tests could not run.
+`sluice exec` lists such a test as could not run, naming the system
+before and after. On any other host, nothing of its system is read.
+
 ## `[checkout]`: where a combination is tested
 
 sluice tests each combination in a clean checkout of its own, apart from
