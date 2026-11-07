@@ -18,15 +18,21 @@ it. Its title SHALL stay as the state it shows (137, C.5).
 ### Requirement: sluice's check carries the pull request's queue as fields
 Every `sluice` check SHALL end its summary with one hidden block,
 `<!-- sluice:queue {…} -->`, whose JSON has `host`; `taken_in`;
-`submission` and `state`, the submission's number and its state as its
-record names it, or `null` while not taken in; `ahead`, each submission
-ahead of it as `{"submission", "pull_request"}`; and `waits_for`, what
-it lacks while not taken in. A changed field SHALL be posted, and an
-unchanged block posts nothing (137, C.5; rule core.32).
+`submission` and `state`, the submission's number and its record's
+state, or `null` while not taken in; `ahead`, each submission ahead of
+it in queue order as `{"submission", "pull_request"}`; and `waits_for`,
+what it lacks before it is taken in, or taken in again. A changed field
+SHALL be posted, and an unchanged block posts nothing (137, C.5; rule
+core.32).
 
 #### Scenario: A queued submission's block
 - **WHEN** host `b` holds `#12` as submission 1406, queued behind `#10`'s submission 1405
 - **THEN** the summary of `#12`'s `sluice` check ends with `<!-- sluice:queue {"host":"b","taken_in":true,"submission":1406,"state":"queued","ahead":[{"submission":1405,"pull_request":10}],"waits_for":[]} -->`
+
+#### Scenario: A queue reordered by priority and after
+- **WHEN** host `b` holds `#10`'s submission 1405 under test, then `#12`'s 1406 and `#14`'s 1407 queued, and a planner gives 1407 priority 5
+- **THEN** `#12`'s check is titled `queued behind #10, #14` and its block's `ahead` names 1405 and 1407 in that order
+- **AND** once 1407 is amended to land after 1406, `#12`'s check is titled `queued behind #10` and `#14`'s `queued behind #10, #12`
 
 #### Scenario: A waiting pull request's block
 - **WHEN** host `b` takes main's pull requests in, and `#13` needs one review and `qa/approved`

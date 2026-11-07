@@ -152,7 +152,8 @@ branch's pull requests in, that document, and the wait's until it ends,
 also gives `taken_in_by`, the host holding the branch's intake mark and
 whether its `sluice run` or a wait holds it, and `queue`, where that host
 holds the pull request: `submission` and `state` once it is taken in,
-`ahead` of it, and `waits_for` before then. The wait ends as the pull
+what is `ahead` of it in that host's order, and `waits_for`, what it lacks
+before it is taken in, or taken in again. The wait ends as the pull
 request lands or is sent back there; don't submit again to move it.
 
 A submission that sits at `queued` while another is testing is waiting its

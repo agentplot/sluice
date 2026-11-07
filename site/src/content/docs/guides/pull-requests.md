@@ -375,12 +375,16 @@ program to read:
 ```
 
 `state` is the submission's state on that host, and `ahead` lists the
-submissions ahead of it there, each with its pull request's number, or
-`null` for work submitted from a worktree. Before the host takes the
+submissions ahead of it there, in the order that host will land them,
+priorities and `--after` included, each with its pull request's number,
+or `null` for work submitted from a worktree. Before the host takes the
 pull request in, `taken_in` is `false`, `submission` and `state` are
 `null`, and `waits_for` lists what the check's title says it waits for,
-such as `["1 review", "qa/approved"]`. sluice posts only when the state
-or a field of the block changes.
+such as `["1 review", "qa/approved"]`. A pull request sent back and
+waiting for its submitter's next submit keeps its `submission`, its
+`state` says how it was sent back, and `waits_for` is `["the next
+submit"]`. sluice posts only when the state or a field of the block
+changes.
 
 sluice on another host reads where the pull request stands from this
 block, not from the check's title or whether GitHub shows the run

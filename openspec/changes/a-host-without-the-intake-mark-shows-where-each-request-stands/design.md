@@ -119,10 +119,21 @@ with one HTML comment, which GitHub's Markdown hides:
   the request is not taken in.
 - `ahead`: the submissions ahead of it in that host's queue and not out
   of it, each with its request's number or `null` for a worktree's, in
-  queue order.
-- `waits_for`: while not taken in, what it lacks, in the words the
-  check's title gives (`1 review`, `qa/approved`, `a draft`, `the next
-  submit`, `withdrawn by the operator`). Otherwise it is empty.
+  the order that host's rounds take the queue (6, 7): what is landing or
+  under test as its combination holds it, then by priority and order of
+  submission, each after its `after`, as `sluice status` reads it
+  (`Status::chain`). One waiting on an `after` not yet in the chain has
+  the chain ahead of it, then what it waits on, as a forecast reads it
+  (64).
+- `waits_for`: what it lacks before that host takes it in, or takes it
+  in again, in the words the check's title gives (`1 review`,
+  `qa/approved`, `a draft`, `the next submit`, `withdrawn by the
+  operator`): while it is not taken in, and while its submission at that
+  head left the queue without landing and it waits for its submitter's
+  next submit or its author's ready mark, `taken_in` then true and
+  `state` how it left. Otherwise it is empty. *Not taken:* emptying it
+  once taken in, which would leave that request's way on in its title's
+  words alone.
 
 The words say the same for a person: the summary gains a first line,
 "Submission 1406 on b." or "Waiting to be taken in on b.", and the title
