@@ -234,8 +234,8 @@ impl Submit {
     /// `--no-remove` and `--timeout` are `wt submit`'s own; the rest is
     /// read as sluice reads it, so that only a submit from one worktree
     /// reads what stands, follows or removes anything: not one that
-    /// submits nothing (`--check`, `--status`) or several worktrees as one
-    /// act (125), and not `--help`, `--version` or arguments sluice
+    /// submits nothing (`--check`, `--status`), a branch by name (124) or
+    /// several worktrees as one act (125), and not `--help`, `--version` or arguments sluice
     /// refuses, which exit as they do with nothing submitted. `--timeout`
     /// bounds a wait, so it is refused on a run that does not wait.
     pub fn parse(args: impl IntoIterator<Item = OsString>) -> Submit {
@@ -285,6 +285,7 @@ impl Submit {
             crate::Command::Submit {
                 no_wait,
                 check,
+                head,
                 status,
                 worktree,
                 json,
@@ -309,6 +310,8 @@ impl Submit {
                 Some("this one gives --check")
             } else if status {
                 Some("this one gives --status")
+            } else if head.is_some() {
+                Some("this one submits a branch by name")
             } else if worktree.len() > 1 {
                 Some("this one submits several worktrees")
             } else {
@@ -319,10 +322,11 @@ impl Submit {
             }
         }
         // Several worktrees are one act of `sluice submit`'s, which none
-        // follows and none is removed by.
-        let single = (!check && !status && worktree.len() == 1).then(|| Single {
+        // follows and none is removed by; a branch submitted by name is no
+        // worktree's (124).
+        let single = (!check && !status && head.is_none() && worktree.len() <= 1).then(|| Single {
             branch,
-            worktree: worktree[0].clone().into(),
+            worktree: worktree.first().map_or(".", String::as_str).into(),
             waits: !no_wait,
             remove: !keep,
             timeout,
@@ -534,7 +538,11 @@ mod tests {
         assert_eq!(removes(&s), None);
         assert!(s.single.as_ref().is_some_and(|w| w.waits && !w.remove));
         assert_eq!(s.sluice, ["submit", "main"]);
-        for reads in [&["main", "--check"][..], &["main", "--status"]] {
+        for reads in [
+            &["main", "--check"][..],
+            &["main", "--status"],
+            &["main", "--head", "feature/x"],
+        ] {
             let s = parse(reads);
             assert_eq!(s.single, None, "{reads:?}");
             assert_eq!(s.refused, None, "{reads:?}");
@@ -662,6 +670,10 @@ mod tests {
                     "../b",
                 ],
                 "this one submits several worktrees",
+            ),
+            (
+                &["main", "--timeout", "9m", "--head", "feature/x"],
+                "this one submits a branch by name",
             ),
         ] {
             let s = parse(given);

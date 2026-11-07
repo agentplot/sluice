@@ -105,6 +105,7 @@ Examples:
   $ sluice submit main --no-wait --subject \"Batch review cards\"   its pull request's title
   $ sluice submit main --after 12,14 --priority 5
   $ sluice submit main --worktree ../b1 --worktree ../b2   both heads as one act
+  $ sluice submit main --head feature/x --no-wait   a branch sluice lands on, by name
 
 Exit codes:
   0    landed, whatever failed after the landing (said on stderr)
@@ -249,18 +250,19 @@ pub enum Command {
         /// Only say whether it would conflict; submit nothing.
         #[arg(long)]
         check: bool,
-        /// With --check, the branch whose revision to forecast in place of
-        /// the worktree's head, such as a feature branch's against the
-        /// branch it lands on.
-        #[arg(long, value_name = "BRANCH", requires = "check")]
+        /// The branch to submit in place of this worktree's head, a branch
+        /// sluice lands on, from anywhere in the repository; with --check,
+        /// the branch whose revision to forecast.
+        #[arg(long, value_name = "BRANCH")]
         head: Option<String>,
         /// Only say where this worktree's last submission, or its pull
         /// request, stands.
         #[arg(long)]
         status: bool,
-        /// The worktree to submit from; given more than once, every one's
-        /// head as one act, in the order given.
-        #[arg(long, default_value = ".")]
+        /// The worktree to submit from, this folder where none is given;
+        /// given more than once, every one's head as one act, in the order
+        /// given.
+        #[arg(long)]
         worktree: Vec<String>,
         /// One JSON document on stdout.
         #[arg(long)]
@@ -1040,6 +1042,34 @@ pub fn run(
             worktree,
             json,
         } => {
+            // 124, D1: a submit by name reads no worktree, and has no last
+            // submission of one to report.
+            if head.is_some() && !check {
+                let why = if !worktree.is_empty() {
+                    Some(
+                        "--head names what is submitted, from anywhere in the repository; give \
+                         no --worktree with it",
+                    )
+                } else if status {
+                    Some(
+                        "--status reads a worktree's last submission; a branch's are in sluice \
+                         status <target> --all",
+                    )
+                } else if subject.len() > 1 {
+                    Some("--head submits one branch; give one --subject with it, or none")
+                } else {
+                    None
+                };
+                if let Some(why) = why {
+                    writeln!(out, "sluice submit: {why}")?;
+                    return Ok(USAGE);
+                }
+            }
+            let worktree = if worktree.is_empty() {
+                vec![".".to_string()]
+            } else {
+                worktree
+            };
             // 125: several worktrees are one act, which neither forecasts
             // nor reports one worktree's last submission.
             if worktree.len() > 1 && (check || status) {
@@ -1100,6 +1130,35 @@ pub fn run(
                     &branch,
                     &after,
                     json,
+                    out,
+                );
+            }
+            // 124: a branch sluice lands on, submitted by name.
+            if let Some(named) = head {
+                if takes_pulls(&s, &branch)? {
+                    let text = format!(
+                        "refused: {branch} takes pull requests, and a submit by name opens none \
+                         yet"
+                    );
+                    told::tell(out, json, Kind::Refused, &text, &[])?;
+                    return Ok(CONFLICT);
+                }
+                return submit(
+                    &s,
+                    host,
+                    pushers,
+                    clock,
+                    SubmitRequest {
+                        head: SubmitHead::Branch(named),
+                        branch,
+                        after,
+                        priority,
+                        subject,
+                    },
+                    no_wait,
+                    json,
+                    pause,
+                    tick,
                     out,
                 );
             }
@@ -1431,6 +1490,13 @@ pub fn run(
                     let names = status_names(&status, std::slice::from_ref(&sub));
                     let testing =
                         progress::lines(&s, &branch, Some(sub.id), clock.now(), Some(&names))?;
+                    // 124, D10: no session of its own moves a submission by
+                    // name on, so its status names its way on.
+                    let ways = if sub.from.by_name() {
+                        ways_on(&s, &sub, &branch)?
+                    } else {
+                        Vec::new()
+                    };
                     write_status(
                         &status,
                         pusher.as_ref(),
@@ -1440,6 +1506,9 @@ pub fn run(
                         Some(&room),
                         out,
                     )?;
+                    for w in ways {
+                        writeln!(out, "{w}")?;
+                    }
                     Ok(0)
                 }
             },
@@ -1991,7 +2060,7 @@ fn refusal(
                 hashes(ids, None, &mut BTreeSet::new())
             )
         }
-        SubmitRefusal::NoHead(from) => format!("refused: no branch {from} to forecast"),
+        SubmitRefusal::NoHead(from) => format!("refused: no branch {from} to submit"),
         SubmitRefusal::ToItself => format!("refused: {worktree} is not submitted to itself"),
         SubmitRefusal::NotLandedOn => format!(
             "refused: {worktree} is no branch sluice lands on: a branch of a worktree's own is \
@@ -2052,7 +2121,10 @@ fn forecast(
     let f = match got {
         Ok(f) => f,
         Err(r) => {
-            let text = refusal(&r, worktree, &worktree_name(s, worktree), branch, pushers)?;
+            let text = match &r {
+                SubmitRefusal::NoHead(from) => format!("refused: no branch {from} to forecast"),
+                _ => refusal(&r, worktree, &worktree_name(s, worktree), branch, pushers)?,
+            };
             told::tell(out, json, Kind::Refused, &text, &refusal_next(&r, branch))?;
             return Ok(CONFLICT);
         }
@@ -2183,7 +2255,12 @@ fn submit(
     }
     if !json {
         let ahead = queued_ahead(&accepted.ahead, |i| format!("#{i}"));
-        writeln!(out, "submission {id} to {} · {ahead}", req.branch)?;
+        // 124, D9: a branch named is said by its name.
+        let from = match &req.head {
+            SubmitHead::Worktree(_) => String::new(),
+            SubmitHead::Branch(b) => format!(" from {b}"),
+        };
+        writeln!(out, "submission {id} to {}{from} · {ahead}", req.branch)?;
         if let Some(copy) = copy {
             writeln!(out, "{}", copy_differs_line(copy))?;
         }
@@ -3213,9 +3290,6 @@ fn report(
             combination(&t.submissions)
         )?;
     }
-    // Who moves it on: the agent working in the worktree it came from, by
-    // that worktree's branch, a pull request's the one it was opened from.
-    let from = sub.from.head.as_deref().unwrap_or(&sub.from.worktree);
     match sub.state {
         State::Landed => {
             let to = sub.landed_as.clone().expect("a landed submission");
@@ -3231,31 +3305,14 @@ fn report(
         }
         State::Failed => {
             let t = sub.tested.clone().expect("a blamed submission was tested");
-            // A check with no key was left without a result (15): not run,
-            // most often behind a check that failed.
-            let ran: Vec<&FailedTask> = sub.failed.iter().filter(|f| !f.hash.is_empty()).collect();
-            let timed_out = sub.result.as_deref() == Some("timed out");
-            // Time-limit-1 66: in a run its time limit ended, a check with
-            // no key that could run is one the limit cut off.
-            let cut: Vec<&str> = sub
-                .failed
-                .iter()
-                .filter(|f| timed_out && f.hash.is_empty() && f.not_run.is_none())
-                .map(|f| f.task.as_str())
-                .collect();
-            let not_run: Vec<&str> = sub
-                .failed
-                .iter()
-                .filter(|f| f.hash.is_empty())
-                .map(|f| f.task.as_str())
-                .filter(|t| !cut.contains(t))
-                .collect();
-            // 19: read as failed for its key holding a pass and a fail.
-            let flaky: Vec<&str> = ran
-                .iter()
-                .filter(|f| f.flaky.is_some())
-                .map(|f| f.task.as_str())
-                .collect();
+            let Failure {
+                ran,
+                timed_out,
+                cut,
+                not_run,
+                flaky,
+                could_not,
+            } = Failure::of(sub);
             if timed_out && cut.is_empty() {
                 writeln!(out, "timed out")?;
             } else if timed_out {
@@ -3284,8 +3341,6 @@ fn report(
                 }
             }
             // Could-not-run-1 115: a test that could not run, and why.
-            let could_not: Vec<&FailedTask> =
-                sub.failed.iter().filter(|f| f.not_run.is_some()).collect();
             for f in &could_not {
                 let why = f.not_run.as_deref().unwrap_or_default();
                 writeln!(out, "  {}", words::could_not_run(&f.task, why))?;
@@ -3344,31 +3399,8 @@ fn report(
                      (flaky = \"fail\")"
                 )?;
             }
-            if !could_not.is_empty() {
-                writeln!(
-                    out,
-                    "{}",
-                    words::could_not_run_way_on(
-                        from,
-                        &could_not
-                            .iter()
-                            .map(|f| f.task.as_str())
-                            .collect::<Vec<_>>()
-                    )
-                )?;
-            }
-            if timed_out {
-                writeln!(out, "{}", words::timed_out_way_on(from, &cut))?;
-            }
-            if not_run.len() > could_not.len() || ran.len() > flaky.len() {
-                writeln!(out, "{}", words::fix_way_on(from))?;
-            }
-            if !flaky.is_empty() {
-                let other_failed = ran
-                    .iter()
-                    .filter_map(|f| f.flaky.as_ref())
-                    .all(|k| k.other.outcome == Outcome::Fail);
-                writeln!(out, "{}", words::flaky_way_on(&flaky, other_failed))?;
+            for w in ways_on(s, sub, branch)? {
+                writeln!(out, "{w}")?;
             }
         }
         State::Conflict => {
@@ -3383,11 +3415,111 @@ fn report(
                     w.from.worktree
                 )?;
             }
-            writeln!(out, "{}", words::conflict_way_on(from, branch))?;
+            for w in ways_on(s, sub, branch)? {
+                writeln!(out, "{w}")?;
+            }
         }
         _ => writeln!(out, "{}", sub.state.word())?,
     }
     Ok(exit_for(sub))
+}
+
+/// What a blamed submission's record says failed, as its report and its
+/// ways on read it.
+struct Failure<'a> {
+    /// The checks that ran and failed, each with its key.
+    ran: Vec<&'a FailedTask>,
+    /// Its run's time limit ended it (time-limit-1 66).
+    timed_out: bool,
+    /// The checks the time limit cut off: with no key, and able to run.
+    cut: Vec<&'a str>,
+    /// The checks left without a result (15), not cut off: not run, most
+    /// often behind a check that failed.
+    not_run: Vec<&'a str>,
+    /// 19: read as failed for its key holding a pass and a fail.
+    flaky: Vec<&'a str>,
+    /// Could-not-run-1 115: the checks the host could not run.
+    could_not: Vec<&'a FailedTask>,
+}
+
+impl<'a> Failure<'a> {
+    fn of(sub: &'a Submission) -> Failure<'a> {
+        let ran: Vec<&FailedTask> = sub.failed.iter().filter(|f| !f.hash.is_empty()).collect();
+        let timed_out = sub.result.as_deref() == Some("timed out");
+        let cut: Vec<&str> = sub
+            .failed
+            .iter()
+            .filter(|f| timed_out && f.hash.is_empty() && f.not_run.is_none())
+            .map(|f| f.task.as_str())
+            .collect();
+        let not_run: Vec<&str> = sub
+            .failed
+            .iter()
+            .filter(|f| f.hash.is_empty())
+            .map(|f| f.task.as_str())
+            .filter(|t| !cut.contains(t))
+            .collect();
+        let flaky: Vec<&str> = ran
+            .iter()
+            .filter(|f| f.flaky.is_some())
+            .map(|f| f.task.as_str())
+            .collect();
+        let could_not: Vec<&FailedTask> =
+            sub.failed.iter().filter(|f| f.not_run.is_some()).collect();
+        Failure {
+            ran,
+            timed_out,
+            cut,
+            not_run,
+            flaky,
+            could_not,
+        }
+    }
+}
+
+/// The ways on of a failed or conflicting submission to `branch`, in the
+/// order its report gives them, for whoever moves it on: the agent working
+/// in the worktree it came from, or, for a branch submitted by name, its
+/// caller, who lands a fix on the branch and submits it by name again
+/// (D10). A fix by name to a conflict merges `branch` at the revision the
+/// submission was tested on, or at the branch's own where it was not.
+/// None for any other state.
+fn ways_on(s: &Sluice<'_>, sub: &Submission, branch: &str) -> Result<Vec<String>> {
+    let mover = words::Mover::of(&sub.from, branch);
+    let mut ways = Vec::new();
+    match sub.state {
+        State::Failed => {
+            let f = Failure::of(sub);
+            if !f.could_not.is_empty() {
+                let tasks: Vec<&str> = f.could_not.iter().map(|f| f.task.as_str()).collect();
+                ways.push(words::could_not_run_way_on(mover, &tasks));
+            }
+            if f.timed_out {
+                ways.push(words::timed_out_way_on(mover, &f.cut));
+            }
+            if f.not_run.len() > f.could_not.len() || f.ran.len() > f.flaky.len() {
+                ways.push(words::fix_way_on(mover));
+            }
+            if !f.flaky.is_empty() {
+                let other_failed = f
+                    .ran
+                    .iter()
+                    .filter_map(|f| f.flaky.as_ref())
+                    .all(|k| k.other.outcome == Outcome::Fail);
+                ways.push(words::flaky_way_on(&f.flaky, other_failed));
+            }
+        }
+        State::Conflict => {
+            let at = match (&mover, &sub.tested) {
+                (words::Mover::Agent(_), _) => None,
+                (_, Some(t)) => Some(t.on.clone()),
+                (_, None) => s.seams().branch.read(branch)?,
+            };
+            ways.push(words::conflict_way_on(mover, branch, at.as_ref()));
+        }
+        _ => {}
+    }
+    Ok(ways)
 }
 
 /// 51, 135: `sluice inbox`: collect every outcome pending for the
