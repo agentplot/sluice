@@ -210,6 +210,21 @@ pub fn could_not_run(task: &str, why: &str) -> String {
     format!("{task} could not run: {why}")
 }
 
+/// 149: a required check its runner skipped for the tasks `by` it depends
+/// on, which ran and failed; the tasks joined with `, ` and the last with
+/// ` and `.
+pub fn failed_by(check: &str, by: &[String]) -> String {
+    let (tasks, what) = match by {
+        [] => (String::new(), "a task it depends on"),
+        [one] => (one.clone(), "a task it depends on"),
+        [rest @ .., last] => (
+            format!("{} and {last}", rest.join(", ")),
+            "tasks it depends on",
+        ),
+    };
+    format!("{check} failed by {tasks}, {what}")
+}
+
 /// ADR 0050: a submission refused because `branch` requires checks the
 /// task runner in the submitting worktree keeps out of CI: each, through
 /// the tag that names it, with its line of the policy, and the way on for
