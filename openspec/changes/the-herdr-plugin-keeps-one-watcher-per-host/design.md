@@ -126,9 +126,10 @@ busybox's. A server that fails is dropped, under the lease's lock and
 only if it still fails there: its registration is removed, and with it
 its tokens and panes, and its folder with them unless a former version's
 `watch.log` is left in it. So is a server whose herdr calls failed twice
-in a row; the call that tells is the pane list that every setting of a
-server's tokens makes, `tokens.sh` exiting 3, with nothing set, when herdr
-does not list its panes. Once no server remains, the watcher stops, ends its
+in a row; the call that tells is the reading of its panes (D6), at its
+ensure, the ticks after it and the minute's pass, which keeps nothing and
+sets nothing when herdr does not list them. Once no server remains, the
+watcher stops, ends its
 sources and releases the lease. A server started at a stopped one's path
 has another socket file. It runs the startup, which registers it again
 with a fresh link.
@@ -240,7 +241,11 @@ The watcher reads a server's panes, with their folders, their
 `sluice_branch` tokens, and the git worktree and repository of each
 folder new to it. It does so at the server's ensure, and again at the
 next tick, so a token or a folder given just after a pane opens is
-seen. It also reads them at a popup's asking and at the minute's pass
+seen. An ensure read between ticks is read at the tick after that one
+too, since the next may come a moment after it: so what is given within
+a tick of the ensure is read within a tick of being given. The path not
+taken is a new sleep at each ensure, which D4's one sleep rules out. It
+also reads them at a popup's asking and at the minute's pass
 (D5). It keeps them in `servers/<sum>/panes.json`. It runs `git` only
 for a folder it has not met. A document's change uses the panes as kept.
 Only a landing's toast lists tabs and workspaces too, to tell the pane
