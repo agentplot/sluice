@@ -6,7 +6,9 @@ tasks:
   # Everything but the tests that start a sandbox (`sandbox` task).
   test:
     command: 'cargo test -p sluice -- --skip sandbox'
-    inputs: ['/crates/sluice/**/*', '/crates/sluice-seams/**/*', '/crates/sluice-core/**/*', '/crates/sluice-fakes/**/*', '/plugins/sluice/skills/**/*', '/Cargo.toml', '/Cargo.lock', '/devenv.nix', '/devenv.lock']
+    # The flake module's rendered files, which a unit test reads as sluice
+    # reads the host's settings (record 0098), among them.
+    inputs: ['/crates/sluice/**/*', '/crates/sluice-seams/**/*', '/crates/sluice-core/**/*', '/crates/sluice-fakes/**/*', '/plugins/sluice/skills/**/*', '/nix/tests/files/**/*', '/Cargo.toml', '/Cargo.lock', '/devenv.nix', '/devenv.lock']
     tags: [cargo-test, check-fast]
     options: {runFromWorkspaceRoot: true}
   # The profiles against real tools (git, moon, wt, a container engine,

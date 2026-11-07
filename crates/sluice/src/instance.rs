@@ -253,7 +253,20 @@ impl Instance {
     /// The settings on a host of `all` cores that gives sluice `given` of
     /// them: fewer where its affinity or quota limits sluice (71).
     pub fn from_host(path: Option<&Path>, given: usize, all: usize) -> Result<Instance> {
-        let form: ConfigForm = toml::from_str(&settings_text(path)?)
+        Instance::from_text(&settings_text(path)?, path, given, all, home().as_deref())
+    }
+
+    /// As [`Instance::from_host`], from the settings' `text`, read from
+    /// `path`, with `~/` expanded in `home`: so a test gives both, and sets
+    /// no `HOME` beside the tests on other threads.
+    fn from_text(
+        text: &str,
+        path: Option<&Path>,
+        given: usize,
+        all: usize,
+        home: Option<&Path>,
+    ) -> Result<Instance> {
+        let form: ConfigForm = toml::from_str(text)
             .with_context(|| format!("reading {}", path.unwrap_or(Path::new("")).display()))?;
         // What sluice may use (71): the host's limit where it gives one, the
         // keeper's `cores` where it gives none, and all its cores otherwise.
@@ -284,14 +297,11 @@ impl Instance {
                  it must be less than the bound"
             ),
         };
-        let forge = form
-            .forge
-            .map(|f| forge(f, home().as_deref()))
-            .transpose()?;
+        let forge = form.forge.map(|f| forge(f, home)).transpose()?;
         let signing = match form.signing {
             None => None,
             Some(s) => Some(Signing {
-                key: private_key("[signing] key", &s.key, home().as_deref())?,
+                key: private_key("[signing] key", &s.key, home)?,
                 signer: s.signer,
             }),
         };
@@ -330,7 +340,7 @@ impl Instance {
             }
             s => s,
         };
-        let caches = caches(form.caches, home().as_deref())?;
+        let caches = caches(form.caches, home)?;
         Ok(Instance {
             bound,
             reserved,
@@ -861,6 +871,74 @@ dir = "/caches/moon"
             ),
             "RUSTC_WRAPPER is set by both the first and the second [[caches]]: \
              a variable has one value for every run"
+        );
+    }
+
+    /// 35, 71, 74, 78, 87, 136; record 0098: the file sluice's flake module
+    /// renders with every key it declares set, read by the reader that
+    /// refuses a field it does not know, as its settings name it.
+    #[test]
+    fn the_modules_file_is_read_as_written() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = std::env::temp_dir().join(format!("sluice-module-{}", std::process::id()));
+        let folder = home.join(".config/sluice");
+        std::fs::create_dir_all(&folder).unwrap();
+        for key in ["app.pem", "signing"] {
+            let key = folder.join(key);
+            std::fs::write(&key, "key").unwrap();
+            std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let read = Instance::from_text(
+            include_str!("../../../nix/tests/files/every.toml"),
+            None,
+            16,
+            16,
+            Some(&home),
+        );
+        let _ = std::fs::remove_dir_all(&home);
+        let variables = |pairs: &[(&str, &str)]| {
+            pairs
+                .iter()
+                .map(|(name, value)| (name.to_string(), value.to_string()))
+                .collect::<BTreeMap<_, _>>()
+        };
+        assert_eq!(
+            read.unwrap(),
+            Instance {
+                bound: 3,
+                reserved: 1,
+                processors: 12,
+                forge: Some(Forge {
+                    app_id: 123456,
+                    key: folder.join("app.pem"),
+                    discovery: Duration::from_secs(60),
+                }),
+                signing: Some(Signing {
+                    signer: "host-a".into(),
+                    key: folder.join("signing"),
+                }),
+                peers: Peers {
+                    lease: Duration::from_secs(300),
+                    alive: Duration::from_secs(120),
+                    name: Some("host-a".into()),
+                },
+                systems: Some(vec!["aarch64-darwin".into(), "x86_64-linux".into()]),
+                caches: vec![
+                    HostCache {
+                        dir: home.join(".cache/sccache"),
+                        socket: Some(home.join(".cache/sccache/server.sock")),
+                        env: variables(&[
+                            ("RUSTC_WRAPPER", "sccache"),
+                            ("SCCACHE_DIR", "~/.cache/sccache"),
+                        ]),
+                    },
+                    HostCache {
+                        dir: home.join(".moon/cache/shared"),
+                        socket: None,
+                        env: variables(&[("MOON_CACHE_SHARED_WORKTREE_CACHE", "true")]),
+                    },
+                ],
+            }
         );
     }
 }
