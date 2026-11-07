@@ -1366,7 +1366,8 @@ pub struct Row {
     pub task: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system: Option<String>,
-    /// Its key's hash; `None` for a check left with no result.
+    /// Its key's hash; `None` for a check left with no result, or failed
+    /// by a task it depends on (149).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
     pub result: RowResult,
@@ -1390,6 +1391,11 @@ pub struct Row {
     /// Could-not-run-1 115: why it could not run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub not_run: Option<String>,
+    /// 149: the tasks it depends on that ran and failed, which its runner
+    /// skipped it for; each has a row of its own with its key. Empty for a
+    /// check that ran, or was left without a result, on its own.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failed_by: Vec<String>,
     /// Could-not-run-1 116: why its result was set aside.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub set_aside: Option<String>,

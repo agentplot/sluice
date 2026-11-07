@@ -214,15 +214,20 @@ pub fn could_not_run(task: &str, why: &str) -> String {
 /// on, which ran and failed; the tasks joined with `, ` and the last with
 /// ` and `.
 pub fn failed_by(check: &str, by: &[String]) -> String {
-    let (tasks, what) = match by {
-        [] => (String::new(), "a task it depends on"),
-        [one] => (one.clone(), "a task it depends on"),
-        [rest @ .., last] => (
-            format!("{} and {last}", rest.join(", ")),
-            "tasks it depends on",
-        ),
+    let what = if by.len() > 1 {
+        "tasks it depends on"
+    } else {
+        "a task it depends on"
     };
-    format!("{check} failed by {tasks}, {what}")
+    format!("{check} failed by {}, {what}", and_list(by))
+}
+
+/// `items` joined with `, `, the last with ` and `.
+pub fn and_list(items: &[String]) -> String {
+    match items {
+        [rest @ .., last] if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
+        _ => items.concat(),
+    }
 }
 
 /// ADR 0050: a submission refused because `branch` requires checks the
