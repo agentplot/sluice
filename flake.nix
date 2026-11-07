@@ -96,5 +96,9 @@
         sluice = import ./nix/modules/darwin.nix { inherit packages; };
         default = sluice;
       };
+      nixosModules = rec {
+        sluice = import ./nix/modules/nixos.nix { inherit packages; };
+        default = sluice;
+      };
     };
 }

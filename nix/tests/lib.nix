@@ -52,6 +52,32 @@ in
       ];
     };
 
+  # A NixOS system of x86_64-linux with the flake's module enabled for the
+  # normal user alice, beside the normal user bob, and the module `given`.
+  nixosSystem =
+    given:
+    inputs.nixpkgs.lib.nixosSystem {
+      modules = [
+        outputs.nixosModules.default
+        {
+          nixpkgs.hostPlatform = "x86_64-linux";
+          users.users.alice.isNormalUser = true;
+          users.users.bob.isNormalUser = true;
+          boot.loader.grub.enable = false;
+          fileSystems."/" = {
+            device = "/dev/disk/by-label/nixos";
+            fsType = "ext4";
+          };
+          system.stateVersion = "26.11";
+          services.sluice = {
+            enable = true;
+            user = "alice";
+          };
+        }
+        given
+      ];
+    };
+
   # The messages of the assertions a system fails.
   failures =
     evaluated: map (a: a.message) (builtins.filter (a: !a.assertion) evaluated.config.assertions);
