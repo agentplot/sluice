@@ -319,6 +319,28 @@ mod tests {
         );
     }
 
+    /// 149: a check failed by the tasks it depends on names each, the
+    /// last joined with ` and `, as design D8 words it.
+    #[test]
+    fn a_check_failed_by_its_dependencies_names_each() {
+        assert_eq!(
+            failed_by("root:integration", &["api:integration".into()]),
+            "root:integration failed by api:integration, a task it depends on"
+        );
+        assert_eq!(
+            failed_by(
+                "root:integration",
+                &[
+                    "api:integration".into(),
+                    "ui:integration".into(),
+                    "web:integration".into()
+                ]
+            ),
+            "root:integration failed by api:integration, ui:integration and web:integration, \
+             tasks it depends on"
+        );
+    }
+
     /// 140: a landing beside the queue, and what an entry that takes the
     /// queue instead waits behind, in the record's words.
     #[test]

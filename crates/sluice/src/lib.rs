@@ -3202,22 +3202,31 @@ fn report(
         }
         State::Failed => {
             let t = sub.tested.clone().expect("a blamed submission was tested");
+            // 149: a check failed by the tasks it depends on has no key
+            // of its own and never ran: it is said after the tasks that
+            // failed it, never as not run.
+            let failed_by: Vec<&FailedTask> = sub
+                .failed
+                .iter()
+                .filter(|f| !f.failed_by.is_empty())
+                .collect();
             // A check with no key was left without a result (15): not run,
             // most often behind a check that failed.
             let ran: Vec<&FailedTask> = sub.failed.iter().filter(|f| !f.hash.is_empty()).collect();
             let timed_out = sub.result.as_deref() == Some("timed out");
+            let keyless = |f: &&FailedTask| f.hash.is_empty() && f.failed_by.is_empty();
             // Time-limit-1 66: in a run its time limit ended, a check with
             // no key that could run is one the limit cut off.
             let cut: Vec<&str> = sub
                 .failed
                 .iter()
-                .filter(|f| timed_out && f.hash.is_empty() && f.not_run.is_none())
+                .filter(|f| timed_out && keyless(f) && f.not_run.is_none())
                 .map(|f| f.task.as_str())
                 .collect();
             let not_run: Vec<&str> = sub
                 .failed
                 .iter()
-                .filter(|f| f.hash.is_empty())
+                .filter(keyless)
                 .map(|f| f.task.as_str())
                 .filter(|t| !cut.contains(t))
                 .collect();
@@ -3235,6 +3244,9 @@ fn report(
             if !ran.is_empty() {
                 let named: Vec<String> = ran.iter().map(|f| failed_name(f)).collect();
                 writeln!(out, "failed: {}", named.join(", "))?;
+            }
+            for f in &failed_by {
+                writeln!(out, "  {}", words::failed_by(&failed_name(f), &f.failed_by))?;
             }
             if !not_run.is_empty() {
                 writeln!(out, "not run: {}", not_run.join(", "))?;
