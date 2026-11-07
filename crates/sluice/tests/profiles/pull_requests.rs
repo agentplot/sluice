@@ -2401,7 +2401,8 @@ fn a_wait_on_a_pull_request_beside_a_driver() {
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(sluice::WAITING), "{}", text(&out));
-    let doc: Value = serde_json::from_slice(&out.stdout).expect(&text(&out));
+    let doc: Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|_| panic!("{}", text(&out)));
     assert_eq!(doc["pull_request"], pull.number, "{doc}");
     assert!(g.of(pull.number).is_empty(), "{:?}", g.subs());
 }
@@ -2420,10 +2421,11 @@ fn a_pull_requests_submit_beside_a_driver() {
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
-    let doc: Value = serde_json::from_slice(&out.stdout).expect(&text(&out));
+    let doc: Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|_| panic!("{}", text(&out)));
     let n = g.pull_from("unit/submitted").number;
     assert_eq!(doc["pull_request"], n, "{doc}");
-    let id = doc["id"].as_u64().expect(&doc.to_string());
+    let id = doc["id"].as_u64().unwrap_or_else(|| panic!("{doc}"));
     let subs = g.of(n);
     assert_eq!(subs.len(), 1, "{subs:?}");
     assert_eq!(subs[0]["id"], id);

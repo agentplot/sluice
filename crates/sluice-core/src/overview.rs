@@ -4,10 +4,10 @@
 //!
 //! Read from the records alone (61; rule core.11): it takes no lock,
 //! holds no decision and writes nothing (rule core.14). A branch's policy
-//! is read at the revision its records last saw, and its revision as the
-//! host holds it, never fetched but by the tick's one ask of its remote,
-//! so a reader that asks every second asks a remote no more than for its
-//! records (64, 129).
+//! is read at its revision as the host holds it, and at the revision its
+//! records last saw only where the host holds none, never fetched but by
+//! the tick's one ask of its remote, so a reader that asks every second
+//! asks a remote no more than for its records (56, 64, 124, 129).
 
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
@@ -405,23 +405,32 @@ impl Sluice<'_> {
         Ok(out)
     }
 
-    /// 26, 61: every branch with records, as last written, each read at
-    /// the revision its records last saw, in the order `from`'s policy
+    /// 26, 61: every branch with records, as last written, each as
+    /// [`Sluice::branch_view_of`] reads it, in the order `from`'s policy
     /// names them (ADR 0036). A branch whose policy, revision or records
     /// could not be read is shown with the refusal and hides no other
     /// (26; 129, 133): only the records' own list fails it whole. Each
     /// branch's view names its revision as the tick's ask found it, so a
     /// forecast can form from what a reader wrote (64, 129).
+    ///
+    /// ADR 0036, 56, 129: the order is read from `from`'s policy at the
+    /// revision its view reads its policy at, and at `from`'s own revision
+    /// only where it has no records, never fetching, so one revision gives
+    /// everything the overview reads of that branch's policy (ADR 0046 as
+    /// amended 2026-11-06; rule core.15).
     pub fn overview(&self, from: Option<&OrderFrom>) -> Result<Vec<BranchView>> {
         let mut out = Vec::new();
         let mut order_at = from.and_then(|f| f.local.clone());
         for branch in self.seams.state.branches()? {
-            let view = self
-                .branch_view_of(&branch)
-                .unwrap_or_else(|e| BranchView::unread(&branch, &e));
+            let read = self.view_read(&branch);
             if from.is_some_and(|f| f.branch == branch) {
-                order_at = view.at.clone().or(order_at);
+                if let Ok(read) = &read {
+                    order_at = read.policy_at.clone().or(order_at);
+                }
             }
+            let view = read
+                .and_then(|read| self.view_from(&branch, read))
+                .unwrap_or_else(|e| BranchView::unread(&branch, &e));
             out.push(view);
         }
         // The order decides nothing, so a policy it cannot read leaves the
@@ -439,12 +448,41 @@ impl Sluice<'_> {
     /// no fetch, and, where that ask was refused, its words; and the
     /// branch's revision as the host holds it, none where that ask was
     /// refused, so a forecast can form from what a reader wrote (64).
+    ///
+    /// 56, 124, 129: its policy at the branch's revision as this host holds
+    /// it, whether or not that ask was refused, and at the revision its
+    /// records last saw only where the host holds none, so a policy mended
+    /// outside sluice ends the branch's refusal with no round run (ADR 0046
+    /// as amended 2026-11-06; rule core.15).
     pub fn branch_view_of(&self, branch: &str) -> Result<BranchView> {
+        let read = self.view_read(branch)?;
+        self.view_from(branch, read)
+    }
+
+    /// What a branch's view is read from, before its policy is: its
+    /// records as the host holds them, its revision as the host holds it,
+    /// and the revision its policy is read at, that one, then the one its
+    /// records last saw.
+    fn view_read(&self, branch: &str) -> Result<ViewRead> {
         let snapshot = self.seams.state.read_held(branch)?;
         let base = Line::load(branch, snapshot.clone())?.doc.base;
-        let policy = match &base {
+        let held = self.seams.branch.held(branch)?;
+        Ok(ViewRead {
+            policy_at: held.clone().or(base),
+            snapshot,
+            held,
+        })
+    }
+
+    fn view_from(&self, branch: &str, read: ViewRead) -> Result<BranchView> {
+        let ViewRead {
+            snapshot,
+            held,
+            policy_at,
+        } = read;
+        let policy = match policy_at {
             Some(rev) => self
-                .policy_at(rev)
+                .policy_at(&rev)
                 .with_context(|| format!("{branch}'s policy at {rev}"))?,
             None => None,
         };
@@ -462,12 +500,19 @@ impl Sluice<'_> {
         let stale = self.seams.state.stale(branch);
         view.revision = match &stale {
             Some(_) => None,
-            None => self.seams.branch.held(branch)?,
+            None => held,
         };
         view.stale = stale.map(|r| r.to_string());
         view.refused_writes = crate::refused_writes::standing(&view.refused_writes, || self.now());
         Ok(view)
     }
+}
+
+/// A branch's records and revisions as its view reads them.
+struct ViewRead {
+    snapshot: Snapshot,
+    held: Option<Rev>,
+    policy_at: Option<Rev>,
 }
 
 /// 77, 107: a host serving a remote, by its last sign of life.

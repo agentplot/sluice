@@ -1355,6 +1355,171 @@ fn the_overview_names_a_hand_pushed_revision() {
     assert_eq!(after["depth"], 0, "{after}");
 }
 
+/// A quiet branch mended outside sluice (124, 129; record 0046; rule
+/// core.15): its records last saw a revision whose policy holds a
+/// `[[checkout.cache]]` table, and a clean one is pushed to its remote by
+/// another host. Nothing is queued on it, so no round runs.
+mod quiet {
+    use super::*;
+
+    /// Another host's clone of origin, `branch` checked out.
+    fn elsewhere(s: &Setup, name: &str, branch: &str) -> Repo {
+        let other = Repo::clone_of(s.origin.path(), name);
+        other.git(&["switch", "-q", branch]);
+        other
+    }
+
+    /// `other`'s commit of `policy` on `branch`, pushed to origin: its
+    /// revision.
+    fn push_policy(other: &Repo, branch: &str, policy: &str) -> String {
+        other.write(".config/sluice.toml", policy);
+        other.git(&["commit", "-q", "-am", "the policy, by hand"]);
+        other.git(&["push", "-q", "origin", &format!("HEAD:{branch}")]);
+        other.rev("HEAD")
+    }
+
+    /// A records document of `branch`, as `doc` is written and with the
+    /// version a write moves to.
+    fn rewritten(doc: &str, base: &str) -> String {
+        let mut v: serde_json::Value = serde_json::from_str(doc).unwrap();
+        v["base"] = base.into();
+        serde_json::to_string_pretty(&v).unwrap()
+    }
+
+    /// `branch`'s records in this host's files as a sluice that read
+    /// `at`'s policy left them: a round stood on `at` last.
+    fn last_saw_here(s: &Setup, branch: &str, at: &str) {
+        let dir = s.repo.dir().join(".git/sluice").join(branch);
+        let doc = std::fs::read_to_string(dir.join("branch.json")).unwrap();
+        let version: u64 = std::fs::read_to_string(dir.join("version"))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        std::fs::write(dir.join("branch.json"), rewritten(&doc, at)).unwrap();
+        std::fs::write(dir.join("version"), format!("{}\n", version + 1)).unwrap();
+    }
+
+    /// `doc`'s `base`, and how many `moved` lines `log` holds.
+    fn stood(doc: &str, log: &str) -> (String, usize) {
+        let v: serde_json::Value = serde_json::from_str(doc).unwrap();
+        let moved = log
+            .lines()
+            .filter(|l| l.contains("\"event\":\"moved\""))
+            .count();
+        (v["base"].as_str().unwrap_or_default().to_string(), moved)
+    }
+
+    /// `branch`'s records in this host's files: its `base`, and its log's
+    /// `moved` lines.
+    fn stood_here(s: &Setup, branch: &str) -> (String, usize) {
+        let dir = s.repo.dir().join(".git/sluice").join(branch);
+        let read = |f: &str| std::fs::read_to_string(dir.join(f)).unwrap_or_default();
+        stood(&read("branch.json"), &read("log.jsonl"))
+    }
+
+    /// The reflog of this host's `ref`, newest first.
+    fn reflog(s: &Setup, name: &str) -> String {
+        s.repo.git(&["reflog", "show", "--format=%H %gs", name])
+    }
+
+    /// remote-branch's "A quiet branch this host fetched is read whole by
+    /// status" (124, 129; rule core.15): `main` on origin, its state in
+    /// this host's files last seeing `r1`, whose policy holds a
+    /// `[[checkout.cache]]` table, and this host's `origin/main` at `r2`,
+    /// which takes it out. Status and the overview read `main` whole,
+    /// nothing is fetched, nothing is written, and no round runs.
+    #[test]
+    fn a_quiet_branch_this_host_fetched_is_read_whole_by_status() {
+        let s = Setup::new("quiet-fetched", "origin");
+        s.submit("a");
+        s.step_until_out();
+        assert_eq!(s.states(), ["landed"]);
+        let other = elsewhere(&s, "quiet-fetched-b", "main");
+        let clean = std::fs::read_to_string(other.dir().join(".config/sluice.toml")).unwrap();
+        let r1 = push_policy(&other, "main", &format!("{clean}{CACHE}"));
+        s.repo.git(&["fetch", "-q", "origin"]);
+        last_saw_here(&s, "main", &r1);
+        let r2 = push_policy(&other, "main", &clean);
+        s.repo.git(&["fetch", "-q", "origin"]);
+        assert_eq!(s.repo.rev("origin/main"), r2);
+        let fetched = reflog(&s, "refs/remotes/origin/main");
+        let records = s.records();
+        let files = |dir: &Path| -> Vec<(PathBuf, Vec<u8>)> {
+            let mut out: Vec<_> = std::fs::read_dir(dir)
+                .unwrap()
+                .map(|e| e.unwrap().path())
+                .filter(|p| p.is_file())
+                .map(|p| (p.clone(), std::fs::read(&p).unwrap()))
+                .collect();
+            out.sort();
+            out
+        };
+        let written = files(&records);
+        let before = stood_here(&s, "main");
+        assert_eq!(before.0, r1);
+
+        let status = s.status();
+        assert_eq!(status["at"], r1.as_str(), "{status}");
+        let main = overview_of(&s, "main");
+        assert!(main.get("unread").is_none(), "{main}");
+        assert_eq!(main["at"], r1.as_str(), "{main}");
+        assert_eq!(main["revision"], r2.as_str(), "{main}");
+
+        assert_eq!(reflog(&s, "refs/remotes/origin/main"), fetched, "fetched");
+        assert!(files(&records) == written, "the records were written");
+        assert_eq!(stood_here(&s, "main"), before, "a round ran");
+    }
+
+    /// remote-branch's "A quiet branch this host never fetched takes a
+    /// submit" (124, 129): `bolt/x` on origin, its state in this host's
+    /// files last seeing `r1`, whose policy holds a `[[checkout.cache]]`
+    /// table, origin's `bolt/x` at `r2`, which takes it out, and this
+    /// host's `origin/bolt/x` still `r1`. Status refuses `bolt/x` naming
+    /// `r1`; a submit fetches it and takes the submission; status after it
+    /// reads `bolt/x` whole, the submission queued, and no round runs.
+    #[test]
+    fn a_quiet_branch_this_host_never_fetched_takes_a_submit() {
+        let s = Setup::new("quiet-never-fetched", "origin");
+        let out = s.sluice(&["branch", "create", "bolt/x", "--from", "main"]);
+        assert!(out.status.success(), "{}", text(&out));
+        s.repo.git(&["fetch", "-q", "origin"]);
+        let out = s.submit_to("a", "origin/bolt/x", "bolt/x");
+        assert!(out.status.success(), "{}", text(&out));
+        step_bolt_until_out(&s);
+        assert_eq!(bolt_states(&s), ["landed"]);
+        let other = elsewhere(&s, "quiet-never-fetched-b", "bolt/x");
+        let clean = std::fs::read_to_string(other.dir().join(".config/sluice.toml")).unwrap();
+        let r1 = push_policy(&other, "bolt/x", &format!("{clean}{CACHE}"));
+        s.repo.git(&["fetch", "-q", "origin"]);
+        assert_eq!(s.repo.rev("origin/bolt/x"), r1);
+        last_saw_here(&s, "bolt/x", &r1);
+        let r2 = push_policy(&other, "bolt/x", &clean);
+        assert_eq!(
+            s.repo.rev("origin/bolt/x"),
+            r1,
+            "this host never fetched r2"
+        );
+        let before = stood_here(&s, "bolt/x");
+        assert_eq!(before.0, r1);
+
+        let out = s.sluice(&["status", "bolt/x"]);
+        assert!(!out.status.success(), "{}", text(&out));
+        let said = text(&out);
+        assert!(
+            said.contains(&r1) && said.contains("[[checkout.cache]]"),
+            "{said}"
+        );
+        assert!(!said.contains(&r2), "{said}");
+
+        let out = s.submit_to("b", "bolt/x", "bolt/x");
+        assert!(out.status.success(), "{}", text(&out));
+        assert_eq!(s.repo.rev("origin/bolt/x"), r2, "the submit fetched it");
+        assert_eq!(bolt_states(&s), ["landed", "queued"]);
+        assert_eq!(stood_here(&s, "bolt/x"), before, "a round ran");
+    }
+}
+
 /// A worktree on `unit/<name>` cut from `base`, with one commit writing
 /// `files`, submitted nowhere: its directory.
 fn worktree(s: &Setup, name: &str, base: &str, files: &[(&str, &str)]) -> PathBuf {

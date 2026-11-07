@@ -1124,9 +1124,11 @@ fn home_shows_the_worktrees_submission_by_its_path() {
     let v = home(&f, "unit/a");
     assert_eq!(v["submission"]["id"], 1);
     assert_eq!(v["submission"]["state"], "queued");
+    // No round has read the branch, and its gate is read where this host
+    // holds it all the same (56, 129; rule core.15).
     assert_eq!(
         v["branches"],
-        serde_json::json!([{"branch": BRANCH, "depth": 1, "testing": 0, "parallel": null}])
+        serde_json::json!([{"branch": BRANCH, "depth": 1, "testing": 0, "parallel": 4}])
     );
     assert_eq!(
         v["next"],
@@ -2271,6 +2273,82 @@ fn overview_orders_branches_as_the_policy_names_them() {
         .map(|l| l.split(' ').next().unwrap())
         .collect();
     assert_eq!(heads, ["release", "bolt/a", "bolt/b"]);
+}
+
+/// ADR 0036, 56, 129: the default branch's policy orders the overview at
+/// the revision its view reads it at, the one this host holds, and not at
+/// the revision its records last saw, never fetching (ADR 0046 as amended
+/// 2026-11-06; rule core.15).
+#[test]
+fn overview_orders_branches_by_the_revision_this_host_holds() {
+    let f = Fakes::new();
+    // The revision main's records last saw names release before bolt/*;
+    // the one this host holds names them the other way round.
+    let saw = f.world.init(
+        "main",
+        &[(
+            POLICY_PATH,
+            "[branches.main]\nrequired = []\n[branches.release]\nrequired = []\n\
+             [branches.\"bolt/*\"]\nrequired = []\n",
+        )],
+    );
+    let theirs = "[branches.\"bolt/*\"]\nrequired = []\n[branches.release]\nrequired = []\n";
+    for b in ["release", "bolt/a"] {
+        f.world.init(b, &[(POLICY_PATH, theirs)]);
+    }
+    for b in ["main", "release", "bolt/a"] {
+        let head = f.world.work(&f.world.tip(b), &[("work", Some(b))]);
+        let worktree = format!("w/{b}");
+        f.world.session(&worktree, "agent", &head);
+        let (code, out) = sluice(&f, &["submit", b, "--worktree", &worktree, "--no-wait"]);
+        assert_eq!(code, 0, "submitting to {b}: {out}");
+    }
+    {
+        let _lock = f.state.lock("main").unwrap().unwrap();
+        let read = f.state.read("main").unwrap();
+        let mut doc: serde_json::Value =
+            serde_json::from_slice(&read.files["branch.json"]).unwrap();
+        doc["base"] = saw.0.clone().into();
+        let mut put = std::collections::BTreeMap::new();
+        put.insert("branch.json".to_string(), serde_json::to_vec(&doc).unwrap());
+        let changes = Changes {
+            put,
+            ..Changes::default()
+        };
+        f.state.write("main", read.version, changes).unwrap();
+    }
+    let holds = f.world.work(
+        &saw,
+        &[(
+            POLICY_PATH,
+            Some(
+                "[branches.main]\nrequired = []\n[branches.\"bolt/*\"]\nrequired = []\n\
+                 [branches.release]\nrequired = []\n",
+            ),
+        )],
+    );
+    f.world.set_branch("main", &holds);
+
+    let (code, json) = sluice(&f, &["overview", "--json"]);
+    assert_eq!(code, 0, "{json}");
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let branches = v["branches"].as_array().unwrap();
+    let main = &branches[0];
+    assert_eq!(main["branch"], "main", "{json}");
+    assert_eq!(main["at"], saw.0.as_str(), "{json}");
+    assert_eq!(main["revision"], holds.0.as_str(), "{json}");
+    let order: Vec<&str> = branches
+        .iter()
+        .map(|b| b["branch"].as_str().unwrap())
+        .collect();
+    assert_eq!(order, ["main", "bolt/a", "release"]);
+    let (_, text) = sluice(&f, &["overview"]);
+    let heads: Vec<&str> = text
+        .lines()
+        .filter(|l| !l.starts_with(' '))
+        .map(|l| l.split(' ').next().unwrap())
+        .collect();
+    assert_eq!(heads, ["main", "bolt/a", "release"]);
 }
 
 /// 26 (129, 133): a branch whose policy the overview could not read is
