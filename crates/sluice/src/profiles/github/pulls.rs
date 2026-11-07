@@ -3471,11 +3471,21 @@ mod tests {
             ..view
         };
         post(&formed);
+        // Record 0093 (D3): GitHub keeps a completed run completed, so a
+        // check that waits again is read by its title, as any host reads
+        // it now; what sluice sent for each is queued.
         let held = forge.held().unwrap();
-        assert!(held.posted["head"]
+        let per_check: Vec<&Posted> = held.posted["head"]
             .iter()
             .filter(|p| p.name != SLUICE_CHECK)
-            .all(|p| p.posting.status == Status::Queued));
+            .collect();
+        assert_eq!(per_check.len(), 3);
+        assert!(per_check.iter().all(|p| p.posting.title == "formed again"));
+        assert!(per_check.iter().all(|p| held
+            .posts
+            .iter()
+            .rfind(|(rev, name, _)| rev == "head" && *name == p.name)
+            .is_some_and(|(_, _, sent)| sent.status == Status::Queued)));
         let _ = std::fs::remove_dir_all(dir);
     }
 
