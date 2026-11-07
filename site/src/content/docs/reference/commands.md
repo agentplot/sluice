@@ -8,10 +8,10 @@ sidebar:
 | Command | |
 |---|---|
 | `sluice` | Where this worktree stands: its submission, each branch's queue, its place, and what to run next. `--json` for a status line. |
-| `sluice submit <branch>` | Queue this worktree's head and wait for the outcome; to a branch with pull requests, open one for it instead. `--no-wait` returns once queued or opened; `--status` reports where the last submission from this worktree stands; `--check` only reports whether it would conflict, and `--check --head <branch>` whether a branch no worktree holds would; `--after 2,5` lands it after those; `--json` for scripts. `--subject <text>`, one line saying what lands, titles the pull request it opens and names its landing commit. `--worktree <path>` given more than once submits each worktree's head as one act, in that order, with one `--subject` per `--worktree` or none ([below](#submitting-several-worktrees-as-one-act)). |
+| `sluice submit <branch>` | Queue this worktree's head and wait for the outcome; to a branch with pull requests, open one for it instead. `--no-wait` returns once queued or opened; `--status` reports where the last submission from this worktree stands; `--check` only reports whether it would conflict, and `--check --head <branch>` whether a branch no worktree holds would; `--after 2,5` lands it after those; `--json` for scripts. `--head <branch>` without `--check` submits that branch, one sluice lands on, in place of this worktree's head, from anywhere in the repository ([below](#submitting-a-branch-by-name)). `--subject <text>`, one line saying what lands, titles the pull request it opens and names its landing commit. `--worktree <path>` given more than once submits each worktree's head as one act, in that order, with one `--subject` per `--worktree` or none ([below](#submitting-several-worktrees-as-one-act)). |
 | `sluice wait <id>` | Wait for a submission's outcome, running sluice's rounds meanwhile, as a waiting submit does; `sluice wait <branch>` for this worktree's last submission to it. Where `sluice run` is running on the host, the wait follows it and runs no rounds of its own. `--timeout 9m` returns after that long with the submission as it stands, and exits `5`; `--json` prints its record. One process of the repository on the host reads the queue, `sluice run` where it runs and otherwise the first watch or wait, and the others follow what it read. |
 | `sluice inbox` | Collect every outcome pending for this worktree's submissions, print each, and mark each delivered, so it is delivered once. Run once when a session starts again, or by a tool that submits without waiting. `--json` for scripts ([below](#sluice-inbox)). |
-| `sluice status <branch>` | The queue: each submission still in it, by its number and its subject, its agent, its worktree and its state, with how many are in it. Each combination under test says how far it has got. `--all` for every submission the branch has had. It reads the branch where its records last saw it, as `sluice overview` does, and never fetches the branch. A branch whose state is on its remote is read from there; when the remote can't be reached, it shows the state last fetched and says so. For a branch on a remote, a round sets this host's own branch of that name to each landing. When it couldn't, status says above the queue which revision this host's branch holds, the landing it lacks and why, until a round sets it. `--json` carries the same under `copy`. While this host's rounds can't read the branch or its state from its remote, status says so above the queue. It says what they couldn't read, from which remote, since when and for how many rounds. Below that is what git said, on as many lines as git said it. It says so until a round reads the remote again. `--json` carries the same under `refused`: `remote`, `asked`, `said`, `since` and `rounds`. Above the queue it also lists the writes sluice's protection refused in the last day, by command, with the host, how many times, the first and the last. A command shows until a day passes with none of its writes refused. `--json` carries them under `refused_writes`, as the overview's fields give them. A branch with no records and no such branch exits 1. It lists the checkouts held because their release failed, each with what failed and how many times it was tried. `sluice status <id>` for one. `sluice status` alone lists every worktree sluice holds ports or runs for. `--json` for tools. |
+| `sluice status <branch>` | The queue: each submission still in it, by its number and its subject, its agent, its worktree and its state, with how many are in it. Each combination under test says how far it has got. `--all` for every submission the branch has had. It reads the branch where its records last saw it, as `sluice overview` does, and never fetches the branch. A branch whose state is on its remote is read from there; when the remote can't be reached, it shows the state last fetched and says so. For a branch on a remote, a round sets this host's own branch of that name to each landing. When it couldn't, status says above the queue which revision this host's branch holds, the landing it lacks and why, until a round sets it. `--json` carries the same under `copy`. While this host's rounds can't read the branch or its state from its remote, status says so above the queue. It says what they couldn't read, from which remote, since when and for how many rounds. Below that is what git said, on as many lines as git said it. It says so until a round reads the remote again. `--json` carries the same under `refused`: `remote`, `asked`, `said`, `since` and `rounds`. Above the queue it also lists the writes sluice's protection refused in the last day, by command, with the host, how many times, the first and the last. A command shows until a day passes with none of its writes refused. `--json` carries them under `refused_writes`, as the overview's fields give them. A branch with no records and no such branch exits 1. It lists the checkouts held because their release failed, each with what failed and how many times it was tried. `sluice status <id>` for one. Under `--json`, each submission is its record, and a landed, failed or conflicting one carries `notice`, the one line [`sluice inbox`](#sluice-inbox) prints for it. `sluice status` alone lists every worktree sluice holds ports or runs for. `--json` for tools. |
 | `sluice overview` | Every branch's queue at a glance: the combinations under test, the submissions still queued, the latest landings, blames and conflicts, and the worktrees and previews held. `--json` for tools: it also gives each branch's `revision`, as the read found it, and `after_landed`, the landed submissions a queued one's `--after` names, and each combination's `on`, the branch's revision it was formed on. `--json --watch` prints it again each time it changes. A read of the queue it couldn't make is printed as one line, the error document with what it was refused. The watch reads again a second later. It ends only when it's stopped, when its repository is gone, or where the repository has no sluice: no state, and no branch here or a remote's as last fetched holding `.config/sluice.toml`. Its last line is then the overview with `"set_up": false`, and it exits `0`; nothing is fetched to tell. One process of the repository on the host reads the queue, `sluice run` where it runs and otherwise the first watch or wait, and the others follow what it read. A watch of a newer sluice takes over the reading from an older watch or wait. `sluice overview` alone always reads it itself. |
 | `sluice run` | Work every branch's queue until stopped. One runs per repository on a host: a second one runs nothing, and says so once, until the first stops. While it runs, every wait and watch of the repository on the host follows it ([below](#who-runs-the-rounds)). On a host whose config names a [`[signing]`](/sluice/reference/configuration/#signing) key, it also takes runs of the branches that trust its signer. |
 | `sluice step <branch>` | One round of a branch's work, then exit: for cron, CI or a hook. Says `led` when another host keeps the branch, and `held` when the revision it reads lacks the branch's last landing ([below](#sluice-branch)). `--json` for scripts. |
@@ -60,6 +60,80 @@ own rounds do, and the work queued from other hosts where it's missing.
 ```json
 {"conflict":{"paths":["docs/architecture/builds.md"],"with":[{"id":217,"from":{"agent":"wldn-design","worktree":"design/runner-credential"}}]},"head":"4f0c2a1…","onto":"9b7e3d0…","ahead":[217]}
 ```
+
+## Submitting a branch by name
+
+`sluice submit <branch> --head <branch>` without `--check` submits a
+branch sluice lands on, such as a feature branch, to another, in place
+of the worktree's head. It runs anywhere in the repository: a worktree
+on any branch, the main checkout, or a bare repository's git directory.
+It reads nothing of the folder it runs in, so what a worktree holds
+beyond its commits refuses nothing.
+
+```console
+$ sluice submit main --head feature/runner
+submission 52 to main from feature/runner · 1 queued ahead (#51)
+testing main + #51 + #52 · 12s of 45m
+testing main + #51 + #52 · 4 tasks to run, 9 replayed
+passed · landed as b7d2e94
+```
+
+It submits the branch as its policy holds it: the remote's revision
+where the policy names a remote, and this host's own branch otherwise.
+It pushes nothing, moves no branch on this host, and says nothing of
+this host's copy of a branch on a remote. `--check --head` with the same
+branch forecasts that same revision, and leaves out the submissions the
+submit would withdraw, so the forecast says what the submit would meet.
+
+It takes `--after`, `--priority`, `--no-wait`, `--json` and one
+`--subject`, as any submit does. `--no-wait --json` answers
+`{"id","branch","ahead"}`. With no subject, the landing commit names the
+branch. `--head` with `--worktree`, with `--status` or with more than
+one `--subject` exits `64` before anything is read. It refuses, exits
+`2` and writes nothing for a branch that doesn't exist, `no branch
+feature/gone to submit`, and for the branch it would land on, `main is
+not submitted to itself`. It refuses a branch no `[branches]` table
+names at its revision as well:
+
+```console
+$ sluice submit main --head cards
+refused: cards is no branch sluice lands on: a branch of a worktree's own is submitted from that worktree
+```
+
+The submission is the branch's own work. Its record names the branch as
+both `from.worktree` and `from.head`, with no `path` and no `session`
+([the state](/sluice/reference/state/#a-submission)). A submission by
+name and one from a worktree that has checked out the branch are one
+work. Each withdraws the other's earlier submission to the same branch,
+and its `attempt` counts both.
+
+Its outcome goes to no session. No round types a notice for it or logs
+it `pending`, no `sluice inbox` collects it, in any worktree, and
+nothing marks it delivered. `sluice wait <id>` reports it and marks
+nothing. `sluice status main --all --json` gives it with the words an
+inbox would: the submission whose `from.head` is the branch, with its
+`notice`, its `failed` or `conflict`, and `tested.on`. A waiting submit
+by name runs sluice's rounds as any waiting submit does, and exits by
+the outcome. The way on of one that failed is its caller's, and
+`sluice status <id>` names it too:
+
+```console
+$ sluice wait 53
+testing main + #53 · 4 tasks to run, 9 replayed
+failed: cli:test
+  on main + #53 (e20a6f9)
+  log of cli:test: .git/sluice/.logs/main/e2/cli:test.log
+once a fix lands on feature/runner, sluice submit main --head feature/runner submits it again
+```
+
+For a conflict, the fix that lands on the branch first merges the target
+at the revision the submission was tested on, as `once a fix that merges
+main at c41e8f2 lands on feature/runner` says.
+
+To a branch that takes pull requests, the submit opens or updates the
+pull request from the branch, ready for review, and titles it by
+`--subject` or the branch's name. It pushes nothing. sluice takes the
+pull request in as any other and posts its outcome on it.
 
 ## Refused at submit
 
@@ -155,7 +229,7 @@ Under `--json` it prints one document however it ends,
 `{"branch","submissions"}`, one item per worktree in the order given,
 each with its `worktree`. With `--no-wait` an item holds `id` and
 `ahead`, and `warnings` when it was taken unchecked; waiting, it is the submission's record, as `sluice status <id>
---json` prints it. A refusal's error document lists the refused
+--json` prints it but for its `notice`. A refusal's error document lists the refused
 worktrees under `worktrees`. `--check` and `--status` take one worktree,
 and exit `64` given more.
 
@@ -934,8 +1008,8 @@ $ sluice wait 12 --timeout 9m --json
 
 Under `--json`, it prints one document however it ends, out of time
 and stopped with Ctrl-C included: the submission's record, as `sluice
-status <id> --json` prints it. Read the outcome from its `state` and
-the exit. A landed or withdrawn submission leaves `sluice status
+status <id> --json` prints it but for its `notice`. Read the outcome
+from its `state` and the exit. A landed or withdrawn submission leaves `sluice status
 <branch>`'s listing, so searching that listing for an outcome never
 finds one.
 
@@ -988,7 +1062,9 @@ as [`sluice inbox`](#sluice-inbox) does, and `sluice inbox` won't
 deliver it again. Under `--json`, the record it prints carries the
 `delivered` and `delivered_to` it marks. A wait on another worktree's
 submission marks nothing, and nor does one that ends out of time or
-stopped. An outcome already delivered is reported as it stands. When the
+stopped. A submission by name came from no worktree, and nor did a pull
+request from a branch sluice lands on, so a wait on either marks
+nothing, wherever it runs. An outcome already delivered is reported as it stands. When the
 wait can't make its mark, it says so on stderr, and the outcome stays
 pending for `sluice inbox`.
 
@@ -999,8 +1075,12 @@ worktree's submissions that is still pending: decided, and not yet
 delivered to the session working there. It collects every submission
 from the worktree's branch, on any branch, that landed, was blamed or
 conflicts. A pull request opened from that branch counts as the
-branch's. A withdrawn submission, and one still queued or under test,
-is not collected. `--worktree <path>` collects for another worktree.
+branch's where no `[branches]` table names the branch. No worktree
+pushes a branch sluice lands on, so a pull request from one is no
+worktree's, and nor is a [submission by
+name](#submitting-a-branch-by-name): no `sluice inbox` collects either.
+A withdrawn submission, and one still queued or under test, is not
+collected. `--worktree <path>` collects for another worktree.
 
 An outcome is delivered once, by whichever comes first: the notice a
 round types into the session's herdr pane when it decides the outcome,
