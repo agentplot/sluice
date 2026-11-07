@@ -4,12 +4,56 @@ The verify stage's report on `change/a-failed-entry-is-submitted-again`,
 read against this change's proposal, design, delta specs and tasks, from
 the base `0b15d250` (`bolt/sluice-takes-mended-work-again`) to `52c3d4a9`.
 
-**Verdict: the work holds, and the change is archived.** Every task is
-ticked and done. Every requirement and scenario of the three delta specs
-is met by code and by a test that asserts it. The checks the change
-names pass. The change's record is 0096, a number no other branch holds,
-and it says how its decision stands against `main`'s record 0093 and the
-statement's rewrite of 120, 137, 140 and C.5's pull request row.
+**Verdict: the work falls short, and the change is not archived.**
+Every task is ticked and done. Every requirement and scenario of the
+three delta specs is met by code and by a test that asserts it. The
+checks the change names pass on the branch as it stands. The change's
+record is 0096, a number no other branch holds, and it says how its
+decision stands against `main`'s record 0093 and the statement's
+rewrite of 120, 137, 140 and C.5's pull request row. But the change
+cannot be archived without failing the gate: once its deltas are
+applied, `root:specs` fails on its three MODIFIED requirements. See
+Finding.
+
+## Finding
+
+**Archived, the change fails `root:specs`.** `openspec archive
+a-failed-entry-is-submitted-again --yes` applied the deltas (+1 added,
+~3 modified). Then `sluice exec main -- moon run root:specs`, under the
+openspec `devenv.nix` pins (1.14.3), failed with exit 1: `62 passed, 3
+failed (65 items)`. Each of the three fails on one warning, which
+`--strict` reads as an error: "Requirement text is very long (>500
+characters). Move examples and edge cases into scenarios, or split it
+into separate requirements that each state one behavior." The three
+are this change's MODIFIED requirements:
+
+| Spec | Requirement | On `main`'s spec now | As this change writes it |
+|---|---|---|---|
+| pull-request-submit | A pull request's status names its head and whether it is a draft | 461 | 801 |
+| request-intake-host | A wait that follows GitHub reports what GitHub shows | 249 | 786 |
+| worktrunk-submit | A pull request stands while it is open and ready at the revision a submit would send | under 500 | 733 |
+
+The ADDED requirement, "A submit takes again a pull request another
+host sent back", is 476 and passes. Before the archive, all 65 specs
+pass. The archive was undone, uncommitted, so the branch holds the
+change open as it was.
+
+`root:changes` (`openspec validate --changes --strict`) passes. It does
+not weigh a delta requirement's length, so the gate does not catch this
+before an archive, although `moon.yml` says of `root:changes` that "a
+requirement archive would refuse fails the unit's own checks and not
+first at its merge". That gap is the gate's, outside this change. It is
+reported, not fixed here.
+
+**What the code stage does.** Bring the statement of each of the three
+MODIFIED requirements to 500 characters or fewer. Move the cases it
+lists into its scenarios, or split it into requirements that each state
+one behavior. Keep what each one requires. The scenarios and tests
+above already cover those cases. Nothing in the code, the tests or the
+record needs to change. True when the change, archived in a scratch
+worktree, passes `sluice exec main -- moon run root:specs`, and when
+`openspec validate a-failed-entry-is-submitted-again --strict` holds the
+change valid.
 
 ## Tasks
 
@@ -103,6 +147,9 @@ sent back", is new to `pull-request-submit`.
   …/verify.md beyond its head`). This report was being written in the
   worktree during the run. The outcome is not affected, and the head
   that lands is the archive commit, not `52c3d4a9`.
+- `root:specs` was not among the checks `52c3d4a9` affects, since
+  `openspec/specs` is unchanged on the branch. Run on the change
+  archived, it failed. See Finding.
 - The run said `would conflict: docs/architecture/core.md,
   site/src/content/docs/architecture/rules.md with main`. That is rule
   core.33, which the bolt and `main` hold differently. See
@@ -110,7 +157,7 @@ sent back", is new to `pull-request-submit`.
 
 ## Observations
 
-None of these is a shortfall of the change. Each is for a later reader.
+Apart from the Finding, none of these is a shortfall of the change. Each is for a later reader.
 
 - D4's read happens after the push, of the check on the head the request
   held before it, which is what the ADDED requirement asks. Reading it
