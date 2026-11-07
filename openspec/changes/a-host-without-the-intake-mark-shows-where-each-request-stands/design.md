@@ -232,9 +232,13 @@ D4 allows. The trait's default answers none, so the core names no forge
   how old each row is.
 - **A wait** across hosts answers `Followed::Open` with `taken_in_by`
   and `queue` beside its title and lines. Its words gain the line `#12
-  is submission 1406 on b, taken in by b's sluice run`, printed again
-  only when it changes. Its `--json` documents, `--status`'s and the
-  one at its timeout, gain both fields.
+  is submission 1406 on b, taken in by b's sluice run`, or `#12 waits
+  to be taken in by a wait on b`, printed again only when it changes.
+  The check's first line, which says the same, leaves the lines beneath
+  the title, and what it waits for stays in the title. Its `--json`
+  documents, `--status`'s, a `--no-wait` submit's and the one at its
+  timeout, gain both fields; a wait on the host that takes the request
+  in prints neither.
 
 *Not taken:* a section of its own for the overview's watch to read
 GitHub, which core.31 rules out for a reader's tick.
