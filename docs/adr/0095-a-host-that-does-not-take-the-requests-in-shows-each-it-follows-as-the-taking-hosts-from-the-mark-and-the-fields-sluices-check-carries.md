@@ -15,7 +15,7 @@ Status: accepted. 137 and C.5's pull request row as amended at agentplot/bluepri
 Record 0093, accepted by the user on 2026-11-06 ("I approved 93.") after this change was designed, has no host take a branch's requests in, and the intake mark goes (137 as the statement at 7c2fbf0 proposes it and 88a4cf0 accepts it). What of this record goes with the mark once 0093 is built is under Consequences.
 
 Deciders: the design agent, for the statement; the change's design, for D1 to D6.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 26, 80, 129, 136 and 137 and C.5's pull request row at 4791adf, and 137 at 7c2fbf0 and 88a4cf0; records 0044, 0071, 0088, 0089 and 0093; rules core.25, core.31, core.32, core.33; crew's `fix--a-landing-in-another-hosts-queue-reads-as-in-the-queue`; the change `a-failed-entry-is-submitted-again` and its record; flume's `crates/flume/src/profiles/merge_queue/sluice/mod.rs`; `crates/sluice/src/profiles/github/pulls.rs` (`queued`, `queue_shown`, `waiting`, `waiting_in_group`, `outcome_shown`, `post_check`, `follow_across`, `Pulls::seen`, `opening`, `hand_over`), `crates/sluice/src/profiles/github/kept.rs` (`Kept::change_readings`), `crates/sluice/src/profiles/pushed_refs.rs` (`intake_mark`, `Mark`), `crates/sluice/src/lib.rs` (`Followed::Open`, the wait's loop) and `crates/sluice/src/overview.rs` as the bolt `requests-show-where-they-stand-from-any-host` held them at 2f0b5c98.
+Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 26, 80, 129, 136 and 137 and C.5's pull request row at 4791adf, and 137 at 7c2fbf0 and 88a4cf0; records 0044, 0071, 0088, 0089, 0093 and 0096; rules core.25, core.31, core.32, core.33; crew's `fix--a-landing-in-another-hosts-queue-reads-as-in-the-queue`; the change `a-failed-entry-is-submitted-again` and its record; flume's `crates/flume/src/profiles/merge_queue/sluice/mod.rs`; `crates/sluice/src/profiles/github/pulls.rs` (`queued`, `queue_shown`, `waiting`, `waiting_in_group`, `outcome_shown`, `post_check`, `follow_across`, `Pulls::seen`, `opening`, `hand_over`), `crates/sluice/src/profiles/github/kept.rs` (`Kept::change_readings`), `crates/sluice/src/profiles/pushed_refs.rs` (`intake_mark`, `Mark`), `crates/sluice/src/lib.rs` (`Followed::Open`, the wait's loop) and `crates/sluice/src/overview.rs` as the bolt `requests-show-where-they-stand-from-any-host` held them at 2f0b5c98.
 
 ## Context and problem statement
 
@@ -77,8 +77,9 @@ crew needs to tell a landing queued on another host from one queued here, and fl
 
 **D6. Fields or words.**
 
-1. **Where the check carries a block, the request's state is read from it** (chosen): `taken_in` with `state` `failed` or `conflict` is sent back, and `landed` is landed. Where it carries none, as an older sluice posted it, the words are read, as `follow_across` and `a-failed-entry-is-submitted-again` read them.
+1. **Where the check carries a block, the request's state is read from it** (chosen): `waits_for` naming the next submit is held, read by the request's draft mark as record 0096 reads a held check, sent back while a draft and waiting to be taken in again once out of it; otherwise `taken_in` with `state` `failed` or `conflict` is sent back, and `landed` is landed. Where it carries none, as an older sluice posted it, the words are read, as `follow_across` and `a-failed-entry-is-submitted-again` read them: its title, never the conclusion GitHub keeps for the run (record 0096). `as_its_check_says` is the one reader of both.
 2. The words always. Every reader keeps parsing titles once fields exist.
+3. A held block read by its `state` alone, `failed` sent back draft or not. A request its submitter marked ready since would read sent back on another host until the taking host posts again, which record 0096 rules out.
 
 ## Decision outcome
 
