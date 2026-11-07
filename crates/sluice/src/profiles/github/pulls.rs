@@ -3076,12 +3076,15 @@ impl Pulls {
         };
         let posting = posted.map(|p| p.posting);
         if p.merged {
-            let title = posting
-                .map(|p| p.title)
-                .filter(|t| t.starts_with("landed"))
-                .unwrap_or_else(|| "landed".into());
+            let (title, summary) = posting
+                .filter(|p| p.title.starts_with("landed"))
+                .map_or_else(
+                    || ("landed".into(), String::new()),
+                    |p| (p.title, p.summary),
+                );
             return Ok(Followed::Landed {
                 title,
+                summary,
                 head: p.head.clone(),
                 draft: p.draft,
             });
