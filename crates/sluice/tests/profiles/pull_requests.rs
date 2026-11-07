@@ -5437,3 +5437,97 @@ fn a_refused_query_falls_back_to_the_reads_per_pull_request() {
     );
     assert_eq!(g.of(one).len(), 1, "{:?}", g.subs());
 }
+
+// ---------------------------------------------------------------------------
+// remote-branch: a quiet branch that takes pull requests is read at the
+// revision this host holds, so intake's pass takes its requests in with no
+// round run first (56, 124, 129, 136; rule core.15)
+// ---------------------------------------------------------------------------
+
+/// A `[[checkout.cache]]` table, which this sluice refuses (record 0049).
+const CACHE: &str = "\n[[checkout.cache]]\nkey = [\"Cargo.lock\"]\npaths = [\"target\"]\n";
+
+/// main's records in this host's files as a sluice that read `at`'s policy
+/// left them: a round stood on `at` last.
+fn last_saw(g: &OnGitHub, at: &str) {
+    let dir = g.repo.dir().join(".git/sluice/main");
+    let mut doc: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("branch.json")).unwrap()).unwrap();
+    doc["base"] = at.into();
+    std::fs::write(
+        dir.join("branch.json"),
+        serde_json::to_string_pretty(&doc).unwrap(),
+    )
+    .unwrap();
+    let version: u64 = std::fs::read_to_string(dir.join("version"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    std::fs::write(dir.join("version"), format!("{}\n", version + 1)).unwrap();
+}
+
+/// The revision main's records in this host's files last saw.
+fn base(g: &OnGitHub) -> String {
+    let path = g.repo.dir().join(".git/sluice/main/branch.json");
+    let doc: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    doc["base"].as_str().unwrap_or_default().to_string()
+}
+
+/// remote-branch's "A quiet branch that takes pull requests takes them in
+/// after intake's fetch" (124, 129, 136; rule core.15), in
+/// agentplot/flywheel-next's shape from 2026-10-28 to 2026-11-06: `main`
+/// on origin, taking pull requests, its records in this host's files last
+/// seeing `r1`, whose policy holds a `[[checkout.cache]]` table, and
+/// origin's `main` at `r2`, which takes it out, as this host's
+/// `origin/main` holds it. Nothing is queued, so no round has moved the
+/// records off `r1`. One `sluice run` pass, discovery due, takes a request
+/// opened by hand in before any round of that pass runs.
+#[test]
+fn a_quiet_branch_that_takes_pull_requests_takes_them_in_after_intakes_fetch() {
+    let g = OnGitHub::new("pr-quiet", "");
+    g.named("a", "");
+    g.step();
+    let clean = std::fs::read_to_string(g.repo.dir().join(".config/sluice.toml")).unwrap();
+    let cached = format!("{clean}{CACHE}");
+    let r1 = g.repo.branch(
+        "policy/cached",
+        "main",
+        &[(".config/sluice.toml", Some(&cached))],
+    );
+    let r2 = g.repo.branch(
+        "policy/clean",
+        &r1,
+        &[(".config/sluice.toml", Some(&clean))],
+    );
+    for rev in [&r1, &r2] {
+        g.repo
+            .git(&["push", "-q", "origin", &format!("{rev}:refs/heads/main")]);
+    }
+    g.repo.git(&["fetch", "-q", "origin"]);
+    assert_eq!(g.repo.rev("origin/main"), r2);
+    last_saw(&g, &r1);
+    assert_eq!(base(&g), r1);
+    let (n, head) = g.by_hand("unit/quiet", &[("q.txt", Some("q\n"))], false);
+    g.on_main();
+    g.discovery_passes();
+    let logged = g.log().len();
+
+    let out = g.skipping(g.repo.dir(), &["run", "--rounds", "1"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let said = text(&out);
+    assert!(!said.contains("[[checkout.cache]]"), "{said}");
+    let log = g.log();
+    let new = &log[logged..];
+    let taken = new
+        .iter()
+        .position(|l| l["event"] == "submitted" && l["head"] == head.as_str())
+        .unwrap_or_else(|| panic!("#{n} was not taken in: {said}\n{new:#?}"));
+    assert!(
+        !new[..taken].iter().any(|l| l["event"] == "moved"),
+        "a round ran before intake: {new:#?}"
+    );
+    let a = g.of(n);
+    assert_eq!(a.len(), 1, "{a:?}");
+    assert_eq!(a[0]["head"], head.as_str(), "{a:?}");
+}
