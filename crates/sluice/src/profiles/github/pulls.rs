@@ -3031,6 +3031,18 @@ fn as_its_check_says(posting: Option<Posting>, head: &str, draft: bool, host: &s
     open(posting.title, lines)
 }
 
+/// Whether `posting`, sluice's check on an open pull request at `head`,
+/// says it was sent back, blamed or in conflict, or held for the next
+/// submit, draft or not: [`as_its_check_says`] read as of a draft, whose
+/// held row is sent back, so the reading names no host (120, C.5; record
+/// 0093).
+fn sent_back_or_held(posting: Option<Posting>, head: &str) -> bool {
+    matches!(
+        as_its_check_says(posting, head, true, ""),
+        Followed::SentBack { .. }
+    )
+}
+
 impl Pulls {
     /// 137: where pull request `n` stands while `host` takes its branch's
     /// pull requests in: by GitHub's word and sluice's check on its head,
@@ -3256,7 +3268,26 @@ impl Pulls {
                 .remove(&here);
             let log = Line::read_log(&s.seams().state.read(branch)?)?;
             let left = latest.filter(left_unlanded).map(|e| acts_from(&log, &e));
-            if n == 1 && (pull.draft || left.is_some()) {
+            // 120, C.5: a submit takes again a request sent back or held for
+            // it, draft or not, whichever host takes the branch's requests
+            // in; where another does, this host's records hold no submission
+            // of it that left the queue, and a request out of draft is held
+            // there all the same (a request opened by hand, or one sent back
+            // before that host's pass marked it a draft). So sluice's check
+            // on the head it held before the push says, read once on the
+            // submitter's own act; a new request, a draft or one whose
+            // leaving this host's records give reads nothing (rule core.32;
+            // record 0093). A check that says anything else leaves the
+            // request as it is, never a draft even for a moment, since a
+            // draft mark withdraws what the other host queued (C.5).
+            let sent_back = match existing {
+                Some(p) if n == 1 && !p.draft && left.is_none() => {
+                    let posted = forge.posted(&t.repo, &p.head)?;
+                    sent_back_or_held(posted.map(|p| p.posting), &p.head)
+                }
+                _ => false,
+            };
+            if n == 1 && (pull.draft || left.is_some() || sent_back) {
                 mark_ready(forge, &t.repo, number, pull.draft, left)?;
                 said.push_str(" · marked ready for review");
             }
@@ -4112,6 +4143,12 @@ mod tests {
             };
             for posting in [own, sticky] {
                 let status = posting.status;
+                // D4: a submit marks ready what reads sent back as a draft.
+                assert_eq!(
+                    sent_back_or_held(Some(posting.clone()), "h"),
+                    matches!(as_draft, Read::SentBack(..)),
+                    "{status:?}, a submit's reading"
+                );
                 assert_eq!(
                     read(Some(posting.clone()), true),
                     as_draft,
@@ -4128,6 +4165,7 @@ mod tests {
         for draft in [true, false] {
             assert_eq!(read(None, draft), Read::Open("waiting".into()));
         }
+        assert!(!sent_back_or_held(None, "h"));
         // An open request's words beneath its state, as the check says them.
         match as_its_check_says(Some(queued("main", &[]).posting), "h", false, "b") {
             Followed::Open { lines, .. } => assert_eq!(
