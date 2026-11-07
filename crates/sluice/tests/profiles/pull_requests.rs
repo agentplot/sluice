@@ -5369,6 +5369,164 @@ fn run_again_marks_ready_a_draft_another_host_sent_back() {
     assert_eq!(subs[1]["head"], pull.head.as_str(), "{subs:?}");
 }
 
+/// How many GraphQL requests naming `mutation` GitHub's double was sent:
+/// `convertPullRequestToDraft` marks a pull request a draft, and
+/// `markPullRequestReadyForReview` ready for review.
+fn mutations(g: &OnGitHub, mutation: &str) -> usize {
+    g.gh.fake
+        .requests()
+        .iter()
+        .filter(|r| r.path == "/graphql" && r.body.contains(mutation))
+        .count()
+}
+
+/// pull-request-submit, "Sent back, not a draft": host B blamed `#n`,
+/// which a person opened from `unit/review` and which B therefore left out
+/// of draft, its check saying `failed: …`; `sluice submit main --no-wait`
+/// on host A from a worktree on `unit/review`, nothing committed since,
+/// marks it a draft and then ready for review at that head, though A's
+/// records hold no submission of it, and B's next pass takes it in again
+/// (120, 137, C.5; record 0093).
+#[test]
+fn a_submit_marks_ready_a_request_another_host_sent_back_not_a_draft() {
+    let g = OnGitHub::new("intake-sent-back-ready", "");
+    g.named("a", "");
+    let b = g.other("b", "", "");
+    b.run("1");
+    let w = g.session("review", &[("broken", "b\n")]);
+    g.repo
+        .git(&["push", "-q", "origin", "unit/review:refs/heads/unit/review"]);
+    let head = github::rev(g.bare.path(), "refs/heads/unit/review").unwrap();
+    let n =
+        g.gh.forge
+            .open_by("person", "main", "unit/review", &head, false, None)
+            .unwrap();
+    let until = Instant::now() + Duration::from_secs(60);
+    let blamed = || {
+        b.of(n).first().is_some_and(|s| s["state"] == "failed")
+            && g.posted(&head).is_some_and(|p| p.1.starts_with("failed: "))
+    };
+    while !blamed() {
+        assert!(
+            Instant::now() < until,
+            "B never blamed it: {:?}, {:?}",
+            b.of(n),
+            g.posted(&head)
+        );
+        b.discovery_passes();
+        b.run("1");
+    }
+    assert!(
+        !g.pull_from("unit/review").draft,
+        "B leaves a request opened by hand out of draft"
+    );
+    // The marks later than B's leaving, to the second GitHub and the
+    // records keep, as B reads a ready mark since (120).
+    std::thread::sleep(Duration::from_millis(1100));
+    let drafted = mutations(&g, "convertPullRequestToDraft");
+    let readied = mutations(&g, "markPullRequestReadyForReview");
+    let out = g
+        .command(env!("CARGO_BIN_EXE_sluice"), &w)
+        .args(["submit", "main", "--no-wait"])
+        .output()
+        .unwrap();
+    assert!(
+        text(&out).contains(&format!("updated #{n}")) && text(&out).contains("marked ready"),
+        "{}",
+        text(&out)
+    );
+    assert_eq!(
+        mutations(&g, "convertPullRequestToDraft"),
+        drafted + 1,
+        "a draft first: {}",
+        text(&out)
+    );
+    assert_eq!(
+        mutations(&g, "markPullRequestReadyForReview"),
+        readied + 1,
+        "then ready: {}",
+        text(&out)
+    );
+    let ready = g.pull_from("unit/review");
+    assert!(!ready.draft && ready.head == head, "{ready:?}");
+    assert!(g.of(n).is_empty(), "A took nothing in");
+    while b.of(n).len() < 2 {
+        assert!(
+            Instant::now() < until,
+            "B never took it again: {:?}",
+            b.of(n)
+        );
+        b.discovery_passes();
+        b.run("1");
+    }
+    let subs = b.of(n);
+    assert_eq!(subs[1]["head"], head.as_str(), "{subs:?}");
+}
+
+/// pull-request-submit, "Still queued on the other host": host B has `#n`
+/// queued, its check saying `queued: next on main`; `sluice submit main
+/// --no-wait` on host A, nothing committed since, marks it no draft, even
+/// for a moment, and B's submission of it stays in B's queue, which a
+/// draft mark would withdraw (C.5; record 0093).
+#[test]
+fn a_submit_leaves_a_request_queued_on_another_host() {
+    let g = OnGitHub::new("intake-still-queued", "");
+    g.named("a", "");
+    let b = g.other("b", "", "");
+    b.run("1");
+    let w = g.session("queued", &[("q.txt", "q\n")]);
+    let out = g.wt_submit(&w, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let pull = g.pull_from("unit/queued");
+    let n = pull.number;
+    let until = Instant::now() + Duration::from_secs(60);
+    while !g
+        .posted(&pull.head)
+        .is_some_and(|p| p.1 == "queued: next on main")
+    {
+        assert!(
+            Instant::now() < until,
+            "B never queued it: {:?}, {:?}",
+            b.of(n),
+            g.posted(&pull.head)
+        );
+        b.discovery_passes();
+        b.run("1");
+    }
+    // In B's queue: the pass that took it in may have formed its
+    // combination, which B's check says at its next pass.
+    let id = b.of(n)[0]["id"].clone();
+    assert!(
+        matches!(b.of(n)[0]["state"].as_str(), Some("queued" | "testing")),
+        "{:?}",
+        b.of(n)
+    );
+    let drafted = mutations(&g, "convertPullRequestToDraft");
+    let out = g
+        .command(env!("CARGO_BIN_EXE_sluice"), &w)
+        .args(["submit", "main", "--no-wait"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert!(!text(&out).contains("marked ready"), "{}", text(&out));
+    assert_eq!(
+        mutations(&g, "convertPullRequestToDraft"),
+        drafted,
+        "never a draft: {}",
+        text(&out)
+    );
+    assert!(!g.pull_from("unit/queued").draft);
+    assert!(g.of(n).is_empty(), "A took nothing in");
+    // B's next pass reads no draft mark, so withdraws nothing (C.5): its
+    // one submission of `#n` goes on.
+    b.discovery_passes();
+    b.run("1");
+    let subs = b.of(n);
+    assert_eq!(subs.len(), 1, "{subs:?}");
+    assert_eq!(subs[0]["id"], id, "{subs:?}");
+    assert_ne!(subs[0]["state"], "withdrawn", "{subs:?}");
+}
+
 /// request-intake-host, "A wait lets go", stopped by Ctrl-C: a wait on
 /// host B, where no `sluice run` lives, holds main's mark, and once Ctrl-C
 /// stops it the mark is gone from the remote.
