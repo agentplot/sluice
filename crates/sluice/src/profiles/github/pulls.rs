@@ -1102,7 +1102,7 @@ impl Pulls {
                     p,
                     latest.get(&place(p.number)),
                     bound.get(&p.number),
-                    &status.submissions,
+                    &status,
                     &log,
                     &names,
                     r,
@@ -1313,7 +1313,7 @@ impl Pulls {
         p: &Pull,
         latest: Option<&Submission>,
         group: Option<&Bound>,
-        subs: &[Submission],
+        status: &sluice_core::Status,
         log: &[sluice_core::records::LogLine],
         names: &BTreeMap<u64, String>,
         r: &mut Reading,
@@ -1322,7 +1322,7 @@ impl Pulls {
         // D1: its queue on this host, as sluice's check on its head
         // carries it, from its submission at that head, if any.
         let at = latest.filter(|e| e.head.0 == p.head);
-        let queue = || queue_at(&self.peer.name, at, subs);
+        let queue = || queue_at(&self.peer.name, at, status);
         // A submit's pull request whose submission left the queue without
         // landing waits for its submitter's act, a submit or a person's
         // ready mark, at or after the second it left: whatever its head,
@@ -1381,7 +1381,7 @@ impl Pulls {
                         }
                     }
                 }
-                _ => return Ok(queue_shown(branch, e, subs, names, queue()).into()),
+                _ => return Ok(queue_shown(branch, e, status, names, queue()).into()),
             }
         }
         // Waiting: what is missing, and where it would land now. One of a
@@ -1431,7 +1431,9 @@ impl Pulls {
                     // pass took in is in no status read before it, and is
                     // found among the entries it registered.
                     let pull_of = |i: u64| {
-                        subs.iter()
+                        status
+                            .submissions
+                            .iter()
                             .find(|x| x.id == i)
                             .map(|x| number(&x.from.worktree))
                             .unwrap_or_else(|| self.entries.borrow().get(&i).map(|e| e.number))
@@ -1484,7 +1486,8 @@ impl Pulls {
             .map(|f| f.forecast)
         {
             Ok(Forecast::Clear) => {
-                let ahead: Vec<String> = subs
+                let ahead: Vec<String> = status
+                    .submissions
                     .iter()
                     .filter(|x| !x.state.is_out() && x.from.worktree != here)
                     .map(|x| name(x.id, names))
@@ -2318,16 +2321,25 @@ fn next_submit(branch: &str, from: &str) -> String {
 /// check's summary, an HTML comment GitHub's Markdown hides.
 const QUEUE_BLOCK: &str = "<!-- sluice:queue ";
 
+/// 6, 7: the submissions ahead of `e` in its branch's queue as `status`
+/// reads it, in the order a round takes them (D1).
+fn ahead_in<'a>(e: &Submission, status: &'a sluice_core::Status) -> Vec<&'a Submission> {
+    status
+        .ahead_of(e.id)
+        .into_iter()
+        .filter_map(|i| status.submissions.iter().find(|x| x.id == i))
+        .collect()
+}
+
 /// D1: a pull request's queue on `host`, as sluice's check on its head
 /// carries it: `at` is the submission of the request at that head that
-/// `host`'s records hold, if any, and `subs` the branch's submissions,
-/// those ahead of it while it is in the queue. It waits for nothing until
-/// a waiting check names what.
-fn queue_at(host: &str, at: Option<&Submission>, subs: &[Submission]) -> Queue {
+/// `host`'s records hold, if any, and `status` the branch's queue there,
+/// which gives those ahead of it, in queue order, while it is in the
+/// queue. It waits for nothing until a waiting check names what.
+fn queue_at(host: &str, at: Option<&Submission>, status: &sluice_core::Status) -> Queue {
     let ahead = match at {
-        Some(e) if !e.state.is_out() => subs
-            .iter()
-            .filter(|x| x.id < e.id && !x.state.is_out())
+        Some(e) if !e.state.is_out() => ahead_in(e, status)
+            .into_iter()
             .map(|x| Ahead {
                 submission: x.id,
                 pull_request: number(&x.from.worktree),
@@ -2577,12 +2589,13 @@ fn queued(branch: &str, ahead: &[String], queue: Queue) -> Shown {
     }
 }
 
-/// A submitted pull request's state in the queue: `queue` is its queue on
-/// the host that posts it (D1).
+/// A submitted pull request's state in the queue, `status` the branch's
+/// queue, whose order names what it is queued behind: `queue` is its
+/// queue on the host that posts it (D1).
 fn queue_shown(
     branch: &str,
     e: &Submission,
-    subs: &[Submission],
+    status: &sluice_core::Status,
     names: &BTreeMap<u64, String>,
     queue: Queue,
 ) -> Shown {
@@ -2606,9 +2619,8 @@ fn queue_shown(
             }
         }
         _ => {
-            let ahead: Vec<String> = subs
+            let ahead: Vec<String> = ahead_in(e, status)
                 .iter()
-                .filter(|x| x.id < e.id && !x.state.is_out())
                 .map(|x| name(x.id, names))
                 .collect();
             queued(branch, &ahead, queue)
@@ -3984,7 +3996,7 @@ mod tests {
             pending: vec![("cli:build".into(), Some("macos-arm64".into()))],
         };
         let names = BTreeMap::from([(12, "#12".to_string())]);
-        let shown = queued("main", &[], queue_at("b", None, &[]));
+        let shown = queued("main", &[], queue_at("b", None, &status_of(&[])));
         let mut post = |v: &VerdictView| {
             pulls
                 .show_report(
@@ -4090,7 +4102,7 @@ mod tests {
                 timed_out: false,
             },
             &names,
-            queue_at("b", None, &[]),
+            queue_at("b", None, &status_of(&[])),
         );
         pulls
             .show_report(
@@ -4142,7 +4154,7 @@ mod tests {
                 covered_by,
             },
             &names,
-            queue_at("b", None, &[]),
+            queue_at("b", None, &status_of(&[])),
         );
         pulls
             .show_report(
@@ -4427,6 +4439,21 @@ mod tests {
     }
 
     /// A submission into `main` from `worktree`, in `state`.
+    /// A branch's queue holding `subs`, its chain as a round orders it
+    /// (6, 7), with no combination formed.
+    fn status_of(subs: &[Submission]) -> sluice_core::Status {
+        let landed = subs
+            .iter()
+            .filter(|s| s.state == State::Landed)
+            .map(|s| s.id)
+            .collect();
+        sluice_core::Status {
+            chain: sluice_core::order::chain(subs, &landed, &[], true).chain,
+            submissions: subs.to_vec(),
+            ..Default::default()
+        }
+    }
+
     fn submitted(id: u64, worktree: &str, state: &str) -> Submission {
         serde_json::from_value(serde_json::json!({
             "schema": sluice_core::records::SUBMISSION_SCHEMA, "id": id, "branch": "main",
@@ -4447,7 +4474,7 @@ mod tests {
             None,
             &["1 review".into(), "qa/approved".into()],
             Some("forecast: merges onto main without conflict".into()),
-            queue_at("b", None, &[]),
+            queue_at("b", None, &status_of(&[])),
         );
         assert_eq!(w.posting.title, "waiting: needs 1 review, qa/approved");
         let s = &w.posting.summary;
@@ -4466,7 +4493,7 @@ mod tests {
             None,
             &["a draft".into(), "1 review".into()],
             None,
-            queue_at("b", None, &[]),
+            queue_at("b", None, &status_of(&[])),
         );
         assert_eq!(draft.posting.title, "waiting: a draft");
         assert_eq!(
@@ -4478,7 +4505,11 @@ mod tests {
             Some("unit/review"),
             &[NEXT_SUBMIT.into()],
             None,
-            queue_at("b", Some(&submitted(9, "pull/13", "failed")), &[]),
+            queue_at(
+                "b",
+                Some(&submitted(9, "pull/13", "failed")),
+                &status_of(&[]),
+            ),
         );
         let s = &held.posting.summary;
         assert!(s.starts_with("Submission 9 on b.\n\n"), "{s}");
@@ -4498,7 +4529,7 @@ mod tests {
             &[],
             &bound,
             Some("forecast: merges onto main without conflict".into()),
-            queue_at("b", None, &[]),
+            queue_at("b", None, &status_of(&[])),
         );
         assert_eq!(grouped.posting.title, "waiting for its group: #14");
         let s = &grouped.posting.summary;
@@ -4523,9 +4554,9 @@ mod tests {
         let shown = queue_shown(
             "main",
             &subs[2],
-            &subs,
+            &status_of(&subs),
             &names,
-            queue_at("b", Some(&subs[2]), &subs),
+            queue_at("b", Some(&subs[2]), &status_of(&subs)),
         );
         assert_eq!(shown.posting.title, "queued behind #10");
         let s = &shown.posting.summary;
@@ -4543,9 +4574,9 @@ mod tests {
         let next = queue_shown(
             "main",
             &landed[1],
-            &landed,
+            &status_of(&landed),
             &names,
-            queue_at("b", Some(&landed[1]), &landed),
+            queue_at("b", Some(&landed[1]), &status_of(&landed)),
         );
         assert_eq!(next.posting.title, "queued: next on main");
         assert!(queue_of(&next.posting.summary).unwrap().ahead.is_empty());
@@ -4560,9 +4591,9 @@ mod tests {
         let tested = queue_shown(
             "main",
             &testing,
-            &subs,
+            &status_of(&subs),
             &names,
-            queue_at("b", Some(&testing), &subs),
+            queue_at("b", Some(&testing), &status_of(&subs)),
         );
         assert_eq!(tested.posting.title, "testing main + #10 + #12");
         let q = queue_of(&tested.posting.summary).unwrap();
@@ -4581,7 +4612,7 @@ mod tests {
                 timed_out: false,
             },
             &names,
-            queue_at("b", Some(&failed), &subs),
+            queue_at("b", Some(&failed), &status_of(&subs)),
         );
         let s = &sent_back.posting.summary;
         assert!(s.starts_with("Submission 1406 on b.\n\n"), "{s}");
@@ -4593,7 +4624,7 @@ mod tests {
             submitted(7, "/work/a", "queued"),
             submitted(8, "pull/12", "queued"),
         ];
-        let q = queue_at("b", Some(&worktrees[1]), &worktrees);
+        let q = queue_at("b", Some(&worktrees[1]), &status_of(&worktrees));
         assert_eq!(
             q.ahead,
             [Ahead {
@@ -4603,13 +4634,84 @@ mod tests {
         );
     }
 
+    /// pull-request-status, "each submission ahead of it": the block's
+    /// `ahead` and the title's `queued behind` follow the queue's order,
+    /// not the order of submission. A worktree's submission at priority 5
+    /// is ahead of `#12`, submitted before it at 0; `#14`, at priority 9
+    /// but after `#12`, is behind both; and a worktree's at priority -1,
+    /// submitted first, is behind all three (6, 7; D1).
+    #[test]
+    fn the_check_names_whats_ahead_in_queue_order() {
+        let mut subs = vec![
+            submitted(1405, "/work/a", "queued"),
+            submitted(1406, "pull/12", "queued"),
+            submitted(1407, "/work/c", "queued"),
+            submitted(1408, "pull/14", "queued"),
+        ];
+        subs[0].priority = -1;
+        subs[2].priority = 5;
+        subs[3].priority = 9;
+        subs[3].after = vec![1406];
+        let status = status_of(&subs);
+        assert_eq!(status.chain, [1407, 1406, 1408, 1405]);
+        let names = names(&subs);
+        let ahead = |q: &Queue| -> Vec<(u64, Option<u64>)> {
+            q.ahead
+                .iter()
+                .map(|a| (a.submission, a.pull_request))
+                .collect()
+        };
+
+        let twelve = queue_at("b", Some(&subs[1]), &status);
+        assert_eq!(ahead(&twelve), [(1407, None)]);
+        let shown = queue_shown("main", &subs[1], &status, &names, twelve);
+        assert_eq!(
+            shown.posting.title,
+            "queued behind submission 1407 (person)"
+        );
+
+        let fourteen = queue_at("b", Some(&subs[3]), &status);
+        assert_eq!(ahead(&fourteen), [(1407, None), (1406, Some(12))]);
+        let shown = queue_shown("main", &subs[3], &status, &names, fourteen.clone());
+        assert_eq!(
+            shown.posting.title,
+            "queued behind submission 1407 (person), #12"
+        );
+        assert_eq!(queue_of(&shown.posting.summary), Some(fourteen));
+
+        let first = queue_at("b", Some(&subs[0]), &status);
+        assert_eq!(
+            ahead(&first),
+            [(1407, None), (1406, Some(12)), (1408, Some(14))]
+        );
+
+        // 7: one whose `after` is in the queue but not yet in the chain
+        // has the chain ahead of it, then what it waits on.
+        let mut waits = subs.clone();
+        waits[3].after = vec![1409];
+        waits.push(submitted(1409, "pull/15", "queued"));
+        waits[4].after = vec![1];
+        let status = status_of(&waits);
+        assert_eq!(status.chain, [1407, 1406, 1405]);
+        let fourteen = queue_at("b", Some(&waits[3]), &status);
+        assert_eq!(
+            ahead(&fourteen),
+            [
+                (1407, None),
+                (1406, Some(12)),
+                (1405, None),
+                (1409, Some(15))
+            ]
+        );
+    }
+
     /// D1: a reader takes the last block of a check's summary, and reads
     /// none in a check an older sluice posted, or in one whose block does
     /// not read; a `>` in a field never ends the comment; and the words a
     /// wait prints leave the block out.
     #[test]
     fn a_queue_block_reads_back_and_an_older_check_has_none() {
-        let mut q = queue_at("b", None, &[]);
+        let mut q = queue_at("b", None, &status_of(&[]));
         q.waits_for = vec!["ci/a->b".into()];
         let summary = summed(&q, "Needs `ci/a->b` on this commit before sluice takes it.");
         assert!(!summary[summary.rfind(QUEUE_BLOCK).unwrap()..]
@@ -4641,7 +4743,7 @@ mod tests {
     #[test]
     fn the_fields_decide_over_the_words() {
         let posting = |status, title: &str, state: Option<&str>| {
-            let mut q = queue_at("b", None, &[]);
+            let mut q = queue_at("b", None, &status_of(&[]));
             if let Some(state) = state {
                 q.taken_in = true;
                 q.submission = Some(1406);
@@ -4673,7 +4775,7 @@ mod tests {
         );
         assert_eq!(read(Status::Queued, "queued", Some("landed")), Told::Landed);
         let mut waiting = posting(Status::Failure, "waiting: the next submit", None);
-        waiting.summary = summed(&queue_at("b", None, &[]), "Held.");
+        waiting.summary = summed(&queue_at("b", None, &status_of(&[])), "Held.");
         assert_eq!(told(Some(&waiting)), Told::Open);
 
         assert_eq!(
@@ -4697,7 +4799,7 @@ mod tests {
             None,
             &["a draft".into()],
             None,
-            queue_at("b", None, &[]),
+            queue_at("b", None, &status_of(&[])),
         );
         assert_eq!(w.posting.title, "waiting: a draft");
         assert!(
@@ -4718,7 +4820,7 @@ mod tests {
             Some("unit/review"),
             &[NEXT_SUBMIT.into()],
             Some("forecast: merges onto main without conflict".into()),
-            queue_at("b", None, &[]),
+            queue_at("b", None, &status_of(&[])),
         );
         assert_eq!(w.posting.status, Status::Queued);
         assert_eq!(w.posting.title, "waiting: the next submit");
@@ -4743,7 +4845,7 @@ mod tests {
             None,
             &[format!("{WITHDRAWN_BY}{}", withdrawer("operator"))],
             Some("forecast: merges onto main without conflict".into()),
-            queue_at("b", None, &[]),
+            queue_at("b", None, &status_of(&[])),
         );
         assert_eq!(w.posting.status, Status::Queued);
         assert_eq!(w.posting.title, "waiting: withdrawn by the operator");
@@ -4829,7 +4931,13 @@ mod tests {
     /// with none says what it said before.
     #[test]
     fn a_landing_beside_the_queue_says_no_check_ran() {
-        let on_b = || queue_at("b", Some(&submitted(12, "pull/12", "landed")), &[]);
+        let on_b = || {
+            queue_at(
+                "b",
+                Some(&submitted(12, "pull/12", "landed")),
+                &status_of(&[]),
+            )
+        };
         let covered = outcome_shown(
             "main",
             &Outcome::Landed {

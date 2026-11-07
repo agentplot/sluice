@@ -43,7 +43,8 @@ pub struct GroupRequest {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Accepted {
     pub id: u64,
-    /// Submissions queued ahead of it on the branch.
+    /// Submissions queued ahead of it on the branch, in the order a round
+    /// takes them (6, 7).
     pub ahead: Vec<u64>,
     /// The earlier submission from the same place it withdrew (67).
     pub withdrew: Vec<u64>,
@@ -342,7 +343,7 @@ impl Queue {
 }
 
 /// A branch's queue as read from its records (26, 49).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Status {
     pub branch: String,
     pub at: Option<Rev>,
@@ -351,6 +352,9 @@ pub struct Status {
     pub parallel: Option<usize>,
     /// The submissions in the branch's live records.
     pub submissions: Vec<Submission>,
+    /// 6 to 8: the branch's chain on `at`, in the order a round takes it,
+    /// what is landing first ([`Line::order`]).
+    pub chain: Vec<u64>,
     /// How many have moved to its finished records, which
     /// [`Sluice::history`] reads.
     pub finished: usize,
@@ -406,6 +410,14 @@ impl Status {
     /// No such branch, and no records of one: nothing sluice lands on.
     pub fn is_unknown(&self) -> bool {
         self.at.is_none() && self.submissions.is_empty() && self.finished == 0
+    }
+
+    /// 6, 7: the submissions ahead of submission `id` in the queue, in the
+    /// order a round takes them ([`order::ahead_of`]).
+    pub fn ahead_of(&self, id: u64) -> Vec<u64> {
+        order::ahead_of(id, &self.chain, |i| {
+            self.submissions.iter().find(|s| s.id == i)
+        })
     }
 }
 
@@ -1281,6 +1293,7 @@ impl Sluice<'_> {
             crate::refused_writes::standing(&line.doc.refused_writes, || self.now());
         let on_remote =
             !refused_writes.is_empty() && self.seams.branch.copy(branch)? != HostCopy::Itself;
+        let chain = line.order(at.as_ref(), true).chain;
         Ok(Status {
             branch: branch.into(),
             at,
@@ -1303,6 +1316,7 @@ impl Sluice<'_> {
             failed_releases: line.doc.failed_releases.clone(),
             refused_writes,
             on_remote,
+            chain,
             submissions: line.subs.into_values().collect(),
             warnings,
             stale: self.seams.state.stale(branch).map(|r| r.remote),
@@ -1632,12 +1646,6 @@ fn admit(
             },
         );
     }
-    let ahead: Vec<u64> = l
-        .subs
-        .values()
-        .filter(|s| !s.state.is_out())
-        .map(|s| s.id)
-        .collect();
     l.subs.insert(
         id,
         Submission {
@@ -1675,6 +1683,10 @@ fn admit(
             head: submitted.head.clone(),
         },
     );
+    // 6, 7: ahead of it in the order a round takes the queue, as status
+    // reads it.
+    let chain = l.order(l.doc.base.as_ref(), true).chain;
+    let ahead = order::ahead_of(id, &chain, |i| l.subs.get(&i));
     Accepted {
         id,
         ahead,
@@ -2558,6 +2570,32 @@ mod tests {
             assert_eq!(s.after, vec![earlier], "none names another of the act");
             assert_eq!(s.priority, 3);
         }
+    }
+
+    /// 6, 7: what a submit names ahead of it, and the chain status reads,
+    /// follow the order a round takes the queue in, not the order of
+    /// submission: one at priority 5 is ahead of one submitted before it
+    /// at 0, and one at priority 9 after that one is behind both.
+    #[test]
+    fn ahead_is_the_queues_order() {
+        let h = Host::new();
+        for w in ["a", "b", "c"] {
+            h.place(w);
+        }
+        let submit = |w: &str, after: &[u64], priority: i64| {
+            let mut req = h.group(&[w], after);
+            req.priority = priority;
+            h.sluice().submit_group(&req).unwrap().unwrap().remove(0)
+        };
+        let a = submit("a", &[], 0);
+        let b = submit("b", &[], 5);
+        assert!(b.ahead.is_empty(), "{:?}", b.ahead);
+        let c = submit("c", &[a.id], 9);
+        assert_eq!(c.ahead, [b.id, a.id]);
+        let status = h.sluice().status(BRANCH).unwrap();
+        assert_eq!(status.chain, [b.id, a.id, c.id]);
+        assert_eq!(status.ahead_of(a.id), [b.id]);
+        assert_eq!(status.ahead_of(c.id), [b.id, a.id]);
     }
 
     /// 23, 125: a group given a subject per place keeps each on its own

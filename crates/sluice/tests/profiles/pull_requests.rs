@@ -1548,6 +1548,79 @@ fn the_queue_block_moves_with_the_queue_ahead() {
     assert_eq!(after["ahead"], serde_json::json!([]), "{after}");
 }
 
+/// pull-request-status, "each submission ahead of it": the check's block
+/// and title name what is ahead in the order host `b`'s rounds take its
+/// queue, not the order of submission. With the first request under test,
+/// a planner gives the third priority 5, and the second's check names it
+/// ahead; then the third lands after the second, and the second's check
+/// names only the first again, the third's both (6, 7; D1).
+#[test]
+fn the_queue_block_follows_the_queues_order() {
+    let g = OnGitHub::checked("pr-host-queue-order", "", "1m", "parallel = 1\n");
+    g.named("b", "");
+    let pid = g.repo.dir().join(".git/hang.pid");
+    let hang = format!("{}\n", pid.display());
+    let (a, _) = g.by_hand("unit/tested", &[("hang", Some(&hang))], false);
+    let (b, b_head) = g.by_hand("unit/second", &[("b.txt", Some("b\n"))], false);
+    let (c, c_head) = g.by_hand("unit/third", &[("c.txt", Some("c\n"))], false);
+    g.step();
+    let (first, second, third) = (id_of(&g.of(a)), id_of(&g.of(b)), id_of(&g.of(c)));
+    let until = Instant::now() + Duration::from_secs(60);
+    while !pid.exists() {
+        assert!(Instant::now() < until, "the check never started");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let process = std::fs::read_to_string(&pid).unwrap().trim().to_string();
+    let amend = |args: &[&str]| {
+        let out = g.sluice(&[&["amend", &third.to_string()], args].concat());
+        assert!(out.status.success(), "{}", text(&out));
+    };
+    let shown = |head: &str| {
+        let (_, title, summary) = g.posted(head).unwrap();
+        (title, block(&summary)["ahead"].clone())
+    };
+    let entry = |submission: u64, n: u64| serde_json::json!({ "submission": submission, "pull_request": n });
+
+    amend(&["--priority", "5"]);
+    g.step();
+    assert_eq!(
+        shown(&b_head),
+        (
+            format!("queued behind #{a}, #{c}"),
+            serde_json::json!([entry(first, a), entry(third, c)])
+        )
+    );
+    assert_eq!(
+        shown(&c_head),
+        (
+            format!("queued behind #{a}"),
+            serde_json::json!([entry(first, a)])
+        )
+    );
+
+    amend(&["--after", &second.to_string()]);
+    g.step();
+    assert_eq!(
+        shown(&b_head),
+        (
+            format!("queued behind #{a}"),
+            serde_json::json!([entry(first, a)])
+        )
+    );
+    assert_eq!(
+        shown(&c_head),
+        (
+            format!("queued behind #{a}, #{b}"),
+            serde_json::json!([entry(first, a), entry(second, b)])
+        )
+    );
+    assert!(Command::new("kill")
+        .arg(&process)
+        .status()
+        .unwrap()
+        .success());
+}
+
 /// Two rounds with nothing changed between them post nothing the second
 /// time.
 #[test]
