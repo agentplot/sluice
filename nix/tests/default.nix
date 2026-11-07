@@ -6,15 +6,27 @@
 # line for each failure, `nix: <case>: <what>`.
 let
   t = import ./lib.nix { paths = builtins.fromJSON (builtins.getEnv "SLUICE_FLAKE_INPUTS"); };
-  inherit (t.lib) concatLists concatStringsSep mapAttrsToList;
+  inherit (t.lib)
+    concatLists
+    concatMap
+    concatStringsSep
+    mapAttrsToList
+    ;
 
+  # Each file's cases kept apart, so two platforms' cases of one name both
+  # run.
   lines =
-    cases:
+    files:
     concatStringsSep "\n" (
-      concatLists (mapAttrsToList (case: map (what: "nix: ${case}: ${what}")) cases)
+      concatMap (
+        file: concatLists (mapAttrsToList (case: map (what: "nix: ${case}: ${what}")) (import file t))
+      ) files
     );
 in
 {
-  typecheck = lines (import ./typecheck.nix t);
-  test = lines (import ./file.nix t);
+  typecheck = lines [ ./typecheck.nix ];
+  test = lines [
+    ./file.nix
+    ./darwin.nix
+  ];
 }

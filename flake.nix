@@ -53,8 +53,6 @@
       workspace = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).workspace.package;
       released = builtins.getEnv "SLUICE_VERSION";
       version = if released != "" then released else workspace.version;
-    in
-    {
       packages = forAll (
         pkgs:
         let
@@ -88,5 +86,15 @@
           };
         }
       );
+    in
+    {
+      inherit packages;
+
+      # services.sluice, the host's own settings and the package (record
+      # 0098, core.51).
+      darwinModules = rec {
+        sluice = import ./nix/modules/darwin.nix { inherit packages; };
+        default = sluice;
+      };
     };
 }
