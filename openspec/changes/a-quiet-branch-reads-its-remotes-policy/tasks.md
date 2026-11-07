@@ -37,7 +37,7 @@ id.
 
 ## 6. The site
 
-- [ ] 6.1 In the commands reference, the `sluice status` row says the queue is read where the branch's state last saw it and the policy at the branch's revision as this host holds it, never fetching. In the GitHub guide, the paragraph on a copy whose policy sluice refuses says a fixed policy pushed to GitHub ends sluice's refusal the next time a sluice command reads the branch once the machine has the fixed revision, so submit and status take work again with no one running a round: at the next look where the queue's state is on GitHub, and at the next submit, which fetches it. Both pages speak to any host's operator (rule core.26). True when `sluice exec main -- moon run site:prose` passes.
+- [x] 6.1 In the commands reference, the `sluice status` row says the queue is read where the branch's state last saw it and the policy at the branch's revision as this host holds it, never fetching. In the GitHub guide, the paragraph on a copy whose policy sluice refuses says a fixed policy pushed to GitHub ends sluice's refusal the next time a sluice command reads the branch once the machine has the fixed revision, so submit and status take work again with no one running a round: at the next look where the queue's state is on GitHub, and at the next submit, which fetches it. Both pages speak to any host's operator (rule core.26). True when `sluice exec main -- moon run site:prose` passes.
 
 ## 7. The gate
 
