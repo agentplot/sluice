@@ -8,10 +8,7 @@ delivered, and is this worktree's: one it submitted, whose recorded
 work is its branch and which names no `from.head`; or a pull request's
 opened from its branch, where that branch is one sluice lands on
 nowhere. A submission withdrawn, or still queued or under test, SHALL
-NOT be delivered. A submission by name, whose `from.head` and
-`from.worktree` are both a branch it named (124), SHALL NOT be delivered
-in any worktree, nor a pull request's opened from a branch sluice lands
-on, since no worktree pushed that branch (1, 124).
+NOT be delivered.
 
 #### Scenario: A restarted session collects a landing it missed
 
@@ -50,6 +47,16 @@ on, since no worktree pushed that branch (1, 124).
   submission 16 is blamed and not delivered, and `sluice inbox` runs in
   that worktree
 - **THEN** the command delivers submission 16's failure
+
+## ADDED Requirements
+
+### Requirement: No worktree collects a submission by name or a request from a branch sluice lands on
+
+`sluice inbox` SHALL NOT deliver, in any worktree, a submission by name,
+whose `from.head` and `from.worktree` are both the branch it named
+(124), the worktree on that branch among them; nor a pull request's
+opened from a branch sluice lands on, since no worktree pushed that
+branch (1, 124).
 
 #### Scenario: A submission by name is no worktree's
 

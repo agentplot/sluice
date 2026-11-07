@@ -1,3 +1,12 @@
+## Purpose
+
+How a branch sluice lands on is submitted by its name from any folder
+of the repository, a bare repository's git directory among them: its
+head the branch as its policy holds it, its record naming no worktree
+and no session, its outcome delivered by nothing and read from the
+branch's records in an inbox's words (124, 51, 67, 120; rule core.50;
+record 0090; flume 133, 202, 203).
+
 ## ADDED Requirements
 
 ### Requirement: A branch sluice lands on is submitted by name from anywhere in the repository
