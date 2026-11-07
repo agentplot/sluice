@@ -44,7 +44,7 @@ check task passing.
 
 - [x] 5.1 In `crates/sluice/src/profiles/github/pulls.rs`'s `opening`, where `left` is none and the existing request is open and not a draft, read sluice's check on its head before the push; where 3.2's function reads it sent back or held, mark the request ready as `mark_ready` does with no `left`, a draft first, and say `marked ready for review` (D4). Read nothing for a new request, a draft, or one whose `left` this host's records give. Comments cite 120, C.5, rule core.32 and record 0093. True when `cargo clippy -p sluice --all-targets -- -D warnings` is clean.
 - [x] 5.2 In `crates/sluice/tests/profiles/pull_requests.rs`, add `a_submit_marks_ready_a_request_another_host_sent_back_not_a_draft` (pull-request-submit, "Sent back, not a draft": a request opened by hand from `unit/review`, blamed by B and left out of draft; `sluice submit main --no-wait` on A from a worktree on `unit/review` marks it a draft and ready, and B's next pass takes it in again) and `a_submit_leaves_a_request_queued_on_another_host` ("Still queued": no draft mark reaches the double, and B's submission stays queued). True when `sluice exec main -- cargo test -p sluice --features tools --test pull_requests -- a_submit_marks_ready a_submit_leaves` passes.
-- [ ] 5.3 Check the group: commit, then run `sluice exec main -- moon run cli:test cli:tools`. True when both pass.
+- [x] 5.3 Check the group: commit, then run `sluice exec main -- moon run cli:test cli:tools`. True when both pass.
 
 ## 6. Say it to the operator
 
