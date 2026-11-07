@@ -11,7 +11,7 @@ decision-makers:
 
 Status: accepted by the user on 2026-10-25, on their card ("Approved").
 
-Amended in part by record 0093, proposed on 2026-11-06, once it is accepted: the reader a watch or a wait finds or starts is sluice's own host process (129, 135).
+Amended in part by record 0093, accepted on 2026-11-06: the reader a watch or a wait finds or starts is sluice's own host process (129, 135).
 
 Deciders: the user, who asked through the operator on 2026-10-24 whether the herdr and Claude Code plugins could do without one sluice process per Claude Code tab, and answered the design put to them in madswan-design's pane with "go" on 2026-10-25; the record's other words are madswan-design's, for the user to accept on this record's card.
 Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 26, 71, 80, 129; ADR 0023; rules core.11, core.14; `plugins/sluice-board/hooks/register.tsx` (`feed`), `plugins/herdr/lib/sources.sh` and the herdr-watch spec; `crates/sluice/src/overview.rs` (`document`, `run`); signal `2026-10-24-madswan-design-fe11a4cd/01`.
