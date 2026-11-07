@@ -13,6 +13,8 @@ Status: accepted on 2026-11-07, agentplot-design's ruling from the records alrea
 
 Amends record 0023 in part, where its plugin's watcher is one per herdr server.
 
+Amended 2026-11-07, agentplot-design's reading for agentplot-planner on the change `the-herdr-plugin-keeps-one-watcher-per-host`: forking nothing on a timer means no work on a timer beyond the tick's one wait, save what time alone asks of the tokens. The herdr-sidebar spec has every token the plugin sets expire within two minutes unless the watcher sets it again, so a stopped watcher leaves nothing stale, and a token's clocks (`#95 testing 3m/15m`, `#94 landed 12m`) count minutes. So once a minute, and only on a herdr server that shows a sluice token, the watcher reads that server's panes and sets its tokens again; a server that shows none gets nothing on a timer. The other path, tokens set with no expiry and clocks that stand still between changes, would leave a stopped watcher's tokens standing and its clocks wrong, and is not taken. The reading is cheap to change later.
+
 Deciders: agentplot-design, ruling for agentplot-planner on signal 2026-11-07-agentplot-ops-ac49fa28/01, whose words are the user's: "what about the herdr/plugin's creating many/many processes".
 
 Sources: records 0023 (a reader sees the queue through one overview, and plugins live outside the core), 0056 (one process per host reads a repository's records for every watcher of its queues) and 0093 (sluice's own host process); `plugins/herdr/bin/watch.sh`, `bin/document.sh` and `lib/common.sh` and `openspec/specs/herdr-watch/spec.md` at 26e131bd; signal 2026-11-07-agentplot-ops-ac49fa28/01 on afterthought/crew-state agentplot/main (deneb, 2026-11-07: eleven herdr servers, eleven watchers over the same repositories, about 280 processes); flume record 0051 as amended 2026-11-06, which ends flume's own plugin's settle per herdr server.
@@ -33,7 +35,7 @@ Option 1.
 
 - **One watcher per user on a host.** However many herdr servers run the plugin, one watcher holds the host's lease and serves them all; a server's startup, pane or worktree event that finds it running starts nothing. A watcher whose servers have all stopped answering stops within two ticks, and the next server's event starts one again.
 - **One read of each repository.** The watcher follows one `sluice overview --watch` for each repository a pane of any server is in, and keeps each repository's latest document once, which every server's popup, dashboard, segments and toasts read. A toast of a landing or a blame is told once in each server that has a pane in that repository.
-- **Nothing forked while nothing changes.** Between a document's changes and herdr's events, the watcher forks no process on a timer. Each document line is handled without a new process for each of its fields.
+- **Nothing forked while nothing changes.** Between a document's changes and herdr's events, the watcher forks no process on a timer but its tick's one wait and, once a minute on each herdr server that shows a sluice token, the reading of that server's panes and the setting of its tokens again, which the tokens' two minutes' expiry and their clocks need. Each document line is handled without a new process for each of its fields.
 - **The plugin still only reads** (0023): it reads sluice through `sluice overview` alone and submits, withdraws, lands and releases nothing; nothing under `crates/` changes for it.
 
 ### Consequences
