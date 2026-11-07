@@ -966,7 +966,36 @@ When another host takes the branch's pull requests in, the wait takes
 none in and runs no rounds of that branch. It follows the pull request
 on GitHub instead, reading it and sluice's check on its head at most
 once in a quarter of `[forge] discovery`. It prints the check's title
-and summary as they change. It reports what GitHub shows with the words
+and summary as they change. Above them it prints where the pull request
+stands, again only when that changes:
+
+```console
+$ sluice wait main
+#41 is submission 1406 on b, taken in by b's sluice run
+queued behind #38
+  In main's queue; it lands once its combination passes.
+```
+
+The submission and the host after `is` are what sluice's check on the
+pull request's head names. The host after `taken in by` is the one
+`main`'s intake mark names, as this host's last fetch brought it, held
+by that host's `sluice run` or by `a wait on b`. The two differ in the
+pass between a hand-over and the new host's first post. Before the
+host takes the pull request in, it reads `#41 waits to be taken in by
+b's sluice run`. Where no host holds the mark, it says so.
+
+Its documents under `--json` gain two fields: the one `--status`
+prints, the one a `--no-wait` submit prints and the one at its timeout.
+`taken_in_by` is `{"host":"b","holder":"driver"}`, or `"holder":"wait"`,
+and `null` where no mark stands. `queue` is the fields of the check's
+[`sluice:queue` block](/sluice/guides/pull-requests/#what-sluice-posts),
+and `null` where the check carries none:
+
+```json
+{"pull_request":41,"branch":"main","state":"queued behind #38","taken_in_by":{"host":"b","holder":"driver"},"queue":{"host":"b","taken_in":true,"submission":1406,"state":"queued","ahead":[{"submission":1405,"pull_request":38}],"waits_for":[]}}
+```
+
+It reports what GitHub shows with the words
 and exit of a submission's outcome. Merged is `passed · landed as
 b7d2e94`, exit `0`. Sent back is as the check names it, `failed: …`
 with exit `1` or `conflict: …` with exit `2`. Closed without landing is

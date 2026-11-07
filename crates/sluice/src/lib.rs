@@ -607,12 +607,51 @@ pub struct Ahead {
     pub pull_request: Option<u64>,
 }
 
+/// 137: which process of its host holds a branch's intake mark.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Holder {
+    /// The host's `sluice run`, the holder of its driver's lock.
+    Driver,
+    /// A `sluice wait` or a waiting submit.
+    Wait,
+}
+
+/// 137, design D2: the host a branch's intake mark names, as this host's
+/// last fetch brought it, and whether that host's `sluice run` or a wait
+/// holds it.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TakenInBy {
+    pub host: String,
+    pub holder: Holder,
+}
+
+impl TakenInBy {
+    /// Its holder in words: `b's sluice run`, or `a wait on b`.
+    pub fn said(&self) -> String {
+        match self.holder {
+            Holder::Driver => format!("{}'s sluice run", self.host),
+            Holder::Wait => format!("a wait on {}", self.host),
+        }
+    }
+}
+
 /// Where a pull request stands, for a submit that follows it.
 pub enum Followed {
     /// Not decided yet: its state, and lines beneath it.
     Open {
         title: String,
         lines: Vec<String>,
+        /// 137, design D2: where another host takes its branch's pull
+        /// requests in, the host the intake mark names and its holder, as
+        /// this host's last fetch brought it; `None` where no mark stands,
+        /// and on the host that takes them in.
+        taken_in_by: Option<TakenInBy>,
+        /// 137, design D2: where another host takes its branch's pull
+        /// requests in, the queue sluice's check on its current head
+        /// carries; `None` where the check carries none, and on the host
+        /// that takes them in.
+        queue: Option<Queue>,
         /// The submission intake took for it on its current head,
         /// undecided; `None` while it waits to be taken in (C.5 pull
         /// request, 120).
@@ -3784,6 +3823,10 @@ fn submit_pull(
         }
     };
     let mut last: Option<(String, Vec<String>)> = None;
+    // 137: where the pull request stands on the host that takes it in, as
+    // last read and as last said, where that is another host.
+    let mut there: Option<There> = None;
+    let mut said_there = None;
     // 121: the branch's hold as last said, so each is said once.
     let mut said_hold = None;
     let what = format!("#{number}");
@@ -3877,11 +3920,26 @@ fn submit_pull(
             Some(Followed::Open {
                 title,
                 lines,
+                taken_in_by,
+                queue,
                 submission,
                 names,
                 head,
                 draft,
             }) => {
+                // 137, design D5: where another host takes it in, the host
+                // the mark names and the queue its check carries, said
+                // again only when it changes.
+                there = pulls
+                    .elsewhere(branch)
+                    .map(|_| There { taken_in_by, queue });
+                if let (false, Some(t)) = (json, &there) {
+                    let line = t.line(number, branch);
+                    if said_there.as_ref() != Some(&line) {
+                        writeln!(out, "{line}")?;
+                        said_there = Some(line);
+                    }
+                }
                 // Taken in on the head just pushed: the submission is the
                 // answer, as a no-wait submit's on any branch, with the
                 // pull request beside it.
@@ -3921,12 +3979,13 @@ fn submit_pull(
                             "pull_request": number, "branch": branch, "state": now.0,
                             "head": head, "draft": draft,
                         });
-                        let doc = with_sends(doc, s, worktree)?;
+                        let doc = with_sends(There::with(doc, there.as_ref())?, s, worktree)?;
                         writeln!(out, "{}", with_copy(doc, copy.as_ref())?)?;
                     } else if json && no_wait {
                         let doc = serde_json::json!({
                             "pull_request": number, "branch": branch, "state": now.0,
                         });
+                        let doc = There::with(doc, there.as_ref())?;
                         writeln!(out, "{}", with_copy(doc, copy.as_ref())?)?;
                     } else if !json {
                         writeln!(out, "{}", now.0)?;
@@ -3962,6 +4021,7 @@ fn submit_pull(
                 let doc = serde_json::json!({
                     "pull_request": number, "branch": branch, "state": state,
                 });
+                let doc = There::with(doc, there.as_ref())?;
                 writeln!(out, "{}", with_copy(doc, copy.as_ref())?)?;
             } else {
                 writeln!(out, "still open: #{number}; sluice wait {branch}")?;
@@ -4099,6 +4159,10 @@ fn submit_pull_group(
     }
     let mut decided: Vec<Option<Followed>> = opened.iter().map(|_| None).collect();
     let mut last: Vec<Option<(String, Vec<String>)>> = vec![None; opened.len()];
+    // 137: where each stands on the host that takes it in, as last read
+    // and as last said, where that is another host.
+    let mut there: Vec<Option<There>> = vec![None; opened.len()];
+    let mut said_there: Vec<Option<String>> = vec![None; opened.len()];
     // 121: the branch's hold as last said, so each is said once.
     let mut said_hold = None;
     // As `submit_pull`: a read the forge could not answer for the retry
@@ -4146,7 +4210,24 @@ fn submit_pull_group(
                 }
             };
             match followed {
-                Followed::Open { title, lines, .. } => {
+                Followed::Open {
+                    title,
+                    lines,
+                    taken_in_by,
+                    queue,
+                    ..
+                } => {
+                    // 137, design D5: as `submit_pull`'s.
+                    there[i] = pulls
+                        .elsewhere(branch)
+                        .map(|_| There { taken_in_by, queue });
+                    if let (false, Some(t)) = (json, &there[i]) {
+                        let line = t.line(o.number, branch);
+                        if said_there[i].as_ref() != Some(&line) {
+                            writeln!(out, "{line}")?;
+                            said_there[i] = Some(line);
+                        }
+                    }
                     let now = (title, lines);
                     if last[i].as_ref() != Some(&now) {
                         if !json {
@@ -4231,7 +4312,7 @@ fn submit_pull_group(
                 Some(Followed::Done(sub, _)) => serde_json::to_value(sub)?,
                 Some(Followed::Closed) => serde_json::json!({ "state": "closed" }),
                 Some(f @ (Followed::Landed { .. } | Followed::SentBack { .. })) => across_json(f),
-                _ => serde_json::json!({ "state": state(i) }),
+                _ => There::with(serde_json::json!({ "state": state(i) }), there[i].as_ref())?,
             };
             item["worktree"] = serde_json::json!(w);
             item["pull_request"] = serde_json::json!(o.number);
@@ -4286,6 +4367,50 @@ fn submit_pull_group(
         after_landing(e);
     }
     Ok(stopped.unwrap_or(code))
+}
+
+/// 137, design D2: where a pull request another host takes in stands, as
+/// a wait last read it: the host its branch's intake mark names, as this
+/// host's last fetch brought it, and the queue sluice's check on its head
+/// carries.
+#[derive(Clone, Debug, PartialEq)]
+struct There {
+    taken_in_by: Option<TakenInBy>,
+    queue: Option<Queue>,
+}
+
+impl There {
+    /// Design D5: pull request `n` into `branch` in words: the submission
+    /// the check names on the host that posted it, taken in by the host the
+    /// mark names; or that it waits to be taken in by the mark's host.
+    fn line(&self, n: u64, branch: &str) -> String {
+        let held = self
+            .queue
+            .as_ref()
+            .filter(|q| q.taken_in)
+            .and_then(|q| Some((q.submission?, &q.host)));
+        let by = self.taken_in_by.as_ref().map(TakenInBy::said);
+        let none = format!("no host holds {branch}'s intake mark");
+        match (held, by) {
+            (Some((id, host)), Some(by)) => {
+                format!("#{n} is submission {id} on {host}, taken in by {by}")
+            }
+            (Some((id, host)), None) => format!("#{n} is submission {id} on {host}; {none}"),
+            (None, Some(by)) => format!("#{n} waits to be taken in by {by}"),
+            (None, None) => format!("#{n} waits to be taken in; {none}"),
+        }
+    }
+
+    /// Design D5: `doc` with `taken_in_by` and `queue`, `null` where
+    /// neither reads, for a pull request another host takes in; `doc` as
+    /// it is otherwise.
+    fn with(mut doc: serde_json::Value, there: Option<&There>) -> Result<serde_json::Value> {
+        if let Some(t) = there {
+            doc["taken_in_by"] = serde_json::to_value(&t.taken_in_by)?;
+            doc["queue"] = serde_json::to_value(&t.queue)?;
+        }
+        Ok(doc)
+    }
 }
 
 /// 137: the outcome GitHub shows of pull request `number`, which another

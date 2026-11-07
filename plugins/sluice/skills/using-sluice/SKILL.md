@@ -147,7 +147,13 @@ pull request at once, its conditions holding: hand `id` to `sluice wait`.
 Otherwise it answers `{"pull_request","branch","state"}`, `state` what the
 pull request waits for: run `sluice wait main` in the worktree, which
 follows the pull request and, once sluice queues it, its submission, whose
-record it prints under `--json` from then on.
+record it prints under `--json` from then on. Where another host takes the
+branch's pull requests in, that document, and the wait's until it ends,
+also gives `taken_in_by`, the host holding the branch's intake mark and
+whether its `sluice run` or a wait holds it, and `queue`, where that host
+holds the pull request: `submission` and `state` once it is taken in,
+`ahead` of it, and `waits_for` before then. The wait ends as the pull
+request lands or is sent back there; don't submit again to move it.
 
 A submission that sits at `queued` while another is testing is waiting its
 turn. `sluice status <branch>` says `testing N at once (up to M)`. N is one

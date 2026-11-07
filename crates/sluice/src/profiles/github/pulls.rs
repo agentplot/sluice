@@ -67,7 +67,7 @@ use crate::identity::Identity;
 use crate::profiles::local_refs::LocalRefs;
 use crate::profiles::pushed_refs::{Holder, Mark, PushedRefs};
 use crate::retry;
-use crate::{Ahead, Followed, GroupRefused, Opened, Queue, Short, Taker};
+use crate::{Ahead, Followed, GroupRefused, Opened, Queue, Short, TakenInBy, Taker};
 use sluice_core::verdict_view::{Standing as Stands, VerdictView};
 
 /// The place a pull request's entry is submitted from.
@@ -2391,14 +2391,20 @@ fn words(summary: &str) -> String {
 /// and the block that carries `queue`, its `>` escaped so that no field
 /// ends the comment.
 fn summed(queue: &Queue, words: &str) -> String {
-    let first = match queue.submission.filter(|_| queue.taken_in) {
-        Some(n) => format!("Submission {n} on {}.", queue.host),
-        None => format!("Waiting to be taken in on {}.", queue.host),
-    };
+    let first = first_line(queue);
     let fields = serde_json::to_string(queue)
         .unwrap_or_default()
         .replace('>', "\\u003e");
     format!("{first}\n\n{words}\n\n{QUEUE_BLOCK}{fields} -->")
+}
+
+/// D1: a check's first line: the request's submission on the posting
+/// host, or that it waits to be taken in there.
+fn first_line(queue: &Queue) -> String {
+    match queue.submission.filter(|_| queue.taken_in) {
+        Some(n) => format!("Submission {n} on {}.", queue.host),
+        None => format!("Waiting to be taken in on {}.", queue.host),
+    }
 }
 
 /// What a waiting pull request into `branch` is titled, the words of its
@@ -3099,7 +3105,7 @@ impl crate::PullRequests for Pulls {
         // in a quarter of the host's interval; between, what it last said.
         let now = clock.now();
         if self.away.borrow().contains_key(branch) {
-            return self.follow_across(forge, &t.repo, branch, n, now);
+            return self.follow_across(forge, &t, branch, n, now);
         }
         let fresh = self
             .seen
@@ -3194,6 +3200,8 @@ impl crate::PullRequests for Pulls {
         Ok(Followed::Open {
             title,
             lines,
+            taken_in_by: None,
+            queue: None,
             submission,
             names,
             head: pull.as_ref().map(|p| p.head.clone()),
@@ -3210,15 +3218,19 @@ impl Pulls {
     /// passed since any process of the host read them (136; design D4).
     /// Merged is landed; sluice's check failed on its head is sent back, as
     /// the check names; closed and not merged is closed. A request said to
-    /// be landed or closed is followed no longer (design D3).
+    /// be landed or closed is followed no longer (design D3). One still
+    /// open names the host the intake mark names, as the branch's last
+    /// fetch brought it, and the queue the check carries, whose first
+    /// line, saying the same, its lines leave out (design D2, D5).
     fn follow_across(
         &self,
         forge: &dyn Forge,
-        repo: &Repo,
+        t: &Target,
         branch: &str,
         n: u64,
         now: DateTime<Utc>,
     ) -> Result<Followed> {
+        let repo = &t.repo;
         let Some(f) = self.read_followed(forge, repo, branch, n, now)? else {
             return Ok(Followed::Closed);
         };
@@ -3245,20 +3257,26 @@ impl Pulls {
             self.unfollow(repo, branch, &[n]);
             return Ok(Followed::Closed);
         }
+        let queue = posting.as_ref().and_then(|p| queue_of(&p.summary));
         let (title, lines) = match posting {
-            Some(posting) => (
-                posting.title,
-                words(&posting.summary)
+            Some(posting) => {
+                let said = words(&posting.summary);
+                let first = queue.as_ref().map(first_line);
+                let rest = first.and_then(|f| said.strip_prefix(&f)).unwrap_or(&said);
+                let lines = rest
                     .lines()
                     .filter(|l| !l.trim().is_empty())
                     .map(str::to_string)
-                    .collect(),
-            ),
+                    .collect();
+                (posting.title, lines)
+            }
             None => ("waiting".into(), Vec::new()),
         };
         Ok(Followed::Open {
             title,
             lines,
+            taken_in_by: self.taken_in_by(&t.remote, branch),
+            queue,
             submission: None,
             names: BTreeMap::new(),
             head: Some(f.head),
@@ -3388,6 +3406,23 @@ impl Pulls {
         }
     }
 
+    /// 137, design D2: the host `branch`'s intake mark names and whether
+    /// its `sluice run` or a wait holds it, as the branch's last fetch from
+    /// `remote` brought it, with no fetch of its own (129); `None` where no
+    /// mark stands, or where it could not be read, which is warned of.
+    fn taken_in_by(&self, remote: &str, branch: &str) -> Option<TakenInBy> {
+        match self.pushed(remote).and_then(|p| p.intake_mark(branch)) {
+            Ok(mark) => mark.map(|(_, m)| TakenInBy {
+                host: m.host,
+                holder: m.holder,
+            }),
+            Err(e) => {
+                crate::telemetry::warn(&format!("sluice: warning: {e:#}"));
+                None
+            }
+        }
+    }
+
     /// 137: the other host that takes `branch`'s pull requests in, as this
     /// process's intake last found it, or else as the intake mark the
     /// branch's last fetch brought names it, with no fetch of its own (129);
@@ -3396,15 +3431,9 @@ impl Pulls {
         if let Some(host) = self.away.borrow().get(branch) {
             return Some(host.clone());
         }
-        match self.pushed(&t.remote).and_then(|p| p.intake_mark(branch)) {
-            Ok(mark) => mark
-                .map(|(_, m)| m.host)
-                .filter(|host| *host != self.peer.name),
-            Err(e) => {
-                crate::telemetry::warn(&format!("sluice: warning: {e:#}"));
-                None
-            }
-        }
+        self.taken_in_by(&t.remote, branch)
+            .map(|by| by.host)
+            .filter(|host| *host != self.peer.name)
     }
 
     /// 125: every worktree read before anything is pushed, and a refusal

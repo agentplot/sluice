@@ -5444,6 +5444,235 @@ fn an_older_sluices_check_reads_by_its_words() {
     assert!(text(&out).contains("failed: app:test"), "{}", text(&out));
 }
 
+// ---------------------------------------------------------------------------
+// submission-wait: a wait across hosts names where its pull request stands
+// (137, design D2 and D5)
+// ---------------------------------------------------------------------------
+
+impl OnGitHub {
+    /// Host B's `sluice run` holds main's intake mark, and this host, called
+    /// `a`, opened a pull request from its session `name` by `wt submit
+    /// --no-wait`: the session's worktree, and the pull request.
+    fn opened_here_held_by_b(
+        &self,
+        name: &str,
+    ) -> (PathBuf, sluice::profiles::github::forge::Pull) {
+        self.named("a", "");
+        self.other("b", "", "").run("1");
+        let file = format!("{name}.txt");
+        let w = self.session(name, &[(file.as_str(), "x\n")]);
+        let out = self.wt_submit(&w, &["--no-wait"]);
+        assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+        (w, self.pull_from(&format!("unit/{name}")))
+    }
+}
+
+/// sluice's check on a pull request's head as host B posts it while B
+/// holds the request as `submission`, next on main.
+fn held_on_b(submission: u64) -> Posting {
+    let block = serde_json::json!({
+        "host": "b", "taken_in": true, "submission": submission, "state": "queued",
+        "ahead": [], "waits_for": [],
+    });
+    Posting {
+        status: Status::Queued,
+        title: "queued: next on main".into(),
+        summary: format!(
+            "Submission {submission} on b.\n\n\
+             In main's queue; it lands once its combination passes.\n\n\
+             <!-- sluice:queue {block} -->"
+        ),
+        text: None,
+    }
+}
+
+impl OnGitHub {
+    /// sluice's check on `head`, pull request `n`'s, as host B posts it
+    /// while B holds the request as `submission`; host A's next follow of
+    /// it reads it.
+    fn held_there(&self, n: u64, head: &str, submission: u64) {
+        let p = held_on_b(submission);
+        self.posted_elsewhere(n, head, p.status, &p.title, &p.summary);
+    }
+}
+
+/// The last document a `--json` command printed.
+fn last_document(out: &Output) -> Value {
+    let said = String::from_utf8_lossy(&out.stdout);
+    let last = said.lines().rfind(|l| !l.trim().is_empty()).unwrap_or("");
+    serde_json::from_str(last).unwrap_or_else(|e| panic!("{e}: {}", text(out)))
+}
+
+/// submission-wait, "Out of time, queued on the other host": host B's
+/// `sluice run` holds main's mark and holds host A's pull request as
+/// submission 1406, and A's `sluice wait main --timeout 2s --json` in its
+/// worktree exits 5, naming the request, the mark's host and holder, and
+/// the queue B's check carries.
+#[test]
+fn out_of_time_queued_on_the_other_host() {
+    let g = OnGitHub::new("wait-there-timeout", "");
+    let (w, pull) = g.opened_here_held_by_b("timeout");
+    g.held_there(pull.number, &pull.head, 1406);
+    let out = g.skipping(&w, &["wait", "main", "--timeout", "2s", "--json"]);
+    assert_eq!(out.status.code(), Some(sluice::WAITING), "{}", text(&out));
+    let doc = last_document(&out);
+    assert_eq!(doc["pull_request"], pull.number, "{doc}");
+    assert_eq!(
+        doc["taken_in_by"],
+        serde_json::json!({ "host": "b", "holder": "driver" }),
+        "{doc}"
+    );
+    assert_eq!(doc["queue"]["submission"], 1406, "{doc}");
+    assert_eq!(doc["queue"]["host"], "b", "{doc}");
+    assert!(g.of(pull.number).is_empty(), "A took nothing in");
+}
+
+/// submission-wait, "The status a submit reads": the same, and `sluice
+/// submit main --status --json` in that worktree gives the request's head,
+/// its draft mark, the mark's host and the check's queue beside the
+/// request, its branch and its state.
+#[test]
+fn the_status_a_submit_reads_across_hosts() {
+    let g = OnGitHub::new("wait-there-status", "");
+    let (w, pull) = g.opened_here_held_by_b("status");
+    g.held_there(pull.number, &pull.head, 1406);
+    let out = g.skipping(&w, &["submit", "main", "--status", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let doc = last_document(&out);
+    assert_eq!(
+        (&doc["pull_request"], &doc["branch"], &doc["state"]),
+        (
+            &pull.number.into(),
+            &"main".into(),
+            &"queued: next on main".into()
+        ),
+        "{doc}"
+    );
+    assert_eq!(
+        (&doc["head"], &doc["draft"]),
+        (&pull.head.as_str().into(), &false.into()),
+        "{doc}"
+    );
+    assert_eq!(
+        doc["taken_in_by"],
+        serde_json::json!({ "host": "b", "holder": "driver" }),
+        "{doc}"
+    );
+    assert_eq!(
+        doc["queue"],
+        serde_json::json!({
+            "host": "b", "taken_in": true, "submission": 1406, "state": "queued",
+            "ahead": [], "waits_for": [],
+        }),
+        "{doc}"
+    );
+}
+
+/// submission-wait, "Its words": `sluice wait main` on host A follows its
+/// pull request while host B holds it as submission 1406, with `discovery`
+/// at ten seconds, so each pass reads it again. It says once that the
+/// request is submission 1406 on `b`, taken in by `b`'s `sluice run`, and
+/// not again over the reads that find the same; once B holds it as 1407,
+/// it says so, once. The check's own first line, which says the same, is
+/// not said beside it.
+#[test]
+fn a_waits_words_across_hosts() {
+    let g = OnGitHub::new("wait-there-words", "");
+    g.discovery("10s");
+    let (w, pull) = g.opened_here_held_by_b("words");
+    let n = pull.number;
+    g.held_there(n, &pull.head, 1406);
+    let said = Scratch::new("wait-there-words-said");
+    let path = said.path().join("out");
+    let mut wait = g
+        .command(env!("CARGO_BIN_EXE_sluice"), &w)
+        .args(["wait", "main", "--timeout", "1m"])
+        .stdout(std::fs::File::create(&path).unwrap())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let shown = || std::fs::read_to_string(&path).unwrap_or_default();
+    let until = Instant::now() + Duration::from_secs(60);
+    let mut said_once = |line: &str| {
+        while !shown().contains(line) {
+            if Instant::now() >= until || wait.try_wait().unwrap().is_some() {
+                let _ = wait.kill();
+                panic!("never said {line:?}: {}", shown());
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    };
+    let first = format!("#{n} is submission 1406 on b, taken in by b's sluice run");
+    said_once(&first);
+    // Two passes more, each reading the request and its check again.
+    std::thread::sleep(Duration::from_secs(7));
+    let run = g.gh.forge.posted(&github::repo(), &pull.head).unwrap();
+    let run = run.map(|r| r.id);
+    g.gh.forge
+        .post_named(&github::repo(), &pull.head, "sluice", run, &held_on_b(1407))
+        .unwrap();
+    let next = format!("#{n} is submission 1407 on b, taken in by b's sluice run");
+    said_once(&next);
+    let _ = wait.kill();
+    let _ = wait.wait();
+    let shown = shown();
+    assert_eq!(shown.matches(&first).count(), 1, "{shown}");
+    assert_eq!(shown.matches(&next).count(), 1, "{shown}");
+    assert!(!shown.contains("Submission 1406 on b."), "{shown}");
+    assert!(shown.contains("queued: next on main"), "{shown}");
+}
+
+/// submission-wait, "Not yet taken in": a wait on host B holds main's
+/// mark, and B's check on the head of host A's pull request says it needs
+/// one review; A's `sluice wait main --timeout 2s --json` exits 5, its
+/// queue not taken in and waiting for the review, and its mark held by a
+/// wait on B. Without `--json`, it says once that the request waits to be
+/// taken in by a wait on B.
+#[test]
+fn not_yet_taken_in_across_hosts() {
+    let g = OnGitHub::new("wait-there-untaken", "reviews = 1");
+    g.named("a", "");
+    g.push_mark("b", "wait");
+    let w = g.session("untaken", &[("u.txt", "u\n")]);
+    let out = g.wt_submit(&w, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let pull = g.pull_from("unit/untaken");
+    let block = serde_json::json!({
+        "host": "b", "taken_in": false, "submission": null, "state": null,
+        "ahead": [], "waits_for": ["1 review"],
+    });
+    g.posted_elsewhere(
+        pull.number,
+        &pull.head,
+        Status::Queued,
+        "waiting: needs 1 review",
+        &format!(
+            "Waiting to be taken in on b.\n\n\
+             Needs 1 review on this commit before sluice takes it.\n\n\
+             <!-- sluice:queue {block} -->"
+        ),
+    );
+    let out = g.skipping(&w, &["wait", "main", "--timeout", "2s", "--json"]);
+    assert_eq!(out.status.code(), Some(sluice::WAITING), "{}", text(&out));
+    let doc = last_document(&out);
+    assert_eq!(doc["pull_request"], pull.number, "{doc}");
+    assert_eq!(doc["queue"]["taken_in"], false, "{doc}");
+    assert_eq!(
+        doc["queue"]["waits_for"],
+        serde_json::json!(["1 review"]),
+        "{doc}"
+    );
+    assert_eq!(
+        doc["taken_in_by"],
+        serde_json::json!({ "host": "b", "holder": "wait" }),
+        "{doc}"
+    );
+    let out = g.skipping(&w, &["wait", "main", "--timeout", "2s"]);
+    assert_eq!(out.status.code(), Some(sluice::WAITING), "{}", text(&out));
+    let line = format!("#{} waits to be taken in by a wait on b", pull.number);
+    assert_eq!(text(&out).matches(&line).count(), 1, "{}", text(&out));
+}
+
 /// request-intake-host, "A wait lets go", stopped by Ctrl-C: a wait on
 /// host B, where no `sluice run` lives, holds main's mark, and once Ctrl-C
 /// stops it the mark is gone from the remote.
