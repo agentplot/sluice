@@ -28,7 +28,7 @@ id.
 
 ## 4. The reader's tick
 
-- [ ] 4.1 `a_refusal_ends_at_the_tick_after_the_hosts_revision_moved` in `crates/sluice/tests/reader_tick.rs`. The watch is the reader, `origin/main` is fetched by hand to a clean revision, and the watch's next line shows `main` with no `unread`. It counts git's starts to show the policy at the new revision is read once and no round ran (129; rule core.31). True when `sluice exec main -- cargo test -p sluice --test reader_tick -- a_refusal_ends_at_the_tick` passes, failing with 2.1 undone, and the suite's idle-tick cases pass unchanged.
+- [x] 4.1 `a_refusal_ends_at_the_tick_after_the_hosts_revision_moved` in `crates/sluice/tests/reader_tick.rs`. The watch is the reader, `origin/main` is fetched by hand to a clean revision, and the watch's next line shows `main` with no `unread`. It counts git's starts to show the policy at the new revision is read once and no round ran (129; rule core.31). True when `sluice exec main -- cargo test -p sluice --test reader_tick -- a_refusal_ends_at_the_tick` passes, failing with 2.1 undone, and the suite's idle-tick cases pass unchanged.
 
 ## 5. The overview's order
 
