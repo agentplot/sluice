@@ -54,6 +54,17 @@ pub struct MoveRecord {
 
 type Predicate = Rc<dyn Fn(&Tree) -> bool>;
 
+/// 149: what a run made of one task, as a check or as a task a check
+/// depends on.
+#[derive(Clone)]
+enum Seen {
+    Ran(TaskResult),
+    /// It could not run, with why (114).
+    NotRun(String),
+    /// A task it depends on did not pass, so the runner skipped it.
+    Skipped,
+}
+
 #[derive(Clone)]
 struct TaskDef {
     name: String,
@@ -184,6 +195,8 @@ struct Inner {
     took: BTreeMap<String, (u64, u32)>,
     /// Checks a run leaves not run, with why (could-not-run-1 114).
     cannot_run: BTreeMap<String, String>,
+    /// 149: the tasks each task depends on, which a run runs first.
+    depends: BTreeMap<String, Vec<String>>,
     /// What each host lacks of what a run asks of it, by host, as the
     /// check seam's look at the host says it (84; record 0074).
     unmet: BTreeMap<String, String>,
@@ -1269,12 +1282,15 @@ impl World {
             failed_by: Vec::new(),
             timed_out: false,
         };
+        let names: Vec<String> = wanted.iter().map(|t| t.name.clone()).collect();
+        let mut seen = BTreeMap::new();
         for t in wanted {
             if let Some(old) = &since {
+                let prefixes = Self::read_prefixes(inner, &t);
                 let changed = tree
                     .keys()
                     .chain(old.keys())
-                    .filter(|p| p.starts_with(&t.prefix))
+                    .filter(|p| prefixes.iter().any(|x| p.starts_with(x)))
                     .any(|p| tree.get(p) != old.get(p));
                 if !changed {
                     continue;
@@ -1301,52 +1317,47 @@ impl World {
                 report.timed_out = true;
                 break;
             }
-            let hash = Self::task_hash(&t, &tree);
-            let key = (t.name.clone(), hash.clone());
-            let scripted = inner.flaky.get_mut(&t.name).and_then(|q| q.pop_front());
-            if scripted.is_none() && request.replay {
-                if let Some(at) = inner.cache.get(&key) {
-                    report.tasks.push(TaskResult {
-                        took_ms: None,
-                        attempts: None,
-                        task: t.name.clone(),
-                        hash,
-                        outcome: Outcome::Pass,
-                        source: Source::Replayed {
-                            from_run_at: Some(at.clone()),
-                        },
-                    });
-                    continue;
+            // 149: what it depends on runs first, and a failure among
+            // them skips it: failed by those that ran and failed, or else
+            // not run where one could not run.
+            let mut by = Vec::new();
+            let mut could = None;
+            for d in Self::depends_closure(inner, &t.name) {
+                match Self::observe(inner, request, &tree, &d, &mut seen) {
+                    Seen::Ran(r) if r.outcome == Outcome::Fail => by.push(r),
+                    Seen::NotRun(why) if could.is_none() => could = Some((d, why)),
+                    _ => {}
                 }
             }
-            let outcome = match scripted {
-                Some(o) => o,
-                None if inner
-                    .fail_rules
-                    .iter()
-                    .any(|(n, f)| *n == t.name && f(&tree)) =>
-                {
-                    Outcome::Fail
+            if !by.is_empty() {
+                report.failed_by.push(sluice_seams::FailedBy {
+                    task: t.name.clone(),
+                    by: by.iter().map(|r| r.task.clone()).collect(),
+                });
+                for r in by {
+                    if !names.contains(&r.task)
+                        && !report.dependencies.iter().any(|x| x.task == r.task)
+                    {
+                        report.dependencies.push(r);
+                    }
                 }
-                None => Outcome::Pass,
-            };
-            if outcome == Outcome::Pass {
-                // Like a content-keyed cache: only a pass is kept.
-                let at = inner.now.to_rfc3339();
-                inner.cache.insert(key, at);
+                continue;
             }
-            inner.observed.push((t.name.clone(), hash.clone(), outcome));
-            let took = inner.took.get(&t.name).copied();
-            report.tasks.push(TaskResult {
-                took_ms: took.map(|t| t.0),
-                attempts: took.map(|t| t.1),
-                task: t.name.clone(),
-                hash,
-                outcome,
-                source: Source::Ran {
-                    host: inner.host.clone(),
-                },
-            });
+            if let Some((d, why)) = could {
+                report.not_run.push(NotRun {
+                    task: t.name.clone(),
+                    reason: format!("its dependency {d} could not run: {why}"),
+                });
+                continue;
+            }
+            match Self::observe(inner, request, &tree, &t.name, &mut seen) {
+                Seen::Ran(r) => report.tasks.push(r),
+                Seen::NotRun(reason) => report.not_run.push(NotRun {
+                    task: t.name.clone(),
+                    reason,
+                }),
+                Seen::Skipped => report.missing.push(t.name.clone()),
+            }
         }
         let total: u64 = report.tasks.iter().filter_map(|t| t.took_ms).sum();
         if total > 0 {
@@ -1357,6 +1368,126 @@ impl World {
             });
         }
         report
+    }
+
+    /// 149: every task `task` depends on, at any depth, each once,
+    /// sorted.
+    fn depends_closure(inner: &Inner, task: &str) -> Vec<String> {
+        let mut out = BTreeSet::new();
+        let mut next = vec![task.to_string()];
+        while let Some(t) = next.pop() {
+            for d in inner.depends.get(&t).into_iter().flatten() {
+                if d != task && out.insert(d.clone()) {
+                    next.push(d.clone());
+                }
+            }
+        }
+        out.into_iter().collect()
+    }
+
+    /// 149: the paths a check reads: its own and those of every task it
+    /// depends on.
+    fn read_prefixes(inner: &Inner, t: &TaskDef) -> Vec<String> {
+        let deps = Self::depends_closure(inner, &t.name);
+        std::iter::once(t.prefix.clone())
+            .chain(
+                inner
+                    .tasks
+                    .iter()
+                    .filter(|d| deps.contains(&d.name))
+                    .map(|d| d.prefix.clone()),
+            )
+            .collect()
+    }
+
+    /// 149: what a run makes of the task `name`, once a run however many
+    /// checks depend on it: skipped where a task it depends on did not
+    /// pass, not run where it cannot run, and otherwise run, or replayed
+    /// where the run may and a pass of its key is kept.
+    fn observe(
+        inner: &mut Inner,
+        request: &RunRequest,
+        tree: &Tree,
+        name: &str,
+        seen: &mut BTreeMap<String, Seen>,
+    ) -> Seen {
+        if let Some(s) = seen.get(name) {
+            return s.clone();
+        }
+        // A cycle ends here, as the runner refuses one.
+        seen.insert(name.into(), Seen::Skipped);
+        let deps = inner.depends.get(name).cloned().unwrap_or_default();
+        let mut passed = true;
+        for d in &deps {
+            let s = Self::observe(inner, request, tree, d, seen);
+            passed &= matches!(s, Seen::Ran(ref r) if r.outcome == Outcome::Pass);
+        }
+        let s = if !passed {
+            Seen::Skipped
+        } else if let Some(why) = inner.cannot_run.get(name) {
+            Seen::NotRun(why.clone())
+        } else {
+            Seen::Ran(Self::run_task(inner, request, tree, name))
+        };
+        seen.insert(name.into(), s.clone());
+        s
+    }
+
+    /// The task `name` run on `tree`: replayed where the run may and a pass
+    /// of its key is kept, else its `flaky` script's next outcome, else a
+    /// fail where a rule names it, else a pass.
+    fn run_task(inner: &mut Inner, request: &RunRequest, tree: &Tree, name: &str) -> TaskResult {
+        let t = inner
+            .tasks
+            .iter()
+            .find(|t| t.name == name)
+            .unwrap_or_else(|| panic!("{name} is no task the world defines"))
+            .clone();
+        let hash = Self::task_hash(&t, tree);
+        let key = (t.name.clone(), hash.clone());
+        let scripted = inner.flaky.get_mut(&t.name).and_then(|q| q.pop_front());
+        if scripted.is_none() && request.replay {
+            if let Some(at) = inner.cache.get(&key) {
+                return TaskResult {
+                    took_ms: None,
+                    attempts: None,
+                    task: t.name.clone(),
+                    hash,
+                    outcome: Outcome::Pass,
+                    source: Source::Replayed {
+                        from_run_at: Some(at.clone()),
+                    },
+                };
+            }
+        }
+        let outcome = match scripted {
+            Some(o) => o,
+            None if inner
+                .fail_rules
+                .iter()
+                .any(|(n, f)| *n == t.name && f(tree)) =>
+            {
+                Outcome::Fail
+            }
+            None => Outcome::Pass,
+        };
+        if outcome == Outcome::Pass {
+            // Like a content-keyed cache: only a pass is kept.
+            let at = inner.now.to_rfc3339();
+            inner.cache.insert(key, at);
+        }
+        inner.observed.push((t.name.clone(), hash.clone(), outcome));
+        let took = inner.took.get(&t.name).copied();
+        TaskResult {
+            took_ms: took.map(|t| t.0),
+            attempts: took.map(|t| t.1),
+            task: t.name.clone(),
+            hash,
+            outcome,
+            source: Source::Ran {
+                host: inner.host.clone(),
+            },
+        }
     }
 
     // -- the place ---------------------------------------------------------
@@ -1906,6 +2037,22 @@ impl Branch for FakeBranch {
 }
 
 impl FakeTests {
+    /// 149: `task` depends on `dependency`, a task the world defines
+    /// (`World::task`), which a run runs first, as moon does: under its own
+    /// key, fail rules, `flaky` script and `cannot_run`. Where it ran and
+    /// failed, the run skips `task`, which is failed by it, and reports the
+    /// dependency's result in `dependencies` unless it is itself a check
+    /// of the run; where it could not run, `task` is not run, saying so in
+    /// the dependency's words. Its log is its own, as any task's is. A
+    /// check reads the paths of the tasks it depends on as its own.
+    pub fn depends_on(&self, task: &str, dependency: &str) {
+        let mut inner = self.0 .0.borrow_mut();
+        let deps = inner.depends.entry(task.into()).or_default();
+        if !deps.iter().any(|d| d == dependency) {
+            deps.push(dependency.into());
+        }
+    }
+
     /// 147: every equip the check seam was asked, in order.
     pub fn equips(&self) -> Vec<Equip> {
         self.0 .0.borrow().equips.clone()
@@ -2106,6 +2253,7 @@ impl Tests for FakeTests {
         Ok(report
             .tasks
             .iter()
+            .chain(&report.dependencies)
             .filter(|t| !inner.forged.contains(&t.task))
             .map(|t| t.task.clone())
             .collect())
@@ -2209,15 +2357,19 @@ impl Tests for FakeTests {
                     .filter(|t| {
                         // A project's `reads` file, one prefix a line, names
                         // more paths its check reads in that tree, as a
-                        // submission that widens a check's inputs does.
+                        // submission that widens a check's inputs does; and
+                        // a check reads what the tasks it depends on read
+                        // (149).
                         let more = new
                             .get(&format!("{}reads", t.prefix))
                             .map(|r| r.lines().map(String::from).collect::<Vec<_>>())
                             .unwrap_or_default();
+                        let prefixes = World::read_prefixes(&inner, t);
                         new.keys()
                             .chain(old.keys())
                             .filter(|p| {
-                                p.starts_with(&t.prefix) || more.iter().any(|m| p.starts_with(m))
+                                prefixes.iter().any(|x| p.starts_with(x))
+                                    || more.iter().any(|m| p.starts_with(m))
                             })
                             .any(|p| new.get(p) != old.get(p))
                     })
@@ -3127,6 +3279,127 @@ mod tests {
         f.world.kill_session("/w/a");
         assert_eq!(sessions(), 1);
         assert_eq!(f.tests.running().unwrap().queue, 0);
+    }
+
+    /// 149: a task a check depends on runs first, under its own key; where
+    /// it fails, the check is failed by it, its result reported unless it
+    /// is itself a check of the run, and its log is its own; where it
+    /// cannot run, the check is not run in its words; a check two steps up
+    /// is failed by the task that ran.
+    #[test]
+    fn a_check_is_failed_by_the_task_it_depends_on() {
+        let f = Fakes::new();
+        let rev = f
+            .world
+            .init("main", &[("a/lib", "1"), ("b/lib", "1"), ("r/lib", "1")]);
+        f.world.task("api:integration", "a/");
+        f.world.task("api:build", "b/");
+        f.world.task("root:integration", "r/");
+        f.world.task("root:all", "r/");
+        f.tests.depends_on("root:integration", "api:integration");
+        f.tests.depends_on("root:all", "api:build");
+        f.tests.depends_on("api:build", "api:integration");
+        f.world.fails_with("api:integration", "a/lib", "1");
+        let n = std::cell::Cell::new(0);
+        let run = |required: &[&str]| -> (RunHandle, RunReport) {
+            n.set(n.get() + 1);
+            let request = RunRequest {
+                place: f
+                    .checkout
+                    .materialize(
+                        &format!("sluice/try/main/{}", n.get()),
+                        &rev,
+                        &Settings::new(),
+                    )
+                    .unwrap(),
+                revision: rev.clone(),
+                required: required.iter().map(|r| r.to_string()).collect(),
+                since: None,
+                limit: None,
+                limits: Default::default(),
+                tests: Settings::new(),
+                command: None,
+                replay: true,
+                system: None,
+            };
+            let h = f.tests.start(&request).unwrap();
+            match f.tests.progress(&h).unwrap() {
+                Progress::Finished(r) => (h, r),
+                other => panic!("{other:?}"),
+            }
+        };
+        let (h, r) = run(&["root:integration", "root:all"]);
+        assert!(r.tasks.is_empty() && r.missing.is_empty() && r.not_run.is_empty());
+        let by = |task: &str| sluice_seams::FailedBy {
+            task: task.into(),
+            by: vec!["api:integration".into()],
+        };
+        assert_eq!(r.failed_by, [by("root:integration"), by("root:all")]);
+        assert_eq!(r.dependencies.len(), 1, "once, however many it failed");
+        let dep = &r.dependencies[0];
+        assert_eq!(
+            (dep.task.as_str(), dep.outcome),
+            ("api:integration", Outcome::Fail)
+        );
+        assert!(matches!(dep.source, Source::Ran { .. }));
+        assert_eq!(
+            f.world
+                .observed()
+                .iter()
+                .filter(|(t, _, _)| t == "api:integration")
+                .count(),
+            1,
+            "run once"
+        );
+        let logs = f.tests.logs(&h, &["api:integration".into()]).unwrap();
+        assert!(logs[0].text.starts_with("api:integration failed"));
+        assert_eq!(f.tests.proven(&h, &r).unwrap(), ["api:integration"]);
+
+        // A dependency that is itself a check is reported as one.
+        let (_, r) = run(&["api:integration", "root:integration"]);
+        assert_eq!(r.tasks.len(), 1);
+        assert_eq!(r.tasks[0].task, "api:integration");
+        assert!(r.dependencies.is_empty());
+        assert_eq!(r.failed_by, [by("root:integration")]);
+
+        // One that cannot run leaves the check not run, in its words.
+        f.world.cannot_run("api:integration", Some("exited 77"));
+        let (_, r) = run(&["root:integration"]);
+        assert!(r.failed_by.is_empty() && r.dependencies.is_empty());
+        assert_eq!(
+            r.not_run,
+            [NotRun {
+                task: "root:integration".into(),
+                reason: "its dependency api:integration could not run: exited 77".into(),
+            }]
+        );
+
+        // One that passes, on a tree its rule does not name, lets the
+        // check run.
+        f.world.cannot_run("api:integration", None);
+        let rev2 = f.world.work(&rev, &[("a/lib", Some("2"))]);
+        let request = RunRequest {
+            place: f
+                .checkout
+                .materialize("sluice/try/main/9", &rev2, &Settings::new())
+                .unwrap(),
+            revision: rev2,
+            required: vec!["root:integration".into()],
+            since: None,
+            limit: None,
+            limits: Default::default(),
+            tests: Settings::new(),
+            command: None,
+            replay: true,
+            system: None,
+        };
+        let h = f.tests.start(&request).unwrap();
+        let Progress::Finished(r) = f.tests.progress(&h).unwrap() else {
+            panic!("finished")
+        };
+        assert!(r.failed_by.is_empty() && r.dependencies.is_empty());
+        assert_eq!(r.tasks[0].task, "root:integration");
+        assert_eq!(r.tasks[0].outcome, Outcome::Pass);
     }
 
     /// 71: the host's count holds other repositories' runs beside its own,

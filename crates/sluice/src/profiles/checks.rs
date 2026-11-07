@@ -1794,8 +1794,9 @@ impl Tests for Checks {
     fn proven(&self, run: &RunHandle, report: &RunReport) -> Result<Vec<String>> {
         let meta: Meta = serde_json::from_value(self.runs.request(&run.0)?.meta)
             .with_context(|| format!("reading run {}", run.0))?;
+        let tasks = report.tasks.iter().chain(&report.dependencies);
         if meta.runner != "moon" {
-            return Ok(report.tasks.iter().map(|t| t.task.clone()).collect());
+            return Ok(tasks.map(|t| t.task.clone()).collect());
         }
         let store = meta
             .store
@@ -1804,7 +1805,7 @@ impl Tests for Checks {
         let blob = |k: &str| super::moon::blob_in(&store, k);
         let tree = |p: &str| super::moon::file_at(&meta.place, &meta.revision, p);
         let mut out = Vec::new();
-        for t in &report.tasks {
+        for t in tasks {
             match super::moon::check_key(&t.hash, &t.task, &blob, &tree) {
                 Ok(()) => out.push(t.task.clone()),
                 Err(e) => tracing::warn!(

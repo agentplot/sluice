@@ -1,6 +1,6 @@
 //! Reading a gate over a run's recorded results (15, 16, 19, 66, 69).
 
-use sluice_seams::{Enforced, Outcome, RunReport, Source};
+use sluice_seams::{Enforced, NotRun, Outcome, RunReport, Source};
 
 use crate::policy::{Flaky, Rules};
 use crate::records::{FailedTask, FlakyKey, Recorded, ResultKind, ResultLine};
@@ -19,6 +19,11 @@ pub struct Verdict {
     /// the run ran with no result the gate counts for their key, the run's
     /// own signed result among none: missing, never failed.
     pub missing: Vec<String>,
+    /// 149, 114: the required checks the runner skipped for tasks they
+    /// depend on that ran and failed, every one of which reads passed
+    /// under its key: never run, judged by nothing, and read as a check
+    /// that could not run, with why.
+    pub unjudged: Vec<NotRun>,
 }
 
 /// The gate read over one finished run. `results` is the repository's
@@ -41,7 +46,21 @@ pub struct Verdict {
 /// branch whose records are on its remote, a check this run ran whose own
 /// result does not count there, signed with a key the branch's policy
 /// does not list, is missing until a result the gate counts settles it
-/// (87, S18), and no pass.
+/// (87, S18), and no pass. There, `proven` names the tasks whose keys the
+/// candidate's tree bears out, the only ones signed (C.6): one it leaves
+/// out was signed by no one, so it is failed under its key, no pass
+/// (15), never missing.
+///
+/// A task a required check depends on that ran and failed, which the
+/// runner skipped the check for, is read under its own key exactly as a
+/// check is, and counted among those run (149, 16); the skipped check,
+/// which no run gave a key, is never read under one (38). The check is
+/// failed by those of its tasks that read failed, named with them and
+/// with no key of its own. Where none reads failed and one is missing, so
+/// is the check's outcome, until the run is counted (87). Where every one
+/// reads passed, as `flaky = "pass"` reads a key with a pass and a fail,
+/// nothing judged the check: it is unjudged, read as a check that could
+/// not run (114, 115).
 ///
 /// Only results on the run's `system` are read, a pass on one system
 /// never standing for another (85, 69); a line that names no system is
@@ -52,6 +71,7 @@ pub fn read(
     rules: &Rules,
     system: Option<&str>,
     unnamed: Option<&str>,
+    proven: Option<&[String]>,
 ) -> Verdict {
     let flaky = rules.flaky;
     let trusted = |e: &Enforced| rules.trusts_run(&e.kind, e.confined);
@@ -67,11 +87,22 @@ pub fn read(
         (false, Some(e)) => trusted(e) && same_limits(e, &report.executor),
         (_, None) => false,
     };
+    let failed_task = |task: &str, hash: &str, flaky: Option<FlakyKey>| FailedTask {
+        task: task.to_string(),
+        hash: hash.to_string(),
+        log: None,
+        flaky,
+        system: system.map(str::to_string),
+        not_run: None,
+        failed_by: Vec::new(),
+    };
     let mut failed = Vec::new();
     let mut unproven = Vec::new();
     let mut missing = Vec::new();
+    let mut passed = Vec::new();
     let (mut ran, mut replayed) = (0, 0);
-    for t in &report.tasks {
+    // 149: a task a check was failed by is read as the check would be.
+    for t in report.tasks.iter().chain(&report.dependencies) {
         let recorded: Vec<&ResultLine> = results
             .iter()
             .filter(|r| r.task == t.task && r.hash == t.hash && r.kind == ResultKind::Ran)
@@ -82,7 +113,11 @@ pub fn read(
             Source::Ran { .. } => {
                 ran += 1;
                 if rules.signed && recorded.is_empty() {
-                    missing.push(t.task.clone());
+                    if proven.is_some_and(|p| !p.contains(&t.task)) {
+                        failed.push(failed_task(&t.task, &t.hash, None));
+                    } else {
+                        missing.push(t.task.clone());
+                    }
                     continue;
                 }
                 !rules.signed && trusted(&report.executor)
@@ -113,7 +148,9 @@ pub fn read(
             (true, false) => true,
             _ => false,
         };
-        if !passes {
+        if passes {
+            passed.push(t.task.as_str());
+        } else {
             // 19: read as failed for holding both outcomes, so the
             // submitter is shown the result that contradicts this run's,
             // with the host that ran it. This run's own time and host are
@@ -135,35 +172,63 @@ pub fn read(
                         log: None,
                     },
                 });
+            failed.push(failed_task(&t.task, &t.hash, flaky));
+        }
+    }
+    // 149: a check its runner skipped for tasks it depends on that ran and
+    // failed is failed by those that read failed.
+    let read_failed: Vec<String> = failed.iter().map(|f| f.task.clone()).collect();
+    let mut unjudged = Vec::new();
+    for skipped in &report.failed_by {
+        let by: Vec<String> = skipped
+            .by
+            .iter()
+            .filter(|b| read_failed.contains(b))
+            .cloned()
+            .collect();
+        if !by.is_empty() {
             failed.push(FailedTask {
-                task: t.task.clone(),
-                hash: t.hash.clone(),
-                log: None,
-                flaky,
-                system: system.map(str::to_string),
-                not_run: None,
+                failed_by: by,
+                ..failed_task(&skipped.task, "", None)
             });
+        } else if skipped.by.iter().any(|b| missing.contains(b)) {
+            // 87, S18: the run is open again for a host whose results
+            // count, and the check is run again with it.
+        } else if let Some(first) = skipped
+            .by
+            .first()
+            .filter(|_| skipped.by.iter().all(|b| passed.contains(&b.as_str())))
+        {
+            unjudged.push(NotRun {
+                task: skipped.task.clone(),
+                reason: format!(
+                    "its dependency {first} failed, and its key reads passed, \
+                     as flaky = \"pass\" reads a key with a pass and a fail"
+                ),
+            });
+        } else {
+            // 15: a task the check was failed by that the run gave no
+            // result of leaves the check without one.
+            failed.push(failed_task(&skipped.task, "", None));
         }
     }
     // 15: a required check the run left without a result is no pass.
     for task in &report.missing {
-        failed.push(FailedTask {
-            task: task.clone(),
-            hash: String::new(),
-            log: None,
-            flaky: None,
-            system: system.map(str::to_string),
-            not_run: None,
-        });
+        failed.push(failed_task(task, "", None));
     }
     Verdict {
-        passed: failed.is_empty() && unproven.is_empty() && missing.is_empty() && !report.timed_out,
+        passed: failed.is_empty()
+            && unproven.is_empty()
+            && missing.is_empty()
+            && unjudged.is_empty()
+            && !report.timed_out,
         timed_out: report.timed_out,
         failed,
         ran,
         replayed,
         unproven,
         missing,
+        unjudged,
     }
 }
 
@@ -183,7 +248,7 @@ mod tests {
 
     /// A run read on no named system.
     fn read(report: &RunReport, results: &[ResultLine], rules: &Rules) -> Verdict {
-        super::read(report, results, rules, None, None)
+        super::read(report, results, rules, None, None, None)
     }
     use sluice_seams::TaskResult;
 
@@ -460,6 +525,7 @@ mod tests {
             &r,
             Some("macos-arm64"),
             None,
+            None,
         );
         assert_eq!(v.unproven, ["a:test"]);
         let v = super::read(
@@ -467,6 +533,7 @@ mod tests {
             &[on(Some("linux-x64"))],
             &r,
             Some("linux-x64"),
+            None,
             None,
         );
         assert!(v.passed);
@@ -477,6 +544,7 @@ mod tests {
             &r,
             Some("linux-x64"),
             Some("linux-x64"),
+            None,
         );
         assert!(v.passed);
         let v = super::read(
@@ -485,6 +553,7 @@ mod tests {
             &r,
             Some("macos-arm64"),
             Some("linux-x64"),
+            None,
         );
         assert!(!v.passed);
         // A failure names its system.
@@ -496,7 +565,7 @@ mod tests {
             }],
             ..fail
         };
-        let v = super::read(&fail, &[], &r, Some("linux-arm64"), None);
+        let v = super::read(&fail, &[], &r, Some("linux-arm64"), None, None);
         assert_eq!(v.failed[0].system.as_deref(), Some("linux-arm64"));
     }
 
@@ -526,5 +595,195 @@ mod tests {
         let v = read(&ran, &[by_box], &r);
         assert!(v.passed);
         assert!(v.missing.is_empty());
+    }
+    /// A run of `root:integration`, skipped for `api:integration`, which
+    /// ran and failed under the key `d`, held to `executor`.
+    fn failed_by(executor: Enforced) -> RunReport {
+        RunReport {
+            tasks: Vec::new(),
+            dependencies: vec![TaskResult {
+                took_ms: None,
+                attempts: None,
+                task: "api:integration".into(),
+                hash: "d".into(),
+                outcome: Outcome::Fail,
+                source: Source::Ran { host: "h".into() },
+            }],
+            failed_by: vec![sluice_seams::FailedBy {
+                task: "root:integration".into(),
+                by: vec!["api:integration".into()],
+            }],
+            ..report(Source::Ran { host: "h".into() }, executor)
+        }
+    }
+
+    /// A result recorded under `task`'s key `hash`, by `executor`.
+    fn at(task: &str, hash: &str, executor: Enforced, outcome: Outcome) -> ResultLine {
+        ResultLine {
+            task: task.into(),
+            hash: hash.into(),
+            ..recorded(ResultKind::Ran, Some(executor), outcome)
+        }
+    }
+
+    /// `rules(trust)` reading a key with a pass and a fail as `flaky` says.
+    fn flaky(trust: &[&str], flaky: Flaky) -> Rules {
+        Rules {
+            flaky,
+            ..rules(trust)
+        }
+    }
+
+    /// 149, 16: a task a check was failed by is read under its own key
+    /// and counted among the run's; the check is failed by it, with no
+    /// key of its own.
+    #[test]
+    fn a_check_is_failed_by_the_task_it_depends_on() {
+        let v = read(&failed_by(enforced("open", false)), &[], &rules(&["open"]));
+        assert!(!v.passed);
+        assert_eq!(v.ran, 1);
+        assert_eq!(v.failed.len(), 2);
+        let (dep, check) = (&v.failed[0], &v.failed[1]);
+        assert_eq!(
+            (dep.task.as_str(), dep.hash.as_str()),
+            ("api:integration", "d")
+        );
+        assert!(dep.failed_by.is_empty() && dep.flaky.is_none());
+        assert_eq!(check.task, "root:integration");
+        assert_eq!(check.hash, "");
+        assert_eq!(check.failed_by, ["api:integration"]);
+        assert!(check.flaky.is_none() && check.log.is_none() && check.not_run.is_none());
+        assert!(v.unjudged.is_empty() && v.missing.is_empty());
+    }
+
+    /// 149, 19: a dependency whose key holds a trusted pass, under
+    /// `flaky = "fail"`, is flaky, naming the pass, and fails the check.
+    #[test]
+    fn a_flaky_dependency_read_as_failed_fails_the_check() {
+        let open = enforced("open", false);
+        let pass = at("api:integration", "d", open.clone(), Outcome::Pass);
+        let v = read(&failed_by(open), &[pass], &flaky(&["open"], Flaky::Fail));
+        assert!(!v.passed);
+        let k = v.failed[0].flaky.clone().expect("read as flaky");
+        assert_eq!((k.here, k.other.outcome), (Outcome::Fail, Outcome::Pass));
+        assert_eq!(v.failed[1].failed_by, ["api:integration"]);
+    }
+
+    /// 149, 114: the same under `flaky = "pass"` reads the dependency
+    /// passed, so nothing judged the check: unjudged, saying why, and
+    /// nothing failed.
+    #[test]
+    fn a_flaky_dependency_read_as_passed_leaves_the_check_unjudged() {
+        let open = enforced("open", false);
+        let pass = at("api:integration", "d", open.clone(), Outcome::Pass);
+        let v = read(&failed_by(open), &[pass], &flaky(&["open"], Flaky::Pass));
+        assert!(!v.passed);
+        assert!(v.failed.is_empty());
+        assert_eq!(
+            v.unjudged,
+            [NotRun {
+                task: "root:integration".into(),
+                reason: "its dependency api:integration failed, and its key reads passed, \
+                         as flaky = \"pass\" reads a key with a pass and a fail"
+                    .into(),
+            }]
+        );
+    }
+
+    /// 149, 19, 83: a dependency's pass under other limits is not
+    /// weighed with its fail, so the check is failed by it.
+    #[test]
+    fn a_dependencys_pass_under_other_limits_is_not_weighed() {
+        let docker = Enforced {
+            docker: true,
+            ..enforced("open", false)
+        };
+        let pass = at(
+            "api:integration",
+            "d",
+            enforced("open", false),
+            Outcome::Pass,
+        );
+        let v = read(&failed_by(docker), &[pass], &flaky(&["open"], Flaky::Pass));
+        assert!(!v.passed && v.unjudged.is_empty());
+        assert!(v.failed[0].flaky.is_none());
+        assert_eq!(v.failed[1].failed_by, ["api:integration"]);
+    }
+
+    /// 149, 87, S18: on a branch whose records are on its remote, a
+    /// dependency whose result no listed key signed is missing, and the
+    /// check is named nowhere until the run is counted; one whose key the
+    /// tree did not bear out is failed under it, and fails the check (C.6).
+    #[test]
+    fn a_dependency_with_no_counted_result_is_missing_and_names_no_check() {
+        let r = Rules {
+            trust: vec!["box".into()],
+            signed: true,
+            claims: [("box".to_string(), (false, None))].into_iter().collect(),
+            ..Rules::default()
+        };
+        let run = failed_by(enforced("open", false));
+        let v = read(&run, &[], &r);
+        assert!(!v.passed);
+        assert_eq!(v.missing, ["api:integration"]);
+        assert!(v.failed.is_empty() && v.unjudged.is_empty());
+
+        let v = super::read(&run, &[], &r, None, None, Some(&[]));
+        assert!(v.missing.is_empty());
+        assert_eq!(
+            (v.failed[0].task.as_str(), v.failed[0].hash.as_str()),
+            ("api:integration", "d")
+        );
+        assert_eq!(v.failed[1].failed_by, ["api:integration"]);
+
+        let mut by_box = at(
+            "api:integration",
+            "d",
+            enforced("open", false),
+            Outcome::Fail,
+        );
+        by_box.signer = Some("box".into());
+        let v = read(&run, &[by_box], &r);
+        assert!(v.missing.is_empty());
+        assert_eq!(v.failed[1].failed_by, ["api:integration"]);
+    }
+
+    /// 149: a check failed by two, one read failed and one read passed,
+    /// is failed by the first alone.
+    #[test]
+    fn a_check_failed_by_two_names_those_read_failed() {
+        let open = enforced("open", false);
+        let mut run = failed_by(open.clone());
+        run.dependencies.push(TaskResult {
+            task: "ui:integration".into(),
+            hash: "u".into(),
+            ..run.dependencies[0].clone()
+        });
+        run.failed_by[0].by.push("ui:integration".into());
+        let pass = at("ui:integration", "u", open, Outcome::Pass);
+        let v = read(&run, &[pass], &flaky(&["open"], Flaky::Pass));
+        assert!(!v.passed);
+        assert_eq!(v.ran, 2);
+        let names: Vec<&str> = v.failed.iter().map(|f| f.task.as_str()).collect();
+        assert_eq!(names, ["api:integration", "root:integration"]);
+        assert_eq!(v.failed[1].failed_by, ["api:integration"]);
+    }
+
+    /// 149, 38: the skipped check's own key is never read: a pass or a
+    /// fail recorded under its name makes it neither flaky nor passed.
+    #[test]
+    fn the_skipped_checks_own_key_is_never_read() {
+        let open = enforced("open", false);
+        let lines = [
+            at("root:integration", "r", open.clone(), Outcome::Pass),
+            at("root:integration", "", open.clone(), Outcome::Pass),
+        ];
+        let v = read(&failed_by(open), &lines, &flaky(&["open"], Flaky::Pass));
+        assert!(!v.passed);
+        let check = &v.failed[1];
+        assert_eq!(check.task, "root:integration");
+        assert_eq!((check.hash.as_str(), check.flaky.as_ref()), ("", None));
+        assert_eq!(check.failed_by, ["api:integration"]);
+        assert_eq!(v.ran, 1);
     }
 }
