@@ -31,7 +31,6 @@ use sluice_seams::{
 use tracing::{info, info_span, warn};
 
 use crate::line::Line;
-use crate::order::{self, Entry};
 use crate::overview::Room;
 use crate::policy::{Rules, POLICY_PATH};
 use crate::records::{
@@ -1895,7 +1894,7 @@ impl Sluice<'_> {
     /// removed, in which case the chain is arranged again (8, 12, 21).
     fn arrange(&self, line: &mut Line, rules: &Rules, now: &str) -> Result<(Vec<String>, bool)> {
         let base = line.doc.base.clone().expect("decide reads the base first");
-        let ord = self.order(line, &base);
+        let ord = line.order(Some(&base), false);
         let mut removed = false;
 
         // Form (10, 12): reuse a candidate formed on this revision with
@@ -1996,30 +1995,6 @@ impl Sluice<'_> {
             break;
         }
         Ok((ids, removed))
-    }
-
-    fn order(&self, line: &Line, base: &Rev) -> order::Order {
-        let eligible: Vec<Entry> = line
-            .subs
-            .values()
-            .filter(|s| !s.state.is_out() && s.state != State::Landing)
-            .map(|s| Entry {
-                id: s.id,
-                priority: s.priority,
-                after: s.after.clone(),
-            })
-            .collect();
-        let ids: BTreeSet<u64> = eligible.iter().map(|e| e.id).collect();
-        let landed: BTreeSet<u64> = line.landed();
-        let pinned: Vec<Vec<u64>> = line
-            .doc
-            .candidates
-            .iter()
-            .filter(|c| c.on == *base && c.state.pins())
-            .filter(|c| c.submissions.iter().all(|i| ids.contains(i)))
-            .map(|c| c.submissions.clone())
-            .collect();
-        order::order(&eligible, &landed, &pinned)
     }
 
     /// 65: every submission ahead the head conflicts with alone, or, when

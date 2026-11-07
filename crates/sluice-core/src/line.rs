@@ -71,6 +71,21 @@ impl Line {
         self.subs.contains_key(&id) || self.finished.contains_key(&id)
     }
 
+    /// 6 to 8: the branch's chain on its revision `base`: what is under
+    /// test or judged on it as its combinations hold it, then the rest by
+    /// priority and order of submission, each after its `after`; what is
+    /// landing kept only where `landing` asks ([`crate::order::chain`]).
+    pub fn order(&self, base: Option<&Rev>, landing: bool) -> crate::order::Order {
+        let pinned: Vec<Vec<u64>> = self
+            .doc
+            .candidates
+            .iter()
+            .filter(|c| Some(&c.on) == base && c.state.pins())
+            .map(|c| c.submissions.clone())
+            .collect();
+        crate::order::chain(self.subs.values(), &self.landed(), &pinned, landing)
+    }
+
     /// Every submission the branch has landed, live or finished: what a
     /// chain's `after` may wait on (7).
     pub fn landed(&self) -> std::collections::BTreeSet<u64> {

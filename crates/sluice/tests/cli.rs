@@ -6384,6 +6384,8 @@ impl sluice::PullRequests for Pull7 {
         Ok(sluice::Followed::Open {
             title: "waiting".into(),
             lines: Vec::new(),
+            taken_in_by: None,
+            queue: None,
             submission: None,
             names: Default::default(),
             head: None,
