@@ -61,13 +61,15 @@ use super::forge::{
     approvals, Check, Forge, Posted, Posting, Pull, Request, Review, Standing, Status, SLUICE_CHECK,
 };
 use super::kept::Observed;
-use super::kept::{Hold, Kept, Reading, Readings};
+use super::kept::{Follow, Hold, Kept, Reading, Readings};
 use super::render;
 use crate::identity::Identity;
 use crate::profiles::local_refs::LocalRefs;
 use crate::profiles::pushed_refs::{Holder, Mark, PushedRefs};
 use crate::retry;
-use crate::{Followed, GroupRefused, Opened, Short, Taker};
+use crate::{
+    Across, AcrossRow, Ahead, Followed, GroupRefused, Opened, Queue, Short, TakenInBy, Taker,
+};
 use sluice_core::verdict_view::{Standing as Stands, VerdictView};
 
 /// The place a pull request's entry is submitted from.
@@ -307,8 +309,10 @@ pub struct Pulls {
     /// How often a branch's open pull requests are asked for while
     /// nothing on the host moves (136).
     discovery: chrono::TimeDelta,
-    /// What GitHub last said of each pull request a wait follows, by
-    /// number, and when (136).
+    /// What GitHub last said of each pull request a wait on the host that
+    /// takes it in follows, by number, and when, with its timeline once
+    /// read (136); one another host takes in is read through the host's
+    /// kept follows instead (137, design D4).
     seen: RefCell<BTreeMap<u64, Seen>>,
     /// 129: the policies intake read, by revision, kept across its passes.
     policies: sluice_core::Policies,
@@ -325,6 +329,19 @@ pub struct Pulls {
     /// The host that takes each branch's pull requests in, by branch, as
     /// this process's last intake found it, where that is another host.
     away: RefCell<BTreeMap<String, String>>,
+    /// 137, design D5: what this process's reader's documents last carried
+    /// of the pull requests into each branch the host follows, by branch,
+    /// read again only once the kept file or the mark moved.
+    kept_across: RefCell<BTreeMap<String, KeptAcross>>,
+}
+
+/// 137, design D5: a branch's followed pull requests as a reader's
+/// document carries them, and the kept file's modified time and the
+/// mark's commit they were read at.
+struct KeptAcross {
+    modified: std::time::SystemTime,
+    mark: Option<Rev>,
+    across: Option<Across>,
 }
 
 /// A pull request as a wait last read it from GitHub, and its timeline
@@ -333,9 +350,6 @@ struct Seen {
     at: DateTime<Utc>,
     pull: Option<Pull>,
     readied: Option<Vec<DateTime<Utc>>>,
-    /// sluice's check on its head, where a wait follows it across hosts
-    /// and read it then.
-    posted: Option<Posted>,
 }
 
 /// A pull request's state: what sluice posts, and what a submit that
@@ -422,6 +436,7 @@ impl Pulls {
             peer,
             holds: RefCell::default(),
             away: RefCell::default(),
+            kept_across: RefCell::default(),
         }
     }
 
@@ -647,22 +662,36 @@ impl Pulls {
     /// round lands it (rule core.48). Submissions from the host's own
     /// worktrees stay. This host's runs of the combinations the withdrawals
     /// made obsolete end in this pass, and their checkouts are released,
-    /// whether or not a round follows (design D5).
-    fn hand_over(&self, s: &Sluice<'_>, branch: &str, host: &str, tip: &Rev) -> Result<()> {
+    /// whether or not a round follows (design D5). The host follows each
+    /// request it withdrew (design D3).
+    fn hand_over(&self, s: &Sluice<'_>, t: &Target, branch: &str, host: &str) -> Result<()> {
         let by = Requester::Intake(handed_over_to(host, branch));
-        let mut withdrew = false;
+        let mut withdrew = Vec::new();
         for sub in s.status(branch)?.submissions {
-            if number(&sub.from.worktree).is_none()
-                || sub.state.is_out()
+            let Some(n) = number(&sub.from.worktree) else {
+                continue;
+            };
+            if sub.state.is_out()
                 || sub.state == State::Landing
-                || s.seams().branch.contains(tip, &sub.head)?
+                || s.seams().branch.contains(&t.tip, &sub.head)?
             {
                 continue;
             }
             // Landing since: it lands, and nothing of it is withdrawn.
-            withdrew |= matches!(s.withdraw(sub.id, &by)?, Ok(Withdrew::Now));
+            if let Ok(Withdrew::Now) = s.withdraw(sub.id, &by)? {
+                withdrew.push((
+                    n,
+                    known(
+                        &sub.head.0,
+                        false,
+                        sub.subject.as_deref().unwrap_or_default(),
+                        sub.from.head.as_deref().unwrap_or_default(),
+                    ),
+                ));
+            }
         }
-        if withdrew {
+        if !withdrew.is_empty() {
+            self.follow_known(&t.repo, branch, withdrew);
             // 123: a release that failed is held in the records, and said.
             let mut said = Vec::new();
             crate::exec::tell_releases(&mut said, false, &s.drop_obsolete(branch)?)?;
@@ -869,6 +898,16 @@ impl Pulls {
         }
         let forge = self.forge(branch)?;
         let Some(_lock) = self.lock(branch)? else {
+            // 137: another process of the host takes this pass; this one
+            // follows the requests as the host the mark the branch's last
+            // fetch brought names takes them, where that is another host,
+            // so its wait reads them as the host's kept follows allow
+            // (design D4).
+            if !held.signed {
+                if let Some(host) = self.taker_elsewhere(&held, branch) {
+                    self.away.borrow_mut().insert(branch.to_string(), host);
+                }
+            }
             return Ok(true);
         };
         self.log_lines
@@ -915,7 +954,7 @@ impl Pulls {
                     .borrow_mut()
                     .insert(branch.to_string(), host.clone());
                 if !t.signed {
-                    self.hand_over(s, branch, &host, &t.tip)?;
+                    self.hand_over(s, &t, branch, &host)?;
                 }
                 self.register(&t.repo, &s.status(branch)?.submissions);
                 return Ok(true);
@@ -1063,7 +1102,7 @@ impl Pulls {
                     p,
                     latest.get(&place(p.number)),
                     bound.get(&p.number),
-                    &status.submissions,
+                    &status,
                     &log,
                     &names,
                     r,
@@ -1109,7 +1148,9 @@ impl Pulls {
     /// requests: when it asked, at the branch's revision and its records'
     /// version as they stand once intake wrote, so its own submissions and
     /// withdrawals are no move; each open request's reading, with its
-    /// entry as it stands now; and nothing of a request no longer open.
+    /// entry as it stands now; and nothing of a request no longer open. A
+    /// request this host's records hold at its head is followed no longer
+    /// (137, design D3).
     fn keep_readings(
         &self,
         s: &Sluice<'_>,
@@ -1123,6 +1164,12 @@ impl Pulls {
         for (n, r) in &mut work {
             r.entry = entry(latest.get(&place(*n)));
         }
+        let here: Vec<u64> = work
+            .iter()
+            .filter(|(n, r)| latest.get(&place(**n)).is_some_and(|e| e.head.0 == r.head))
+            .map(|(n, _)| *n)
+            .collect();
+        self.unfollow(&t.repo, branch, &here);
         let version = s.seams().state.read(branch)?.version;
         self.kept.change_readings(&t.repo, branch, |kept| {
             kept.asked = Some(asked);
@@ -1266,12 +1313,16 @@ impl Pulls {
         p: &Pull,
         latest: Option<&Submission>,
         group: Option<&Bound>,
-        subs: &[Submission],
+        status: &sluice_core::Status,
         log: &[sluice_core::records::LogLine],
         names: &BTreeMap<u64, String>,
         r: &mut Reading,
     ) -> Result<Considered> {
         let here = place(p.number);
+        // D1: its queue on this host, as sluice's check on its head
+        // carries it, from its submission at that head, if any.
+        let at = latest.filter(|e| e.head.0 == p.head);
+        let queue = || queue_at(&self.peer.name, at, status);
         // A submit's pull request whose submission left the queue without
         // landing waits for its submitter's act, a submit or a person's
         // ready mark, at or after the second it left: whatever its head,
@@ -1294,7 +1345,7 @@ impl Pulls {
         // its person's act, a new head or a ready mark, offers it again
         // (120, C.5).
         let mut rests = None;
-        if let Some(e) = latest.filter(|e| e.head.0 == p.head) {
+        if let Some(e) = at {
             match e.state {
                 State::Withdrawn => {
                     if let Some(by) = withdrawn_by_another(e).filter(|_| from.is_none()) {
@@ -1305,7 +1356,9 @@ impl Pulls {
                         }
                     }
                 }
-                State::Landed => return Ok(outcome_shown(branch, &Outcome::of(e)?, names).into()),
+                State::Landed => {
+                    return Ok(outcome_shown(branch, &Outcome::of(e)?, names, queue()).into())
+                }
                 State::Failed | State::Conflict => {
                     // Sent back: one opened by hand is submitted again only
                     // once it is marked ready for review after it was sent
@@ -1324,11 +1377,11 @@ impl Pulls {
                             self.comment_once(forge, &t.repo, p.number, &id, &body, r)?;
                         }
                         if !held {
-                            return Ok(outcome_shown(branch, &outcome, names).into());
+                            return Ok(outcome_shown(branch, &outcome, names, queue()).into());
                         }
                     }
                 }
-                _ => return Ok(queue_shown(branch, e, subs, names).into()),
+                _ => return Ok(queue_shown(branch, e, status, names, queue()).into()),
             }
         }
         // Waiting: what is missing, and where it would land now. One of a
@@ -1348,8 +1401,8 @@ impl Pulls {
         if let Err(e) = self.fetch_head(pushed, p) {
             return Ok(Considered {
                 shown: (p.draft || !missing.is_empty() || group.is_some()).then(|| match group {
-                    Some(g) => waiting_in_group(branch, from, &missing, g, None),
-                    None => waiting(branch, from, &missing, None),
+                    Some(g) => waiting_in_group(branch, from, &missing, g, None, queue()),
+                    None => waiting(branch, from, &missing, None, queue()),
                 }),
                 failed: Some(e),
             });
@@ -1374,14 +1427,48 @@ impl Pulls {
                             head: p.head.clone(),
                         },
                     );
-                    let ahead: Vec<String> = a.ahead.iter().map(|i| name(*i, names)).collect();
-                    queued(branch, &ahead)
+                    // Ahead of it, each with its pull request: one this
+                    // pass took in is in no status read before it, and is
+                    // found among the entries it registered.
+                    let pull_of = |i: u64| {
+                        status
+                            .submissions
+                            .iter()
+                            .find(|x| x.id == i)
+                            .map(|x| number(&x.from.worktree))
+                            .unwrap_or_else(|| self.entries.borrow().get(&i).map(|e| e.number))
+                    };
+                    let ahead: Vec<Ahead> = a
+                        .ahead
+                        .iter()
+                        .map(|i| Ahead {
+                            submission: *i,
+                            pull_request: pull_of(*i),
+                        })
+                        .collect();
+                    let named: Vec<String> = ahead
+                        .iter()
+                        .map(|x| match (names.get(&x.submission), x.pull_request) {
+                            (None, Some(n)) => format!("#{n}"),
+                            _ => name(x.submission, names),
+                        })
+                        .collect();
+                    let queue = Queue {
+                        host: self.peer.name.clone(),
+                        taken_in: true,
+                        submission: Some(a.id),
+                        state: Some(State::Queued.word().to_string()),
+                        ahead,
+                        waits_for: Vec::new(),
+                    };
+                    queued(branch, &named, queue)
                 }
                 Err(refused) => waiting(
                     branch,
                     from,
                     &[format!("refused: {}", refusal_word(&refused))],
                     None,
+                    queue(),
                 ),
             }));
         }
@@ -1389,8 +1476,8 @@ impl Pulls {
         // the request do.
         if let Some(forecast) = r.forecast.clone() {
             return Ok(match group {
-                Some(g) => waiting_in_group(branch, from, &missing, g, Some(forecast)),
-                None => waiting(branch, from, &missing, Some(forecast)),
+                Some(g) => waiting_in_group(branch, from, &missing, g, Some(forecast), queue()),
+                None => waiting(branch, from, &missing, Some(forecast), queue()),
             }
             .into());
         }
@@ -1399,7 +1486,8 @@ impl Pulls {
             .map(|f| f.forecast)
         {
             Ok(Forecast::Clear) => {
-                let ahead: Vec<String> = subs
+                let ahead: Vec<String> = status
+                    .submissions
                     .iter()
                     .filter(|x| !x.state.is_out() && x.from.worktree != here)
                     .map(|x| name(x.id, names))
@@ -1426,8 +1514,8 @@ impl Pulls {
         };
         r.forecast = Some(forecast.clone());
         Ok(match group {
-            Some(g) => waiting_in_group(branch, from, &missing, g, Some(forecast)),
-            None => waiting(branch, from, &missing, Some(forecast)),
+            Some(g) => waiting_in_group(branch, from, &missing, g, Some(forecast), queue()),
+            None => waiting(branch, from, &missing, Some(forecast), queue()),
         }
         .into())
     }
@@ -1945,6 +2033,22 @@ fn standing(
     }
 }
 
+/// 137, design D3: an open pull request at `head` as this host's own act
+/// on it knows it, `draft` or not, titled `title` and opened from `from`,
+/// with nothing yet read of it.
+fn known(head: &str, draft: bool, title: &str, from: &str) -> Follow {
+    Follow {
+        read_at: None,
+        head: head.to_string(),
+        open: true,
+        merged: false,
+        draft,
+        title: title.to_string(),
+        from: from.to_string(),
+        check: None,
+    }
+}
+
 /// A combination's name in a pull request's words: `main + #38 + #41`.
 fn combination(branch: &str, ids: &[u64], names: &BTreeMap<u64, String>) -> String {
     let mut s = branch.to_string();
@@ -2213,38 +2317,163 @@ fn next_submit(branch: &str, from: &str) -> String {
     )
 }
 
-/// What a waiting pull request into `branch` shows: `from` is the branch
-/// a submit's pull request is submitted from.
-fn waiting(
+/// D1: where the block that carries a request's queue opens in sluice's
+/// check's summary, an HTML comment GitHub's Markdown hides.
+const QUEUE_BLOCK: &str = "<!-- sluice:queue ";
+
+/// 6, 7: the submissions ahead of `e` in its branch's queue as `status`
+/// reads it, in the order a round takes them (D1).
+fn ahead_in<'a>(e: &Submission, status: &'a sluice_core::Status) -> Vec<&'a Submission> {
+    status
+        .ahead_of(e.id)
+        .into_iter()
+        .filter_map(|i| status.submissions.iter().find(|x| x.id == i))
+        .collect()
+}
+
+/// D1: a pull request's queue on `host`, as sluice's check on its head
+/// carries it: `at` is the submission of the request at that head that
+/// `host`'s records hold, if any, and `status` the branch's queue there,
+/// which gives those ahead of it, in queue order, while it is in the
+/// queue. It waits for nothing until a waiting check names what.
+fn queue_at(host: &str, at: Option<&Submission>, status: &sluice_core::Status) -> Queue {
+    let ahead = match at {
+        Some(e) if !e.state.is_out() => ahead_in(e, status)
+            .into_iter()
+            .map(|x| Ahead {
+                submission: x.id,
+                pull_request: number(&x.from.worktree),
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    Queue {
+        host: host.to_string(),
+        taken_in: at.is_some(),
+        submission: at.map(|e| e.id),
+        state: at.map(|e| e.state.word().to_string()),
+        ahead,
+        waits_for: Vec::new(),
+    }
+}
+
+/// D1: the queue a check's summary carries in its last block; `None`
+/// where it carries none, as an older sluice posted it, or where that
+/// block does not read.
+pub fn queue_of(summary: &str) -> Option<Queue> {
+    let rest = &summary[summary.rfind(QUEUE_BLOCK)? + QUEUE_BLOCK.len()..];
+    serde_json::from_str(&rest[..rest.find(" -->")?]).ok()
+}
+
+/// What sluice's check on a pull request's head says of it, for a host
+/// that follows it across hosts (137, C.5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Told {
+    /// Not decided, or not taken in.
+    Open,
+    Landed,
+    /// Failed, or a conflict.
+    SentBack {
+        conflict: bool,
+    },
+}
+
+/// Design D6: the fields decide over the words. A check that carries its
+/// block is read from it alone: taken in and `failed` or `conflict` is
+/// sent back, `landed` is landed, and anything else is open, whatever
+/// GitHub kept of a run it completed earlier. A check with no block, as
+/// an older sluice posted it, is read by its words: a failure is sent
+/// back, a conflict where its title says so.
+fn told(posting: Option<&Posting>) -> Told {
+    let Some(posting) = posting else {
+        return Told::Open;
+    };
+    match queue_of(&posting.summary) {
+        Some(q) if q.taken_in => match q.state.as_deref() {
+            Some("landed") => Told::Landed,
+            Some("failed") => Told::SentBack { conflict: false },
+            Some("conflict") => Told::SentBack { conflict: true },
+            _ => Told::Open,
+        },
+        Some(_) => Told::Open,
+        None if posting.status == Status::Failure => Told::SentBack {
+            conflict: posting.title.starts_with("conflict"),
+        },
+        None => Told::Open,
+    }
+}
+
+/// D1: a check's summary as a person reads it, its block left out.
+fn words(summary: &str) -> String {
+    summary
+        .lines()
+        .filter(|l| !l.trim_start().starts_with(QUEUE_BLOCK))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim_end()
+        .to_string()
+}
+
+/// D1: a check's summary: a first line naming the request's submission
+/// on the posting host, or that it waits to be taken in there; `words`;
+/// and the block that carries `queue`, its `>` escaped so that no field
+/// ends the comment.
+fn summed(queue: &Queue, words: &str) -> String {
+    let first = first_line(queue);
+    let fields = serde_json::to_string(queue)
+        .unwrap_or_default()
+        .replace('>', "\\u003e");
+    format!("{first}\n\n{words}\n\n{QUEUE_BLOCK}{fields} -->")
+}
+
+/// D1: a check's first line: the request's submission on the posting
+/// host, or that it waits to be taken in there.
+fn first_line(queue: &Queue) -> String {
+    match queue.submission.filter(|_| queue.taken_in) {
+        Some(n) => format!("Submission {n} on {}.", queue.host),
+        None => format!("Waiting to be taken in on {}.", queue.host),
+    }
+}
+
+/// What a waiting pull request into `branch` is titled, the words of its
+/// summary before any forecast, and what it waits for in its title's
+/// words: `from` is the branch a submit's pull request is submitted from.
+fn waiting_words(
     branch: &str,
     from: Option<&str>,
     missing: &[String],
-    forecast: Option<String>,
-) -> Shown {
+) -> (String, Vec<String>, Vec<String>) {
     let held = missing.iter().any(|m| m == NEXT_SUBMIT);
     let rests = missing.iter().find_map(|m| m.strip_prefix(WITHDRAWN_BY));
-    let title = if held {
-        format!("waiting: {NEXT_SUBMIT}")
+    let draft = missing.iter().any(|m| m == "a draft");
+    let (title, waits_for) = if held {
+        (
+            format!("waiting: {NEXT_SUBMIT}"),
+            vec![NEXT_SUBMIT.to_string()],
+        )
     } else if let Some(who) = rests {
-        format!("waiting: {WITHDRAWN_BY}{who}")
-    } else if missing.iter().any(|m| m == "a draft") {
-        "waiting: a draft".to_string()
+        let w = format!("{WITHDRAWN_BY}{who}");
+        (format!("waiting: {w}"), vec![w])
+    } else if draft {
+        ("waiting: a draft".to_string(), vec!["a draft".to_string()])
     } else {
-        format!("waiting: needs {}", missing.join(", "))
+        (
+            format!("waiting: needs {}", missing.join(", ")),
+            missing.to_vec(),
+        )
     };
-    let mut summary = Vec::new();
-    if held {
-        summary.push(format!(
+    let words = if held {
+        format!(
             "Its submission left the queue, and sluice marked it a draft. {}",
             next_submit(branch, from.unwrap_or("its branch"))
-        ));
+        )
     } else if let Some(who) = rests {
-        summary.push(format!(
+        format!(
             "Withdrawn from {branch}'s queue by {who}. New commits, or marking it a draft and \
              then ready for review, submit it again."
-        ));
-    } else if missing.iter().any(|m| m == "a draft") {
-        summary.push("A draft: sluice takes it once it is marked ready for review.".to_string());
+        )
+    } else if draft {
+        "A draft: sluice takes it once it is marked ready for review.".to_string()
     } else {
         let named: Vec<String> = missing
             .iter()
@@ -2256,22 +2485,37 @@ fn waiting(
                 }
             })
             .collect();
-        summary.push(format!(
+        format!(
             "Needs {} on this commit before sluice takes it.",
             named.join(", ")
-        ));
-    }
+        )
+    };
+    (title, vec![words], waits_for)
+}
+
+/// What a waiting pull request into `branch` shows: `from` is the branch
+/// a submit's pull request is submitted from, and `queue` its queue on
+/// the host that posts it (D1).
+fn waiting(
+    branch: &str,
+    from: Option<&str>,
+    missing: &[String],
+    forecast: Option<String>,
+    mut queue: Queue,
+) -> Shown {
+    let (title, mut summary, waits_for) = waiting_words(branch, from, missing);
     let mut lines = Vec::new();
     if let Some(f) = forecast {
         summary.push(f.replacen("forecast:", "Forecast:", 1));
         lines.push(f);
     }
+    queue.waits_for = waits_for;
     Shown {
         posting: Posting {
             text: None,
             status: Status::Queued,
             title,
-            summary: summary.join("\n\n"),
+            summary: summed(&queue, &summary.join("\n\n")),
         },
         lines,
     }
@@ -2279,46 +2523,53 @@ fn waiting(
 
 /// 125: one of a group intake has not taken, which waits for what it
 /// lacks itself, or else for the rest of its group: `from` is the branch
-/// it is submitted from.
+/// it is submitted from, and `queue` its queue on the host that posts it
+/// (D1).
 fn waiting_in_group(
     branch: &str,
     from: Option<&str>,
     missing: &[String],
     g: &Bound,
     forecast: Option<String>,
+    mut queue: Queue,
 ) -> Shown {
     let together = format!(
         "One of a group of {} submitted together, which sluice takes only all together, once \
          each is ready.",
         g.n
     );
-    let mut shown = if missing.is_empty() {
+    let (title, mut summary, waits_for) = if missing.is_empty() {
         let on = g.on.join(", ");
-        Shown {
-            posting: Posting {
-                text: None,
-                status: Status::Queued,
-                title: format!("waiting for its group: {on}"),
-                summary: format!("{together} It waits for {on}."),
-            },
-            lines: Vec::new(),
-        }
+        (
+            format!("waiting for its group: {on}"),
+            vec![format!("{together} It waits for {on}.")],
+            vec![format!("its group: {on}")],
+        )
     } else {
-        let mut w = waiting(branch, from, missing, None);
-        w.posting.summary = format!("{}\n\n{together}", w.posting.summary);
-        w
+        let (title, mut summary, waits_for) = waiting_words(branch, from, missing);
+        summary.push(together);
+        (title, summary, waits_for)
     };
+    let mut lines = Vec::new();
     if let Some(f) = forecast {
-        shown
-            .posting
-            .summary
-            .push_str(&format!("\n\n{}", f.replacen("forecast:", "Forecast:", 1)));
-        shown.lines.push(f);
+        summary.push(f.replacen("forecast:", "Forecast:", 1));
+        lines.push(f);
     }
-    shown
+    queue.waits_for = waits_for;
+    Shown {
+        posting: Posting {
+            text: None,
+            status: Status::Queued,
+            title,
+            summary: summed(&queue, &summary.join("\n\n")),
+        },
+        lines,
+    }
 }
 
-fn queued(branch: &str, ahead: &[String]) -> Shown {
+/// A pull request queued on `branch` behind `ahead`, as each is named on
+/// a pull request: `queue` is its queue on the host that posts it (D1).
+fn queued(branch: &str, ahead: &[String], queue: Queue) -> Shown {
     let title = if ahead.is_empty() {
         format!("queued: next on {branch}")
     } else {
@@ -2328,19 +2579,25 @@ fn queued(branch: &str, ahead: &[String]) -> Shown {
         posting: Posting {
             text: None,
             status: Status::Queued,
-            summary: format!("In {branch}'s queue; it lands once its combination passes."),
+            summary: summed(
+                &queue,
+                &format!("In {branch}'s queue; it lands once its combination passes."),
+            ),
             title,
         },
         lines: Vec::new(),
     }
 }
 
-/// A submitted pull request's state in the queue.
+/// A submitted pull request's state in the queue, `status` the branch's
+/// queue, whose order names what it is queued behind: `queue` is its
+/// queue on the host that posts it (D1).
 fn queue_shown(
     branch: &str,
     e: &Submission,
-    subs: &[Submission],
+    status: &sluice_core::Status,
     names: &BTreeMap<u64, String>,
+    queue: Queue,
 ) -> Shown {
     match (&e.tested, e.state) {
         (Some(t), State::Testing | State::Passed | State::Landing) => {
@@ -2349,9 +2606,12 @@ fn queue_shown(
                 posting: Posting {
                     text: None,
                     status: Status::InProgress,
-                    summary: format!(
-                        "sluice is testing `{}`, {branch} with what is ahead of it.",
-                        t.combination.short()
+                    summary: summed(
+                        &queue,
+                        &format!(
+                            "sluice is testing `{}`, {branch} with what is ahead of it.",
+                            t.combination.short()
+                        ),
                     ),
                     title,
                 },
@@ -2359,12 +2619,11 @@ fn queue_shown(
             }
         }
         _ => {
-            let ahead: Vec<String> = subs
+            let ahead: Vec<String> = ahead_in(e, status)
                 .iter()
-                .filter(|x| x.id < e.id && !x.state.is_out())
                 .map(|x| name(x.id, names))
                 .collect();
-            queued(branch, &ahead)
+            queued(branch, &ahead, queue)
         }
     }
 }
@@ -2462,9 +2721,20 @@ impl Outcome {
             },
         }
     }
+
+    /// The state the submission's record names for it.
+    fn state(&self) -> State {
+        match self {
+            Outcome::Landed { .. } => State::Landed,
+            Outcome::Failed { .. } => State::Failed,
+            Outcome::Conflict { .. } => State::Conflict,
+        }
+    }
 }
 
-fn outcome_shown(branch: &str, o: &Outcome, names: &BTreeMap<u64, String>) -> Shown {
+/// What became of a submission, on its pull request: `queue` is its
+/// queue on the host that posts it (D1).
+fn outcome_shown(branch: &str, o: &Outcome, names: &BTreeMap<u64, String>, queue: Queue) -> Shown {
     let (status, title, summary) = match o {
         Outcome::Landed {
             landed_as,
@@ -2538,7 +2808,7 @@ fn outcome_shown(branch: &str, o: &Outcome, names: &BTreeMap<u64, String>) -> Sh
             text: None,
             status,
             title,
-            summary,
+            summary: summed(&queue, &summary),
         },
         lines: Vec::new(),
     }
@@ -2692,6 +2962,83 @@ impl crate::PullRequests for Pulls {
 
     fn handed_over(&self, sub: &Submission) -> bool {
         handed_over(sub, &sub.branch)
+    }
+
+    fn across(&self, seams: Seams<'_>, clock: &dyn Clock, branch: &str) -> Result<Option<Across>> {
+        let s = Sluice::new(seams, clock);
+        // 26, 80: where the branch's records are on its remote, every host
+        // reads the request's submission from them, as its queue shows it.
+        let Some(t) = self.target(&s, branch)?.filter(|t| !t.signed) else {
+            return Ok(None);
+        };
+        let repo = &t.repo;
+        let follows = self.kept.follows(repo, branch).requests;
+        if follows.is_empty() {
+            return Ok(None);
+        }
+        // A read that cannot be made is warned of, and the request shown as
+        // the host last read it.
+        let warn = |e: &anyhow::Error| crate::telemetry::warn(&format!("sluice: warning: {e:#}"));
+        let forge = self.forge(branch).map_err(|e| warn(&e)).ok();
+        let now = clock.now();
+        let read = |n: u64, kept: Follow| {
+            match forge.map(|forge| self.read_followed(forge, repo, branch, n, now)) {
+                Some(Ok(Some(f))) => f,
+                // GitHub has no such pull request: followed no longer.
+                Some(Ok(None)) => Follow {
+                    open: false,
+                    ..kept
+                },
+                Some(Err(e)) => {
+                    warn(&e.context(format!("reading #{n} into {branch}")));
+                    kept
+                }
+                None => kept,
+            }
+        };
+        let (rows, gone) = self.across_rows(&s, branch, follows, read)?;
+        // Design D3: one read merged or closed is said once, here.
+        self.unfollow(repo, branch, &gone);
+        Ok(self.across_of(&t, branch, rows))
+    }
+
+    fn kept_across(
+        &self,
+        seams: Seams<'_>,
+        clock: &dyn Clock,
+        branch: &str,
+    ) -> Result<Option<Across>> {
+        // 129: the branch's policy read from git once while its revision
+        // stands, across the reader's ticks.
+        let s = Sluice::new(seams, clock).keeping(&self.policies);
+        let target = self.target(&s, branch)?.filter(|t| !t.signed);
+        let Some((t, modified)) = target.and_then(|t| {
+            let modified = self.kept.follows_modified(&t.repo, branch)?;
+            Some((t, modified))
+        }) else {
+            self.kept_across.borrow_mut().remove(branch);
+            return Ok(None);
+        };
+        // The mark's commit, read with no process: what it says is read
+        // again only once it moved (rule core.31).
+        let mark = self.pushed(&t.remote)?.intake_mark_at(branch)?;
+        if let Some(k) = self.kept_across.borrow().get(branch) {
+            if k.modified == modified && k.mark == mark {
+                return Ok(k.across.clone());
+            }
+        }
+        let follows = self.kept.follows(&t.repo, branch).requests;
+        let (rows, _) = self.across_rows(&s, branch, follows, |_, kept| kept)?;
+        let across = self.across_of(&t, branch, rows);
+        self.kept_across.borrow_mut().insert(
+            branch.to_string(),
+            KeptAcross {
+                modified,
+                mark,
+                across: across.clone(),
+            },
+        );
+        Ok(across)
     }
 
     fn branches(&self, seams: Seams<'_>) -> Result<Vec<String>> {
@@ -2863,7 +3210,7 @@ impl crate::PullRequests for Pulls {
         // in a quarter of the host's interval; between, what it last said.
         let now = clock.now();
         if self.away.borrow().contains_key(branch) {
-            return self.follow_across(forge, &t.repo, n, now);
+            return self.follow_across(forge, &t, branch, n, now);
         }
         let fresh = self
             .seen
@@ -2879,7 +3226,6 @@ impl crate::PullRequests for Pulls {
                     at: now,
                     pull: pull.clone(),
                     readied: None,
-                    posted: None,
                 };
                 self.seen.borrow_mut().insert(n, seen);
                 pull
@@ -2959,6 +3305,8 @@ impl crate::PullRequests for Pulls {
         Ok(Followed::Open {
             title,
             lines,
+            taken_in_by: None,
+            queue: None,
             submission,
             names,
             head: pull.as_ref().map(|p| p.head.clone()),
@@ -2968,86 +3316,288 @@ impl crate::PullRequests for Pulls {
 }
 
 impl Pulls {
-    /// 137: where pull request `n` stands while another host takes its
-    /// branch's pull requests in: by GitHub's word and sluice's check on its
-    /// head, which that host posts, each read no more often than once in a
-    /// quarter of the host's interval (136), what was last read standing
-    /// between. Merged is landed; sluice's check failed on its head is sent
-    /// back, as the check names; closed and not merged is closed.
+    /// 137: where pull request `n` into `branch` stands while another
+    /// host takes its pull requests in: by GitHub's word and sluice's check
+    /// on its head, which that host posts, as the host's kept follows hold
+    /// them, read again only once a quarter of the host's interval has
+    /// passed since any process of the host read them (136; design D4).
+    /// Merged is landed; sluice's check failed on its head is sent back, as
+    /// the check names; closed and not merged is closed. A request said to
+    /// be landed or closed is followed no longer (design D3). One still
+    /// open names the host the intake mark names, as the branch's last
+    /// fetch brought it, and the queue the check carries, whose first
+    /// line, saying the same, its lines leave out (design D2, D5).
     fn follow_across(
         &self,
         forge: &dyn Forge,
-        repo: &Repo,
+        t: &Target,
+        branch: &str,
         n: u64,
         now: DateTime<Utc>,
     ) -> Result<Followed> {
-        let fresh = self
-            .seen
-            .borrow()
-            .get(&n)
-            .filter(|seen| now - seen.at < self.discovery / 4)
-            .map(|seen| (seen.pull.clone(), seen.posted.clone()));
-        let (pull, posted) = match fresh {
-            Some(read) => read,
-            None => {
-                let pull = forge.pull(repo, n)?;
-                let posted = match &pull {
-                    Some(p) if p.open || p.merged => forge.posted(repo, &p.head)?,
-                    _ => None,
-                };
-                let seen = Seen {
-                    at: now,
-                    pull: pull.clone(),
-                    readied: None,
-                    posted: posted.clone(),
-                };
-                self.seen.borrow_mut().insert(n, seen);
-                (pull, posted)
-            }
-        };
-        let Some(p) = pull else {
+        let repo = &t.repo;
+        let Some(f) = self.read_followed(forge, repo, branch, n, now)? else {
             return Ok(Followed::Closed);
         };
-        let posting = posted.map(|p| p.posting);
-        if p.merged {
+        let posting = f.check.map(|p| p.posting);
+        let told = told(posting.as_ref());
+        if f.merged || told == Told::Landed {
+            self.unfollow(repo, branch, &[n]);
             let title = posting
                 .map(|p| p.title)
                 .filter(|t| t.starts_with("landed"))
                 .unwrap_or_else(|| "landed".into());
             return Ok(Followed::Landed { title });
         }
-        if let Some(posting) = posting.as_ref().filter(|p| p.status == Status::Failure) {
-            if p.open {
+        if let (Some(posting), Told::SentBack { conflict }) = (posting.as_ref(), told) {
+            if f.open {
                 return Ok(Followed::SentBack {
-                    conflict: posting.title.starts_with("conflict"),
+                    conflict,
                     title: posting.title.clone(),
-                    summary: posting.summary.clone(),
+                    summary: words(&posting.summary),
                 });
             }
         }
-        if !p.open {
+        if !f.open {
+            self.unfollow(repo, branch, &[n]);
             return Ok(Followed::Closed);
         }
+        let queue = posting.as_ref().and_then(|p| queue_of(&p.summary));
         let (title, lines) = match posting {
-            Some(posting) => (
-                posting.title,
-                posting
-                    .summary
+            Some(posting) => {
+                let said = words(&posting.summary);
+                let first = queue.as_ref().map(first_line);
+                let rest = first.and_then(|f| said.strip_prefix(&f)).unwrap_or(&said);
+                let lines = rest
                     .lines()
                     .filter(|l| !l.trim().is_empty())
                     .map(str::to_string)
-                    .collect(),
-            ),
+                    .collect();
+                (posting.title, lines)
+            }
             None => ("waiting".into(), Vec::new()),
         };
         Ok(Followed::Open {
             title,
             lines,
+            taken_in_by: self.taken_in_by(&t.remote, branch),
+            queue,
             submission: None,
             names: BTreeMap::new(),
-            head: Some(p.head.clone()),
-            draft: p.draft,
+            head: Some(f.head),
+            draft: f.draft,
         })
+    }
+
+    /// 136, 137, design D4: pull request `n` into `branch` and sluice's
+    /// check on its head as the host's kept follows hold them, where a
+    /// process of the host read them within a quarter of its interval;
+    /// otherwise read from GitHub, each read conditional on the answer the
+    /// host keeps for its address, and kept for every process of the host.
+    /// The process that finds the read due claims it under the follows'
+    /// lock, so no two read it in one quarter, and gives the claim back
+    /// where its read failed. `None`: GitHub has no such pull request, and
+    /// it is followed no longer.
+    fn read_followed(
+        &self,
+        forge: &dyn Forge,
+        repo: &Repo,
+        branch: &str,
+        n: u64,
+        now: DateTime<Utc>,
+    ) -> Result<Option<Follow>> {
+        let quarter = self.discovery / 4;
+        let fresh = |f: &Follow| f.read_at.is_some_and(|at| now - at < quarter);
+        let kept = self.kept.follows(repo, branch).requests.remove(&n);
+        if let Some(f) = kept.filter(fresh) {
+            return Ok(Some(f));
+        }
+        let claimed = self.kept.change_follows(repo, branch, |follows| {
+            match follows.requests.get_mut(&n) {
+                Some(f) if fresh(f) => Err(Box::new(f.clone())),
+                Some(f) => Ok(f.read_at.replace(now)),
+                None => Ok(None),
+            }
+        })?;
+        let before = match claimed {
+            Err(read) => return Ok(Some(*read)),
+            Ok(before) => before,
+        };
+        let read = || -> Result<Option<Follow>> {
+            let Some(p) = forge.pull(repo, n)? else {
+                return Ok(None);
+            };
+            let check = match p.open || p.merged {
+                true => forge.posted(repo, &p.head)?,
+                false => None,
+            };
+            Ok(Some(Follow {
+                read_at: Some(now),
+                open: p.open,
+                merged: p.merged,
+                check,
+                ..known(&p.head, p.draft, &p.title, &p.head_ref)
+            }))
+        };
+        let read = match read() {
+            Ok(read) => read,
+            Err(e) => {
+                let _ = self.kept.change_follows(repo, branch, |follows| {
+                    if let Some(f) = follows.requests.get_mut(&n) {
+                        if f.read_at == Some(now) {
+                            f.read_at = before;
+                        }
+                    }
+                });
+                return Err(e);
+            }
+        };
+        self.kept
+            .change_follows(repo, branch, |follows| match &read {
+                Some(f) => {
+                    follows.requests.insert(n, f.clone());
+                }
+                None => {
+                    follows.requests.remove(&n);
+                }
+            })?;
+        Ok(read)
+    }
+
+    /// 137, design D3: follow each of `known` into `branch`, by number, as
+    /// this host's own act on it left it: what was read of one at the same
+    /// head stands, and the next process to follow one at a new head reads
+    /// it. A follow that could not be kept is warned of, and the act stands.
+    fn follow_known(&self, repo: &Repo, branch: &str, known: Vec<(u64, Follow)>) {
+        let kept = self.kept.change_follows(repo, branch, |follows| {
+            for (n, k) in known {
+                match follows.requests.get_mut(&n) {
+                    Some(f) if f.head == k.head => {
+                        f.open = true;
+                        f.draft = k.draft;
+                        if !k.title.is_empty() {
+                            f.title = k.title;
+                        }
+                        if !k.from.is_empty() {
+                            f.from = k.from;
+                        }
+                    }
+                    _ => {
+                        follows.requests.insert(n, k);
+                    }
+                }
+            }
+        });
+        if let Err(e) = kept {
+            crate::telemetry::warn(&format!("sluice: warning: {e:#}"));
+        }
+    }
+
+    /// 137, design D5: a row for each of `follows` into `branch` whose
+    /// submission this host's queue does not hold at its head, as `read`
+    /// gives it from what was kept of it, and the numbers of those found
+    /// merged or closed, which are shown `landed` or `closed without
+    /// landing`. "Held" is the request's latest submission here at its
+    /// head, in any state, past one this host handed over.
+    fn across_rows(
+        &self,
+        s: &Sluice<'_>,
+        branch: &str,
+        follows: BTreeMap<u64, Follow>,
+        mut read: impl FnMut(u64, Follow) -> Follow,
+    ) -> Result<(Vec<AcrossRow>, Vec<u64>)> {
+        let places: Vec<String> = follows.keys().map(|n| place(*n)).collect();
+        let latest = self.latest_of(s, branch, &places)?;
+        let held = |n: u64, head: &str| latest.get(&place(n)).is_some_and(|e| e.head.0 == head);
+        let (mut rows, mut gone) = (Vec::new(), Vec::new());
+        for (n, kept) in follows {
+            if held(n, &kept.head) {
+                continue;
+            }
+            let f = read(n, kept);
+            if held(n, &f.head) {
+                continue;
+            }
+            // Design D6: the check's fields decide over its words.
+            let posting = f.check.as_ref().map(|p| &p.posting);
+            let state = if f.merged || told(posting) == Told::Landed {
+                gone.push(n);
+                crate::ACROSS_LANDED.to_string()
+            } else if !f.open {
+                gone.push(n);
+                crate::ACROSS_CLOSED.to_string()
+            } else {
+                posting.map_or_else(|| "waiting".into(), |p| p.title.clone())
+            };
+            rows.push(AcrossRow {
+                pull_request: n,
+                queue: posting.and_then(|p| queue_of(&p.summary)),
+                state,
+                title: f.title,
+                from: f.from,
+                head: f.head,
+                draft: f.draft,
+                read_at: f.read_at,
+            });
+        }
+        Ok((rows, gone))
+    }
+
+    /// 137, design D2: `rows` with the host `t`'s intake mark names for
+    /// `branch`; `None` where there are none.
+    fn across_of(&self, t: &Target, branch: &str, rows: Vec<AcrossRow>) -> Option<Across> {
+        (!rows.is_empty()).then(|| Across {
+            taken_in_by: self.taken_in_by(&t.remote, branch),
+            pull_requests: rows,
+        })
+    }
+
+    /// 137, design D3: follow `numbers` into `branch` no longer, writing
+    /// the kept follows only where they hold one of them; one that could
+    /// not be let go is warned of.
+    fn unfollow(&self, repo: &Repo, branch: &str, numbers: &[u64]) {
+        let follows = self.kept.follows(repo, branch);
+        if !numbers.iter().any(|n| follows.requests.contains_key(n)) {
+            return;
+        }
+        let kept = self.kept.change_follows(repo, branch, |follows| {
+            for n in numbers {
+                follows.requests.remove(n);
+            }
+        });
+        if let Err(e) = kept {
+            crate::telemetry::warn(&format!("sluice: warning: {e:#}"));
+        }
+    }
+
+    /// 137, design D2: the host `branch`'s intake mark names and whether
+    /// its `sluice run` or a wait holds it, as the branch's last fetch from
+    /// `remote` brought it, with no fetch of its own (129); `None` where no
+    /// mark stands, or where it could not be read, which is warned of.
+    fn taken_in_by(&self, remote: &str, branch: &str) -> Option<TakenInBy> {
+        match self.pushed(remote).and_then(|p| p.intake_mark(branch)) {
+            Ok(mark) => mark.map(|(_, m)| TakenInBy {
+                host: m.host,
+                holder: m.holder,
+            }),
+            Err(e) => {
+                crate::telemetry::warn(&format!("sluice: warning: {e:#}"));
+                None
+            }
+        }
+    }
+
+    /// 137: the other host that takes `branch`'s pull requests in, as this
+    /// process's intake last found it, or else as the intake mark the
+    /// branch's last fetch brought names it, with no fetch of its own (129);
+    /// `None` where no mark stands or it names this host.
+    fn taker_elsewhere(&self, t: &Target, branch: &str) -> Option<String> {
+        if let Some(host) = self.away.borrow().get(branch) {
+            return Some(host.clone());
+        }
+        self.taken_in_by(&t.remote, branch)
+            .map(|by| by.host)
+            .filter(|host| *host != self.peer.name)
     }
 
     /// 125: every worktree read before anything is pushed, and a refusal
@@ -3229,6 +3779,21 @@ impl Pulls {
                 left,
             ));
         }
+        // 137, design D3: where another host takes the branch's pull
+        // requests in, as the mark this host last fetched names it, the host
+        // follows each request the act opened, updated or marked ready.
+        if !t.signed && self.taker_elsewhere(&t, branch).is_some() {
+            let follows = acted
+                .iter()
+                .map(|(p, _)| {
+                    (
+                        p.number,
+                        known(&p.head, n > 1 && p.draft, &p.title, &p.head_ref),
+                    )
+                })
+                .collect();
+            self.follow_known(&t.repo, branch, follows);
+        }
         let taken = if n > 1 {
             self.take_act(&s, forge, &t, branch, worktrees, &acted, opened)?
         } else {
@@ -3310,7 +3875,16 @@ impl Pulls {
             .map(|(id, e)| (*id, format!("#{}", e.number)))
             .collect();
         let outcome = Outcome::decided(&n.decided);
-        let shown = outcome_shown(&n.branch, &outcome, &names);
+        // D1: decided, so out of the queue, with nothing ahead of it.
+        let queue = Queue {
+            host: self.peer.name.clone(),
+            taken_in: true,
+            submission: Some(n.submission),
+            state: Some(outcome.state().word().to_string()),
+            ahead: Vec::new(),
+            waits_for: Vec::new(),
+        };
+        let shown = outcome_shown(&n.branch, &outcome, &names, queue);
         // ADR 0044: a pull request that landed is closed, so no intake
         // reads it again: its report is posted with the outcome. What the
         // host keeps of the request says what is posted already (136).
@@ -3422,7 +3996,7 @@ mod tests {
             pending: vec![("cli:build".into(), Some("macos-arm64".into()))],
         };
         let names = BTreeMap::from([(12, "#12".to_string())]);
-        let shown = queued("main", &[]);
+        let shown = queued("main", &[], queue_at("b", None, &status_of(&[])));
         let mut post = |v: &VerdictView| {
             pulls
                 .show_report(
@@ -3528,6 +4102,7 @@ mod tests {
                 timed_out: false,
             },
             &names,
+            queue_at("b", None, &status_of(&[])),
         );
         pulls
             .show_report(
@@ -3579,6 +4154,7 @@ mod tests {
                 covered_by,
             },
             &names,
+            queue_at("b", None, &status_of(&[])),
         );
         pulls
             .show_report(
@@ -3862,6 +4438,35 @@ mod tests {
         }
     }
 
+    /// A submission into `main` from `worktree`, in `state`.
+    /// A branch's queue holding `subs`, its chain as a round orders it
+    /// (6, 7), with no combination formed.
+    fn status_of(subs: &[Submission]) -> sluice_core::Status {
+        let landed = subs
+            .iter()
+            .filter(|s| s.state == State::Landed)
+            .map(|s| s.id)
+            .collect();
+        sluice_core::Status {
+            chain: sluice_core::order::chain(subs, &landed, &[], true).chain,
+            submissions: subs.to_vec(),
+            ..Default::default()
+        }
+    }
+
+    fn submitted(id: u64, worktree: &str, state: &str) -> Submission {
+        serde_json::from_value(serde_json::json!({
+            "schema": sluice_core::records::SUBMISSION_SCHEMA, "id": id, "branch": "main",
+            "head": format!("h{id}"), "from": { "agent": "person", "worktree": worktree },
+            "submitted": "2026-11-06T10:00:00Z", "after": [], "priority": 0, "attempt": 1,
+            "state": state,
+        }))
+        .unwrap()
+    }
+
+    /// pull-request-status, waiting for a review: the check names the
+    /// host that posts it and that the request waits to be taken in there,
+    /// and its block what it waits for, in its title's words (D1).
     #[test]
     fn what_a_waiting_pull_request_shows() {
         let w = waiting(
@@ -3869,25 +4474,333 @@ mod tests {
             None,
             &["1 review".into(), "qa/approved".into()],
             Some("forecast: merges onto main without conflict".into()),
+            queue_at("b", None, &status_of(&[])),
         );
         assert_eq!(w.posting.title, "waiting: needs 1 review, qa/approved");
+        let s = &w.posting.summary;
+        assert!(s.starts_with("Waiting to be taken in on b.\n\n"), "{s}");
+        assert!(s.contains("1 review") && s.contains("`qa/approved`"), "{s}");
         assert!(
-            w.posting.summary.contains("1 review") && w.posting.summary.contains("`qa/approved`")
+            s.ends_with(
+                "<!-- sluice:queue {\"host\":\"b\",\"taken_in\":false,\"submission\":null,\
+                 \"state\":null,\"ahead\":[],\"waits_for\":[\"1 review\",\"qa/approved\"]} -->"
+            ),
+            "{s}"
         );
         assert_eq!(w.lines, ["forecast: merges onto main without conflict"]);
-        assert_eq!(
-            waiting("main", None, &["a draft".into()], None)
-                .posting
-                .title,
-            "waiting: a draft"
+        let draft = waiting(
+            "main",
+            None,
+            &["a draft".into(), "1 review".into()],
+            None,
+            queue_at("b", None, &status_of(&[])),
         );
+        assert_eq!(draft.posting.title, "waiting: a draft");
+        assert_eq!(
+            queue_of(&draft.posting.summary).unwrap().waits_for,
+            ["a draft"]
+        );
+        let held = waiting(
+            "main",
+            Some("unit/review"),
+            &[NEXT_SUBMIT.into()],
+            None,
+            queue_at(
+                "b",
+                Some(&submitted(9, "pull/13", "failed")),
+                &status_of(&[]),
+            ),
+        );
+        let s = &held.posting.summary;
+        assert!(s.starts_with("Submission 9 on b.\n\n"), "{s}");
+        let q = queue_of(s).unwrap();
+        assert_eq!(
+            (q.taken_in, q.state.as_deref(), q.waits_for.as_slice()),
+            (true, Some("failed"), [NEXT_SUBMIT.to_string()].as_slice())
+        );
+        let bound = Bound {
+            n: 2,
+            on: vec!["#14".into()],
+            missing: Vec::new(),
+        };
+        let grouped = waiting_in_group(
+            "main",
+            None,
+            &[],
+            &bound,
+            Some("forecast: merges onto main without conflict".into()),
+            queue_at("b", None, &status_of(&[])),
+        );
+        assert_eq!(grouped.posting.title, "waiting for its group: #14");
+        let s = &grouped.posting.summary;
+        assert!(s.starts_with("Waiting to be taken in on b.\n\n"), "{s}");
+        assert!(s.contains("Forecast: merges onto main"), "{s}");
+        assert_eq!(queue_of(s).unwrap().waits_for, ["its group: #14"]);
+    }
+
+    /// pull-request-status, queued behind another: the check names its
+    /// submission on the host that posts it, and its block the
+    /// submissions ahead of it there with their pull requests; testing and
+    /// sent back name the same submission, with nothing ahead once it is
+    /// out of the queue (D1).
+    #[test]
+    fn what_a_queued_pull_request_carries_its_queue() {
+        let subs = vec![
+            submitted(1404, "pull/9", "landed"),
+            submitted(1405, "pull/10", "queued"),
+            submitted(1406, "pull/12", "queued"),
+        ];
+        let names = names(&subs);
+        let shown = queue_shown(
+            "main",
+            &subs[2],
+            &status_of(&subs),
+            &names,
+            queue_at("b", Some(&subs[2]), &status_of(&subs)),
+        );
+        assert_eq!(shown.posting.title, "queued behind #10");
+        let s = &shown.posting.summary;
+        assert!(s.starts_with("Submission 1406 on b.\n\n"), "{s}");
+        assert!(
+            s.ends_with(
+                "<!-- sluice:queue {\"host\":\"b\",\"taken_in\":true,\"submission\":1406,\
+                 \"state\":\"queued\",\"ahead\":[{\"submission\":1405,\"pull_request\":10}],\
+                 \"waits_for\":[]} -->"
+            ),
+            "{s}"
+        );
+
+        let landed = [subs[0].clone(), subs[2].clone()];
+        let next = queue_shown(
+            "main",
+            &landed[1],
+            &status_of(&landed),
+            &names,
+            queue_at("b", Some(&landed[1]), &status_of(&landed)),
+        );
+        assert_eq!(next.posting.title, "queued: next on main");
+        assert!(queue_of(&next.posting.summary).unwrap().ahead.is_empty());
+
+        let mut testing = subs[2].clone();
+        testing.state = State::Testing;
+        testing.tested = Some(sluice_core::records::Tested {
+            combination: Rev::new("c1c1c1c1"),
+            on: Rev::new("m0"),
+            submissions: vec![1405, 1406],
+        });
+        let tested = queue_shown(
+            "main",
+            &testing,
+            &status_of(&subs),
+            &names,
+            queue_at("b", Some(&testing), &status_of(&subs)),
+        );
+        assert_eq!(tested.posting.title, "testing main + #10 + #12");
+        let q = queue_of(&tested.posting.summary).unwrap();
+        assert_eq!(q.state.as_deref(), Some("testing"));
+        assert_eq!(q.ahead.len(), 1);
+
+        let mut failed = subs[2].clone();
+        failed.state = State::Failed;
+        let sent_back = outcome_shown(
+            "main",
+            &Outcome::Failed {
+                tasks: vec!["cli:test".into()],
+                logs: Vec::new(),
+                combination: Rev::new("c1c1c1c1"),
+                ids: vec![1405, 1406],
+                timed_out: false,
+            },
+            &names,
+            queue_at("b", Some(&failed), &status_of(&subs)),
+        );
+        let s = &sent_back.posting.summary;
+        assert!(s.starts_with("Submission 1406 on b.\n\n"), "{s}");
+        let q = queue_of(s).unwrap();
+        assert_eq!(q.state.as_deref(), Some("failed"));
+        assert!(q.ahead.is_empty() && q.waits_for.is_empty());
+
+        let worktrees = vec![
+            submitted(7, "/work/a", "queued"),
+            submitted(8, "pull/12", "queued"),
+        ];
+        let q = queue_at("b", Some(&worktrees[1]), &status_of(&worktrees));
+        assert_eq!(
+            q.ahead,
+            [Ahead {
+                submission: 7,
+                pull_request: None,
+            }]
+        );
+    }
+
+    /// pull-request-status, "each submission ahead of it": the block's
+    /// `ahead` and the title's `queued behind` follow the queue's order,
+    /// not the order of submission. A worktree's submission at priority 5
+    /// is ahead of `#12`, submitted before it at 0; `#14`, at priority 9
+    /// but after `#12`, is behind both; and a worktree's at priority -1,
+    /// submitted first, is behind all three (6, 7; D1).
+    #[test]
+    fn the_check_names_whats_ahead_in_queue_order() {
+        let mut subs = vec![
+            submitted(1405, "/work/a", "queued"),
+            submitted(1406, "pull/12", "queued"),
+            submitted(1407, "/work/c", "queued"),
+            submitted(1408, "pull/14", "queued"),
+        ];
+        subs[0].priority = -1;
+        subs[2].priority = 5;
+        subs[3].priority = 9;
+        subs[3].after = vec![1406];
+        let status = status_of(&subs);
+        assert_eq!(status.chain, [1407, 1406, 1408, 1405]);
+        let names = names(&subs);
+        let ahead = |q: &Queue| -> Vec<(u64, Option<u64>)> {
+            q.ahead
+                .iter()
+                .map(|a| (a.submission, a.pull_request))
+                .collect()
+        };
+
+        let twelve = queue_at("b", Some(&subs[1]), &status);
+        assert_eq!(ahead(&twelve), [(1407, None)]);
+        let shown = queue_shown("main", &subs[1], &status, &names, twelve);
+        assert_eq!(
+            shown.posting.title,
+            "queued behind submission 1407 (person)"
+        );
+
+        let fourteen = queue_at("b", Some(&subs[3]), &status);
+        assert_eq!(ahead(&fourteen), [(1407, None), (1406, Some(12))]);
+        let shown = queue_shown("main", &subs[3], &status, &names, fourteen.clone());
+        assert_eq!(
+            shown.posting.title,
+            "queued behind submission 1407 (person), #12"
+        );
+        assert_eq!(queue_of(&shown.posting.summary), Some(fourteen));
+
+        let first = queue_at("b", Some(&subs[0]), &status);
+        assert_eq!(
+            ahead(&first),
+            [(1407, None), (1406, Some(12)), (1408, Some(14))]
+        );
+
+        // 7: one whose `after` is in the queue but not yet in the chain
+        // has the chain ahead of it, then what it waits on.
+        let mut waits = subs.clone();
+        waits[3].after = vec![1409];
+        waits.push(submitted(1409, "pull/15", "queued"));
+        waits[4].after = vec![1];
+        let status = status_of(&waits);
+        assert_eq!(status.chain, [1407, 1406, 1405]);
+        let fourteen = queue_at("b", Some(&waits[3]), &status);
+        assert_eq!(
+            ahead(&fourteen),
+            [
+                (1407, None),
+                (1406, Some(12)),
+                (1405, None),
+                (1409, Some(15))
+            ]
+        );
+    }
+
+    /// D1: a reader takes the last block of a check's summary, and reads
+    /// none in a check an older sluice posted, or in one whose block does
+    /// not read; a `>` in a field never ends the comment; and the words a
+    /// wait prints leave the block out.
+    #[test]
+    fn a_queue_block_reads_back_and_an_older_check_has_none() {
+        let mut q = queue_at("b", None, &status_of(&[]));
+        q.waits_for = vec!["ci/a->b".into()];
+        let summary = summed(&q, "Needs `ci/a->b` on this commit before sluice takes it.");
+        assert!(!summary[summary.rfind(QUEUE_BLOCK).unwrap()..]
+            .trim_end_matches(" -->")
+            .contains('>'));
+        assert_eq!(queue_of(&summary), Some(q.clone()));
+        assert_eq!(
+            words(&summary),
+            "Waiting to be taken in on b.\n\nNeeds `ci/a->b` on this commit before sluice takes it."
+        );
+
+        let older = "In main's queue; it lands once its combination passes.";
+        assert_eq!(queue_of(older), None);
+        assert_eq!(words(older), older);
+        assert_eq!(queue_of("<!-- sluice:queue {\"host\": -->"), None);
+        assert_eq!(queue_of("<!-- sluice:queue {\"host\":\"b\"}"), None);
+
+        let mut later = q.clone();
+        later.host = "c".into();
+        let twice = format!("{summary}\n\n{}", summed(&later, "Again."));
+        assert_eq!(queue_of(&twice), Some(later));
+    }
+
+    /// request-intake-host, "A pull request's state across hosts is read
+    /// from its check's fields": a run GitHub keeps completed as a failure
+    /// whose block reads `testing` is open, and the block's `failed`,
+    /// `conflict` and `landed` decide whatever the run's status; a check
+    /// with no block is read by its words (D6).
+    #[test]
+    fn the_fields_decide_over_the_words() {
+        let posting = |status, title: &str, state: Option<&str>| {
+            let mut q = queue_at("b", None, &status_of(&[]));
+            if let Some(state) = state {
+                q.taken_in = true;
+                q.submission = Some(1406);
+                q.state = Some(state.into());
+            }
+            let words = "In main's queue.";
+            Posting {
+                status,
+                title: title.into(),
+                summary: match state {
+                    Some(_) => summed(&q, words),
+                    None => words.into(),
+                },
+                text: None,
+            }
+        };
+        let read = |status, title: &str, state| told(Some(&posting(status, title, state)));
+        assert_eq!(
+            read(Status::Failure, "testing main + #12", Some("testing")),
+            Told::Open
+        );
+        assert_eq!(
+            read(Status::InProgress, "failed: app:test", Some("failed")),
+            Told::SentBack { conflict: false }
+        );
+        assert_eq!(
+            read(Status::Failure, "failed: app:test", Some("conflict")),
+            Told::SentBack { conflict: true }
+        );
+        assert_eq!(read(Status::Queued, "queued", Some("landed")), Told::Landed);
+        let mut waiting = posting(Status::Failure, "waiting: the next submit", None);
+        waiting.summary = summed(&queue_at("b", None, &status_of(&[])), "Held.");
+        assert_eq!(told(Some(&waiting)), Told::Open);
+
+        assert_eq!(
+            read(Status::Failure, "failed: app:test", None),
+            Told::SentBack { conflict: false }
+        );
+        assert_eq!(
+            read(Status::Failure, "conflict with #10", None),
+            Told::SentBack { conflict: true }
+        );
+        assert_eq!(read(Status::Success, "landed as abc", None), Told::Open);
+        assert_eq!(told(None), Told::Open);
     }
 
     /// pull-request-status, a draft with no head: shown as a draft, with
     /// no forecast (128).
     #[test]
     fn a_draft_with_no_head_shows_no_forecast() {
-        let w = waiting("main", None, &["a draft".into()], None);
+        let w = waiting(
+            "main",
+            None,
+            &["a draft".into()],
+            None,
+            queue_at("b", None, &status_of(&[])),
+        );
         assert_eq!(w.posting.title, "waiting: a draft");
         assert!(
             !w.posting.summary.contains("Forecast:"),
@@ -3907,6 +4820,7 @@ mod tests {
             Some("unit/review"),
             &[NEXT_SUBMIT.into()],
             Some("forecast: merges onto main without conflict".into()),
+            queue_at("b", None, &status_of(&[])),
         );
         assert_eq!(w.posting.status, Status::Queued);
         assert_eq!(w.posting.title, "waiting: the next submit");
@@ -3931,6 +4845,7 @@ mod tests {
             None,
             &[format!("{WITHDRAWN_BY}{}", withdrawer("operator"))],
             Some("forecast: merges onto main without conflict".into()),
+            queue_at("b", None, &status_of(&[])),
         );
         assert_eq!(w.posting.status, Status::Queued);
         assert_eq!(w.posting.title, "waiting: withdrawn by the operator");
@@ -4016,6 +4931,13 @@ mod tests {
     /// with none says what it said before.
     #[test]
     fn a_landing_beside_the_queue_says_no_check_ran() {
+        let on_b = || {
+            queue_at(
+                "b",
+                Some(&submitted(12, "pull/12", "landed")),
+                &status_of(&[]),
+            )
+        };
         let covered = outcome_shown(
             "main",
             &Outcome::Landed {
@@ -4029,12 +4951,13 @@ mod tests {
                 }),
             },
             &BTreeMap::new(),
+            on_b(),
         );
         assert_eq!(covered.posting.status, Status::Success);
         assert_eq!(covered.posting.title, "landed as 0cef58d beside the queue");
         assert_eq!(
-            covered.posting.summary,
-            "Landed on main as `0cef58d` beside the queue, with no check run: no required \
+            words(&covered.posting.summary),
+            "Submission 12 on b.\n\nLanded on main as `0cef58d` beside the queue, with no check run: no required \
              check reads its changes. Covered by the result at `e25fea4`, passed (141 run, 0 \
              replayed)."
         );
@@ -4047,11 +4970,12 @@ mod tests {
                 covered_by: None,
             },
             &BTreeMap::new(),
+            on_b(),
         );
         assert_eq!(shown.posting.title, "landed as l1abcde beside the queue");
         assert_eq!(
-            shown.posting.summary,
-            "Landed on main as `l1abcde` beside the queue, with no check run: no required \
+            words(&shown.posting.summary),
+            "Submission 12 on b.\n\nLanded on main as `l1abcde` beside the queue, with no check run: no required \
              check reads its changes."
         );
     }
