@@ -214,6 +214,29 @@ not run when its program could not be started, when it exits with a code
 `[tests] not_run` names, or when the executor reports refusing the run
 something it needs.
 
+When a task a required test depends on runs and fails, and the task
+runner skips the test for it, that task fails the test. exec lists the
+task under
+`failed:`, with the tests that failed on their own, and beneath it says
+which test the task failed. It records the task's fail under its
+key, as it records a test's, and exits `1`. It never names the skipped
+test as not run: it never ran, and the task is the one to fix.
+
+```console
+$ sluice exec main
+running the checks 8d41b6c affects against main (c41e8f2)
+…what the tests print…
+failed: api:integration
+  root:integration failed by api:integration, a task it depends on
+recorded 1 result under its key for 8d41b6c
+```
+
+Under `--json`, `dependencies` gives each task that failed a test as
+`tasks` gives a test, `{task, hash, outcome, recorded}`, and
+`failed_by` gives each test a task failed, `{task, by}`, `by` naming
+the tasks. Neither is in `missing`, which lists only the required tests the
+run left without a result.
+
 `sluice exec <branch> -- <command>` runs any command the same way, with
 `SLUICE_CHECKOUT`, `SLUICE_TMP` and the ports in its environment, and
 exits with the command's exit code. It records nothing, and is not held
@@ -950,6 +973,26 @@ testing main + #12 · 7/12 tasks · running sluice:e2e 25m03s, site:prose 40s ·
 testing main + #12 · 12 tasks to run, 0 replayed
 passed · landed as b7d2e94
 ```
+
+A submission blamed for a required test that a task it depends on
+failed names the task failed, then the test it failed, and where the
+task's log is kept. The test is never named as not run and has no log,
+since it never ran. Read the task's log and fix the task:
+
+```console
+$ sluice wait 14
+#14 queued
+testing main + #14 · 3 tasks to run, 0 replayed
+failed: api:integration
+  root:integration failed by api:integration, a task it depends on
+  on main + #14 (e20a6f9)
+  log of api:integration: .git/sluice/.logs/main/c4/api:integration.log
+the agent working in cards fixes it there and submits again
+```
+
+Under `--json`, the record's `failed` holds both: the task with its
+`hash` and `log`, and the test with `failed_by`, as [the submission's
+record](/sluice/reference/state/#a-submission) says.
 
 To a branch with pull requests, `sluice wait <branch>` follows the
 worktree's pull request as a waiting `sluice submit` does. Once sluice

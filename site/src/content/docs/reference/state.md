@@ -368,6 +368,29 @@ is sluice's own. The field is left out when it is empty.
 added, so a script that reads `state`, such as an agent looping on
 `sluice wait --json`, can match all of them.
 
+`failed` lists each test that failed, with its `hash`, the key its
+result is recorded under, and its `log`, where what it printed is kept.
+A task a required test depends on is listed among them where it ran and
+failed, and the task runner skipped the required test for it: that task
+is the one to fix. The required test is listed too, with `failed_by`
+naming the tasks it depends on that failed, and no `hash` or `log`,
+since it never ran:
+
+```json
+"failed": [
+  { "task": "api:integration", "hash": "8c41a0e7d2",
+    "log": ".git/sluice/.logs/main/c4/api:integration.log" },
+  { "task": "root:integration", "failed_by": ["api:integration"] }
+]
+```
+
+A test with neither `hash` nor `failed_by` was left without a result:
+skipped for another reason, never reached or cut off by the time limit.
+Or it could not run, and then its `not_run` says why. A test read as
+failed because its key both passed and failed has `flaky`, as
+[`sluice overview --json`](/sluice/reference/commands/#sluice-overview)
+gives it. A record written by an older sluice has no `failed_by`.
+
 `after` lists submissions this one must land after. `attempt` counts how
 many times this worktree has submitted to this branch. `from.worktree`
 is the branch the work was submitted from; `from.path` is the worktree
