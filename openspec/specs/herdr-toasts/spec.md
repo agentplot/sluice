@@ -11,7 +11,8 @@ and taking them to the pane of the agent whose submission failed.
 For each new `blamed` or `conflict` line in a branch's recent events the
 plugin SHALL raise one herdr toast naming the submission, the branch and,
 for a blame, the blamed tests, once per event across restarts of the
-watcher.
+watcher, in each herdr server it serves that has a pane in the event's
+repository, or in every server it serves when none has.
 
 #### Scenario: Blamed
 
@@ -32,12 +33,26 @@ watcher.
   recent events hold old blames
 - **THEN** none of them raises a toast
 
+#### Scenario: Three servers
+
+- **WHEN** servers A and B have panes in the repository, server C has
+  none, and a new document shows `#87` blamed
+- **THEN** one toast is raised in A and one in B, none in C, and a
+  watcher restarted after them raises none
+
+#### Scenario: A repository no pane is in
+
+- **WHEN** a source of the user's prints a new blame of `#87` in a
+  repository no pane of any server is in, and the watcher serves two
+  servers
+- **THEN** one toast is raised in each of the two servers
+
 ### Requirement: A landing raises a toast only away from its pane
 
-For each new `landed` line the plugin SHALL raise one toast per landed
-submission whose pane it can find and that pane is not the one in front
-of the user, and SHALL raise none for a submission whose pane is in front
-of the user or that has no pane.
+For each new `landed` line the plugin SHALL raise, in each herdr server
+it serves, one toast per landed submission whose pane is open in that
+server and is not the one in front of the user there, and SHALL raise
+none in a server where that pane is in front or that has no pane of it.
 
 #### Scenario: Looking elsewhere
 
@@ -48,6 +63,12 @@ of the user or that has no pane.
 
 - **WHEN** `#94` lands and its pane, tab and workspace are all focused
 - **THEN** no toast is raised
+
+#### Scenario: Two servers
+
+- **WHEN** `#94` lands, its worktree has a pane in front in server A and
+  a pane in another tab in server B
+- **THEN** one toast is raised in B and none in A
 
 ### Requirement: Jump to the culprit
 

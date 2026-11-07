@@ -3,14 +3,16 @@
 # The tab-bar segment: the queue of the focused pane's repository on one
 # line, worded as the Claude Code board's band; nothing while there is no
 # queue. Run by herdr's `tab_bar_right` from the copy the watcher keeps in
-# its state directory, with the focused pane's directory as cwd. It reads
-# only that repository's documents: another repository's neither adds to
-# its work nor blanks it.
+# the host's state, with the focused pane's directory as cwd, whichever
+# herdr server runs it. It reads only that repository's documents: another
+# repository's neither adds to its work nor blanks it.
 set -u
 here=$(cd "$(dirname "$0")/.." && pwd -P)
 HERDR_PLUGIN_ROOT=$here
-# The copy lives in <state>/segment; the plugin's own run gives the state.
-[ -n "${HERDR_PLUGIN_STATE_DIR:-}" ] || HERDR_PLUGIN_STATE_DIR=$(dirname "$here")
+# The copy lives in <state>/segment, so the host's state is where it is,
+# and nothing of the environment but HOME and PATH is read (D12). The
+# plugin's own folder, which has its manifest, is told the state by herdr.
+[ -f "$here/herdr-plugin.toml" ] || HERDR_PLUGIN_STATE_DIR=$(dirname "$here")
 export HERDR_PLUGIN_ROOT HERDR_PLUGIN_STATE_DIR
 . "$here/lib/common.sh"
 

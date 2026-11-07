@@ -16,8 +16,16 @@ case "$*" in
   echo $$ >>"$FAKE/watch-pids"
   [ -f "$FAKE/watch-$here.jsonl" ] || exit 1
   cat "$FAKE/watch-$here.jsonl"
-  # Held open, as a real watch is, while the test wants it.
-  while [ -f "$FAKE/hold" ]; do sleep 1; done
+  # Held open, as a real watch is, while the test wants it, printing
+  # next-<directory>.jsonl when a test puts it there, as a real watch prints
+  # a document when the queue changes.
+  while [ -f "$FAKE/hold" ]; do
+    if [ -f "$FAKE/next-$here.jsonl" ]; then
+      cat "$FAKE/next-$here.jsonl"
+      rm -f "$FAKE/next-$here.jsonl"
+    fi
+    sleep 1
+  done
   ;;
 "overview --json")
   [ -f "$FAKE/probe-sleep" ] && sleep "$(cat "$FAKE/probe-sleep")"
