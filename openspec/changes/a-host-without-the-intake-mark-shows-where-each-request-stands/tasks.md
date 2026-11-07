@@ -29,7 +29,7 @@ words for what it changes.
 
 ## 4. The check's fields decide over its words
 
-- [ ] 4.1 `follow_across` reads a request's state from its check's block where there is one: taken in and `failed` or `conflict` is sent back, and `landed` is landed. A check with no block is read by its words, as now (D6). True when `sluice exec main -- cargo test -p sluice --features tools --test pull_requests -- a_run_github_keeps_completed_reads_by_its_block an_older_sluices_check_reads_by_its_words landed_on_another_host blamed_on_another_host` passes. The first sets `#12`'s run on the double completed as a failure with a block reading `testing`, and fails with `pulls.rs` as main held it.
+- [x] 4.1 `follow_across` reads a request's state from its check's block where there is one: taken in and `failed` or `conflict` is sent back, and `landed` is landed. A check with no block is read by its words, as now (D6). True when `sluice exec main -- cargo test -p sluice --features tools --test pull_requests -- a_run_github_keeps_completed_reads_by_its_block an_older_sluices_check_reads_by_its_words landed_on_another_host blamed_on_another_host` passes. The first sets `#12`'s run on the double completed as a failure with a block reading `testing`, and fails with `pulls.rs` as main held it.
 
 ## 5. A wait names where its request stands
 
