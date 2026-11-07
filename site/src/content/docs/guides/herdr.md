@@ -23,8 +23,11 @@ herdr plugin install agentplot/sluice/plugins/herdr
 It needs herdr 0.9.3 or later, sluice 0.12 or later and `jq` on `PATH`, on
 Linux or macOS. It reads what it shows from `sluice overview --json
 --watch`, the same document the
-[Claude Code plugin](/sluice/guides/claude-code/) reads, in each repository
-with sluice's records that one of your panes is in.
+[Claude Code plugin](/sluice/guides/claude-code/) reads, run once in each
+repository with sluice's records that a pane of any of your herdr servers
+is in. One watcher does this for all of your herdr servers on a host. The
+first server's startup starts it, and each server's startup and new panes
+and worktrees have it serve that server. It stops once none of them runs.
 
 ## Set up your keys and sidebar
 
@@ -234,8 +237,9 @@ session reads the same from `SLUICE_BRANCH`, as
 
 ## Other sources
 
-By default the plugin runs `sluice overview --watch --json` in each
-repository a pane is in. Any other command that prints the same documents,
+By default the plugin runs `sluice overview --watch --json` once in each
+repository a pane of any herdr server is in, and stops it once no pane is
+there. Any other command that prints the same documents,
 one per line, can be added in `sources.toml` in the plugin's config
 directory (`herdr plugin config-dir agentplot.sluice`); the
 [plugin's README](https://github.com/agentplot/sluice/tree/main/plugins/herdr)

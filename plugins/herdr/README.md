@@ -12,9 +12,13 @@ herdr plugin install agentplot/sluice/plugins/herdr
 ```
 
 Needs herdr 0.9.3 or later, `sluice` 0.12 or later and `jq` on `PATH`, on
-Linux or macOS. It reads everything from `sluice overview --watch --json`
-in each repository with sluice's records that one of your panes is in, and
-does nothing elsewhere. It never submits, withdraws or lands anything.
+Linux or macOS. It reads everything from `sluice overview --watch --json`,
+run once in each repository with sluice's records that a pane of any of
+your herdr servers is in, and does nothing elsewhere. One watcher does
+this for all of your herdr servers on a host: the first server's startup
+starts it, each server's startup and new panes and worktrees have it
+serve that server, and it stops once none of them runs. It never submits,
+withdraws or lands anything.
 
 ## What you get
 
@@ -196,8 +200,9 @@ in the session's environment.
 
 ## Sources
 
-By default the plugin runs `sluice overview --watch --json` in every
-repository with sluice's records that a pane is in. To read documents from
+By default the plugin runs `sluice overview --watch --json` once in every
+repository with sluice's records that a pane of any herdr server is in,
+and stops it once no pane of any server is there. To read documents from
 anywhere else, list the commands in `sources.toml`, in the plugin's config
 directory (`herdr plugin config-dir agentplot.sluice`):
 
