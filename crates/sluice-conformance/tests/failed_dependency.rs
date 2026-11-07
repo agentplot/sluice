@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use sluice_conformance::{policy, Harness, Rig, BRANCH};
 use sluice_core::records::{Event, ResultLine, State};
-use sluice_core::{Peer, Sluice, SubmitRequest};
+use sluice_core::{Peer, Sluice, SubmitHead, SubmitRequest};
 use sluice_seams::{Decided, Outcome};
 
 /// The check `main` requires: a task that runs nothing of its own.
@@ -84,7 +84,7 @@ fn passed_on_another_branch(h: &Harness, policy: &str, content: &str) {
     h.w().session("unit/y", "agent-y", &head);
     h.sluice()
         .submit(&SubmitRequest {
-            worktree: "unit/y".into(),
+            head: SubmitHead::Worktree(h.place("unit/y")),
             branch: other.into(),
             after: Vec::new(),
             priority: 0,

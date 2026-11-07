@@ -419,7 +419,7 @@ fn a_branch_whose_limits_the_host_cannot_hold_ends_no_round() {
     let s = h.sluice();
     let y = s
         .submit(&sluice_core::SubmitRequest {
-            worktree: "unit/y".into(),
+            head: sluice_core::SubmitHead::Worktree("unit/y".into()),
             branch: other.into(),
             after: vec![],
             priority: 0,

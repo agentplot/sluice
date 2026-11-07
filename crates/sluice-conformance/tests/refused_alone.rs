@@ -7,7 +7,8 @@
 use sluice_conformance::{policy, previewed, Harness, Rig, BRANCH};
 use sluice_core::records::State;
 use sluice_core::{
-    AmendRefusal, Lookup, Requester, Serves, Step, SubmitRequest, Unread, WithdrawRefusal, Withdrew,
+    AmendRefusal, Lookup, Requester, Serves, Step, SubmitHead, SubmitRequest, Unread,
+    WithdrawRefusal, Withdrew,
 };
 use sluice_seams::Settings;
 
@@ -23,7 +24,7 @@ fn submit_to(h: &Harness, branch: &str, worktree: &str, path: &str) -> u64 {
     h.w().session(worktree, &format!("agent-{worktree}"), &head);
     h.sluice()
         .submit(&SubmitRequest {
-            worktree: worktree.into(),
+            head: SubmitHead::Worktree(worktree.into()),
             branch: branch.into(),
             after: vec![],
             priority: 0,

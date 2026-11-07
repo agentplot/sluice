@@ -1,7 +1,7 @@
 ---
 number: 92
 title: A host's one driver may drive every repository on the host that has sluice, and nothing requires it
-status: proposed
+status: rejected
 date: 2026-11-06
 decision-makers:
 - Chuck Swanberg
@@ -10,7 +10,7 @@ decision-makers:
 
 # A host's one driver may drive every repository on the host that has sluice, and nothing requires it
 
-Status: proposed to the user on 2026-11-06, as `briefs.15` has it; accepted only on their yes.
+Status: rejected by the user on 2026-11-06, replaced by record 0093 on their approval of the host process design in the research talk `research--a-hosts-one-driver-fits-boomdrive`: "Okay I approve this." The host form of `sluice run` it proposed, a process a host keeps, and the mark naming its copy are not built.
 
 Deciders: the user, in swancloud-ops's pane at about 22:29Z on 2026-11-06, on hearing that the gate box runs one `sluice run` under systemd per repository (afterthought/crew-state, agentplot/main, signal 2026-11-06-agentplot-operator-287e6227/01; madswan/main, signal 2026-11-06-madswan-operator-72b5d835/01): "This is a terrible [...] design for sluice. [...] it just doesn't scale: having to install it and run a system service for each repo." and "We have a fixed number of repos for right now so we could keep it in place if it's working. We need to [...] figure out the right way to build sluice", which settles that a host's driving of its queues must not take one installed service per repository, and that the services standing today stay until the new shape is built. agentplot-design for the shape: the host form of `sluice run`, how it finds its repositories, and the intake mark naming a copy, each with the path not taken below.
 

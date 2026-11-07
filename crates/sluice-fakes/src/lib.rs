@@ -319,6 +319,9 @@ struct Inner {
     logs: BTreeMap<String, String>,
     // the driver
     worktrees: BTreeMap<String, Session>,
+    /// The agent the session's harness names for a submit by name (124),
+    /// `SLUICE_AGENT` to the worktrunk driver; `None` names the branch.
+    harness_agent: Option<String>,
     /// Worktrees with a branch checked out: the branch and the revision.
     checked_out: BTreeMap<String, (String, Rev)>,
     delivered: Vec<Notification>,
@@ -1626,6 +1629,12 @@ impl World {
         );
     }
 
+    /// 124: from now, a submit by name runs in a session whose harness
+    /// names `agent`, as `SLUICE_AGENT` does; `None` names the branch.
+    pub fn harness_names(&self, agent: Option<&str>) {
+        self.0.borrow_mut().harness_agent = agent.map(str::to_string);
+    }
+
     /// A worktree has `branch` checked out, at the branch's tip; `None`
     /// detaches it.
     pub fn check_out(&self, worktree: &str, branch: Option<&str>) {
@@ -2826,6 +2835,24 @@ impl Driver for FakeDriver {
             .get(worktree)
             .cloned()
             .ok_or_else(|| anyhow!("no place {worktree}"))
+    }
+
+    /// 124: the agent the harness names, else the branch; the branch as
+    /// its work and its head; this world's host; no path and no session,
+    /// whatever places the world holds (record 0090).
+    fn named(&self, branch: &str) -> Result<Submitter> {
+        let inner = self.0 .0.borrow();
+        Ok(Submitter {
+            agent: inner
+                .harness_agent
+                .clone()
+                .unwrap_or_else(|| branch.to_string()),
+            worktree: branch.into(),
+            path: None,
+            head: Some(branch.into()),
+            host: Some(inner.host.clone()),
+            session: None,
+        })
     }
 
     /// 51: delivered to the session its submitter recorded, or to its

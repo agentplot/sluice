@@ -470,6 +470,33 @@ review or checks has no submission at all: its state is read from GitHub
 each round, and shown there as the `sluice` check. Submission ids
 are numbered in order, and that order is the queue's order.
 
+A [submission by
+name](/sluice/reference/commands/#submitting-a-branch-by-name), `sluice
+submit main --head feature/runner`, names the branch as its work and
+its head: `"from": { "agent": "feature/runner", "worktree":
+"feature/runner", "head": "feature/runner", "host": "build-1" }`. It
+has no `path` and no `session`, wherever the submit ran. Its agent is
+`SLUICE_AGENT` where the submit's session set it, and the branch
+otherwise. `from.head` equal to `from.worktree` marks a submission by
+name, and no other field does: a worktree's own submission has no
+`head`, and a pull request's `worktree` is `pull/<n>`. Its outcome goes
+to no session, so it never has `delivered` or `delivered_to`, and the
+log holds no `pending` or `delivered` event for it. A worktree that has
+checked out the branch submits the same work, by `from.worktree`, so
+each withdraws the other's earlier submission and `attempt` counts both.
+To a branch with pull requests, the submission is the pull request's,
+from `pull/<n>` with `head` the branch.
+
+A withdrawn submission has `"withdrawn": { "by": "operator", "at":
+"2026-10-11T09:30:02Z" }`: who withdrew it, and when. A host that found
+another host taking its branch's pull requests in withdrew its own
+submissions of them. Such a submission's `withdrawn` also has
+`"handed_over_to": "build-2"`, that host. It holds no pull request:
+whichever host takes the pull requests in submits it again, and its log
+line names the host the same way. A submission an older sluice withdrew
+so has no `handed_over_to`, and its `by` reads `build-2 takes main's
+pull requests in`.
+
 ## The log
 
 One event per line. A test is logged when it runs, a failure exactly

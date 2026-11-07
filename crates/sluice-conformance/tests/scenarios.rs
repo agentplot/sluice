@@ -553,7 +553,7 @@ fn s58_a_bolts_landing_worktree_submits_the_bolt_as_its_remote_holds_it() {
     let accepted = h
         .sluice()
         .submit(&sluice_core::SubmitRequest {
-            worktree: BRANCH.into(),
+            head: sluice_core::SubmitHead::Worktree(BRANCH.into()),
             branch: "main".into(),
             after: Vec::new(),
             priority: 0,

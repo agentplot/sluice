@@ -1198,6 +1198,16 @@ pub struct Submitter {
     pub session: Option<String>,
 }
 
+impl Submitter {
+    /// 124: a submission that named a branch sluice lands on as its head,
+    /// from no worktree: its head is its work, the branch (record 0090).
+    /// A worktree's own submission names no head (ADR 0025), and a pull
+    /// request's work is its `pull/<n>`, so nothing else has both equal.
+    pub fn by_name(&self) -> bool {
+        self.head.as_deref() == Some(self.worktree.as_str())
+    }
+}
+
 /// A session's place as its driver sees it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Session {
@@ -1455,6 +1465,13 @@ pub trait Driver {
     /// 2, 47: the head of a session's place, who holds it, and anything
     /// the place holds beyond its commits.
     fn session(&self, worktree: &str) -> Result<Session>;
+
+    /// 124: who submits `branch` by name: the agent the session's harness
+    /// names, else the branch; the branch as its work and its head; this
+    /// host; no worktree and no session, wherever the command runs, so
+    /// nothing of the folder it runs in is read (record 0090; rule
+    /// core.50).
+    fn named(&self, branch: &str) -> Result<Submitter>;
 
     /// 50, 51: deliver an outcome to that entry's session and no other,
     /// and say whether it was. A carrier asked that answered no is
@@ -1814,5 +1831,24 @@ mod tests {
         assert_eq!(read_refused(&e), Some(&refused(None)));
         assert!(format!("{e:#}").ends_with("not found"), "{e:#}");
         assert_eq!(read_refused(&anyhow::anyhow!("main does not exist")), None);
+    }
+
+    /// 124: a submission by name is told by its form alone, its head its
+    /// work; a worktree's own names no head, and a request's work is its
+    /// `pull/<n>` (record 0090).
+    #[test]
+    fn a_submission_by_name_is_its_head_as_its_work() {
+        let from = |worktree: &str, head: Option<&str>| Submitter {
+            agent: "agent".into(),
+            worktree: worktree.into(),
+            path: None,
+            head: head.map(str::to_string),
+            host: None,
+            session: None,
+        };
+        assert!(from("bolt/x", Some("bolt/x")).by_name());
+        assert!(!from("bolt/x", None).by_name());
+        assert!(!from("pull/7", Some("bolt/x")).by_name());
+        assert!(!from("unit/a", Some("bolt/x")).by_name());
     }
 }

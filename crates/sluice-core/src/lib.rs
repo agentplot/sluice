@@ -35,8 +35,8 @@ use crate::refused::Refusal;
 
 pub use ops::{
     Accepted, AmendRefusal, CopyDiffers, CopyHow, Forecast, Forecasted, GroupRequest, KeptOut,
-    Lookup, Pending, PendingOutcome, Refused, Requester, Status, SubmitRefusal, SubmitRequest,
-    SubmittedHead, Unread, WithdrawRefusal, Withdrew,
+    Lookup, Pending, PendingOutcome, Refused, Requester, Status, SubmitHead, SubmitRefusal,
+    SubmitRequest, SubmittedHead, Unread, WithdrawRefusal, Withdrew,
 };
 pub use step::{Round, Started, Step};
 
