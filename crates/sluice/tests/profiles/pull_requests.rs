@@ -5107,6 +5107,163 @@ fn a_wait_across_hosts_reads_at_its_pace() {
     assert!(g.of(pull.number).is_empty(), "no intake, no round");
 }
 
+impl OnGitHub {
+    /// The pull requests into `main` this host follows, by number, as its
+    /// forge state keeps them (137); `null` where it keeps none.
+    fn follows(&self) -> Value {
+        let path = self.state.path().join("sluice/forge/follows/o/r/main.json");
+        std::fs::read(path)
+            .ok()
+            .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+            .map_or(Value::Null, |v| v["requests"].clone())
+    }
+}
+
+/// request-intake-host, "Submitted here, taken in there": host B's `sluice
+/// run` holds main's intake mark, and `wt submit main --no-wait` on host A
+/// opens a pull request; A's follows name it at its head, and A's next
+/// round asks GitHub nothing of main's open pull requests.
+#[test]
+fn submitted_here_taken_in_there() {
+    let g = OnGitHub::new("follows-submitted", "");
+    g.named("a", "");
+    let b = g.other("b", "", "");
+    b.run("1");
+    assert_eq!(g.mark().unwrap().1["host"], "b");
+    let w = g.session("there", &[("t.txt", "t\n")]);
+    let out = g.wt_submit(&w, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let lists = g.lists();
+    let pull = g.pull_from("unit/there");
+    let follows = g.follows();
+    let row = &follows[pull.number.to_string()];
+    assert_eq!(row["head"], pull.head.as_str(), "{follows}");
+    assert_eq!(
+        (&row["from"], &row["open"], &row["merged"]),
+        (&"unit/there".into(), &true.into(), &false.into()),
+        "{follows}"
+    );
+    g.step();
+    assert_eq!(g.lists(), lists, "A's round asks nothing of the list");
+    assert!(g.of(pull.number).is_empty(), "A took nothing in");
+    assert!(g.follows()[pull.number.to_string()].is_object());
+}
+
+/// request-intake-host, "Handed over": host A has `pull/<n>` in its queue
+/// and host B's `sluice run` takes main's mark; A's next pass withdraws its
+/// submission, and A's follows name the request at the head it withdrew.
+#[test]
+fn handed_over_is_followed() {
+    let g = OnGitHub::new("follows-handed", "");
+    let (n, _, process, place, combination) = handed_mid_test(&g);
+    assert!(g.follows()[n.to_string()].is_null(), "taken in here");
+    g.step();
+    let a = g.of(n);
+    assert_eq!(a[0]["state"], "withdrawn", "{a:?}");
+    let follows = g.follows();
+    assert_eq!(follows[n.to_string()]["head"], a[0]["head"], "{follows}");
+    ended_by_the_hand_over(&g, &process, &place, &combination);
+}
+
+/// request-intake-host, "Merged": host A follows the pull request its
+/// waiting submit opened, host B lands it, and A's submit reads it merged:
+/// it says it landed, and A's follows name it no longer.
+#[test]
+fn a_merged_request_leaves_the_follows() {
+    let g = OnGitHub::new("follows-merged", "");
+    g.discovery("10s");
+    g.named("a", "");
+    let b = g.other("b", "", "");
+    b.run("1");
+    let w = g.session("merged", &[("m.txt", "m\n")]);
+    let mut submit = g
+        .command(env!("CARGO_BIN_EXE_sluice"), &w)
+        .args(["submit", "main"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let until = Instant::now() + Duration::from_secs(60);
+    let followed = |g: &OnGitHub| {
+        let n = g.gh.forge.by_ref("unit/merged").unwrap()?.number;
+        g.follows()[n.to_string()].is_object().then_some(n)
+    };
+    let n = loop {
+        if let Some(n) = followed(&g) {
+            break n;
+        }
+        if Instant::now() >= until || submit.try_wait().unwrap().is_some() {
+            let _ = submit.kill();
+            panic!(
+                "never followed: {}\n{}",
+                g.follows(),
+                text(&submit.wait_with_output().unwrap())
+            );
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    while !b.of(n).first().is_some_and(|s| s["state"] == "landed") {
+        assert!(Instant::now() < until, "B never landed it: {:?}", b.of(n));
+        b.discovery_passes();
+        b.run("2");
+    }
+    while submit.try_wait().unwrap().is_none() {
+        if Instant::now() >= until {
+            let _ = submit.kill();
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let out = submit.wait_with_output().unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert!(text(&out).contains("landed"), "{}", text(&out));
+    assert!(g.follows().get(n.to_string()).is_none(), "{}", g.follows());
+}
+
+/// request-intake-host, "Two waits and a status": host A follows its pull
+/// request, which host B takes in, with `discovery` at sixty seconds; two
+/// waits on it for a minute, and statuses of main beside them, read it and
+/// its check from GitHub no more than four times each in all.
+#[test]
+fn two_waits_and_a_status_read_at_one_pace() {
+    let g = OnGitHub::new("follows-pace", "reviews = 1");
+    g.named("a", "");
+    let b = g.other("b", "", "");
+    b.run("1");
+    let w = g.session("paced", &[("p.txt", "p\n")]);
+    let out = g.wt_submit(&w, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let pull = g.pull_from("unit/paced");
+    let (before, checks) = (g.pull_reads(pull.number), g.posted_reads(&pull.head));
+    let wait = || {
+        g.command(env!("CARGO_BIN_EXE_sluice"), &w)
+            .env("SLUICE_ROUND_SLEEP", "record")
+            .args(["wait", "main", "--timeout", "57s"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap()
+    };
+    let waits = [wait(), wait()];
+    for _ in 0..6 {
+        let out = g.sluice(&["status", "main"]);
+        assert!(out.status.success(), "{}", text(&out));
+    }
+    let outs: Vec<Output> = waits
+        .into_iter()
+        .map(|w| w.wait_with_output().unwrap())
+        .collect();
+    let shown: Vec<String> = outs.iter().map(text).collect();
+    for out in &outs {
+        assert_eq!(out.status.code(), Some(sluice::WAITING), "{shown:?}");
+    }
+    let reads = g.pull_reads(pull.number) - before;
+    assert!(reads <= 4, "{reads} reads of the request: {shown:?}");
+    let reads = g.posted_reads(&pull.head) - checks;
+    assert!(reads <= 4, "{reads} reads of its check: {shown:?}");
+    assert!(g.of(pull.number).is_empty(), "no intake, no round");
+}
+
 /// request-intake-host, "Landed on another host": a waiting `sluice submit
 /// main` on host A opened its pull request, host B takes main's pull
 /// requests in and lands it, and A's submit exits 0, reporting it landed.

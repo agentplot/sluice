@@ -61,7 +61,7 @@ use super::forge::{
     approvals, Check, Forge, Posted, Posting, Pull, Request, Review, Standing, Status, SLUICE_CHECK,
 };
 use super::kept::Observed;
-use super::kept::{Hold, Kept, Reading, Readings};
+use super::kept::{Follow, Hold, Kept, Reading, Readings};
 use super::render;
 use crate::identity::Identity;
 use crate::profiles::local_refs::LocalRefs;
@@ -307,8 +307,10 @@ pub struct Pulls {
     /// How often a branch's open pull requests are asked for while
     /// nothing on the host moves (136).
     discovery: chrono::TimeDelta,
-    /// What GitHub last said of each pull request a wait follows, by
-    /// number, and when (136).
+    /// What GitHub last said of each pull request a wait on the host that
+    /// takes it in follows, by number, and when, with its timeline once
+    /// read (136); one another host takes in is read through the host's
+    /// kept follows instead (137, design D4).
     seen: RefCell<BTreeMap<u64, Seen>>,
     /// 129: the policies intake read, by revision, kept across its passes.
     policies: sluice_core::Policies,
@@ -333,9 +335,6 @@ struct Seen {
     at: DateTime<Utc>,
     pull: Option<Pull>,
     readied: Option<Vec<DateTime<Utc>>>,
-    /// sluice's check on its head, where a wait follows it across hosts
-    /// and read it then.
-    posted: Option<Posted>,
 }
 
 /// A pull request's state: what sluice posts, and what a submit that
@@ -647,22 +646,36 @@ impl Pulls {
     /// round lands it (rule core.48). Submissions from the host's own
     /// worktrees stay. This host's runs of the combinations the withdrawals
     /// made obsolete end in this pass, and their checkouts are released,
-    /// whether or not a round follows (design D5).
-    fn hand_over(&self, s: &Sluice<'_>, branch: &str, host: &str, tip: &Rev) -> Result<()> {
+    /// whether or not a round follows (design D5). The host follows each
+    /// request it withdrew (design D3).
+    fn hand_over(&self, s: &Sluice<'_>, t: &Target, branch: &str, host: &str) -> Result<()> {
         let by = Requester::Intake(handed_over_to(host, branch));
-        let mut withdrew = false;
+        let mut withdrew = Vec::new();
         for sub in s.status(branch)?.submissions {
-            if number(&sub.from.worktree).is_none()
-                || sub.state.is_out()
+            let Some(n) = number(&sub.from.worktree) else {
+                continue;
+            };
+            if sub.state.is_out()
                 || sub.state == State::Landing
-                || s.seams().branch.contains(tip, &sub.head)?
+                || s.seams().branch.contains(&t.tip, &sub.head)?
             {
                 continue;
             }
             // Landing since: it lands, and nothing of it is withdrawn.
-            withdrew |= matches!(s.withdraw(sub.id, &by)?, Ok(Withdrew::Now));
+            if let Ok(Withdrew::Now) = s.withdraw(sub.id, &by)? {
+                withdrew.push((
+                    n,
+                    known(
+                        &sub.head.0,
+                        false,
+                        sub.subject.as_deref().unwrap_or_default(),
+                        sub.from.head.as_deref().unwrap_or_default(),
+                    ),
+                ));
+            }
         }
-        if withdrew {
+        if !withdrew.is_empty() {
+            self.follow_known(&t.repo, branch, withdrew);
             // 123: a release that failed is held in the records, and said.
             let mut said = Vec::new();
             crate::exec::tell_releases(&mut said, false, &s.drop_obsolete(branch)?)?;
@@ -869,6 +882,16 @@ impl Pulls {
         }
         let forge = self.forge(branch)?;
         let Some(_lock) = self.lock(branch)? else {
+            // 137: another process of the host takes this pass; this one
+            // follows the requests as the host the mark the branch's last
+            // fetch brought names takes them, where that is another host,
+            // so its wait reads them as the host's kept follows allow
+            // (design D4).
+            if !held.signed {
+                if let Some(host) = self.taker_elsewhere(&held, branch) {
+                    self.away.borrow_mut().insert(branch.to_string(), host);
+                }
+            }
             return Ok(true);
         };
         self.log_lines
@@ -915,7 +938,7 @@ impl Pulls {
                     .borrow_mut()
                     .insert(branch.to_string(), host.clone());
                 if !t.signed {
-                    self.hand_over(s, branch, &host, &t.tip)?;
+                    self.hand_over(s, &t, branch, &host)?;
                 }
                 self.register(&t.repo, &s.status(branch)?.submissions);
                 return Ok(true);
@@ -1109,7 +1132,9 @@ impl Pulls {
     /// requests: when it asked, at the branch's revision and its records'
     /// version as they stand once intake wrote, so its own submissions and
     /// withdrawals are no move; each open request's reading, with its
-    /// entry as it stands now; and nothing of a request no longer open.
+    /// entry as it stands now; and nothing of a request no longer open. A
+    /// request this host's records hold at its head is followed no longer
+    /// (137, design D3).
     fn keep_readings(
         &self,
         s: &Sluice<'_>,
@@ -1123,6 +1148,12 @@ impl Pulls {
         for (n, r) in &mut work {
             r.entry = entry(latest.get(&place(*n)));
         }
+        let here: Vec<u64> = work
+            .iter()
+            .filter(|(n, r)| latest.get(&place(**n)).is_some_and(|e| e.head.0 == r.head))
+            .map(|(n, _)| *n)
+            .collect();
+        self.unfollow(&t.repo, branch, &here);
         let version = s.seams().state.read(branch)?.version;
         self.kept.change_readings(&t.repo, branch, |kept| {
             kept.asked = Some(asked);
@@ -1980,6 +2011,22 @@ fn standing(
             ..fresh
         },
         None => fresh,
+    }
+}
+
+/// 137, design D3: an open pull request at `head` as this host's own act
+/// on it knows it, `draft` or not, titled `title` and opened from `from`,
+/// with nothing yet read of it.
+fn known(head: &str, draft: bool, title: &str, from: &str) -> Follow {
+    Follow {
+        read_at: None,
+        head: head.to_string(),
+        open: true,
+        merged: false,
+        draft,
+        title: title.to_string(),
+        from: from.to_string(),
+        check: None,
     }
 }
 
@@ -3014,7 +3061,7 @@ impl crate::PullRequests for Pulls {
         // in a quarter of the host's interval; between, what it last said.
         let now = clock.now();
         if self.away.borrow().contains_key(branch) {
-            return self.follow_across(forge, &t.repo, n, now);
+            return self.follow_across(forge, &t.repo, branch, n, now);
         }
         let fresh = self
             .seen
@@ -3030,7 +3077,6 @@ impl crate::PullRequests for Pulls {
                     at: now,
                     pull: pull.clone(),
                     readied: None,
-                    posted: None,
                 };
                 self.seen.borrow_mut().insert(n, seen);
                 pull
@@ -3119,48 +3165,28 @@ impl crate::PullRequests for Pulls {
 }
 
 impl Pulls {
-    /// 137: where pull request `n` stands while another host takes its
-    /// branch's pull requests in: by GitHub's word and sluice's check on its
-    /// head, which that host posts, each read no more often than once in a
-    /// quarter of the host's interval (136), what was last read standing
-    /// between. Merged is landed; sluice's check failed on its head is sent
-    /// back, as the check names; closed and not merged is closed.
+    /// 137: where pull request `n` into `branch` stands while another
+    /// host takes its pull requests in: by GitHub's word and sluice's check
+    /// on its head, which that host posts, as the host's kept follows hold
+    /// them, read again only once a quarter of the host's interval has
+    /// passed since any process of the host read them (136; design D4).
+    /// Merged is landed; sluice's check failed on its head is sent back, as
+    /// the check names; closed and not merged is closed. A request said to
+    /// be landed or closed is followed no longer (design D3).
     fn follow_across(
         &self,
         forge: &dyn Forge,
         repo: &Repo,
+        branch: &str,
         n: u64,
         now: DateTime<Utc>,
     ) -> Result<Followed> {
-        let fresh = self
-            .seen
-            .borrow()
-            .get(&n)
-            .filter(|seen| now - seen.at < self.discovery / 4)
-            .map(|seen| (seen.pull.clone(), seen.posted.clone()));
-        let (pull, posted) = match fresh {
-            Some(read) => read,
-            None => {
-                let pull = forge.pull(repo, n)?;
-                let posted = match &pull {
-                    Some(p) if p.open || p.merged => forge.posted(repo, &p.head)?,
-                    _ => None,
-                };
-                let seen = Seen {
-                    at: now,
-                    pull: pull.clone(),
-                    readied: None,
-                    posted: posted.clone(),
-                };
-                self.seen.borrow_mut().insert(n, seen);
-                (pull, posted)
-            }
-        };
-        let Some(p) = pull else {
+        let Some(f) = self.read_followed(forge, repo, branch, n, now)? else {
             return Ok(Followed::Closed);
         };
-        let posting = posted.map(|p| p.posting);
-        if p.merged {
+        let posting = f.check.map(|p| p.posting);
+        if f.merged {
+            self.unfollow(repo, branch, &[n]);
             let title = posting
                 .map(|p| p.title)
                 .filter(|t| t.starts_with("landed"))
@@ -3168,7 +3194,7 @@ impl Pulls {
             return Ok(Followed::Landed { title });
         }
         if let Some(posting) = posting.as_ref().filter(|p| p.status == Status::Failure) {
-            if p.open {
+            if f.open {
                 return Ok(Followed::SentBack {
                     conflict: posting.title.starts_with("conflict"),
                     title: posting.title.clone(),
@@ -3176,7 +3202,8 @@ impl Pulls {
                 });
             }
         }
-        if !p.open {
+        if !f.open {
+            self.unfollow(repo, branch, &[n]);
             return Ok(Followed::Closed);
         }
         let (title, lines) = match posting {
@@ -3195,9 +3222,150 @@ impl Pulls {
             lines,
             submission: None,
             names: BTreeMap::new(),
-            head: Some(p.head.clone()),
-            draft: p.draft,
+            head: Some(f.head),
+            draft: f.draft,
         })
+    }
+
+    /// 136, 137, design D4: pull request `n` into `branch` and sluice's
+    /// check on its head as the host's kept follows hold them, where a
+    /// process of the host read them within a quarter of its interval;
+    /// otherwise read from GitHub, each read conditional on the answer the
+    /// host keeps for its address, and kept for every process of the host.
+    /// The process that finds the read due claims it under the follows'
+    /// lock, so no two read it in one quarter, and gives the claim back
+    /// where its read failed. `None`: GitHub has no such pull request, and
+    /// it is followed no longer.
+    fn read_followed(
+        &self,
+        forge: &dyn Forge,
+        repo: &Repo,
+        branch: &str,
+        n: u64,
+        now: DateTime<Utc>,
+    ) -> Result<Option<Follow>> {
+        let quarter = self.discovery / 4;
+        let fresh = |f: &Follow| f.read_at.is_some_and(|at| now - at < quarter);
+        let kept = self.kept.follows(repo, branch).requests.remove(&n);
+        if let Some(f) = kept.filter(fresh) {
+            return Ok(Some(f));
+        }
+        let claimed = self.kept.change_follows(repo, branch, |follows| {
+            match follows.requests.get_mut(&n) {
+                Some(f) if fresh(f) => Err(Box::new(f.clone())),
+                Some(f) => Ok(f.read_at.replace(now)),
+                None => Ok(None),
+            }
+        })?;
+        let before = match claimed {
+            Err(read) => return Ok(Some(*read)),
+            Ok(before) => before,
+        };
+        let read = || -> Result<Option<Follow>> {
+            let Some(p) = forge.pull(repo, n)? else {
+                return Ok(None);
+            };
+            let check = match p.open || p.merged {
+                true => forge.posted(repo, &p.head)?,
+                false => None,
+            };
+            Ok(Some(Follow {
+                read_at: Some(now),
+                open: p.open,
+                merged: p.merged,
+                check,
+                ..known(&p.head, p.draft, &p.title, &p.head_ref)
+            }))
+        };
+        let read = match read() {
+            Ok(read) => read,
+            Err(e) => {
+                let _ = self.kept.change_follows(repo, branch, |follows| {
+                    if let Some(f) = follows.requests.get_mut(&n) {
+                        if f.read_at == Some(now) {
+                            f.read_at = before;
+                        }
+                    }
+                });
+                return Err(e);
+            }
+        };
+        self.kept
+            .change_follows(repo, branch, |follows| match &read {
+                Some(f) => {
+                    follows.requests.insert(n, f.clone());
+                }
+                None => {
+                    follows.requests.remove(&n);
+                }
+            })?;
+        Ok(read)
+    }
+
+    /// 137, design D3: follow each of `known` into `branch`, by number, as
+    /// this host's own act on it left it: what was read of one at the same
+    /// head stands, and the next process to follow one at a new head reads
+    /// it. A follow that could not be kept is warned of, and the act stands.
+    fn follow_known(&self, repo: &Repo, branch: &str, known: Vec<(u64, Follow)>) {
+        let kept = self.kept.change_follows(repo, branch, |follows| {
+            for (n, k) in known {
+                match follows.requests.get_mut(&n) {
+                    Some(f) if f.head == k.head => {
+                        f.open = true;
+                        f.draft = k.draft;
+                        if !k.title.is_empty() {
+                            f.title = k.title;
+                        }
+                        if !k.from.is_empty() {
+                            f.from = k.from;
+                        }
+                    }
+                    _ => {
+                        follows.requests.insert(n, k);
+                    }
+                }
+            }
+        });
+        if let Err(e) = kept {
+            crate::telemetry::warn(&format!("sluice: warning: {e:#}"));
+        }
+    }
+
+    /// 137, design D3: follow `numbers` into `branch` no longer, writing
+    /// the kept follows only where they hold one of them; one that could
+    /// not be let go is warned of.
+    fn unfollow(&self, repo: &Repo, branch: &str, numbers: &[u64]) {
+        let follows = self.kept.follows(repo, branch);
+        if !numbers.iter().any(|n| follows.requests.contains_key(n)) {
+            return;
+        }
+        let kept = self.kept.change_follows(repo, branch, |follows| {
+            for n in numbers {
+                follows.requests.remove(n);
+            }
+        });
+        if let Err(e) = kept {
+            crate::telemetry::warn(&format!("sluice: warning: {e:#}"));
+        }
+    }
+
+    /// 137: the other host that takes `branch`'s pull requests in, as this
+    /// process's intake last found it, or else as the intake mark the
+    /// branch's last fetch brought names it, with no fetch of its own (129);
+    /// `None` where no mark stands or it names this host.
+    fn taker_elsewhere(&self, t: &Target, branch: &str) -> Option<String> {
+        if let Some(host) = self.away.borrow().get(branch) {
+            return Some(host.clone());
+        }
+        match self.pushed(&t.remote).and_then(|p| p.intake_mark(branch)) {
+            Ok(mark) => mark
+                .map(|(_, m)| m.host)
+                .filter(|host| *host != self.peer.name),
+            Err(e) => {
+                crate::telemetry::warn(&format!("sluice: warning: {e:#}"));
+                None
+            }
+        }
     }
 
     /// 125: every worktree read before anything is pushed, and a refusal
@@ -3378,6 +3546,21 @@ impl Pulls {
                 },
                 left,
             ));
+        }
+        // 137, design D3: where another host takes the branch's pull
+        // requests in, as the mark this host last fetched names it, the host
+        // follows each request the act opened, updated or marked ready.
+        if !t.signed && self.taker_elsewhere(&t, branch).is_some() {
+            let follows = acted
+                .iter()
+                .map(|(p, _)| {
+                    (
+                        p.number,
+                        known(&p.head, n > 1 && p.draft, &p.title, &p.head_ref),
+                    )
+                })
+                .collect();
+            self.follow_known(&t.repo, branch, follows);
         }
         let taken = if n > 1 {
             self.take_act(&s, forge, &t, branch, worktrees, &acted, opened)?
