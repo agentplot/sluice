@@ -215,12 +215,9 @@ impl Sluice<'_> {
                 PreviewState::Failed("its command's supervisor stopped before it reported".into())
             }
             Progress::Finished(r) => {
-                let passed = !r.timed_out
-                    && r.missing.is_empty()
-                    && r.tasks
-                        .iter()
-                        .all(|t| t.outcome == sluice_seams::Outcome::Pass);
-                if passed {
+                // 15, 149: a check failed, failed by a task it depends
+                // on, or left without a result is no pass.
+                if !r.timed_out && !r.failed() {
                     PreviewState::Up
                 } else {
                     let task = r

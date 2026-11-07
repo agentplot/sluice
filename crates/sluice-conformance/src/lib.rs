@@ -15,7 +15,9 @@ use anyhow::Result;
 use sluice_core::line::Line;
 use sluice_core::records::{parse_lines, BranchDoc, Event, LogLine, ResultLine, Submission};
 use sluice_core::session::Recorded;
-use sluice_core::{Accepted, GroupRequest, Requester, Sluice, Step, SubmitRefusal, SubmitRequest};
+use sluice_core::{
+    Accepted, GroupRequest, Requester, Sluice, Step, SubmitHead, SubmitRefusal, SubmitRequest,
+};
 use sluice_fakes::Fakes;
 use sluice_seams::{Driver, Notification, Progress, Rev, RunReport, RunRequest};
 
@@ -185,7 +187,7 @@ pub trait Rig {
     ) -> Result<Accepted, SubmitRefusal> {
         self.sluice()
             .submit(&SubmitRequest {
-                worktree: self.place(worktree),
+                head: SubmitHead::Worktree(self.place(worktree)),
                 branch: BRANCH.into(),
                 after: after.to_vec(),
                 priority,
@@ -198,6 +200,23 @@ pub trait Rig {
         self.try_submit(worktree, &[], 0).expect("accepted").id
     }
 
+    /// 124: the branch `branch` submitted by name, from no worktree.
+    fn try_submit_by_name(&self, branch: &str) -> Result<Accepted, SubmitRefusal> {
+        self.sluice()
+            .submit(&SubmitRequest {
+                head: SubmitHead::Branch(branch.into()),
+                branch: BRANCH.into(),
+                after: Vec::new(),
+                priority: 0,
+                subject: None,
+            })
+            .expect("submit runs")
+    }
+
+    fn submit_by_name(&self, branch: &str) -> u64 {
+        self.try_submit_by_name(branch).expect("accepted").id
+    }
+
     /// 125: the places' heads submitted as one act, in the order given.
     fn try_submit_group(
         &self,
@@ -208,7 +227,10 @@ pub trait Rig {
         self.sluice()
             .submit_group(&GroupRequest {
                 branch: BRANCH.into(),
-                worktrees: worktrees.iter().map(|w| self.place(w)).collect(),
+                heads: worktrees
+                    .iter()
+                    .map(|w| SubmitHead::Worktree(self.place(w)))
+                    .collect(),
                 after: after.to_vec(),
                 priority,
                 subjects: Vec::new(),

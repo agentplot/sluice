@@ -7,7 +7,9 @@ use std::time::Duration;
 
 use sluice_conformance::{policy, Harness, Rig, BRANCH};
 use sluice_core::records::{CopyBehind, Event, State};
-use sluice_core::{CopyDiffers, CopyHow, GroupRequest, Peer, Sluice, Step, SubmitRequest};
+use sluice_core::{
+    CopyDiffers, CopyHow, GroupRequest, Peer, Sluice, Step, SubmitHead, SubmitRequest,
+};
 use sluice_seams::Rev;
 
 /// The name the harness's sluice records its own copy under.
@@ -257,7 +259,7 @@ fn with_main(h: &Harness) {
 fn submit_to_main(h: &Harness, worktree: &str) -> sluice_core::Accepted {
     h.sluice()
         .submit(&SubmitRequest {
-            worktree: worktree.into(),
+            head: SubmitHead::Worktree(worktree.into()),
             branch: "main".into(),
             after: Vec::new(),
             priority: 0,
@@ -349,7 +351,10 @@ fn a_group_naming_a_bolts_worktree_submits_the_remotes_revision_for_it() {
         .sluice()
         .submit_group(&GroupRequest {
             branch: "main".into(),
-            worktrees: vec![BRANCH.into(), "unit/m".into()],
+            heads: vec![
+                SubmitHead::Worktree(BRANCH.into()),
+                SubmitHead::Worktree("unit/m".into()),
+            ],
             after: Vec::new(),
             priority: 0,
             subjects: Vec::new(),

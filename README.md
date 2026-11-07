@@ -101,11 +101,12 @@ combination passes.
   keeps it until it is released: one per landing, with nothing kept
   checked out by hand. It is a cheap environment on the tests' own fakes,
   not a deployment ([previews](https://agentplot.github.io/sluice/guides/previews/)).
-- **No daemon.** sluice keeps nothing running itself. A waiting `sluice
-  submit` drives the queue while it waits; `sluice run`, or `sluice
-  step` from cron, does the same for a host. Where `sluice run` is
-  running on a host, waits and watches follow it and run no rounds of
-  their own. What a preview leaves up, the repository's own tools keep
+- **Nothing to install.** sluice is one binary. A `sluice submit`
+  returns at once; the first command that needs a host's queues moved
+  starts sluice's own host process, which moves every repository's
+  queues on the host and exits once none has work. Waits and watches
+  follow it. A crash or a sleeping laptop loses nothing: the next
+  command starts it again from the records. What a preview leaves up, the repository's own tools keep
   until its release. Every decision is written to plain files before it
   is acted on, so a crash at any point resumes cleanly.
 

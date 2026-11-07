@@ -325,6 +325,7 @@ fn write_overview(
         .as_str()
         .and_then(|at| at.parse().ok())
         .unwrap_or_default();
+    let mut gone = Vec::new();
     for b in branches {
         // 26: a branch that could not be read is shown with the refusal,
         // in its words, and nothing read of it.
@@ -339,17 +340,28 @@ fn write_overview(
             write_across(doc, &b.branch, out)?;
             continue;
         }
+        let places = held_places(&b.branch, Some(b), doc);
+        // 105, record 0091: a branch gone with nothing of it to watch is
+        // named apart, after the branches it lands on.
+        if b.gone && nothing_to_watch(b, &places) {
+            gone.push(b.branch.as_str());
+            continue;
+        }
         let at = b.at.as_ref().map_or("nothing", |r| r.short());
         let testing = b.candidates.iter().filter(|c| c.state.under_test()).count();
         let up_to = b
             .parallel
             .map_or(String::new(), |p| format!(" (up to {p})"));
         let held = held_back(room.as_ref(), b);
-        writeln!(
-            out,
-            "{} at {at} · {} in the queue · testing {testing} at once{up_to}{held}",
-            b.branch, b.depth
-        )?;
+        if b.gone {
+            writeln!(out, "{}", gone_line(&b.branch, b.at.as_ref()))?;
+        } else {
+            writeln!(
+                out,
+                "{} at {at} · {} in the queue · testing {testing} at once{up_to}{held}",
+                b.branch, b.depth
+            )?;
+        }
         if let Some(hold) = &b.held {
             writeln!(out, "  {}", held_line(&b.branch, hold))?;
         }
@@ -357,7 +369,7 @@ fn write_overview(
         if let Some(why) = &b.stale {
             writeln!(out, "  {why}: shown as last fetched")?;
         }
-        write_held_places(&held_places(&b.branch, Some(b), doc), out)?;
+        write_held_places(&places, out)?;
         write_refused_writes(&b.branch, &b.refused_writes, out)?;
         let names = branch_names(b);
         for c in &b.candidates {
@@ -375,6 +387,9 @@ fn write_overview(
             writeln!(out, "  {}", recent_line(r, &names))?;
         }
         write_across(doc, &b.branch, out)?;
+    }
+    if !gone.is_empty() {
+        writeln!(out, "gone, nothing queued or recent: {}", gone.join(", "))?;
     }
     // 123: a worktree's or a preview's held place whose branch has no
     // records is named all the same; 137: so are the pull requests into it
@@ -482,6 +497,29 @@ fn write_across(doc: &serde_json::Value, branch: &str, out: &mut dyn Write) -> R
         }
     }
     Ok(())
+}
+
+/// 105, record 0091: a branch that is gone, by the revision its records
+/// last saw, as the overview and `sluice status` head it.
+pub fn gone_line(branch: &str, at: Option<&sluice_seams::Rev>) -> String {
+    match at {
+        Some(at) => format!("{branch} is gone, last at {}", at.short()),
+        None => format!("{branch} is gone"),
+    }
+}
+
+/// 105, record 0091: nothing of a branch a person watches its queue for:
+/// nothing queued, under test or recent, no hold, no held place, no
+/// refused write and no read refused.
+fn nothing_to_watch(b: &BranchView, places: &[HeldPlace]) -> bool {
+    b.depth == 0
+        && b.submissions.is_empty()
+        && b.candidates.is_empty()
+        && b.recent.is_empty()
+        && b.held.is_none()
+        && b.stale.is_none()
+        && b.refused_writes.is_empty()
+        && places.is_empty()
 }
 
 /// 123: a place of a branch held because its release failed and tried

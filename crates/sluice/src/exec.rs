@@ -19,6 +19,7 @@ use sluice_seams::{
 
 use crate::sessions::SessionRun;
 use crate::told::{self, Kind};
+use crate::words;
 use crate::{Pause, Pushers, CONFLICT, FAILED, LANDED, STOPPED};
 
 /// What `sluice exec` needs of the host beyond the seams: the reserve,
@@ -542,14 +543,24 @@ impl Exec<'_> {
         if command {
             return Ok(());
         }
+        // 149: a task a check was failed by failed as a check does, and
+        // the check it failed is named after it, never as not run.
         let failed: Vec<&str> = report
             .tasks
             .iter()
+            .chain(&report.dependencies)
             .filter(|t| t.outcome == Outcome::Fail)
             .map(|t| t.task.as_str())
             .collect();
         if !failed.is_empty() {
             say(out, json, &format!("failed: {}", failed.join(", ")))?;
+        }
+        for f in &report.failed_by {
+            say(
+                out,
+                json,
+                &format!("  {}", words::failed_by(&f.task, &f.by)),
+            )?;
         }
         if !report.missing.is_empty() {
             say(
@@ -589,19 +600,26 @@ impl Exec<'_> {
         if !self.json {
             return Ok(());
         }
-        let tasks: Vec<serde_json::Value> = report
-            .map(|r| r.tasks.as_slice())
-            .unwrap_or_default()
-            .iter()
-            .map(|t| {
-                serde_json::json!({
-                    "task": t.task,
-                    "hash": t.hash,
-                    "outcome": t.outcome,
-                    "recorded": recorded && matches!(t.source, sluice_seams::Source::Ran { .. }),
+        let results = |of: &[sluice_seams::TaskResult]| -> Vec<serde_json::Value> {
+            of.iter()
+                .map(|t| {
+                    serde_json::json!({
+                        "task": t.task,
+                        "hash": t.hash,
+                        "outcome": t.outcome,
+                        "recorded": recorded && matches!(t.source, sluice_seams::Source::Ran { .. }),
+                    })
                 })
-            })
-            .collect();
+                .collect()
+        };
+        let tasks = results(report.map(|r| r.tasks.as_slice()).unwrap_or_default());
+        // 149: each task a check was failed by, as `tasks` has a check, and
+        // each check so failed; neither is in `missing`.
+        let dependencies = results(
+            report
+                .map(|r| r.dependencies.as_slice())
+                .unwrap_or_default(),
+        );
         let ports: serde_json::Map<String, serde_json::Value> = env
             .iter()
             .filter(|(k, _)| k.starts_with("SLUICE_PORT_"))
@@ -613,6 +631,8 @@ impl Exec<'_> {
             serde_json::json!({
                 "branch": self.branch,
                 "tasks": tasks,
+                "dependencies": dependencies,
+                "failed_by": report.map(|r| r.failed_by.as_slice()).unwrap_or_default(),
                 "missing": missing,
                 "not_run": report.map(|r| r.not_run.as_slice()).unwrap_or_default(),
                 "timed_out": timed_out.unwrap_or(false),
@@ -791,11 +811,10 @@ fn unkept(kept: Result<()>) {
     }
 }
 
+/// Every check the run named reported and passed, within its time limit;
+/// a check failed by a task it depends on is no pass (15, 114, 149).
 fn passed(report: &RunReport) -> bool {
-    !report.timed_out
-        && report.missing.is_empty()
-        && report.not_run.is_empty()
-        && report.tasks.iter().all(|t| t.outcome == Outcome::Pass)
+    !report.timed_out && report.not_run.is_empty() && !report.failed()
 }
 
 #[cfg(test)]

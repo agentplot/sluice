@@ -91,3 +91,40 @@ fn landed_together_each_reads_the_deepest_combination() {
         assert!(v.rows.iter().all(|r| r.result == RowResult::Passed));
     }
 }
+
+/// satisfies: 149, 15, 20 (118); the verdict-report spec's "Failed by a
+/// task it depends on": the report lists the task that ran and failed
+/// with its key and its log, and the check it failed as failed by it,
+/// with no key, never missing.
+#[test]
+fn the_report_names_the_task_a_check_was_failed_by() {
+    const CHECK: &str = "root:integration";
+    const DEP: &str = "api:integration";
+    let h = Harness::new(&policy(false, "fail", 4).replace(
+        "required = [\"#gate\"]",
+        &format!("required = [\"{CHECK}\"]"),
+    ));
+    h.w().task(DEP, "a/");
+    h.w().task(CHECK, "r/");
+    h.f.tests.depends_on(CHECK, DEP);
+    h.fails_with(DEP, "a/lib", "broken");
+    h.work("unit/a", "agent-a", &[("a/lib", Some("broken"))]);
+    let id = h.submit("unit/a");
+    h.settle();
+    assert_eq!(h.sub(id).state, State::Failed);
+
+    let v = h.sluice().verdict_of(BRANCH, id).unwrap().unwrap();
+    assert_eq!(v.standing, Standing::Blamed { timed_out: false });
+    assert_eq!(v.rows.len(), 2, "{:?}", v.rows);
+    let by = |t: &str| v.rows.iter().find(|r| r.task == t).unwrap();
+    let dep = by(DEP);
+    assert_eq!(dep.result, RowResult::Failed);
+    assert!(dep.key.as_deref().is_some_and(|k| !k.is_empty()));
+    assert!(dep.log.is_some(), "where its output is kept (20)");
+    assert!(dep.host.is_some() && dep.failed_by.is_empty());
+    let check = by(CHECK);
+    assert_eq!(check.result, RowResult::Failed, "never missing (15)");
+    assert_eq!(check.key, None, "no run gave it a key");
+    assert_eq!(check.failed_by, [DEP]);
+    assert!(check.log.is_none() && check.host.is_none());
+}

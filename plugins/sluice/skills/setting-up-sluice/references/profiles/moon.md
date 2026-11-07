@@ -27,6 +27,12 @@ trust = ["confined", "sandbox"]           # no "cache": every required task real
 - `required` names moon targets. Tag the tasks a branch needs (`tags:
   [check-fast]` in `moon.yml`) and require `#check-fast`; a slower tag can be
   required on `main` only.
+- A branch may require one task that runs nothing (`command: 'noop'`) and
+  depends on the checks, such as `root:integration` depending on each
+  area's integration tests. When one of them fails, moon skips the task,
+  and sluice reads it as failed by the one that failed, naming it, with that
+  task's key and log, so the agent fixes the task that failed. A `cleanup`
+  dependency, or one with `allowFailure`, fails nothing.
 - sluice runs the affected required tasks with `moon exec`, `--on-failure
   continue` and `--concurrency $SLUICE_JOBS`, and reads moon's run report for
   each task's outcome and hash.
