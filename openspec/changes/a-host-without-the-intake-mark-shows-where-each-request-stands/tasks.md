@@ -45,7 +45,7 @@ words for what it changes.
 
 ## 8. The gate
 
-- [ ] 8.1 The whole gate on the committed branch, the change valid. True when `sluice exec main` passes.
+- [x] 8.1 The whole gate on the committed branch, the change valid. True when `sluice exec main` passes.
 
 ## Workflow follow-up
 
