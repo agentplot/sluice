@@ -116,6 +116,15 @@ every repository on the host and never pushed:
                        touched by a submit that opened, updated or marked
                        ready a pull request into the branch, so the next
                        round asks at once
+  forge/follows/<owner>/<repository>/<branch>.json
+                       on a host that doesn't take the branch's pull
+                       requests in, each one it follows: one a submit on
+                       the host opened, updated or marked ready, one it
+                       handed over, or one a wait or status asked about,
+                       with what GitHub last said of it and of sluice's
+                       check on its head, and when
+  forge/follows/<owner>/<repository>/<branch>.lock
+                       held while that file is written
   forge/intake/<owner>/<repository>/<branch>.json
                        the branch's intake mark as this host last saw it on
                        the remote, when it first saw it there, and when it
@@ -175,7 +184,11 @@ no read has used for a day is removed. A pause stops every sluice on
 the host from calling GitHub until the time GitHub named. A branch's
 file in `requests/` says when its pull requests were last asked for, so
 a sluice started again asks nothing until `[forge] discovery` has passed
-since any sluice on the host asked. Nothing in `forge/` holds a token,
+since any sluice on the host asked. A branch's file in `follows/` says
+when each pull request in it was last read, so every sluice on the host
+reads one at most once in a quarter of `[forge] discovery`. A request
+leaves it once a wait or status has said it landed or closed, or once
+this host takes it in. Nothing in `forge/` holds a token,
 and any file in it may be removed at any time: sluice then asks GitHub
 as if it had kept nothing.
 
