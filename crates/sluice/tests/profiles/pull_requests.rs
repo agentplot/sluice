@@ -34,6 +34,10 @@ const CHECK: &str = "if test -e hang && ! test -e \"$(cat hang)\"; then \
                      if test -e broken; then echo GITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123; \
                      echo it broke; fi\ntest ! -e broken\n";
 
+/// The policy's table for `bolt/*`, branches on GitHub sluice lands on
+/// that take no pull requests.
+const BOLTS: &str = "\n[branches.\"bolt/*\"]\nremote = \"origin\"\ntimeout = \"1m\"\n";
+
 /// `main` on GitHub, taking pull requests with `conditions`, the lines of
 /// its `pull_requests` table.
 struct OnGitHub {
@@ -64,13 +68,7 @@ impl OnGitHub {
     /// `main` on GitHub, and `bolt/x` beside it, a branch on GitHub sluice
     /// lands on, made from `main` and taking no pull requests.
     fn with_bolt(name: &str) -> OnGitHub {
-        let g = OnGitHub::checked_policy(
-            name,
-            "",
-            "1m",
-            "",
-            "\n[branches.\"bolt/*\"]\nremote = \"origin\"\ntimeout = \"1m\"\n",
-        );
+        let g = OnGitHub::checked_policy(name, "", "1m", "", BOLTS);
         g.repo.git(&["branch", "bolt/x", "main"]);
         g.repo
             .git(&["push", "-q", "origin", "bolt/x:refs/heads/bolt/x"]);
@@ -2391,7 +2389,8 @@ fn a_wait_on_a_pull_request_beside_a_driver() {
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(sluice::WAITING), "{}", text(&out));
-    let doc: Value = serde_json::from_slice(&out.stdout).expect(&text(&out));
+    let doc: Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
     assert_eq!(doc["pull_request"], pull.number, "{doc}");
     assert!(g.of(pull.number).is_empty(), "{:?}", g.subs());
 }
@@ -2410,10 +2409,11 @@ fn a_pull_requests_submit_beside_a_driver() {
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
-    let doc: Value = serde_json::from_slice(&out.stdout).expect(&text(&out));
+    let doc: Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
     let n = g.pull_from("unit/submitted").number;
     assert_eq!(doc["pull_request"], n, "{doc}");
-    let id = doc["id"].as_u64().expect(&doc.to_string());
+    let id = doc["id"].as_u64().unwrap_or_else(|| panic!("{doc}"));
     let subs = g.of(n);
     assert_eq!(subs.len(), 1, "{subs:?}");
     assert_eq!(subs[0]["id"], id);
@@ -3722,6 +3722,146 @@ fn a_bolts_landing_worktree_submits_the_bolt_as_github_holds_it() {
     assert_eq!(held.pulls.len(), 1);
     assert_eq!(held.pulls[0].head, again);
     assert!(held.pulls[0].open && !held.pulls[0].draft);
+}
+
+// ---------------------------------------------------------------------------
+// submit-by-name: a branch sluice lands on, named from no worktree, to a
+// branch that takes pull requests (124, C.5; record 0090; rule core.50)
+// ---------------------------------------------------------------------------
+
+impl OnGitHub {
+    /// `sluice submit main --head <branch>` with `args`, run in the
+    /// repository's git directory, where no files are checked out.
+    fn submit_by_name(&self, branch: &str, args: &[&str]) -> Output {
+        self.command(env!("CARGO_BIN_EXE_sluice"), &self.repo.dir().join(".git"))
+            .args(["submit", "main", "--head", branch])
+            .args(args)
+            .output()
+            .unwrap()
+    }
+}
+
+/// 124, C.5, D7: `main` takes pull requests, and this host's `bolt/x`
+/// stands two landings behind GitHub's. `sluice submit main --head bolt/x`
+/// in the repository's git directory opens the request from `bolt/x` into
+/// `main`, ready, titled `bolt/x`, at GitHub's revision; nothing is pushed
+/// and nothing is said of the host's copy; intake takes it in as the
+/// request's, its `from.head` `bolt/x`, with no path and no session.
+/// Submitted again with a subject, the same request is titled by it.
+#[test]
+fn a_submit_by_name_opens_the_request_from_the_branch() {
+    let g = OnGitHub::with_bolt("pr-by-name");
+    let made = g.bolt_on_github();
+    g.land_on_bolt("one", &[("one.txt", "1\n")]);
+    let remote = g.land_on_bolt("two", &[("two.txt", "2\n")]);
+    g.repo.git(&[
+        "-c",
+        "core.hooksPath=/dev/null",
+        "update-ref",
+        "refs/heads/bolt/x",
+        &made,
+    ]);
+
+    let out = g.submit_by_name("bolt/x", &["--no-wait", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let doc: Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
+    let pull = g.pull_from("bolt/x");
+    assert!(pull.open && !pull.draft && pull.base == "main", "{pull:?}");
+    assert_eq!(pull.title, "bolt/x");
+    assert_eq!(pull.head, remote);
+    assert_eq!(
+        g.bolt_on_github(),
+        remote,
+        "nothing pushed to GitHub's bolt/x"
+    );
+    assert_eq!(g.repo.rev("bolt/x"), made, "this host's bolt/x unmoved");
+    assert_eq!(doc["pull_request"], pull.number, "{doc}");
+    assert_eq!(doc["branch"], "main", "{doc}");
+    assert!(doc.get("copy").is_none(), "{doc}");
+    let id = doc["id"].as_u64().unwrap_or_else(|| panic!("{doc}"));
+    let subs = g.of(pull.number);
+    assert_eq!(subs.len(), 1, "{subs:?}");
+    assert_eq!(subs[0]["id"], id);
+    assert_eq!(subs[0]["head"], remote.as_str());
+    assert_eq!(subs[0]["from"]["head"], "bolt/x");
+    assert_eq!(subs[0]["from"]["path"], Value::Null);
+    assert_eq!(subs[0]["from"]["session"], Value::Null);
+
+    let out = g.submit_by_name(
+        "bolt/x",
+        &["--subject", "Batch the review cards", "--no-wait"],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let said = text(&out);
+    assert!(
+        said.contains(&format!("updated #{}: Batch the review cards", pull.number)),
+        "{said}"
+    );
+    assert!(
+        !said.contains("pushed") && !said.contains("this host's"),
+        "{said}"
+    );
+    let held = g.gh.forge.held().unwrap();
+    assert_eq!(held.pulls.len(), 1);
+    assert_eq!(held.pulls[0].title, "Batch the review cards");
+    assert_eq!(g.bolt_on_github(), remote);
+}
+
+/// 124, 51, D6: the request a submit by name opened is blamed while GitHub
+/// refuses every post of its outcome, so the outcome stays undelivered;
+/// `sluice inbox --json` in a worktree that has checked out `bolt/x`
+/// collects nothing of it, since no worktree pushed a branch sluice lands
+/// on.
+#[test]
+fn a_request_by_name_is_collected_by_no_worktree() {
+    let g = OnGitHub::checked_policy("pr-by-name-inbox", "", "1m", "", BOLTS);
+    // GitHub's bolt/x breaks main's check.
+    g.repo.branch("bolt/x", "main", &[("broken", Some("x\n"))]);
+    g.repo
+        .git(&["push", "-q", "origin", "bolt/x:refs/heads/bolt/x"]);
+    let out = g.submit_by_name("bolt/x", &["--no-wait", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let doc: Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
+    let id = doc["id"].as_u64().unwrap_or_else(|| panic!("{doc}"));
+    let n = g.pull_from("bolt/x").number;
+
+    for (method, path) in [
+        ("POST", "/repos/o/r/check-runs"),
+        ("PATCH", "/repos/o/r/check-runs"),
+        ("POST", "/repos/o/r/issues"),
+        ("PATCH", "/repos/o/r/issues"),
+    ] {
+        g.gh.trouble(method, path, usize::MAX, github::Trouble::Status(422));
+    }
+    let until = Instant::now() + Duration::from_secs(60);
+    while g.of(n).iter().all(|s| s["state"] != "failed") {
+        assert!(Instant::now() < until, "never failed: {:?}", g.subs());
+        g.discovery_passes();
+        g.sluice(&["step", "main"]);
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let sub = g.of(n).into_iter().find(|s| s["id"] == id).unwrap();
+    assert_eq!(sub["state"], "failed", "{sub}");
+    assert_eq!(sub["from"]["head"], "bolt/x", "{sub}");
+    assert_eq!(sub["delivered"], Value::Null, "{sub}");
+
+    let w = g.repo.dir().with_extension("on-bolt");
+    let _ = std::fs::remove_dir_all(&w);
+    g.repo
+        .git(&["worktree", "add", "-q", w.to_str().unwrap(), "bolt/x"]);
+    let out = g
+        .command(env!("CARGO_BIN_EXE_sluice"), &w)
+        .args(["inbox", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let doc: Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
+    assert_eq!(doc, serde_json::json!({ "outcomes": [] }));
+    let sub = g.of(n).into_iter().find(|s| s["id"] == id).unwrap();
+    assert_eq!(sub["delivered"], Value::Null, "{sub}");
 }
 
 // ---------------------------------------------------------------------------

@@ -50,7 +50,7 @@ use sluice_core::policy::{Policy, PullRequests as Conditions, POLICY_PATH};
 use sluice_core::records::{Event, State, Submission};
 use sluice_core::{
     Clock, Forecast, GroupRequest, Requester, Seams, Sluice, SubmitHead, SubmitRefusal,
-    SubmitRequest, Withdrew,
+    SubmitRequest, SubmittedHead, Withdrew,
 };
 use sluice_seams::{
     Branch, CoveringVerdict, Decided, Delivery, Formed, HostCopy, LandingCommit, Moved,
@@ -2788,16 +2788,16 @@ impl crate::PullRequests for Pulls {
         &self,
         seams: Seams<'_>,
         clock: &dyn Clock,
-        worktree: &str,
+        head: &SubmitHead,
         branch: &str,
         subject: Option<&str>,
     ) -> Result<Result<Opened, SubmitRefusal>> {
         Ok(
-            match self.opening(seams, clock, &[worktree.to_string()], branch, &[subject])? {
+            match self.opening(seams, clock, std::slice::from_ref(head), branch, &[subject])? {
                 Ok(mut opened) => Ok(opened.remove(0)),
                 Err(GroupRefused::Worktrees(mut refused)) => Err(refused.remove(0).1),
                 Err(GroupRefused::Short { .. }) => {
-                    bail!("a submit of one worktree read its pull request's conditions")
+                    bail!("a submit of one head read its pull request's conditions")
                 }
             },
         )
@@ -2823,7 +2823,12 @@ impl crate::PullRequests for Pulls {
                 worktrees.len()
             );
         };
-        self.opening(seams, clock, worktrees, branch, &subjects)
+        let heads: Vec<SubmitHead> = worktrees
+            .iter()
+            .cloned()
+            .map(SubmitHead::Worktree)
+            .collect();
+        self.opening(seams, clock, &heads, branch, &subjects)
     }
 
     fn find(
@@ -3059,59 +3064,78 @@ impl Pulls {
         })
     }
 
-    /// 125: every worktree read before anything is pushed, and a refusal
-    /// for each refused; then, in order, each request marked one of the
-    /// group before its head reaches it: an open request's description
-    /// written for its head before its branch is pushed, a new one opened
-    /// a draft with it once its branch is. Then the group is taken whole or left drafts
-    /// ([`Pulls::take_act`]). One worktree is marked one of no group and
-    /// marked ready, for intake to take on its conditions. Each worktree's
-    /// of `subjects`, one per worktree, titles its request where given.
+    /// 125: every head read before anything is pushed, and a refusal for
+    /// each refused; then, in order, each request marked one of the group
+    /// before its head reaches it: an open request's description written
+    /// for its head before its branch is pushed, a new one opened a draft
+    /// with it once its branch is. Then the group is taken whole or left
+    /// drafts ([`Pulls::take_act`]). One head is marked one of no group and
+    /// marked ready, for intake to take on its conditions. Each head's of
+    /// `subjects`, one per head, titles its request where given. A worktree
+    /// is read through the driver's session; a branch named (124), through
+    /// the core's, the branch as its remote holds it, so nothing of the
+    /// folder the command runs in is read and nothing is pushed (record
+    /// 0090; rule core.50).
     fn opening(
         &self,
         seams: Seams<'_>,
         clock: &dyn Clock,
-        worktrees: &[String],
+        heads: &[SubmitHead],
         branch: &str,
         subjects: &[Option<&str>],
     ) -> Result<Result<Vec<Opened>, GroupRefused>> {
+        let s = Sluice::new(seams, clock);
         let mut refused = Vec::new();
-        let mut sessions: Vec<Session> = Vec::new();
-        for (k, worktree) in worktrees.iter().enumerate() {
-            let session = seams.driver.session(worktree)?;
-            let before = worktrees[..k]
+        // Each head read, by the name it was given, with the head a branch
+        // named submits, read with it.
+        let mut read: Vec<(&str, Session, Option<SubmittedHead>)> = Vec::new();
+        for head in heads {
+            let name = head.name();
+            let (session, submitted) = match head {
+                SubmitHead::Worktree(worktree) => (seams.driver.session(worktree)?, None),
+                SubmitHead::Branch(named) => match s.named_session(named, branch)? {
+                    Ok((session, submitted)) => (session, Some(submitted)),
+                    Err(r) => {
+                        refused.push((name.to_string(), r));
+                        continue;
+                    }
+                },
+            };
+            let before = read
                 .iter()
-                .zip(&sessions)
-                .find(|(w, s)| *w == worktree || s.from.worktree == session.from.worktree);
-            if let Some((earlier, _)) = before {
-                refused.push((worktree.clone(), SubmitRefusal::NamedTwice(earlier.clone())));
+                .find(|(n, s, _)| *n == name || s.from.worktree == session.from.worktree);
+            if let Some((earlier, _, _)) = before {
+                refused.push((
+                    name.to_string(),
+                    SubmitRefusal::NamedTwice(earlier.to_string()),
+                ));
             } else if session.detached {
-                refused.push((worktree.clone(), SubmitRefusal::Detached));
+                refused.push((name.to_string(), SubmitRefusal::Detached));
             } else if !session.dirty.is_empty() {
                 refused.push((
-                    worktree.clone(),
+                    name.to_string(),
                     SubmitRefusal::Dirty(session.dirty.clone()),
                 ));
             }
-            sessions.push(session);
+            read.push((name, session, submitted));
         }
-        let s = Sluice::new(seams, clock);
         let target = self.target(&s, branch)?;
         if target.is_none() {
-            for w in worktrees {
-                refused.push((w.clone(), SubmitRefusal::NotManaged));
+            for h in heads {
+                refused.push((h.name().to_string(), SubmitRefusal::NotManaged));
             }
         }
         let (Some(t), true) = (target, refused.is_empty()) else {
             return Ok(Err(GroupRefused::Worktrees(refused)));
         };
         // ADR 0050: refused before anything is pushed or opened, each place
-        // its runner keeps a required check out of CI in.
+        // its runner keeps a required check out of CI in; a branch named
+        // has no place to ask, and is taken with nothing asked.
         let mut warnings = Vec::new();
-        for (worktree, session) in worktrees.iter().zip(&sessions) {
+        for (name, session, _) in &read {
             match s.check_kept_out(session, branch, &t.tip)? {
                 Ok(w) => warnings.push(w),
-                Err(r) => refused.push((worktree.clone(), r)),
+                Err(r) => refused.push((name.to_string(), r)),
             }
         }
         if !refused.is_empty() {
@@ -3121,19 +3145,23 @@ impl Pulls {
         let _lock = self.wait_lock(branch)?;
         // 124, 1: a branch sluice lands on is asked for as its remote holds
         // it, and nothing is pushed; only a branch it lands on nowhere is.
-        let submitted = sessions
+        // A branch named was read so already.
+        let submitted = read
             .iter()
-            .map(|session| s.submitted_head(session))
+            .map(|(_, session, named)| match named {
+                Some(head) => Ok(head.clone()),
+                None => s.submitted_head(session),
+            })
             .collect::<Result<Vec<_>>>()?;
         let open = forge.pulls(&t.repo, branch)?;
-        let n = sessions.len();
+        let n = read.len();
         let token = group_token(clock.now(), &submitted[0].head);
         let mut opened = Vec::new();
         // Each request as the act leaves it, and when its last submission
         // left the queue, for the group's taking.
         let mut acted = Vec::new();
-        for (k, ((session, submitted), &subject)) in
-            sessions.iter().zip(&submitted).zip(subjects).enumerate()
+        for (k, (((_, session, _), submitted), &subject)) in
+            read.iter().zip(&submitted).zip(subjects).enumerate()
         {
             let head_ref = session.from.worktree.clone();
             let head = &submitted.head;
@@ -3239,7 +3267,8 @@ impl Pulls {
             ));
         }
         let taken = if n > 1 {
-            self.take_act(&s, forge, &t, branch, worktrees, &acted, opened)?
+            let names: Vec<String> = heads.iter().map(|h| h.name().to_string()).collect();
+            self.take_act(&s, forge, &t, branch, &names, &acted, opened)?
         } else {
             Ok(opened)
         };

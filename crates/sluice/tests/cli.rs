@@ -6069,7 +6069,7 @@ impl sluice::PullRequests for Pull7 {
         &self,
         _: sluice_core::Seams<'_>,
         _: &dyn sluice_core::Clock,
-        _: &str,
+        _: &sluice_core::SubmitHead,
         _: &str,
         subject: Option<&str>,
     ) -> anyhow::Result<Result<sluice::Opened, sluice_core::SubmitRefusal>> {

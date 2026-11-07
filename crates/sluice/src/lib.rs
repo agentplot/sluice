@@ -675,14 +675,19 @@ pub trait PullRequests {
     /// 137: let go of the intake marks this process holds as a wait.
     fn let_go(&self) {}
 
-    /// Push `worktree`'s branch and open its pull request into `branch`,
-    /// or update the one open; `subject`, the submitter's line saying what
-    /// lands, titles it.
+    /// Open the pull request from `head`'s branch into `branch`, or update
+    /// the one open, and mark it ready; `subject`, the submitter's line
+    /// saying what lands, titles it, and the branch where none is given.
+    /// A worktree's branch sluice lands on nowhere is pushed first; a
+    /// branch sluice lands on, a worktree's or one named (124), is asked
+    /// for as its remote holds it, and nothing is pushed. A branch named
+    /// is read through the core's session, never the driver's (C.5; record
+    /// 0090).
     fn open(
         &self,
         seams: Seams<'_>,
         clock: &dyn Clock,
-        worktree: &str,
+        head: &SubmitHead,
         branch: &str,
         subject: Option<&str>,
     ) -> Result<Result<Opened, SubmitRefusal>>;
@@ -750,7 +755,7 @@ impl PullRequests for () {
         &self,
         _: Seams<'_>,
         _: &dyn Clock,
-        _: &str,
+        _: &SubmitHead,
         branch: &str,
         _: Option<&str>,
     ) -> Result<Result<Opened, SubmitRefusal>> {
@@ -1133,15 +1138,18 @@ pub fn run(
                     out,
                 );
             }
-            // 124: a branch sluice lands on, submitted by name.
+            // 124: a branch sluice lands on, submitted by name; to a branch
+            // that takes pull requests, by the request from it (C.5).
             if let Some(named) = head {
                 if takes_pulls(&s, &branch)? {
-                    let text = format!(
-                        "refused: {branch} takes pull requests, and a submit by name opens none \
-                         yet"
+                    let mode = PullMode::Open {
+                        no_wait,
+                        subject: subject.as_deref(),
+                    };
+                    let named = SubmitHead::Branch(named);
+                    return submit_pull(
+                        &s, host, pulls, clock, &named, &branch, mode, json, pause, out,
                     );
-                    told::tell(out, json, Kind::Refused, &text, &[])?;
-                    return Ok(CONFLICT);
                 }
                 return submit(
                     &s,
@@ -1171,6 +1179,7 @@ pub fn run(
                         subject: subject.as_deref(),
                     }
                 };
+                let worktree = SubmitHead::Worktree(worktree);
                 return submit_pull(
                     &s, host, pulls, clock, &worktree, &branch, mode, json, pause, out,
                 );
@@ -1219,6 +1228,7 @@ pub fn run(
                 },
                 Err(_) if takes_pulls(&s, &target)? => {
                     let mode = PullMode::Wait { deadline };
+                    let worktree = SubmitHead::Worktree(worktree);
                     return submit_pull(
                         &s, host, pulls, clock, &worktree, &target, mode, json, pause, out,
                     );
@@ -2650,13 +2660,13 @@ fn await_submission(
                 number,
                 deadline: waiting.deadline,
             };
-            let worktree = waiting.worktree.unwrap_or(".");
+            let worktree = SubmitHead::Worktree(waiting.worktree.unwrap_or(".").to_string());
             return submit_pull(
                 s,
                 waiting.host,
                 pulls,
                 waiting.clock,
-                worktree,
+                &worktree,
                 &sub.branch,
                 mode,
                 waiting.json,
@@ -3850,13 +3860,16 @@ impl PullMode<'_> {
 /// at a submit's first pass, which is its own act (135). An outcome it
 /// reports that is still pending is marked delivered to the worktree, whose
 /// branch the request was opened from, as [`await_submission`] marks one (51).
+/// A branch named (124) opens the request from that branch, reading no
+/// worktree, and its outcome is marked delivered to none: the request
+/// carries it (C.5; record 0090).
 #[allow(clippy::too_many_arguments)]
 fn submit_pull(
     s: &Sluice<'_>,
     host: &dyn exec::Host,
     pulls: &dyn PullRequests,
     clock: &dyn Clock,
-    worktree: &str,
+    head: &SubmitHead,
     branch: &str,
     mode: PullMode<'_>,
     json: bool,
@@ -3864,6 +3877,13 @@ fn submit_pull(
     out: &mut dyn Write,
 ) -> Result<i32> {
     let seams = s.seams();
+    // The place the request is found by, and the outcome delivered to: a
+    // worktree's; none for a branch named, whose way is the request's.
+    let worktree = head.name();
+    let delivered_to = match head {
+        SubmitHead::Worktree(w) => Some(w.as_str()),
+        SubmitHead::Branch(_) => None,
+    };
     let status = matches!(mode, PullMode::Status);
     let no_wait = matches!(mode, PullMode::Open { no_wait: true, .. });
     let opens = matches!(mode, PullMode::Open { .. });
@@ -3905,7 +3925,7 @@ fn submit_pull(
             PullMode::Open { subject, .. } => subject,
             _ => None,
         };
-        match pulls.open(seams, clock, worktree, branch, subject)? {
+        match pulls.open(seams, clock, head, branch, subject)? {
             Ok(o) => {
                 if !json {
                     writeln!(out, "{}", o.said)?;
@@ -3914,8 +3934,9 @@ fn submit_pull(
                 o.number
             }
             Err(r) => {
-                let named = worktree_name(s, worktree);
-                writeln!(out, "{}", refusal(&r, worktree, &named, branch, &())?)?;
+                let named = head_name(s, head);
+                let text = refusal(&r, worktree, &named, branch, &())?;
+                told::tell(out, json, Kind::Refused, &text, &refusal_next(&r, branch))?;
                 return Ok(CONFLICT);
             }
         }
@@ -3985,10 +4006,11 @@ fn submit_pull(
                     return Ok(0);
                 }
                 // 51: the request was opened from this worktree's branch,
-                // so the outcome a waiting submit reports is its own.
+                // so the outcome a waiting submit reports is its own; a
+                // branch named's is no one's (124).
                 return report_delivering(
                     s,
-                    Some(worktree),
+                    delivered_to,
                     sub,
                     branch,
                     &names,
@@ -4135,12 +4157,21 @@ fn submit_pull(
                     return still(out, STOPPED);
                 }
                 // 122: as `wait_on`, for the submission the pull request
-                // was taken in as, on the head its worktree submitted (124).
-                let landed = seams
-                    .driver
-                    .session(worktree)
-                    .ok()
-                    .and_then(|w| s.submitted_head(&w).ok())
+                // was taken in as, on the head its worktree, or the branch
+                // named, submitted (124).
+                let submitted = match head {
+                    SubmitHead::Worktree(w) => seams
+                        .driver
+                        .session(w)
+                        .ok()
+                        .and_then(|w| s.submitted_head(&w).ok()),
+                    SubmitHead::Branch(b) => s
+                        .named_session(b, branch)
+                        .ok()
+                        .and_then(|r| r.ok())
+                        .map(|(_, h)| h),
+                };
+                let landed = submitted
                     .and_then(|h| taken_in(s, branch, &h.head))
                     .and_then(|id| landed(s, id));
                 if let Some(sub) = landed {
@@ -4150,7 +4181,7 @@ fn submit_pull(
                     };
                     let code = report_delivering(
                         s,
-                        Some(worktree),
+                        delivered_to,
                         sub,
                         branch,
                         &names,
