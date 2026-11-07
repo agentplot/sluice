@@ -1386,6 +1386,13 @@ impl Sluice<'_> {
     /// not fetched for a read. Only a branch whose records have seen no
     /// revision yet is read from the branch itself.
     ///
+    /// 56, 124, 129: its policy at the branch's revision as this host holds
+    /// it, so a policy mended outside sluice is read whole with no round
+    /// run, and one refused there names that revision; at the revision its
+    /// records last saw only where the host holds none (ADR 0046 as
+    /// amended 2026-11-06; rule core.15). Nothing is fetched for it and
+    /// nothing written.
+    ///
     /// 105: a branch removed is read from its records as any other, and
     /// said to be gone: by that read where it was made, and otherwise by
     /// the revision the host holds of it, with no fetch (record 0091).
@@ -1394,20 +1401,24 @@ impl Sluice<'_> {
         let found = snapshot.version > 0 || !snapshot.files.is_empty();
         let kept_out = kept_out(&Line::read_log(&snapshot)?);
         let line = Line::load(branch, snapshot)?;
-        let (at, gone) = match &line.doc.base {
-            Some(base) => (
-                Some(base.clone()),
-                self.seams.branch.held(branch)?.is_none(),
-            ),
+        // The revision this host holds of the branch, read with no fetch,
+        // once the branch is read where its records have seen no revision:
+        // what says it gone and what its policy is read at.
+        let (at, held, gone) = match &line.doc.base {
+            Some(base) => {
+                let held = self.seams.branch.held(branch)?;
+                let gone = held.is_none();
+                (Some(base.clone()), held, gone)
+            }
             None => {
                 let read = self.seams.branch.read(branch)?;
                 let gone = read.is_none();
-                (read, gone)
+                (read, self.seams.branch.held(branch)?, gone)
             }
         };
         let recorded = found || (gone && self.seams.state.branches()?.iter().any(|b| b == branch));
-        let policy = match &at {
-            Some(rev) => self.policy_at(rev)?,
+        let policy = match held.or_else(|| at.clone()) {
+            Some(rev) => self.policy_at(&rev)?,
             None => None,
         };
         let parallel = match &policy {

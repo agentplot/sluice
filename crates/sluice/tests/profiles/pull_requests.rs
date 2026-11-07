@@ -1347,9 +1347,19 @@ fn a_submits_pull_request_sent_back_says_so() {
     let pull = g.pull_from("unit/blamed");
     assert!(pull.draft, "{pull:?}");
     assert_eq!(g.of_after(pull.number, 2).len(), 1, "{:?}", g.subs());
-    let (status, title, summary) = g.posted(&pull.head).unwrap();
+    // Record 0096 (D3): GitHub keeps the check failed once it was, so the
+    // held state is read by its title, as any host reads it now; what
+    // sluice sent for it is queued.
+    let (_, title, summary) = g.posted(&pull.head).unwrap();
+    assert_eq!(title, "waiting: the next submit");
+    let held = g.gh.forge.held().unwrap();
+    let sent = held
+        .posts
+        .iter()
+        .rfind(|(rev, name, _)| *rev == pull.head && name == "sluice")
+        .unwrap();
     assert_eq!(
-        (status, title.as_str()),
+        (sent.2.status, sent.2.title.as_str()),
         (Status::Queued, "waiting: the next submit")
     );
     assert!(
@@ -5684,7 +5694,7 @@ impl OnGitHub {
 
 /// sluice's check on a pull request's head as host B posts it while B
 /// holds the request as `submission`, next on main.
-fn held_on_b(submission: u64) -> Posting {
+fn queued_on_b(submission: u64) -> Posting {
     let block = serde_json::json!({
         "host": "b", "taken_in": true, "submission": submission, "state": "queued",
         "ahead": [], "waits_for": [],
@@ -5706,7 +5716,7 @@ impl OnGitHub {
     /// while B holds the request as `submission`; host A's next follow of
     /// it reads it.
     fn held_there(&self, n: u64, head: &str, submission: u64) {
-        let p = held_on_b(submission);
+        let p = queued_on_b(submission);
         self.posted_elsewhere(n, head, p.status, &p.title, &p.summary);
     }
 }
@@ -5824,7 +5834,13 @@ fn a_waits_words_across_hosts() {
     let run = g.gh.forge.posted(&github::repo(), &pull.head).unwrap();
     let run = run.map(|r| r.id);
     g.gh.forge
-        .post_named(&github::repo(), &pull.head, "sluice", run, &held_on_b(1407))
+        .post_named(
+            &github::repo(),
+            &pull.head,
+            "sluice",
+            run,
+            &queued_on_b(1407),
+        )
         .unwrap();
     let next = format!("#{n} is submission 1407 on b, taken in by b's sluice run");
     said_once(&next);
@@ -6265,6 +6281,471 @@ fn a_watch_reads_no_followed_request_itself() {
     assert_eq!(g.pull_reads(n), pulls, "{}", text(&out));
     assert_eq!(g.posted_reads(&pull.head), checks, "{}", text(&out));
     assert!(g.of(n).is_empty(), "A took nothing in");
+}
+
+/// Host B takes main's pull requests in and has blamed the pull request a
+/// `wt submit` on host A opened from a session's worktree with `changes`,
+/// a `broken` among them, and marked it a draft, its check saying
+/// `waiting: the next submit` while the double keeps that check completed
+/// and failed, as GitHub kept switchboard-kit #268's (record 0096). Host
+/// B, the worktree, and the pull request as it was opened; a second later
+/// than B's leaving, so a ready mark made next reads as since it (120).
+fn held_on_b<'g>(
+    g: &'g OnGitHub,
+    name: &str,
+    changes: &[(&str, &str)],
+) -> (Other<'g>, PathBuf, sluice::profiles::github::forge::Pull) {
+    g.named("a", "");
+    let b = g.other("b", "", "");
+    b.run("1");
+    let w = g.session(name, changes);
+    let out = g.wt_submit(&w, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let pull = g.pull_from(&format!("unit/{name}"));
+    let until = Instant::now() + Duration::from_secs(60);
+    let held = || {
+        g.pull_from(&format!("unit/{name}")).draft
+            && g.posted(&pull.head)
+                .is_some_and(|p| p.1 == "waiting: the next submit")
+    };
+    // A pass at a time: one run of a round moves no clock on, so B records
+    // the submission's leaving at the time the double stamps marks by.
+    while !held() {
+        assert!(
+            Instant::now() < until,
+            "B never held it: {:?}, {:?}",
+            b.of(pull.number),
+            g.posted(&pull.head)
+        );
+        b.discovery_passes();
+        b.run("1");
+    }
+    assert_eq!(b.of(pull.number)[0]["state"], "failed");
+    assert_eq!(
+        g.posted(&pull.head).unwrap().0,
+        Status::Failure,
+        "the double keeps the check failed"
+    );
+    // The ready mark later than the leaving, to the second GitHub and the
+    // records keep, as B reads a ready mark since (120).
+    std::thread::sleep(Duration::from_millis(1100));
+    // A quarter of `discovery` has passed since A's submit last read the
+    // request, as B's blame takes on a host, so A's next follow reads what
+    // B's check says now (136; record 0095 D4).
+    g.follow_due(pull.number);
+    (b, w, pull)
+}
+
+/// [`held_on_b`], then a `sluice submit main --no-wait --json` on A has
+/// marked the pull request ready for review at the same head. Host B, the
+/// worktree, the pull request as it was opened, and the submit's document.
+fn held_on_b_then_marked_ready<'g>(
+    g: &'g OnGitHub,
+    name: &str,
+    changes: &[(&str, &str)],
+) -> (
+    Other<'g>,
+    PathBuf,
+    sluice::profiles::github::forge::Pull,
+    Value,
+) {
+    let (b, w, pull) = held_on_b(g, name, changes);
+    let out = g
+        .command(env!("CARGO_BIN_EXE_sluice"), &w)
+        .args(["submit", "main", "--no-wait", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let doc: Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
+    let ready = g.pull_from(&format!("unit/{name}"));
+    assert!(!ready.draft && ready.head == pull.head, "{ready:?}");
+    (b, w, pull, doc)
+}
+
+/// request-intake-host, "Held, then marked ready": B blamed `#n` and
+/// marked it a draft, its check saying `waiting: the next submit`, and a
+/// submit on A marked it ready at the same head; before B's next pass, a
+/// wait on A reads it waiting to be taken in by B, not sent back, though
+/// GitHub keeps the check failed (120, 137, C.5; record 0096).
+#[test]
+fn held_then_marked_ready_waits_to_be_taken_in() {
+    let g = OnGitHub::new("intake-held-ready", "");
+    let (b, w, pull, doc) = held_on_b_then_marked_ready(&g, "held", &[("broken", "b\n")]);
+    assert_eq!(doc["pull_request"], pull.number, "{doc}");
+    assert_eq!(doc["state"], "waiting to be taken in by b", "{doc}");
+    let out = g.skipping(&w, &["wait", "main", "--timeout", "5s", "--json"]);
+    assert_eq!(out.status.code(), Some(sluice::WAITING), "{}", text(&out));
+    let doc: Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
+    assert_eq!(doc["pull_request"], pull.number, "{doc}");
+    assert_eq!(doc["state"], "waiting to be taken in by b", "{doc}");
+    assert_eq!(b.of(pull.number).len(), 1, "B has not taken it in again");
+    assert!(g.of(pull.number).is_empty(), "A took nothing in");
+}
+
+/// request-intake-host, "Taken in again while GitHub keeps the check
+/// failed": after a submit on A marked `#n` ready, main's check is mended,
+/// and B takes `#n` in again at the same head and lands it, its check
+/// saying `queued: …`, then `testing …`, while the double keeps that check
+/// completed and failed; a wait on A says each as it changes and exits 0
+/// at the landing (137; record 0096).
+#[test]
+fn taken_in_again_while_github_keeps_the_check_failed() {
+    let g = OnGitHub::new("intake-taken-again", "");
+    g.discovery("10s");
+    let (b, w, pull, _) = held_on_b_then_marked_ready(&g, "again", &[("broken", "b\n")]);
+    let n = pull.number;
+    // main's check mended: `broken` no longer fails it, and it takes five
+    // seconds, so A's wait reads it under test.
+    let mended = g
+        .repo
+        .branch("mended", "main", &[("check.sh", Some("sleep 5\n"))]);
+    g.repo
+        .git(&["push", "-q", "origin", &format!("{mended}:refs/heads/main")]);
+    let said = g.repo.dir().with_extension("wait.out");
+    let mut wait = g
+        .command(env!("CARGO_BIN_EXE_sluice"), &w)
+        .args(["wait", "main", "--timeout", "2m"])
+        .stdout(std::fs::File::create(&said).unwrap())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let words = || std::fs::read_to_string(&said).unwrap_or_default();
+    let until = Instant::now() + Duration::from_secs(90);
+    // B passes again once A's wait has said what B's check says now, or
+    // where B's last pass changed nothing, so the wait reads each state B
+    // posts; the check held for the next submit, A says waiting for B.
+    let shown = |title: &str| match title {
+        "waiting: the next submit" => "waiting to be taken in by b".to_string(),
+        t => t.to_string(),
+    };
+    let mut last = String::new();
+    while wait.try_wait().unwrap().is_none() {
+        if Instant::now() >= until {
+            let _ = wait.kill();
+            panic!("A's wait never ended: {}", words());
+        }
+        let (status, now, _) = g.posted(&pull.head).unwrap();
+        if !now.starts_with("landed") {
+            assert_eq!(status, Status::Failure, "the double keeps the check failed");
+        }
+        if now == last || words().contains(&shown(&now)) {
+            b.discovery_passes();
+            b.run("1");
+            last = now;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let out = wait.wait_with_output().unwrap();
+    let said = words();
+    assert_eq!(
+        out.status.code(),
+        Some(sluice::LANDED),
+        "{said}{}",
+        text(&out)
+    );
+    let at = |what: &str| {
+        said.find(what)
+            .unwrap_or_else(|| panic!("never said {what:?}: {said}"))
+    };
+    assert!(
+        at("waiting to be taken in by b") < at("queued: next on main"),
+        "{said}"
+    );
+    assert!(
+        at("queued: next on main") < at("testing main + #"),
+        "{said}"
+    );
+    assert!(at("testing main + #") < at("passed · landed"), "{said}");
+    assert!(!said.contains("failed: "), "{said}");
+    let subs = b.of(n);
+    assert_eq!(subs.len(), 2, "{subs:?}");
+    assert_eq!(subs[1]["head"], pull.head.as_str());
+    assert_eq!(subs[1]["state"], "landed", "{subs:?}");
+    assert!(g.of(n).is_empty(), "A took nothing in");
+}
+
+/// pull-request-submit, "Sent back on another host": B blamed `#n` and
+/// marked it a draft; `wt submit main --status --json` on A exits 0 and
+/// prints it sent back, with sluice's check's title and summary on its
+/// head, its head, its draft mark and `sends`, as `--status` answers where
+/// the host takes the request in; in words, the check's title (124, 137;
+/// record 0096).
+#[test]
+fn status_of_a_request_another_host_sent_back() {
+    let g = OnGitHub::new("intake-status-sent-back", "");
+    let (_b, w, pull) = held_on_b(&g, "statused", &[("broken", "b\n")]);
+    let out = g.wt_submit(&w, &["--status", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let doc: Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
+    let (_, title, summary) = g.posted(&pull.head).unwrap();
+    assert_eq!(title, "waiting: the next submit");
+    // The check's summary as a person reads it, its queue block left out
+    // (record 0095 D1).
+    let summary = summary
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("<!-- sluice:queue "))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim_end()
+        .to_string();
+    assert_eq!(
+        doc,
+        serde_json::json!({
+            "pull_request": pull.number, "branch": "main", "state": "failed",
+            "title": title, "summary": summary,
+            "head": pull.head, "draft": true, "sends": pull.head,
+        })
+    );
+    let out = g.wt_submit(&w, &["--status"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert!(
+        String::from_utf8_lossy(&out.stdout).starts_with(&title),
+        "{}",
+        text(&out)
+    );
+    assert!(g.of(pull.number).is_empty(), "A took nothing in");
+}
+
+/// worktrunk-submit, "Sent back as a draft on another host", then "Run
+/// again before the other host takes it in again": the across twin of
+/// [`run_again_marks_a_draft_ready`]. B blamed `#n` and marked it a draft,
+/// its check saying `waiting: the next submit` while the double keeps that
+/// check failed; `wt submit main --no-wait --json` on A, nothing committed
+/// since, marks it ready at that head and answers that it waits for B; run
+/// again under a time limit, it pushes and marks nothing, follows `#n`, and
+/// exits 5 saying the same; and B's next pass takes `#n` in again at that
+/// head (67, 120, 137, C.5; record 0096).
+#[test]
+fn run_again_marks_ready_a_draft_another_host_sent_back() {
+    let g = OnGitHub::new("intake-again-draft", "");
+    let (b, w, pull) = held_on_b(&g, "redrafted", &[("broken", "b\n")]);
+    let n = pull.number;
+    // Beside its state, the mark's host and holder and the queue B's check
+    // carries, B's submission of it failed and held for the next submit
+    // (record 0095 D5).
+    let waiting = serde_json::json!({
+        "pull_request": n, "branch": "main", "state": "waiting to be taken in by b",
+        "taken_in_by": { "host": "b", "holder": "driver" },
+        "queue": {
+            "host": "b", "taken_in": true, "submission": b.of(n)[0]["id"],
+            "state": "failed", "ahead": [], "waits_for": ["the next submit"],
+        },
+    });
+    let out = g.wt_submit(&w, &["--no-wait", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let doc: Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
+    assert_eq!(doc, waiting);
+    let ready = g.pull_from("unit/redrafted");
+    assert!(!ready.draft && ready.head == pull.head, "{ready:?}");
+
+    let pushed = github::rev(g.bare.path(), "refs/heads/unit/redrafted");
+    let writes = || {
+        let edit = format!("/repos/o/r/pulls/{n}");
+        g.gh.fake
+            .requests()
+            .iter()
+            .filter(|r| {
+                (r.method == "PATCH" && r.path == edit)
+                    || (r.path == "/graphql" && r.body.contains("mutation("))
+            })
+            .count()
+    };
+    let before = writes();
+    let out = g.wt_submit(&w, &["--timeout", "2s", "--json"]);
+    assert_eq!(out.status.code(), Some(sluice::WAITING), "{}", text(&out));
+    let doc: Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
+    assert_eq!(doc, waiting);
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        said.contains(&format!(
+            "wt submit: following pull request #{n}, already open at this revision"
+        )),
+        "{said}"
+    );
+    assert!(!said.contains("pushed"), "{said}");
+    assert_eq!(writes(), before, "nothing marked");
+    assert_eq!(
+        github::rev(g.bare.path(), "refs/heads/unit/redrafted"),
+        pushed
+    );
+    assert!(!g.pull_from("unit/redrafted").draft);
+    assert!(g.of(n).is_empty(), "A took nothing in");
+
+    let until = Instant::now() + Duration::from_secs(60);
+    while b.of(n).len() < 2 {
+        assert!(
+            Instant::now() < until,
+            "B never took it again: {:?}",
+            b.of(n)
+        );
+        b.discovery_passes();
+        b.run("1");
+    }
+    let subs = b.of(n);
+    assert_eq!(subs[1]["head"], pull.head.as_str(), "{subs:?}");
+}
+
+/// How many GraphQL requests naming `mutation` GitHub's double was sent:
+/// `convertPullRequestToDraft` marks a pull request a draft, and
+/// `markPullRequestReadyForReview` ready for review.
+fn mutations(g: &OnGitHub, mutation: &str) -> usize {
+    g.gh.fake
+        .requests()
+        .iter()
+        .filter(|r| r.path == "/graphql" && r.body.contains(mutation))
+        .count()
+}
+
+/// pull-request-submit, "Sent back, not a draft": host B blamed `#n`,
+/// which a person opened from `unit/review` and which B therefore left out
+/// of draft, its check saying `failed: …`; `sluice submit main --no-wait`
+/// on host A from a worktree on `unit/review`, nothing committed since,
+/// marks it a draft and then ready for review at that head, though A's
+/// records hold no submission of it, and B's next pass takes it in again
+/// (120, 137, C.5; record 0096).
+#[test]
+fn a_submit_marks_ready_a_request_another_host_sent_back_not_a_draft() {
+    let g = OnGitHub::new("intake-sent-back-ready", "");
+    g.named("a", "");
+    let b = g.other("b", "", "");
+    b.run("1");
+    let w = g.session("review", &[("broken", "b\n")]);
+    g.repo
+        .git(&["push", "-q", "origin", "unit/review:refs/heads/unit/review"]);
+    let head = github::rev(g.bare.path(), "refs/heads/unit/review").unwrap();
+    let n =
+        g.gh.forge
+            .open_by("person", "main", "unit/review", &head, false, None)
+            .unwrap();
+    let until = Instant::now() + Duration::from_secs(60);
+    let blamed = || {
+        b.of(n).first().is_some_and(|s| s["state"] == "failed")
+            && g.posted(&head).is_some_and(|p| p.1.starts_with("failed: "))
+    };
+    while !blamed() {
+        assert!(
+            Instant::now() < until,
+            "B never blamed it: {:?}, {:?}",
+            b.of(n),
+            g.posted(&head)
+        );
+        b.discovery_passes();
+        b.run("1");
+    }
+    assert!(
+        !g.pull_from("unit/review").draft,
+        "B leaves a request opened by hand out of draft"
+    );
+    // The marks later than B's leaving, to the second GitHub and the
+    // records keep, as B reads a ready mark since (120).
+    std::thread::sleep(Duration::from_millis(1100));
+    let drafted = mutations(&g, "convertPullRequestToDraft");
+    let readied = mutations(&g, "markPullRequestReadyForReview");
+    let out = g
+        .command(env!("CARGO_BIN_EXE_sluice"), &w)
+        .args(["submit", "main", "--no-wait"])
+        .output()
+        .unwrap();
+    assert!(
+        text(&out).contains(&format!("updated #{n}")) && text(&out).contains("marked ready"),
+        "{}",
+        text(&out)
+    );
+    assert_eq!(
+        mutations(&g, "convertPullRequestToDraft"),
+        drafted + 1,
+        "a draft first: {}",
+        text(&out)
+    );
+    assert_eq!(
+        mutations(&g, "markPullRequestReadyForReview"),
+        readied + 1,
+        "then ready: {}",
+        text(&out)
+    );
+    let ready = g.pull_from("unit/review");
+    assert!(!ready.draft && ready.head == head, "{ready:?}");
+    assert!(g.of(n).is_empty(), "A took nothing in");
+    while b.of(n).len() < 2 {
+        assert!(
+            Instant::now() < until,
+            "B never took it again: {:?}",
+            b.of(n)
+        );
+        b.discovery_passes();
+        b.run("1");
+    }
+    let subs = b.of(n);
+    assert_eq!(subs[1]["head"], head.as_str(), "{subs:?}");
+}
+
+/// pull-request-submit, "Still queued on the other host": host B has `#n`
+/// queued, its check saying `queued: next on main`; `sluice submit main
+/// --no-wait` on host A, nothing committed since, marks it no draft, even
+/// for a moment, and B's submission of it stays in B's queue, which a
+/// draft mark would withdraw (C.5; record 0096).
+#[test]
+fn a_submit_leaves_a_request_queued_on_another_host() {
+    let g = OnGitHub::new("intake-still-queued", "");
+    g.named("a", "");
+    let b = g.other("b", "", "");
+    b.run("1");
+    let w = g.session("queued", &[("q.txt", "q\n")]);
+    let out = g.wt_submit(&w, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let pull = g.pull_from("unit/queued");
+    let n = pull.number;
+    let until = Instant::now() + Duration::from_secs(60);
+    while !g
+        .posted(&pull.head)
+        .is_some_and(|p| p.1 == "queued: next on main")
+    {
+        assert!(
+            Instant::now() < until,
+            "B never queued it: {:?}, {:?}",
+            b.of(n),
+            g.posted(&pull.head)
+        );
+        b.discovery_passes();
+        b.run("1");
+    }
+    // In B's queue: the pass that took it in may have formed its
+    // combination, which B's check says at its next pass.
+    let id = b.of(n)[0]["id"].clone();
+    assert!(
+        matches!(b.of(n)[0]["state"].as_str(), Some("queued" | "testing")),
+        "{:?}",
+        b.of(n)
+    );
+    let drafted = mutations(&g, "convertPullRequestToDraft");
+    let out = g
+        .command(env!("CARGO_BIN_EXE_sluice"), &w)
+        .args(["submit", "main", "--no-wait"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert!(!text(&out).contains("marked ready"), "{}", text(&out));
+    assert_eq!(
+        mutations(&g, "convertPullRequestToDraft"),
+        drafted,
+        "never a draft: {}",
+        text(&out)
+    );
+    assert!(!g.pull_from("unit/queued").draft);
+    assert!(g.of(n).is_empty(), "A took nothing in");
+    // B's next pass reads no draft mark, so withdraws nothing (C.5): its
+    // one submission of `#n` goes on.
+    b.discovery_passes();
+    b.run("1");
+    let subs = b.of(n);
+    assert_eq!(subs.len(), 1, "{subs:?}");
+    assert_eq!(subs[0]["id"], id, "{subs:?}");
+    assert_ne!(subs[0]["state"], "withdrawn", "{subs:?}");
 }
 
 /// request-intake-host, "A wait lets go", stopped by Ctrl-C: a wait on
