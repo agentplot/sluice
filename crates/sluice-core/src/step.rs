@@ -3600,6 +3600,8 @@ fn unstarted(checks: &[String], kind: &str, reason: String) -> RunReport {
                 reason: reason.clone(),
             })
             .collect(),
+        dependencies: Vec::new(),
+        failed_by: Vec::new(),
         timed_out: false,
         detail: None,
         kept_out: Vec::new(),

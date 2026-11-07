@@ -7,6 +7,17 @@
 //! candidate; every moon command gets the run's environment, so nothing of
 //! `MOON_*` in sluice's own reaches it, and stdin from `/dev/null`.
 //!
+//! A required task moon skipped is read through the dependencies the plan
+//! kept (149; C.2). moon's run report names no edge of its graph, so the
+//! plan keeps each target's dependencies at any depth from the `moon query
+//! tasks` it reads, leaving out a `cleanup` one, which moon runs after its
+//! task and never skips the task for. A target moon skipped for a task it
+//! depends on that ran and failed is failed by that task, whose result the
+//! report gives under its own key; one skipped for a task that exited as
+//! `[tests] not_run` names is not run (114); any other is left without a
+//! result (15). In a run its time limit ended nothing is read through a
+//! dependency (66).
+//!
 //! Before any moon command, the working copy is equipped by the check
 //! profile's one sequence (147; rule core.46; [`super::checks::Equipping`]):
 //! the repository's toolchain, then the steps [`Moon::steps`] gives, each
@@ -25,7 +36,7 @@ use std::process::{Command, Output, Stdio};
 use anyhow::{anyhow, bail, Context as _, Result};
 use serde_json::Value;
 use sluice_seams::{
-    EquipStep, KeptOutTask, NotRun, Outcome, Reads, Rev, RunDetail, Source, TaskProgress,
+    EquipStep, FailedBy, KeptOutTask, NotRun, Outcome, Reads, Rev, RunDetail, Source, TaskProgress,
     TaskResult, TaskState, Through,
 };
 
@@ -56,6 +67,28 @@ struct Task {
     tags: Vec<String>,
     /// Whether moon runs it in its CI mode (`runInCI`).
     in_ci: bool,
+    /// 149; C.2: the tasks it depends on directly, every one of its
+    /// `deps` but a `cleanup` one, which moon runs after it and never
+    /// skips it for.
+    deps: Vec<String>,
+}
+
+/// 149; design D2: what a run's report says of its required checks.
+#[derive(Debug, Default)]
+pub struct Read {
+    /// The results of the checks the run judged (15, 16, 38).
+    pub tasks: Vec<TaskResult>,
+    /// The checks it did not judge (could-not-run-1 114), a check whose
+    /// dependency could not run among them.
+    pub not_run: Vec<NotRun>,
+    /// The result of each task a check of `failed_by` was failed by that
+    /// is no check of the run, each once.
+    pub dependencies: Vec<TaskResult>,
+    /// The checks moon skipped for a task they depend on that ran and
+    /// failed.
+    pub failed_by: Vec<FailedBy>,
+    /// What moon says of the run (119).
+    pub detail: Option<RunDetail>,
 }
 
 impl Moon {
@@ -101,6 +134,10 @@ impl Moon {
             }
         }
         let targets: Vec<String> = wanted.into_iter().collect();
+        // 149: the run report names no edge of the graph, so the plan
+        // keeps what each target depends on, for the reading to find the
+        // task a skipped target was skipped for.
+        let deps = dependencies(&tasks, &targets);
         // ADR 0044: moon runs in its CI mode, which runs no task the
         // repository keeps out of CI; each such target reads missing.
         let kept_out: Vec<String> = kept_out(&tasks, &request.required)
@@ -121,6 +158,7 @@ impl Moon {
                 stamps: Vec::new(),
                 kept_out,
                 cold: false,
+                deps,
             });
         }
         let cold = holds_cold(&tasks, &targets, &cold);
@@ -146,6 +184,7 @@ impl Moon {
             stamps: vec![".last-used"],
             kept_out,
             cold,
+            deps,
         })
     }
 
@@ -229,26 +268,27 @@ impl Moon {
     /// Each required target's result from moon's run report: a task that
     /// ran, `Ran` with its outcome; one answered from the cache,
     /// `Replayed`; one that failed with an exit `not_run` names, not run
-    /// (could-not-run-1 114); anything else, no result (15, 16, 38; rule
-    /// core.9). With them, what moon says of the run (119).
+    /// (could-not-run-1 114). A target with no result of its own is read
+    /// through `deps`, what the plan kept of each target's dependencies
+    /// (149; design D2): failed by the tasks it depends on that ran and
+    /// failed, then not run where one could not run, then no result (15,
+    /// 16, 38; rule core.9). With them, what moon says of the run (119).
     pub fn read(
         &self,
         place: &Path,
         targets: &[String],
+        deps: &BTreeMap<String, Vec<String>>,
         not_run: &[i32],
         host: &str,
-    ) -> Result<(Vec<TaskResult>, Vec<NotRun>, Option<RunDetail>)> {
+    ) -> Result<Read> {
         let report = match std::fs::read(place.join(REPORT)) {
             Ok(b) => b,
             // Ended before moon wrote it, or nothing was run.
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return Ok((Vec::new(), Vec::new(), None))
-            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Read::default()),
             Err(e) => return Err(e.into()),
         };
         let report: Value = serde_json::from_slice(&report).context("reading moon's run report")?;
-        let (tasks, unjudged) = read_report(&report, targets, not_run, host);
-        Ok((tasks, unjudged, run_detail(&report)))
+        Ok(read_report(&report, targets, deps, not_run, host))
     }
 
     /// ADR 0028: where each of `targets` has got in a run still going,
@@ -469,32 +509,81 @@ impl Moon {
         }
         let out = self.command(cx, &args, range)?;
         let json: Value = serde_json::from_slice(&out).context("reading moon query tasks")?;
-        let mut tasks = BTreeMap::new();
-        for project in json["tasks"]
-            .as_object()
-            .into_iter()
-            .flat_map(|o| o.values())
-        {
-            for task in project.as_object().into_iter().flat_map(|o| o.values()) {
-                let Some(target) = task["target"].as_str() else {
-                    continue;
-                };
-                let tags = task["tags"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|t| t.as_str().map(String::from))
-                    .collect();
-                // `runInCI` is a boolean or, since moon 2, a word: `skip`
-                // and `false` keep a task out of CI; any other runs it.
-                let run_in_ci = &task["options"]["runInCI"];
-                let in_ci =
-                    !(run_in_ci == &Value::Bool(false) || run_in_ci.as_str() == Some("skip"));
-                tasks.insert(target.to_string(), Task { tags, in_ci });
-            }
-        }
-        Ok(tasks)
+        Ok(query_tasks(&json))
     }
+}
+
+/// Every task a `moon query tasks` document lists, by its target.
+fn query_tasks(json: &Value) -> BTreeMap<String, Task> {
+    let mut tasks = BTreeMap::new();
+    for project in json["tasks"]
+        .as_object()
+        .into_iter()
+        .flat_map(|o| o.values())
+    {
+        for task in project.as_object().into_iter().flat_map(|o| o.values()) {
+            let Some(target) = task["target"].as_str() else {
+                continue;
+            };
+            let tags = task["tags"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|t| t.as_str().map(String::from))
+                .collect();
+            // `runInCI` is a boolean or, since moon 2, a word: `skip`
+            // and `false` keep a task out of CI; any other runs it.
+            let run_in_ci = &task["options"]["runInCI"];
+            let in_ci = !(run_in_ci == &Value::Bool(false) || run_in_ci.as_str() == Some("skip"));
+            let deps = task["deps"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(dependency)
+                .collect();
+            tasks.insert(target.to_string(), Task { tags, in_ci, deps });
+        }
+    }
+    tasks
+}
+
+/// 149; C.2: the task one item of a task's `deps` names, as `moon query
+/// tasks` prints it: a target, or an object's `target`. `None` for a
+/// `cleanup` one, which moon runs after its task and never skips the task
+/// for, and for an item of any other shape, which names nothing sluice
+/// reads, so a target skipped for it stays missing (15).
+fn dependency(item: &Value) -> Option<String> {
+    match item {
+        Value::String(target) => Some(target.clone()),
+        Value::Object(o) if o.get("type").and_then(Value::as_str) != Some("cleanup") => {
+            o.get("target")?.as_str().map(String::from)
+        }
+        _ => None,
+    }
+}
+
+/// 149; design D1: each of `targets`' dependencies at any depth of the
+/// graph, each once, sorted; a target with none is left out. A cycle ends
+/// where it comes back, and no target is its own dependency.
+fn dependencies(
+    tasks: &BTreeMap<String, Task>,
+    targets: &[String],
+) -> BTreeMap<String, Vec<String>> {
+    targets
+        .iter()
+        .filter_map(|target| {
+            let mut seen = BTreeSet::new();
+            let mut next: Vec<&str> = vec![target];
+            while let Some(t) = next.pop() {
+                for d in tasks.get(t).into_iter().flat_map(|task| &task.deps) {
+                    if d != target && seen.insert(d.clone()) {
+                        next.push(d);
+                    }
+                }
+            }
+            (!seen.is_empty()).then(|| (target.clone(), seen.into_iter().collect()))
+        })
+        .collect()
 }
 
 /// ADR 0044, 0050: the tasks `required` names, by name or through a tag
@@ -606,73 +695,65 @@ fn changed_files(place: &Path, base: &str, head: &str) -> Result<Vec<String>> {
         .collect())
 }
 
-/// The results of `targets` in a run report, and those that failed with
-/// an exit `not_run` names. Only `RunTask(…)` actions are checks: a
-/// `wait` dependency's `RunPersistentTask(…)` is a helper.
-fn read_report(
-    report: &Value,
-    targets: &[String],
-    not_run: &[i32],
-    host: &str,
-) -> (Vec<TaskResult>, Vec<NotRun>) {
-    let mut out = Vec::new();
-    let mut unjudged = Vec::new();
-    for action in report["actions"].as_array().into_iter().flatten() {
-        let Some(label) = action["label"].as_str() else {
-            continue;
+/// One task's action in a run report: a `RunTask(…)`, or a
+/// `RunPersistentTask(…)`, a helper a check waits on.
+struct Action<'a> {
+    target: &'a str,
+    persistent: bool,
+    status: Option<&'a str>,
+    /// moon skips no dependent for a failure it allows.
+    allow_failure: bool,
+    hash: Option<String>,
+    hydrated: bool,
+    /// The last try's exit: a retried task's last try is the one that
+    /// judged it.
+    exit: Option<i32>,
+    tries: usize,
+    took_ms: Option<u64>,
+}
+
+impl<'a> Action<'a> {
+    fn of(action: &'a Value) -> Option<Action<'a>> {
+        let label = action["label"].as_str()?;
+        let (inner, persistent) = match label.strip_prefix("RunTask(") {
+            Some(l) => (l, false),
+            None => (label.strip_prefix("RunPersistentTask(")?, true),
         };
-        let Some(inner) = label
-            .strip_prefix("RunTask(")
-            .and_then(|l| l.strip_suffix(')'))
-        else {
-            continue;
-        };
-        let target = action["node"]["params"]["target"].as_str().unwrap_or(inner);
-        if !targets.iter().any(|t| t == target) {
-            continue;
-        }
-        let ops = action["operations"].as_array().cloned().unwrap_or_default();
+        let inner = inner.strip_suffix(')')?;
+        let ops = action["operations"]
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or_default();
         let op = |kind: &str| {
             ops.iter()
                 .find(|o| o["meta"]["type"].as_str() == Some(kind))
-                .cloned()
         };
-        let Some(hash) =
-            op("hash-generation").and_then(|o| o["meta"]["hash"].as_str().map(String::from))
-        else {
-            continue;
+        let executions = || {
+            ops.iter()
+                .filter(|o| o["meta"]["type"].as_str() == Some("task-execution"))
         };
-        let hydrated =
-            op("output-hydration").is_some_and(|o| o["status"].as_str() == Some("cached"));
-        // A retried task's last try is the one that judged it.
-        let exit = ops
-            .iter()
-            .rfind(|o| o["meta"]["type"].as_str() == Some("task-execution"))
-            .and_then(|o| o["meta"]["exitCode"].as_i64())
-            .and_then(|c| i32::try_from(c).ok());
-        let (outcome, replayed) = match action["status"].as_str() {
-            Some("passed") => (Outcome::Pass, hydrated),
-            Some("failed") => match exit.filter(|c| not_run.contains(c)) {
-                Some(code) => {
-                    unjudged.push(NotRun {
-                        task: target.to_string(),
-                        reason: not_run_reason(code),
-                    });
-                    continue;
-                }
-                None => (Outcome::Fail, false),
-            },
-            Some("cached" | "cached-from-remote") => (Outcome::Pass, true),
-            _ => continue,
-        };
-        let tries = ops
-            .iter()
-            .filter(|o| o["meta"]["type"].as_str() == Some("task-execution"))
-            .count();
-        out.push(TaskResult {
+        Some(Action {
+            target: action["node"]["params"]["target"].as_str().unwrap_or(inner),
+            persistent,
+            status: action["status"].as_str(),
+            allow_failure: action["allowFailure"].as_bool() == Some(true),
+            hash: op("hash-generation").and_then(|o| o["meta"]["hash"].as_str().map(String::from)),
+            hydrated: op("output-hydration")
+                .is_some_and(|o| o["status"].as_str() == Some("cached")),
+            exit: executions()
+                .next_back()
+                .and_then(|o| o["meta"]["exitCode"].as_i64())
+                .and_then(|c| i32::try_from(c).ok()),
+            tries: executions().count(),
             took_ms: report_ms(&action["duration"]),
-            attempts: u32::try_from(tries).ok().filter(|n| *n > 0),
-            task: target.to_string(),
+        })
+    }
+
+    fn result(&self, hash: String, outcome: Outcome, replayed: bool, host: &str) -> TaskResult {
+        TaskResult {
+            took_ms: self.took_ms,
+            attempts: u32::try_from(self.tries).ok().filter(|n| *n > 0),
+            task: self.target.to_string(),
             hash,
             outcome,
             source: if replayed {
@@ -682,12 +763,129 @@ fn read_report(
                     host: host.to_string(),
                 }
             },
-        });
+        }
+    }
+
+    /// The exit `not_run` names that this failed with, where moon read it
+    /// as no failure it allows (114).
+    fn could_not_run(&self, not_run: &[i32]) -> Option<i32> {
+        (self.status == Some("failed") && !self.allow_failure)
+            .then_some(self.exit)
+            .flatten()
+            .filter(|c| not_run.contains(c))
+    }
+
+    /// It ran and failed, with a hash, a failure moon allows not and one
+    /// that could not run not (149).
+    fn failed(&self, not_run: &[i32]) -> bool {
+        self.status == Some("failed")
+            && !self.allow_failure
+            && self.hash.is_some()
+            && self.could_not_run(not_run).is_none()
+    }
+}
+
+/// What a run report says of `targets`, and of the run (119). Only
+/// `RunTask(…)` actions are checks: a `wait` dependency's
+/// `RunPersistentTask(…)` is a helper. A target with no result of its
+/// own, and not one that failed with an exit `not_run` names, is read
+/// through its dependencies in `deps`, both kinds of action alike (149;
+/// design D2): failed by those that ran and failed, each that is no target
+/// giving its result to `dependencies` once; otherwise not run, naming
+/// the first that could not run; otherwise left without a result (15).
+/// An empty `deps`, as a run an older sluice started has, reads nothing
+/// through a dependency.
+fn read_report(
+    report: &Value,
+    targets: &[String],
+    deps: &BTreeMap<String, Vec<String>>,
+    not_run: &[i32],
+    host: &str,
+) -> Read {
+    let actions: Vec<Action> = report["actions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Action::of)
+        .collect();
+    let mut read = Read {
+        detail: run_detail(report),
+        ..Read::default()
+    };
+    for a in actions
+        .iter()
+        .filter(|a| !a.persistent && targets.iter().any(|t| t == a.target))
+    {
+        let Some(hash) = &a.hash else {
+            continue;
+        };
+        let (outcome, replayed) = match a.status {
+            Some("passed") => (Outcome::Pass, a.hydrated),
+            Some("failed") => match a.exit.filter(|c| not_run.contains(c)) {
+                Some(code) => {
+                    read.not_run.push(NotRun {
+                        task: a.target.to_string(),
+                        reason: not_run_reason(code),
+                    });
+                    continue;
+                }
+                None => (Outcome::Fail, false),
+            },
+            Some("cached" | "cached-from-remote") => (Outcome::Pass, true),
+            _ => continue,
+        };
+        read.tasks
+            .push(a.result(hash.clone(), outcome, replayed, host));
+    }
+    for target in targets {
+        let judged = read.tasks.iter().any(|t| &t.task == target)
+            || read.not_run.iter().any(|n| &n.task == target);
+        let Some(of) = deps.get(target).filter(|_| !judged) else {
+            continue;
+        };
+        let theirs: Vec<&Action> = of
+            .iter()
+            .filter_map(|d| actions.iter().rfind(|a| a.target == d))
+            .collect();
+        let failed: Vec<&&Action> = theirs.iter().filter(|a| a.failed(not_run)).collect();
+        if !failed.is_empty() {
+            for a in &failed {
+                let Some(hash) = &a.hash else {
+                    continue;
+                };
+                let listed = targets.iter().any(|t| t == a.target)
+                    || read.dependencies.iter().any(|d| d.task == a.target);
+                if !listed {
+                    read.dependencies
+                        .push(a.result(hash.clone(), Outcome::Fail, false, host));
+                }
+            }
+            read.failed_by.push(FailedBy {
+                task: target.clone(),
+                by: failed.iter().map(|a| a.target.to_string()).collect(),
+            });
+            continue;
+        }
+        if let Some((a, code)) = theirs
+            .iter()
+            .find_map(|a| a.could_not_run(not_run).map(|c| (a, c)))
+        {
+            read.not_run.push(NotRun {
+                task: target.clone(),
+                reason: format!(
+                    "its dependency {} could not run: {}",
+                    a.target,
+                    not_run_reason(code)
+                ),
+            });
+        }
     }
     // In target order, whatever order moon ran them in.
-    out.sort_by(|a, b| a.task.cmp(&b.task));
-    unjudged.sort_by(|a, b| a.task.cmp(&b.task));
-    (out, unjudged)
+    read.tasks.sort_by(|a, b| a.task.cmp(&b.task));
+    read.not_run.sort_by(|a, b| a.task.cmp(&b.task));
+    read.dependencies.sort_by(|a, b| a.task.cmp(&b.task));
+    read.failed_by.sort_by(|a, b| a.task.cmp(&b.task));
+    read
 }
 
 /// Proposed 119: what moon's run report says of the whole run, `None`
@@ -1072,6 +1270,7 @@ mod tests {
         let task = |tags: &[&str], in_ci| Task {
             tags: tags.iter().map(|t| t.to_string()).collect(),
             in_ci,
+            deps: Vec::new(),
         };
         let tasks = BTreeMap::from([
             ("app:serve".to_string(), task(&["check-fast"], false)),
@@ -1103,6 +1302,7 @@ mod tests {
         let task = |tags: &[&str]| Task {
             tags: tags.iter().map(|t| t.to_string()).collect(),
             in_ci: true,
+            deps: Vec::new(),
         };
         let tasks = BTreeMap::from([
             ("app:bench".to_string(), task(&["check-fast", "bench"])),
@@ -1431,7 +1631,11 @@ mod tests {
         let targets: Vec<String> = ["a:test", "b:test", "c:test", "d:test", "e:serve"]
             .map(String::from)
             .to_vec();
-        let (got, unjudged) = read_report(&report, &targets, &[], "h");
+        let Read {
+            tasks: got,
+            not_run: unjudged,
+            ..
+        } = read_report(&report, &targets, &BTreeMap::new(), &[], "h");
         assert!(unjudged.is_empty());
         let short: Vec<(&str, &str, Outcome, bool)> = got
             .iter()
@@ -1453,7 +1657,11 @@ mod tests {
             ]
         );
         // Could-not-run-1 114: an exit `not_run` names is no fail.
-        let (got, unjudged) = read_report(&report, &targets, &[1], "h");
+        let Read {
+            tasks: got,
+            not_run: unjudged,
+            ..
+        } = read_report(&report, &targets, &BTreeMap::new(), &[1], "h");
         assert!(!got.iter().any(|t| t.task == "c:test"));
         assert_eq!(unjudged.len(), 1);
         assert_eq!(unjudged[0].task, "c:test");
@@ -1494,7 +1702,11 @@ mod tests {
             .to_vec();
         // An exit `not_run` names on a first try that a retry passed is no
         // could-not-run.
-        let (got, unjudged) = read_report(&report, &targets, &[1], "h");
+        let Read {
+            tasks: got,
+            not_run: unjudged,
+            ..
+        } = read_report(&report, &targets, &BTreeMap::new(), &[1], "h");
         assert!(unjudged.is_empty());
         let short: Vec<(&str, Outcome, Option<u64>, Option<u32>)> = got
             .iter()
@@ -1513,6 +1725,429 @@ mod tests {
         assert_eq!(d.saved_ms(), Some(90));
         assert_eq!(d.changed, vec!["app/f".to_string()]);
         assert_eq!(run_detail(&serde_json::json!({"actions": []})), None);
+    }
+
+    /// A `moon query tasks` document as moon 2.6.1 prints it, trimmed to
+    /// what the runner reads: each dependency an object with `target`,
+    /// `args`, `env` and `cacheStrategy`, and `type` for a `wait` or a
+    /// `cleanup` one; a task with none has no `deps`. `root:all` also
+    /// names `ui:test` as a bare target, and an item of no shape moon
+    /// prints (149; C.2).
+    const QUERY: &str = r#"{"tasks":{
+      "alpha":{
+        "serve":{"target":"alpha:serve","tags":[],"options":{"runInCI":true,"persistent":true}},
+        "stop":{"target":"alpha:stop","tags":[],"options":{"runInCI":true}}},
+      "api":{
+        "build":{"target":"api:build","tags":[],"options":{"runInCI":true},
+          "deps":[{"args":[],"env":{},"target":"api:test","cacheStrategy":"ignored"}]},
+        "test":{"target":"api:test","tags":["check-fast"],"options":{"runInCI":true}}},
+      "cyc":{
+        "a":{"target":"cyc:a","tags":[],"options":{"runInCI":true},
+          "deps":[{"args":[],"env":{},"target":"cyc:b","cacheStrategy":"ignored"}]},
+        "b":{"target":"cyc:b","tags":[],"options":{"runInCI":true},
+          "deps":[{"args":[],"env":{},"target":"cyc:a","cacheStrategy":"ignored"}]}},
+      "root":{
+        "all":{"target":"root:all","tags":["check-fast"],"options":{"runInCI":true},
+          "deps":[{"args":[],"env":{},"target":"api:build","cacheStrategy":"ignored"},
+                  {"args":[],"env":{},"target":"alpha:serve","cacheStrategy":"ignored","type":"wait"},
+                  {"args":[],"env":{},"target":"alpha:stop","cacheStrategy":"ignored","type":"cleanup"},
+                  "ui:test",
+                  7]}},
+      "ui":{
+        "test":{"target":"ui:test","tags":[],"options":{"runInCI":true}}}},
+     "options":{"affected":null,"json":true}}"#;
+
+    fn query() -> BTreeMap<String, Task> {
+        query_tasks(&serde_json::from_str(QUERY).unwrap())
+    }
+
+    /// 149; C.2: a task's dependencies are each item of its `deps`, a
+    /// bare target or an object's `target`, with or without a `type`, a
+    /// `wait` one kept; a `cleanup` one, which moon runs after the task,
+    /// and an item of any other shape are left out.
+    #[test]
+    fn a_tasks_dependencies_are_read_from_moon_query_tasks() {
+        let tasks = query();
+        assert_eq!(
+            tasks["root:all"].deps,
+            ["api:build", "alpha:serve", "ui:test"]
+        );
+        assert_eq!(tasks["api:build"].deps, ["api:test"]);
+        assert!(tasks["ui:test"].deps.is_empty());
+        assert!(tasks["alpha:stop"].deps.is_empty());
+        assert_eq!(tasks["root:all"].tags, ["check-fast"]);
+    }
+
+    /// 149; design D1: each target's dependencies at any depth, each once
+    /// and sorted; a cycle ends where it comes back, and a target with
+    /// none is left out of the map.
+    #[test]
+    fn a_targets_dependencies_at_any_depth() {
+        let tasks = query();
+        let targets = ["api:build", "cyc:a", "root:all", "ui:test"].map(String::from);
+        let deps = dependencies(&tasks, &targets);
+        let s = |xs: &[&str]| xs.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            deps,
+            BTreeMap::from([
+                ("api:build".to_string(), s(&["api:test"])),
+                ("cyc:a".to_string(), s(&["cyc:b"])),
+                (
+                    "root:all".to_string(),
+                    s(&["alpha:serve", "api:build", "api:test", "ui:test"])
+                ),
+            ])
+        );
+        assert!(dependencies(&tasks, &[]).is_empty());
+    }
+
+    /// An action as moon 2.6.1 writes it in its run report: a task that
+    /// ran, with its hash and each try's exit; with no hash and no exit,
+    /// one moon skipped, whose operations it writes as `[]` (#1305's
+    /// `root:integration`).
+    fn action(label: &str, status: &str, hash: Option<&str>, exits: &[i64]) -> Value {
+        let target = label
+            .split_once('(')
+            .and_then(|(_, t)| t.strip_suffix(')'))
+            .unwrap();
+        let mut ops = Vec::new();
+        if let Some(hash) = hash {
+            ops.push(serde_json::json!({"status":"passed","meta":{"type":"hash-generation","hash":hash}}));
+        }
+        for exit in exits {
+            let status = if *exit == 0 { "passed" } else { "failed" };
+            ops.push(serde_json::json!({"status":status,
+                "meta":{"type":"task-execution","command":"sh test.sh","exitCode":exit}}));
+        }
+        serde_json::json!({"allowFailure":false,"expectFailure":false,"flaky":false,
+            "duration":{"secs":0,"nanos":34913000},"label":label,"status":status,
+            "node":{"action":"run-task","params":{"args":[],"env":{},
+                "persistent":label.starts_with("RunPersistentTask("),"target":target}},
+            "operations":ops})
+    }
+
+    fn failed(target: &str, hash: &str) -> Value {
+        action(&format!("RunTask({target})"), "failed", Some(hash), &[1])
+    }
+
+    fn passed(target: &str, hash: &str) -> Value {
+        action(&format!("RunTask({target})"), "passed", Some(hash), &[0])
+    }
+
+    fn skipped(target: &str) -> Value {
+        action(&format!("RunTask({target})"), "skipped", None, &[])
+    }
+
+    fn run_report(actions: Vec<Value>) -> Value {
+        let mut all =
+            vec![serde_json::json!({"label":"SyncWorkspace","status":"passed","operations":[]})];
+        all.extend(actions);
+        serde_json::json!({"actions":all,"status":"completed"})
+    }
+
+    fn graph(edges: &[(&str, &[&str])]) -> BTreeMap<String, Vec<String>> {
+        edges
+            .iter()
+            .map(|(t, ds)| (t.to_string(), ds.iter().map(|d| d.to_string()).collect()))
+            .collect()
+    }
+
+    fn read(report: &Value, targets: &[&str], deps: &[(&str, &[&str])], not_run: &[i32]) -> Read {
+        let targets: Vec<String> = targets.iter().map(|t| t.to_string()).collect();
+        read_report(report, &targets, &graph(deps), not_run, "h")
+    }
+
+    /// Each check failed by a task, with the tasks it was failed by.
+    fn by(r: &Read) -> Vec<(&str, Vec<&str>)> {
+        r.failed_by
+            .iter()
+            .map(|f| (f.task.as_str(), f.by.iter().map(String::as_str).collect()))
+            .collect()
+    }
+
+    fn named(results: &[TaskResult]) -> Vec<(&str, &str, Outcome)> {
+        results
+            .iter()
+            .map(|t| (t.task.as_str(), t.hash.as_str(), t.outcome))
+            .collect()
+    }
+
+    /// Nothing read of a target: no result, not run or failed by a
+    /// dependency, so the check names it as left without a result (15).
+    fn nothing(r: &Read) -> bool {
+        r.tasks.is_empty()
+            && r.not_run.is_empty()
+            && r.failed_by.is_empty()
+            && r.dependencies.is_empty()
+    }
+
+    /// 149; #1305's shape: a `noop` target moon skipped, `operations: []`,
+    /// for the one task it depends on that ran and failed is failed by
+    /// it, and that task's result, which is no target, is the run's, ran
+    /// on this host with its hash, time and tries; a dependency that
+    /// passed fails nothing.
+    #[test]
+    fn a_noop_target_skipped_for_its_failed_dependency_is_failed_by_it() {
+        let report = run_report(vec![
+            passed("tests/integration:ui", "u1"),
+            failed("tests/integration:api", "8c41"),
+            skipped("root:integration"),
+        ]);
+        let r = read(
+            &report,
+            &["root:integration"],
+            &[(
+                "root:integration",
+                &["tests/integration:api", "tests/integration:ui"],
+            )],
+            &[],
+        );
+        assert!(r.tasks.is_empty() && r.not_run.is_empty());
+        assert_eq!(
+            by(&r),
+            [("root:integration", vec!["tests/integration:api"])]
+        );
+        assert_eq!(
+            r.dependencies,
+            [TaskResult {
+                task: "tests/integration:api".into(),
+                hash: "8c41".into(),
+                outcome: Outcome::Fail,
+                source: Source::Ran { host: "h".into() },
+                took_ms: Some(34),
+                attempts: Some(1),
+            }]
+        );
+    }
+
+    /// 149: a target is failed by the task that ran two steps down, and
+    /// the task between, which moon skipped and the run does not require,
+    /// is named nowhere; where it is a target too, it is failed by the
+    /// same task, which is listed once.
+    #[test]
+    fn a_dependency_two_steps_down_fails_the_target() {
+        let report = run_report(vec![
+            failed("api:test", "t1"),
+            action("RunTask(api:build)", "skipped", None, &[]),
+            skipped("root:all"),
+        ]);
+        let r = read(
+            &report,
+            &["root:all"],
+            &[("root:all", &["api:build", "api:test"])],
+            &[],
+        );
+        assert_eq!(by(&r), [("root:all", vec!["api:test"])]);
+        assert_eq!(named(&r.dependencies), [("api:test", "t1", Outcome::Fail)]);
+
+        let r = read(
+            &report,
+            &["api:build", "root:all"],
+            &[
+                ("api:build", &["api:test"]),
+                ("root:all", &["api:build", "api:test"]),
+            ],
+            &[],
+        );
+        assert_eq!(
+            by(&r),
+            [
+                ("api:build", vec!["api:test"]),
+                ("root:all", vec!["api:test"])
+            ]
+        );
+        assert_eq!(named(&r.dependencies), [("api:test", "t1", Outcome::Fail)]);
+    }
+
+    /// 149: a target two of whose dependencies failed is failed by both,
+    /// and each is listed once with its key.
+    #[test]
+    fn two_failed_dependencies_both_fail_the_target() {
+        let report = run_report(vec![
+            failed("ui:integration", "u1"),
+            failed("api:integration", "a1"),
+            skipped("root:integration"),
+        ]);
+        let r = read(
+            &report,
+            &["root:integration"],
+            &[("root:integration", &["api:integration", "ui:integration"])],
+            &[],
+        );
+        assert_eq!(
+            by(&r),
+            [(
+                "root:integration",
+                vec!["api:integration", "ui:integration"]
+            )]
+        );
+        assert_eq!(
+            named(&r.dependencies),
+            [
+                ("api:integration", "a1", Outcome::Fail),
+                ("ui:integration", "u1", Outcome::Fail)
+            ]
+        );
+    }
+
+    /// 149: a dependency that is itself a target is in `tasks` with its
+    /// fail, and not in `dependencies`.
+    #[test]
+    fn a_dependency_that_is_a_target_is_listed_as_a_target() {
+        let report = run_report(vec![failed("alpha:test", "a1"), skipped("beta:test")]);
+        let r = read(
+            &report,
+            &["alpha:test", "beta:test"],
+            &[("beta:test", &["alpha:test"])],
+            &[],
+        );
+        assert_eq!(named(&r.tasks), [("alpha:test", "a1", Outcome::Fail)]);
+        assert!(r.dependencies.is_empty());
+        assert_eq!(by(&r), [("beta:test", vec!["alpha:test"])]);
+    }
+
+    /// 114, 149: a target skipped for a dependency whose exit `not_run`
+    /// names is not run, saying which task could not run and why, and
+    /// gives that task's result nowhere.
+    #[test]
+    fn a_dependency_that_could_not_run_leaves_the_target_not_run() {
+        let report = run_report(vec![
+            action("RunTask(api:integration)", "failed", Some("a1"), &[77]),
+            skipped("root:integration"),
+        ]);
+        let r = read(
+            &report,
+            &["root:integration"],
+            &[("root:integration", &["api:integration"])],
+            &[77],
+        );
+        assert!(r.tasks.is_empty() && r.dependencies.is_empty() && r.failed_by.is_empty());
+        assert_eq!(
+            r.not_run,
+            [NotRun {
+                task: "root:integration".into(),
+                reason: "its dependency api:integration could not run: exited 77, \
+                         which [tests] not_run names: it could not run here"
+                    .into(),
+            }]
+        );
+    }
+
+    /// 149: one dependency that failed outweighs another that could not
+    /// run: the target is failed by the first alone.
+    #[test]
+    fn a_failed_dependency_outweighs_one_that_could_not_run() {
+        let report = run_report(vec![
+            failed("api:integration", "a1"),
+            action("RunTask(ui:integration)", "failed", Some("u1"), &[77]),
+            skipped("root:integration"),
+        ]);
+        let r = read(
+            &report,
+            &["root:integration"],
+            &[("root:integration", &["api:integration", "ui:integration"])],
+            &[77],
+        );
+        assert!(r.not_run.is_empty());
+        assert_eq!(by(&r), [("root:integration", vec!["api:integration"])]);
+        assert_eq!(
+            named(&r.dependencies),
+            [("api:integration", "a1", Outcome::Fail)]
+        );
+    }
+
+    /// 15, 149: a dependency whose failure moon allows fails no target,
+    /// so one skipped for another reason is left without a result.
+    #[test]
+    fn a_failure_moon_allows_fails_no_target() {
+        let mut lint = failed("api:lint", "l1");
+        lint["allowFailure"] = Value::Bool(true);
+        let report = run_report(vec![lint, skipped("root:integration")]);
+        let r = read(
+            &report,
+            &["root:integration"],
+            &[("root:integration", &["api:lint"])],
+            &[],
+        );
+        assert!(nothing(&r), "{r:?}");
+    }
+
+    /// 15, 149: a target moon skipped while no task it depends on failed
+    /// or could not run is left without a result.
+    #[test]
+    fn a_target_skipped_for_no_dependency_is_left_without_a_result() {
+        let report = run_report(vec![
+            passed("api:integration", "a1"),
+            skipped("root:integration"),
+        ]);
+        let r = read(
+            &report,
+            &["root:integration"],
+            &[("root:integration", &["api:integration"])],
+            &[],
+        );
+        assert!(nothing(&r), "{r:?}");
+    }
+
+    /// 149: a helper the target waits on is a task it depends on, so its
+    /// failure fails the target, and its result is the run's.
+    #[test]
+    fn a_persistent_dependency_that_failed_fails_the_target() {
+        let report = run_report(vec![
+            action("RunPersistentTask(api:serve)", "failed", Some("s1"), &[1]),
+            skipped("root:integration"),
+        ]);
+        let r = read(
+            &report,
+            &["root:integration"],
+            &[("root:integration", &["api:serve"])],
+            &[],
+        );
+        assert_eq!(by(&r), [("root:integration", vec!["api:serve"])]);
+        assert_eq!(named(&r.dependencies), [("api:serve", "s1", Outcome::Fail)]);
+    }
+
+    /// 114, 119, 149: a dependency moon tried twice is judged by its last
+    /// try: a not-run exit first and a fail last fails the target, with
+    /// both tries counted; a fail first and a not-run exit last leaves
+    /// the target not run.
+    #[test]
+    fn a_retried_dependency_is_judged_by_its_last_try() {
+        let report = run_report(vec![
+            action("RunTask(api:integration)", "failed", Some("a1"), &[77, 1]),
+            skipped("root:integration"),
+        ]);
+        let deps: &[(&str, &[&str])] = &[("root:integration", &["api:integration"])];
+        let r = read(&report, &["root:integration"], deps, &[77]);
+        assert_eq!(by(&r), [("root:integration", vec!["api:integration"])]);
+        assert_eq!(r.dependencies[0].attempts, Some(2));
+
+        let report = run_report(vec![
+            action("RunTask(api:integration)", "failed", Some("a1"), &[1, 77]),
+            skipped("root:integration"),
+        ]);
+        let r = read(&report, &["root:integration"], deps, &[77]);
+        assert!(r.failed_by.is_empty() && r.dependencies.is_empty());
+        assert_eq!(r.not_run.len(), 1);
+        assert!(
+            r.not_run[0]
+                .reason
+                .starts_with("its dependency api:integration could not run: exited 77"),
+            "{}",
+            r.not_run[0].reason
+        );
+    }
+
+    /// 15, 149: with no map, as a run an older sluice started has, a
+    /// skipped target is read through nothing and left without a result.
+    #[test]
+    fn a_run_with_no_map_reads_a_skipped_target_as_before() {
+        let report = run_report(vec![
+            failed("api:integration", "a1"),
+            skipped("root:integration"),
+        ]);
+        let r = read(&report, &["root:integration"], &[], &[]);
+        assert!(nothing(&r), "{r:?}");
     }
 
     /// Checkpoints and run records as moon 2.6.1 writes them while a run
@@ -1689,7 +2324,7 @@ mod tests {
         ]
         .map(String::from)
         .to_vec();
-        let (results, _) = read_report(&report, &targets, &[], "h");
+        let results = read_report(&report, &targets, &BTreeMap::new(), &[], "h").tasks;
         let output = "\u{25AE}\u{25AE}\u{25AE}\u{25AE} g:test (0a1b2c3d)\n";
         let cut = Moon.cut_off(&place, output.as_bytes(), &targets, &results, start, limit);
         assert_eq!(cut, ["c:test", "d:test", "g:test"]);

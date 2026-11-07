@@ -1188,6 +1188,8 @@ impl World {
                 },
                 missing: Vec::new(),
                 not_run: Vec::new(),
+                dependencies: Vec::new(),
+                failed_by: Vec::new(),
                 timed_out: false,
             };
         }
@@ -1227,6 +1229,8 @@ impl World {
                 },
                 missing: Vec::new(),
                 not_run: Vec::new(),
+                dependencies: Vec::new(),
+                failed_by: Vec::new(),
                 timed_out: false,
             };
         }
@@ -1261,6 +1265,8 @@ impl World {
             },
             missing: Vec::new(),
             not_run: Vec::new(),
+            dependencies: Vec::new(),
+            failed_by: Vec::new(),
             timed_out: false,
         };
         for t in wanted {

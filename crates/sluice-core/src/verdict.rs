@@ -219,6 +219,8 @@ mod tests {
             }],
             missing: Vec::new(),
             not_run: Vec::new(),
+            dependencies: Vec::new(),
+            failed_by: Vec::new(),
             timed_out: false,
             executor,
         }
