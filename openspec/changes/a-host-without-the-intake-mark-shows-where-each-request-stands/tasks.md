@@ -41,7 +41,7 @@ words for what it changes.
 
 ## 7. The overview lists them
 
-- [ ] 7.1 `overview::document` gives each branch with such requests `taken_in_by` and `pull_requests`, as status gives them, and the overview's words list the same rows under the branch. A one-shot overview reads them as status does. A reader's document carries the kept file whenever its modified time moved, and its tick reads GitHub for none of it (D5; core.25, core.31). The commands reference's `sluice overview` section names the fields. True when `sluice exec main -- cargo test -p sluice --features tools --test pull_requests -- a_one_shot_overview_lists_requests_taken_in_elsewhere a_watch_reads_no_followed_request_itself` and `sluice exec main -- moon run site:prose` pass.
+- [x] 7.1 `overview::document` gives each branch with such requests `taken_in_by` and `pull_requests`, as status gives them, and the overview's words list the same rows under the branch. A one-shot overview reads them as status does. A reader's document carries the kept file whenever its modified time moved, and its tick reads GitHub for none of it (D5; core.25, core.31). The commands reference's `sluice overview` section names the fields. True when `sluice exec main -- cargo test -p sluice --features tools --test pull_requests -- a_one_shot_overview_lists_requests_taken_in_elsewhere a_watch_reads_no_followed_request_itself` and `sluice exec main -- moon run site:prose` pass.
 
 ## 8. The gate
 
