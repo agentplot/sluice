@@ -148,6 +148,9 @@ again: given `--after` or `--priority` where a submission stands,
 queue. `--timeout` given with `--no-wait`, `--check` or `--status` exits
 `64` and submits nothing. A new commit, or a submission blamed, in
 conflict or withdrawn, goes into the queue again as any submit does.
+So does a pull request blamed or in conflict, whichever host takes the
+branch's pull requests in. Where another host does, `wt submit` reads
+it sent back from sluice's check on its head, and submits it again.
 
 `sluice wait` waits the same way and removes nothing: a worktree waited on
 with it is still there after its submission lands, ports and all. Run

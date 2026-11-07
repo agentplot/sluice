@@ -875,6 +875,10 @@ scenarios! {
     a_withdrawn_combinations_passed_run_is_read_for_nothing: bolt();
     a_withdrawn_combinations_failed_run_blames_no_one: bolt();
     a_withdrawn_combinations_failed_release_holds_its_checkout: releasing();
+    a_quiet_branch_mended_outside_sluice_is_read_whole: bolt();
+    status_of_a_submission_on_a_mended_branch_answers_for_it: bolt();
+    a_refusal_names_the_revision_this_host_holds: bolt();
+    a_read_of_a_mended_branch_leaves_its_state_as_it_was: bolt();
 }
 
 /// Each scenario of `shared` with the branch's records on its remote and
