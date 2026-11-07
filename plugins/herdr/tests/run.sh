@@ -234,6 +234,32 @@ needs_ps() {
   return 1
 }
 
+# How the processes a process started are listed here: by ps, or, where
+# sluice's sandbox on macOS refuses the set-uid ps, by pgrep, which it lets
+# run. A test that lists them is skipped only where neither can.
+if ps -o pid= -p $$ >/dev/null 2>&1; then
+  lists="ps"
+else
+  pgrep -P $$ >/dev/null 2>&1
+  if [ $? -le 1 ]; then lists="pgrep"; else lists=""; fi
+fi
+needs_children() {
+  [ -n "$lists" ] && return 0
+  echo "skip: $name: neither ps nor pgrep can run here (${ps_error:-no output})"
+  skips=$((skips + 1))
+  return 1
+}
+
+# The processes whose parent is pid $1, one a line: its pid, then its
+# command line.
+children_of() {
+  if [ "$lists" = ps ]; then
+    ps -A -o pid=,ppid=,args= | awk -v p="$1" '$2 == p { c = $1; sub(/^ *[0-9]+ +[0-9]+ +/, ""); print c, $0 }'
+  else
+    pgrep -lf -P "$1"
+  fi
+}
+
 pass() {
   [ "$failures" = "$failed_before" ] && printf 'ok   %s\n' "$name"
   return 0
@@ -926,7 +952,7 @@ rm -f "$FAKE/hold"
 pass
 
 fresh 'watch: three servers, two repositories, six processes'
-if needs_ps; then
+if needs_children; then
   # Two repositories with sluice's records: repo, in its worktree other,
   # and plain. Nothing in them gives a pane a token.
   plain_common=$(cd "$scratch/plain/.git" && pwd -P)
@@ -952,15 +978,17 @@ if needs_ps; then
   # readers' children; what a source's command starts is its own.
   got=
   for i in 1 2 3 4 5 6 7 8 9 10; do
-    got=$(ps -A -o pid=,ppid=,args= | awk -v w="$w" '
-      { pid[NR] = $1; ppid[NR] = $2; a = $0; sub(/^ *[0-9]+ +[0-9]+ +/, "", a); args[NR] = a }
-      END {
-        for (i = 1; i <= NR; i++) if (ppid[i] == w) {
-          k = args[i] ~ /overview --watch --json/ ? "command" : args[i] ~ /bin\/document\.sh/ ? "reader" : args[i] ~ /^sleep / ? "sleep" : "other: " args[i]
-          print k
-          if (k == "reader") for (j = 1; j <= NR; j++) if (ppid[j] == pid[i]) print "the reader'"'"'s: " args[j]
-        }
-      }' | sort | tr '\n' ' ')
+    got=$(children_of "$w" | while read -r c_pid c_args; do
+      case $c_args in
+      *"overview --watch --json"*) echo command ;;
+      *bin/document.sh*)
+        echo reader
+        children_of "$c_pid" | while read -r _ r_args; do echo "the reader's: $r_args"; done
+        ;;
+      "sleep "*) echo sleep ;;
+      *) echo "other: $c_args" ;;
+      esac
+    done | sort | tr '\n' ' ')
     [ "$got" = 'command command reader reader sleep ' ] && break
     sleep 1
   done
