@@ -53,4 +53,4 @@ check task passing.
 
 ## 7. The gate
 
-- [ ] 7.1 Run the gate's checks on the committed work with `sluice exec main`, and `openspec validate a-failed-entry-is-submitted-again --strict`. True when every task passes and the change is valid.
+- [x] 7.1 Run the gate's checks on the committed work with `sluice exec main`, and `openspec validate a-failed-entry-is-submitted-again --strict`. True when every task passes and the change is valid.
