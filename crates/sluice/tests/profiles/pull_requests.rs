@@ -1349,9 +1349,19 @@ fn a_submits_pull_request_sent_back_says_so() {
     let pull = g.pull_from("unit/blamed");
     assert!(pull.draft, "{pull:?}");
     assert_eq!(g.of_after(pull.number, 2).len(), 1, "{:?}", g.subs());
-    let (status, title, summary) = g.posted(&pull.head).unwrap();
+    // Record 0093 (D3): GitHub keeps the check failed once it was, so the
+    // held state is read by its title, as any host reads it now; what
+    // sluice sent for it is queued.
+    let (_, title, summary) = g.posted(&pull.head).unwrap();
+    assert_eq!(title, "waiting: the next submit");
+    let held = g.gh.forge.held().unwrap();
+    let sent = held
+        .posts
+        .iter()
+        .rfind(|(rev, name, _)| *rev == pull.head && name == "sluice")
+        .unwrap();
     assert_eq!(
-        (status, title.as_str()),
+        (sent.2.status, sent.2.title.as_str()),
         (Status::Queued, "waiting: the next submit")
     );
     assert!(
