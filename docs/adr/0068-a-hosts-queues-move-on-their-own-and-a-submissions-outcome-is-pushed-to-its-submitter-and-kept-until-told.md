@@ -11,7 +11,7 @@ decision-makers:
 
 Status: accepted by the user on 2026-10-28, on their card ("Approved"), after a revision on their note of the same day and an amendment naming the carriers.
 
-Amended in part by record 0093, proposed on 2026-11-06, once it is accepted: a host's queues move in sluice's own host process, which the first command that needs it starts and which ends when no queue has work; nothing is installed or kept for sluice, and `sluice run` is no process a host keeps (135).
+Amended in part by record 0093, accepted on 2026-11-06: a host's queues move in sluice's own host process, which the first command that needs it starts and which ends when no queue has work; nothing is installed or kept for sluice, and `sluice run` is no process a host keeps (135).
 
 Amended 2026-10-28 by record 0070, accepted by the user: told and untold are delivered and pending, the one command a session's start uses is `sluice inbox`, and a push is a notice; the record's field is `delivered`, the former `told` still read.
 
