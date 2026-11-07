@@ -5694,7 +5694,7 @@ impl OnGitHub {
 
 /// sluice's check on a pull request's head as host B posts it while B
 /// holds the request as `submission`, next on main.
-fn held_on_b(submission: u64) -> Posting {
+fn queued_on_b(submission: u64) -> Posting {
     let block = serde_json::json!({
         "host": "b", "taken_in": true, "submission": submission, "state": "queued",
         "ahead": [], "waits_for": [],
@@ -5716,7 +5716,7 @@ impl OnGitHub {
     /// while B holds the request as `submission`; host A's next follow of
     /// it reads it.
     fn held_there(&self, n: u64, head: &str, submission: u64) {
-        let p = held_on_b(submission);
+        let p = queued_on_b(submission);
         self.posted_elsewhere(n, head, p.status, &p.title, &p.summary);
     }
 }
@@ -5834,7 +5834,13 @@ fn a_waits_words_across_hosts() {
     let run = g.gh.forge.posted(&github::repo(), &pull.head).unwrap();
     let run = run.map(|r| r.id);
     g.gh.forge
-        .post_named(&github::repo(), &pull.head, "sluice", run, &held_on_b(1407))
+        .post_named(
+            &github::repo(),
+            &pull.head,
+            "sluice",
+            run,
+            &queued_on_b(1407),
+        )
         .unwrap();
     let next = format!("#{n} is submission 1407 on b, taken in by b's sluice run");
     said_once(&next);
