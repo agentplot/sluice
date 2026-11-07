@@ -11,6 +11,8 @@ decision-makers:
 
 Status: accepted, a decision of the code stage of `fix/a-hosts-intake-never-withdraws-anothers-submission` under the statement as written (122, 137, C.5) and rules core.33 and core.48, which it keeps; cheap to change later. How a host's several waits hold one mark is record 0089's.
 
+Superseded by record 0093, proposed on 2026-11-06, once it is accepted: no host takes a branch's requests in, so no intake mark is kept, renewed or handed over (137).
+
 Deciders: the code stage of `fix/a-hosts-intake-never-withdraws-anothers-submission`.
 
 Amended 2026-11-06 by madswan-design, below: a withdrawal for a hand-over holds no request.

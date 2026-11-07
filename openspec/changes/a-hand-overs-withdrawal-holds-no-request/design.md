@@ -178,3 +178,9 @@ request then.
 - **The field shows in every JSON record of a hand-over's withdrawal**
   → optional, as `beside` and `covered_by` are, and skipped where
   absent.
+- **Record 0093, proposed on 2026-11-06,** has no host take a branch's
+  requests in, so no hand-over is made once it is accepted and built.
+  Until then record 0088 as amended governs, and this builds it. Once
+  that design is built, the hand-overs the records already hold are
+  still read by this field, or by their words where none is named, as
+  rule core.33 keeps.

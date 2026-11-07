@@ -11,6 +11,8 @@ decision-makers:
 
 Status: accepted by the user, 2026-10-28, in session.
 
+Amended in part by record 0093, proposed on 2026-11-06, once it is accepted: no host takes a branch's requests in; they are taken in only where the branch's records are on its remote, on a forge by its jobs (137). The forge's reads stand as decided.
+
 Amended 2026-10-28 by the user, in session: a submit that does not wait fails at once on a spent allowance, exit 3, naming the time the pause ends, and makes no call; a waiting submit and a wait still wait the pause out within their own timeout (clause 134 as amended, blueprints 983cc03).
 
 Amended 2026-10-28, checked by hand with the app's installation 171576254, since no test reaches GitHub: GitHub answered `200` with a new ETag to a `GET /repos/agentplot/sluice` that carried, as `If-None-Match`, the ETag a token bought 61 seconds earlier had received. GitHub's ETags depend on the token, so a kept answer saves a call only to the process whose token received it; the design holds as written.
