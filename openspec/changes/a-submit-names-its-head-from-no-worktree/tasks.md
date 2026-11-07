@@ -43,7 +43,7 @@ clauses by number and rules by id.
 
 ## 7. A status gives an inbox's words
 
-- [ ] 7.1 One function makes a decided record's document with its `notice`, for `sluice inbox --json`, `sluice status <branch> [--all] --json` and `sluice status <n> --json`; none on a withdrawn, queued or testing one (D8). True when `sluice exec main -- cargo test -p sluice --features tools --test worktrunk -- status_gives_the_inbox_words` passes for a failure by name (`notice`, `failed`, `tested.on`) and a conflict by name (`notice`, `conflict.paths`), and the inbox's own tests pass unchanged by `sluice exec main -- cargo test -p sluice-conformance --test inbox`.
+- [x] 7.1 One function makes a decided record's document with its `notice`, for `sluice inbox --json`, `sluice status <branch> [--all] --json` and `sluice status <n> --json`; none on a withdrawn, queued or testing one (D8). True when `sluice exec main -- cargo test -p sluice --features tools --test worktrunk -- status_gives_the_inbox_words` passes for a failure by name (`notice`, `failed`, `tested.on`) and a conflict by name (`notice`, `conflict.paths`), and the inbox's own tests pass unchanged by `sluice exec main -- cargo test -p sluice-conformance --test inbox`.
 
 ## 8. The site and the skill
 
