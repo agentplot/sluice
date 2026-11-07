@@ -3014,7 +3014,11 @@ impl Pulls {
                 .map(|p| p.title)
                 .filter(|t| t.starts_with("landed"))
                 .unwrap_or_else(|| "landed".into());
-            return Ok(Followed::Landed { title });
+            return Ok(Followed::Landed {
+                title,
+                head: p.head.clone(),
+                draft: p.draft,
+            });
         }
         if let Some(posting) = posting.as_ref().filter(|p| p.status == Status::Failure) {
             if p.open {
@@ -3022,6 +3026,8 @@ impl Pulls {
                     conflict: posting.title.starts_with("conflict"),
                     title: posting.title.clone(),
                     summary: posting.summary.clone(),
+                    head: p.head.clone(),
+                    draft: p.draft,
                 });
             }
         }

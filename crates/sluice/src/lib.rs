@@ -604,15 +604,23 @@ pub enum Followed {
     /// each submission is called on a pull request.
     Done(Submission, BTreeMap<u64, String>),
     /// 137: merged, while another host takes its branch's pull requests
-    /// in: sluice's check's title on its head, where it says it landed.
-    Landed { title: String },
+    /// in: sluice's check's title on its head, where it says it landed,
+    /// and the head and draft mark the forge held for it (record 0093).
+    Landed {
+        title: String,
+        head: String,
+        draft: bool,
+    },
     /// 137: sent back on its head, while another host takes its branch's
     /// pull requests in: failed, or in conflict, as sluice's check there
-    /// names it.
+    /// names it, and the head and draft mark the forge holds for it, which
+    /// `--status` answers with (124; record 0093).
     SentBack {
         conflict: bool,
         title: String,
         summary: String,
+        head: String,
+        draft: bool,
     },
     /// Closed without landing.
     Closed,
@@ -4288,7 +4296,7 @@ fn across(
 /// sluice's check's title and summary for a pull request sent back.
 fn across_lines(f: &Followed, out: &mut dyn Write) -> Result<()> {
     match f {
-        Followed::Landed { title } => writeln!(out, "passed · {title}")?,
+        Followed::Landed { title, .. } => writeln!(out, "passed · {title}")?,
         Followed::SentBack { title, summary, .. } => {
             writeln!(out, "{title}")?;
             for l in summary.lines().filter(|l| !l.trim().is_empty()) {
@@ -4303,11 +4311,12 @@ fn across_lines(f: &Followed, out: &mut dyn Write) -> Result<()> {
 /// 137: [`across`]'s document: the state, and sluice's check's title.
 fn across_json(f: &Followed) -> serde_json::Value {
     match f {
-        Followed::Landed { title } => serde_json::json!({ "state": "landed", "title": title }),
+        Followed::Landed { title, .. } => serde_json::json!({ "state": "landed", "title": title }),
         Followed::SentBack {
             conflict,
             title,
             summary,
+            ..
         } => serde_json::json!({
             "state": if *conflict { "conflict" } else { "failed" },
             "title": title,
