@@ -49,7 +49,7 @@ check task passing.
 ## 6. Say it to the operator
 
 - [x] 6.1 In `site/src/content/docs/reference/commands.md`, in the paragraph on a wait whose pull request another host takes in, say the wait reads sluice's check's words, not the colour GitHub keeps for it; that a pull request held for the next submit is sent back while a draft and, once marked ready, waits for that host to take it in again; and that `sluice submit --status --json` there prints a landed or sent-back request with `head`, `draft` and `sends` and exits `0`. In `site/src/content/docs/guides/worktrunk.md`, say a pull request blamed or in conflict goes into the queue again on `wt submit` whichever host takes the branch's pull requests in. In `site/src/content/docs/guides/pull-requests.md`, where a submit marks a draft sluice made ready, say a submit from any host does, and marks ready a request sent back that is no draft. Name no host, team or tool of ours (rule core.26). True when `sluice exec main -- moon run site:prose` passes with no warning on the pages.
-- [ ] 6.2 Check the group: commit, then run `sluice exec main -- moon run site:prose`. True when it passes.
+- [x] 6.2 Check the group: commit, then run `sluice exec main -- moon run site:prose`. True when it passes.
 
 ## 7. The gate
 
