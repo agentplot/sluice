@@ -49,6 +49,23 @@ Option 1.
 - How a host records its active system, and which process serves a requirement, is the executor profile's to read (C.2). A host whose service manager records no active system is read by its requirements alone.
 - A host that changed while every check passed changes nothing: a pass stands.
 
+## What it reads, by example
+
+sluice knows nothing of any deployer, swancloud's or another's. It reads two facts every Nix-managed host keeps about itself, wherever sluice runs:
+
+- **The host's active system.** nix-darwin and NixOS each keep `/run/current-system`, a link to the system the host is running. Every switch points it at a new one, whoever ran the switch.
+- **The process serving each requirement the run's policy asks.** For a container engine, the process answering its socket, by its process id.
+
+A run of a stack test on deneb, as it would go:
+
+1. The run begins at 14:00. The executor notes `/run/current-system -> /nix/store/abc…-darwin-system` and the engine's socket served by process 4121.
+2. At 14:03 a deploy switches deneb. The link now points at `/nix/store/xyz…-darwin-system`, and the upgrade quits and restarts OrbStack, now process 9930.
+3. At 14:06 the stack test fails: its containers were killed mid-test.
+4. The executor reads both facts again. The system is `xyz…`, not `abc…`, and the engine is process 9930, not 4121.
+5. sluice records the run as having no outcome, "the host's system changed during the run", and blames no one. It releases the run's place, which runs its release command and removes the containers, networks and routes the run left. Then it runs the check again in a new place.
+
+Had neither fact moved, the fail at 14:06 would be a real fail, blamed and read as today. A host that keeps no `/run/current-system` is read by its requirements' processes alone.
+
 ## Consequences
 
 - Clauses 84 and 114 say so (agentplot/blueprints 74e668d, proposed), and `core.38` is amended to match, marked proposed.
