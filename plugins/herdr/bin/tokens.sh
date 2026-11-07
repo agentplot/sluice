@@ -1,9 +1,10 @@
 #!/bin/sh
-# shellcheck disable=SC1091,SC2154,SC2016 # jq programs; common.sh, sourced, sets root, lib, state and config.
-# The sidebar: the `sluice` token on every pane whose worktree has
-# something to say, `sluice_q` on every workspace with a queue. Reports
-# only what changed, unless --refresh, which reports every token again so
-# its time to live starts over.
+# shellcheck disable=SC1091,SC2154,SC2016 # jq programs; common.sh, sourced, sets root, lib, state, server and config.
+# The sidebar: the `sluice` token on every pane of the herdr server in the
+# environment whose worktree has something to say, `sluice_q` on every
+# workspace with a queue, from the host's documents. Reports only what
+# changed, unless --refresh, which reports every token again so its time
+# to live starts over.
 set -u
 . "$(dirname "$0")/../lib/common.sh"
 . "$lib/panes.sh"
@@ -47,9 +48,11 @@ want=$(jqw -n -c --argjson panes "$panes" --argjson docs "$docs" --argjson extra
       | (map(.repo) | unique) as $repos
       | {id: $w, v: ($docs | map(select(.repository as $r | $repos | index($r))) | queue_token)} ] }')
 
-last=$state/tokens.json
+# What was last set in this server, and its sequence, are its own (D3).
+mkdir -p "$server"
+last=$server/tokens.json
 [ -f "$last" ] || echo '{"panes":{},"spaces":{}}' >"$last"
-seq_file=$state/seq
+seq_file=$server/seq
 n=$(($(cat "$seq_file" 2>/dev/null || echo 0) + 1))
 echo "$n" >"$seq_file"
 

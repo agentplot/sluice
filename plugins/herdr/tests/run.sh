@@ -1,9 +1,12 @@
 #!/bin/sh
 # shellcheck disable=SC2016 # jq programs name their own $variables.
 # The herdr plugin's scripts against stand-in `herdr` and `sluice` on PATH:
-# recorded overview documents in, the herdr calls made checked. git runs
-# isolated from the user's config and credentials on scratch repositories,
-# and nothing here reaches a network, a credential or a running herdr.
+# recorded overview documents in, the herdr calls made checked, each herdr
+# server a socket file in the test's folder answered from that socket's
+# files. A test that counts what the plugin runs puts tests/fake-logged
+# first on PATH, whose `jq` and `git` log each call. git runs isolated
+# from the user's config and credentials on scratch repositories, and
+# nothing here reaches a network, a credential or a running herdr.
 
 set -u
 here=$(cd "$(dirname "$0")" && pwd -P)
@@ -15,7 +18,9 @@ scratch=$(mktemp -d "${SLUICE_TMP:-${TMPDIR:-/tmp}}/sluice-herdr.XXXXXX")
 # A lease this run holds for a test, as a watcher of this plugin would, so
 # --ensure starts none and what the test asks of the watcher stays put.
 hold_lease() {
-  printf '%s %s\n%s\n%s\n' $$ "$(date +%s)" "$plugin" "$(sed -n 's/^version = "\(.*\)"$/\1/p' "$plugin/herdr-plugin.toml")" >"$S/watch.lease"
+  # shellcheck disable=SC2012 # the socket's inode, as watch.sh reads it.
+  printf '%s %s\n%s\n%s\n%s\n' $$ "$(date +%s)" "$plugin" "$(sed -n 's/^version = "\(.*\)"$/\1/p' "$plugin/herdr-plugin.toml")" \
+    "$(ls -di "$HERDR_SOCKET_PATH" | awk '{ print $1 }')" >"$S/watch.lease"
 }
 
 # Wait up to $1 seconds for the shell condition $2, checking each second.
@@ -137,12 +142,23 @@ fresh() {
   mkdir -p "$t/state" "$t/config" "$t/fake"
   export HERDR_PLUGIN_STATE_DIR="$t/state" HERDR_PLUGIN_CONFIG_DIR="$t/config" FAKE="$t/fake"
   export SLUICE_HERDR_NOW="$NOW"
-  # This herdr server's state: the tests run with no socket.
-  S=$t/state/servers/$(printf none | cksum | cut -d' ' -f1)
+  # The host's state, which every herdr server's views read.
+  S=$t/state
   mkdir -p "$S/docs" "$S/probe"
   : >"$FAKE/herdr-calls"
   : >"$FAKE/sluice-calls"
+  serve herdr
   panes front-none
+}
+
+# Make the herdr server named $1 the one in the environment: its socket a
+# file in the test's folder, made if it is not there, and $H the folder of
+# that socket's files, which tests/fake/herdr answers from.
+serve() {
+  export HERDR_SOCKET_PATH="$t/$1.sock"
+  H=$HERDR_SOCKET_PATH.d
+  [ -e "$HERDR_SOCKET_PATH" ] || : >"$HERDR_SOCKET_PATH"
+  mkdir -p "$H"
 }
 
 fail() {
@@ -171,23 +187,23 @@ calls() { cat "$FAKE/herdr-calls"; }
 has() { grep -qF -- "$1" "$FAKE/herdr-calls" || fail "no herdr call with: $1"; }
 hasnt() { if grep -qF -- "$1" "$FAKE/herdr-calls"; then fail "a herdr call with: $1"; fi; }
 
-# Panes: p1 in work (workspace w1, tab t1), p2 in other (w2, t2), p3 in
-# home (w1, t1). $1 names the pane in front, or front-none.
+# The server's panes: p1 in work (workspace w1, tab t1), p2 in other (w2,
+# t2), p3 in home (w1, t1). $1 names the pane in front, or front-none.
 panes() {
   jq -n -c --arg work "$work" --arg other "$other" --arg home "$scratch/home" --arg f "$1" '
     {result: {panes: [
       {pane_id: "p1", tab_id: "t1", workspace_id: "w1", agent: "claude", cwd: $work, foreground_cwd: $work, focused: ($f == "p1")},
       {pane_id: "p2", tab_id: "t2", workspace_id: "w2", agent: "claude", cwd: $other, foreground_cwd: $other, focused: ($f == "p2")},
-      {pane_id: "p3", tab_id: "t1", workspace_id: "w1", cwd: $home, foreground_cwd: $home, focused: false}]}}' >"$FAKE/panes.json"
-  jq -n -c --arg f "$1" '{result: {tabs: [{tab_id: "t1", focused: ($f == "p1")}, {tab_id: "t2", focused: ($f == "p2")}]}}' >"$FAKE/tabs.json"
-  jq -n -c --arg f "$1" '{result: {workspaces: [{workspace_id: "w1", focused: ($f == "p1")}, {workspace_id: "w2", focused: ($f == "p2")}]}}' >"$FAKE/spaces.json"
+      {pane_id: "p3", tab_id: "t1", workspace_id: "w1", cwd: $home, foreground_cwd: $home, focused: false}]}}' >"$H/panes.json"
+  jq -n -c --arg f "$1" '{result: {tabs: [{tab_id: "t1", focused: ($f == "p1")}, {tab_id: "t2", focused: ($f == "p2")}]}}' >"$H/tabs.json"
+  jq -n -c --arg f "$1" '{result: {workspaces: [{workspace_id: "w1", focused: ($f == "p1")}, {workspace_id: "w2", focused: ($f == "p2")}]}}' >"$H/spaces.json"
 }
 
 # The token sluice_branch=$2 on pane $1, as an orchestrator sets it,
 # beside another source's token in the one map herdr keeps.
 named() {
   jq -c --arg p "$1" --arg b "$2" '.result.panes |= map(if .pane_id == $p then .tokens = {sluice_branch: $b, other_tool: "x"} else . end)' \
-    "$FAKE/panes.json" >"$FAKE/panes.next" && mv "$FAKE/panes.next" "$FAKE/panes.json"
+    "$H/panes.json" >"$H/panes.next" && mv "$H/panes.next" "$H/panes.json"
 }
 
 # A document for repo: main with nothing queued, changed by the jq in $1.
@@ -250,6 +266,23 @@ grep -q 'a value herdr cannot read: width = 80%' "$t/out" || fail "an unreadable
 grep -v '^id = ' "$plugin/herdr-plugin.toml" >"$t/herdr-plugin.toml"
 if sh "$here/manifest.sh" "$t/herdr-plugin.toml" >"$t/out" 2>&1; then fail "a manifest with no id passed"; fi
 grep -q ': no id$' "$t/out" || fail "the missing id not named: $(cat "$t/out")"
+pass
+
+## the stand-ins
+
+fresh 'stand-ins: herdr answers from its socket, jq and git are logged'
+"$here/fake/herdr" pane list | jq -e '.result.panes | length == 3' >/dev/null || fail "herdr did not answer from its socket's files"
+grep -qx 'herdr.sock: pane list' "$FAKE/herdr-calls" || fail "herdr logged: $(calls)"
+serve gone
+rm -f "$HERDR_SOCKET_PATH"
+"$here/fake/herdr" pane list >/dev/null && fail "a server whose socket is gone answered"
+out=$(cd "$work" && PATH="$here/fake-logged:$PATH" jq -n -c '[1,
+  2]')
+[ "$out" = '[1,2]' ] || fail "jq answered: $out"
+[ "$(cat "$FAKE/jq-calls")" = 'work: -n -c [1,   2]' ] || fail "jq logged: $(cat "$FAKE/jq-calls")"
+out=$(cd "$work" && PATH="$here/fake-logged:$PATH" git rev-parse HEAD)
+[ "$out" = "$(git -C "$work" rev-parse HEAD)" ] || fail "git answered: $out"
+[ "$(cat "$FAKE/git-calls")" = 'work: rev-parse HEAD' ] || fail "git logged: $(cat "$FAKE/git-calls")"
 pass
 
 ## herdr-watch
@@ -358,7 +391,7 @@ if needs_ps; then
   w=$!
   # Three ticks at least, each starting with a look at herdr's panes, while
   # the source is held open.
-  within 30 '[ "$(grep -c "^pane list" "$FAKE/herdr-calls")" -ge 12 ]' || fail "the watcher did not tick"
+  within 30 '[ "$(grep -c ": pane list$" "$FAKE/herdr-calls")" -ge 12 ]' || fail "the watcher did not tick"
   [ "$(grep -c '^work: overview --watch --json' "$FAKE/sluice-calls")" = 1 ] ||
     fail "a new source every tick: $(grep -c 'overview --watch' "$FAKE/sluice-calls") started"
   kill "$w" 2>/dev/null
@@ -403,7 +436,7 @@ touch "$FAKE/hold"
 # No ps that runs, and on macOS no /proc: nothing can be told by identity.
 PATH="$here/fake-no-ps:$PATH" SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 60 2>"$t/log" &
 w=$!
-within 30 '[ "$(grep -c "^pane list" "$FAKE/herdr-calls")" -ge 12 ]' || fail "the watcher did not tick"
+within 30 '[ "$(grep -c ": pane list$" "$FAKE/herdr-calls")" -ge 12 ]' || fail "the watcher did not tick"
 [ "$(grep -c '^work: overview --watch --json' "$FAKE/sluice-calls")" = 1 ] ||
   fail "a new source every tick: $(grep -c 'overview --watch' "$FAKE/sluice-calls") started"
 kill "$w" 2>/dev/null
@@ -465,20 +498,6 @@ rm -f "$FAKE/hold"
 kill "$a" 2>/dev/null
 pass
 
-fresh 'watch: one watcher per herdr server'
-HERDR_SOCKET_PATH=/run/one.sock SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ensure
-HERDR_SOCKET_PATH=/run/two.sock SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ensure
-# The live watchers, one per server's lease.
-live_watchers() {
-  n=0
-  for l in "$HERDR_PLUGIN_STATE_DIR"/servers/*/watch.lease; do
-    [ -f "$l" ] && kill -0 "$(holder_of "$l")" 2>/dev/null && n=$((n + 1))
-  done
-  echo "$n"
-}
-within 20 '[ "$(live_watchers)" = 2 ]' || fail "$(live_watchers) watchers for two herdr servers"
-pass
-
 fresh 'watch: a renewer killed holding the lock'
 if needs_ps; then
   # The renewer holds the lock four seconds each time, so it is caught there.
@@ -501,17 +520,12 @@ if needs_ps; then
 fi
 
 fresh 'watch: herdr gone'
-touch "$FAKE/down"
+touch "$H/down"
 began=$(date +%s)
 SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 10 2>/dev/null
 [ $(($(date +%s) - began)) -lt 6 ] || fail "the watcher kept going without herdr"
 [ -f "$S/watch.lease" ] && fail "the watcher left its lease"
 pass
-
-# The state of the herdr server at socket $1.
-state_of() {
-  echo "$t/state/servers/$(printf '%s' "$1" | cksum | cut -d' ' -f1)"
-}
 
 # Whether every process named has ended.
 ended() {
@@ -523,11 +537,9 @@ fresh 'watch: its herdr server stops'
 doc >"$FAKE/overview-work.json"
 doc >"$FAKE/watch-work.jsonl"
 touch "$FAKE/hold"
-# The server's socket, here a plain file, which a server removes as it stops.
-sock=$t/herdr.sock
-: >"$sock"
-S=$(state_of "$sock")
-HERDR_SOCKET_PATH=$sock SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 60 2>/dev/null &
+# The server's socket, a plain file here, which a server removes as it stops.
+sock=$HERDR_SOCKET_PATH
+SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 60 2>/dev/null &
 w=$!
 within 15 'sources_of "$w" | grep -q .' || fail "no source started"
 theirs=$(sources_of "$w")
@@ -543,11 +555,9 @@ fresh 'watch: another herdr server in its place'
 doc >"$FAKE/overview-work.json"
 doc >"$FAKE/watch-work.jsonl"
 touch "$FAKE/hold"
-sock=$t/herdr.sock
-: >"$sock"
-S=$(state_of "$sock")
+sock=$HERDR_SOCKET_PATH
 # Its ticks are long, so only the new server's watcher can end it here.
-HERDR_SOCKET_PATH=$sock SLUICE_HERDR_TICK=60 sh "$plugin/bin/watch.sh" --ticks 60 2>/dev/null &
+SLUICE_HERDR_TICK=60 sh "$plugin/bin/watch.sh" --ticks 60 2>/dev/null &
 a=$!
 within 15 'sources_of "$a" | grep -q .' || fail "no source started"
 theirs=$(sources_of "$a")
@@ -555,7 +565,7 @@ theirs=$(sources_of "$a")
 # socket of its own, and runs the plugin's startup.
 rm -f "$sock"
 : >"$sock"
-HERDR_SOCKET_PATH=$sock SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ensure
+SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ensure
 ends_within "$a" 15 || fail "the first server's watcher still runs after ${took}s"
 within 5 'ended $theirs' || fail "the first server's sources outlived it"
 within 15 'b=$(holder_of "$S/watch.lease") && [ -n "$b" ] && [ "$b" != "$a" ] && kill -0 "$b" 2>/dev/null' ||
@@ -610,6 +620,26 @@ f=$(ls "$S"/docs/*.json)
 [ "$(jq -r '.branches[0].recent[0].ids[0]' "$f")" = 95 ] || fail "the state file is not the last document"
 set -- "$S"/docs/*.tmp.*
 [ -e "$1" ] && fail "a temporary file was left"
+pass
+
+fresh 'watch: read by every server'
+for s in one two; do
+  serve "$s"
+  panes front-none
+done
+serve one
+feed "$(doc ".branches[0].depth = 1 | .branches[0].submissions = [$(sub 12 '$work' testing)]
+  | .branches[0].candidates = [{id: \"c1\", submissions: [12], revision: \"x\", state: \"testing\",
+      started: \"2026-10-16T19:42:00Z\", limit: 900, targets: [\"#check-fast\"], executor: \"sandbox\", ran: 0, replayed: 0, failed: []}]")"
+# One state file, the host's, whichever server's watcher kept it.
+kept=$(find "$S" -name '*.json' -path '*/docs/*')
+[ "$kept" = "$(ls "$S"/docs/*.json 2>/dev/null)" ] && [ "$(printf '%s\n' "$kept" | wc -l)" -eq 1 ] ||
+  fail "not one state file in the host's state: $kept"
+for s in one two; do
+  serve "$s"
+  out=$(SLUICE_HERDR_DIR=$work sh "$plugin/bin/status.sh" --once </dev/null)
+  printf '%s' "$out" | grep -q '▶ testing main + #12 w' || fail "the popup in server $s shows: $out"
+done
 pass
 
 fresh 'watch: a document missing fields'
@@ -1272,18 +1302,36 @@ pass
 fresh "status: the segment is the server's"
 home=$t/server
 st=$home/.local/state/herdr/plugins/agentplot.sluice
-sock=$t/herdr.sock
 mkdir -p "$st"
 printf '%s\n' "$board" | jq -c --arg r "$common" '.repository = $r' |
-  HERDR_SOCKET_PATH=$sock HERDR_PLUGIN_STATE_DIR=$st sh "$plugin/bin/document.sh" local "$work"
-HOME=$home HERDR_SOCKET_PATH=$sock HERDR_PLUGIN_STATE_DIR=$st SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 1 2>/dev/null
+  HERDR_PLUGIN_STATE_DIR=$st sh "$plugin/bin/document.sh" local "$work"
+HOME=$home HERDR_PLUGIN_STATE_DIR=$st SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 1 2>/dev/null
 cmd=$(HOME=$home HERDR_PLUGIN_STATE_DIR=$st sh "$plugin/bin/setup.sh" </dev/null | sed -n "s/.*command = '\(.*\)', interval_seconds.*/\1/p")
 # As herdr runs it on the server, whatever host the client is on: the
-# server's home, socket and PATH, nothing else, so the clock is the host's
-# own and the time under test is however long ago the board's run started.
-out=$(cd "$work" && env -i HOME="$home" HERDR_SOCKET_PATH="$sock" PATH="$PATH" /bin/sh -lc "$cmd")
+# server's home and PATH, nothing else, not even its socket, so the clock
+# is the host's own and the time under test is however long ago the
+# board's run started.
+out=$(cd "$work" && env -i HOME="$home" PATH="$PATH" /bin/sh -lc "$cmd")
 case $out in 'sluice main · 3 submissions · testing main + #12 Batch review cards + #13 plugin-board 3/5 ▓▓▓▓▓▓░░░░ '*'/15m · #14 Herdr popup waiting · last #9 unit/sidebar blamed on 4f1c2aa') ;;
 *) fail "with only the server's environment it printed: $out" ;;
+esac
+pass
+
+fresh 'status: the segment is the same in every server'
+printf '%s\n' "$board" | jq -c --arg r "$common" '.repository = $r' | sh "$plugin/bin/document.sh" local "$work"
+SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 1 2>/dev/null
+# Two servers with panes in the repository, the segment run in each with
+# its own socket, as each server's tab bar runs it.
+lines=
+for s in one two; do
+  serve "$s"
+  panes front-none
+  lines="$lines$(cd "$work" && sh "$HERDR_PLUGIN_STATE_DIR/segment/bin/segment.sh")
+"
+done
+[ "$(printf '%s' "$lines" | sort -u | wc -l)" -eq 1 ] || fail "the servers' lines differ: $lines"
+case $lines in 'sluice main · 3 submissions · testing main + #12 Batch review cards + #13 plugin-board '*) ;;
+*) fail "the segment printed: $lines" ;;
 esac
 pass
 
@@ -1308,7 +1356,7 @@ for run in plain extra; do
   } 2>>"$t/$run.err"
   sed 's/--seq [0-9]*//' "$FAKE/herdr-calls" >"$t/$run.calls"
 done
-grep -q '"later"' "$t"/extra/servers/*/docs/*.json || fail "the extra fields were not kept"
+grep -q '"later"' "$t"/extra/docs/*.json || fail "the extra fields were not kept"
 cmp -s "$t/plain.frame" "$t/extra.frame" || fail "the popup differs: $(diff "$t/plain.frame" "$t/extra.frame")"
 cmp -s "$t/plain.calls" "$t/extra.calls" || fail "the herdr calls differ: $(diff "$t/plain.calls" "$t/extra.calls")"
 grep -q 'notification show sluice: #87 blamed' "$t/extra.calls" || fail "no toast with the extra fields"
@@ -1418,7 +1466,7 @@ feed "$(doc)" "$(doc "$blamed87")"
 : >"$FAKE/herdr-calls"
 sh "$plugin/bin/jump.sh"
 has 'agent focus p2'
-touch "$FAKE/no-agent"
+touch "$H/no-agent"
 sh "$plugin/bin/jump.sh"
 has 'workspace focus w2'
 has 'tab focus t2'
@@ -1653,7 +1701,7 @@ forecast
 grep -q 'submit' "$FAKE/sluice-calls" && fail "a forecast ran for a named pane: $(cat "$FAKE/sluice-calls")"
 # Another pane in the same worktree, with no branch named, has one.
 jq -c --arg work "$work" '.result.panes += [{pane_id: "p4", tab_id: "t1", workspace_id: "w1", cwd: $work, foreground_cwd: $work, focused: false}]' \
-  "$FAKE/panes.json" >"$FAKE/panes.next" && mv "$FAKE/panes.next" "$FAKE/panes.json"
+  "$H/panes.json" >"$H/panes.next" && mv "$H/panes.next" "$H/panes.json"
 forecast
 tokens
 [ "$(grep -c 'work: submit main --check --json' "$FAKE/sluice-calls")" = 1 ] || fail "no forecast for the pane with no branch named: $(cat "$FAKE/sluice-calls")"

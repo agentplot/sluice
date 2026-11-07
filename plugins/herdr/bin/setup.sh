@@ -1,5 +1,5 @@
 #!/bin/sh
-# shellcheck disable=SC1091,SC2154,SC2016 # jq programs; common.sh, sourced, sets root, lib, base, state and config.
+# shellcheck disable=SC1091,SC2154,SC2016 # jq programs; common.sh, sourced, sets root, lib, state and config.
 # Show the snippets to add to herdr's config.toml: the key, the sidebar
 # rows and the tab-bar segment, with this plugin's paths filled in. It
 # edits nothing; on a terminal it waits for q or Escape.
@@ -12,10 +12,10 @@ set -u
 # host whose herdr keeps its state at the same place below it.
 home=${HOME:-}
 home=${home%/}
-if [ -n "$home" ] && [ "${base#"$home"/}" != "$base" ]; then
-  segment="'sh \"\$HOME/${base#"$home"/}/segment/bin/segment.sh\"'"
+if [ -n "$home" ] && [ "${state#"$home"/}" != "$state" ]; then
+  segment="'sh \"\$HOME/${state#"$home"/}/segment/bin/segment.sh\"'"
 else
-  segment="\"sh '$base/segment/bin/segment.sh'\""
+  segment="\"sh '$state/segment/bin/segment.sh'\""
 fi
 
 cat <<EOF

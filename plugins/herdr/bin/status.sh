@@ -1,7 +1,7 @@
 #!/bin/sh
 # shellcheck disable=SC1091,SC2154,SC2016 # jq programs; common.sh, sourced, sets root, lib, state and config.
 # The status popup, and with --dashboard the same view in its own tab:
-# the focused pane's repository's queue, read from the watcher's state and
+# the focused pane's repository's queue, read from the host's state and
 # redrawn as it changes. Keys: q or Escape closes, j jumps to the culprit's
 # pane, a switches between this repository and every one held, the arrows
 # and Page Up and Down scroll a frame taller than the pane.

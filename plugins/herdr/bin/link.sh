@@ -1,5 +1,5 @@
 #!/bin/sh
-# shellcheck disable=SC1091,SC2154,SC2016 # jq programs; common.sh, sourced, sets root, lib, base, state and config.
+# shellcheck disable=SC1091,SC2154,SC2016 # jq programs; common.sh, sourced, sets root, lib, state and config.
 # A row's link, from herdr's Ctrl-click (HERDR_PLUGIN_CLICKED_URL) or the
 # popup's number key ($1): sluice-herdr:focus?path=<worktree> focuses that
 # worktree's pane; sluice-herdr:log?path=<log>&task=<test> opens the log in

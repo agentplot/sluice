@@ -1,5 +1,5 @@
 #!/bin/sh
-# shellcheck disable=SC1091,SC2154,SC2016 # jq programs; common.sh, sourced, sets root, lib, base, state and config.
+# shellcheck disable=SC1091,SC2154,SC2016 # jq programs; common.sh, sourced, sets root, lib, state and config.
 # The plugin's one watcher. `--ensure` starts it unless a watcher holds a
 # lease renewed in the last 60 s, and nudges it to look for repositories.
 # Running, it finds the repositories the panes are in, runs each source
@@ -58,13 +58,14 @@ write_lease() {
   if holds_lock; then mv -f "$lease.tmp.$$" "$lease"; else rm -f "$lease.tmp.$$"; fi
 }
 
-# The tab-bar segment runs from the state directory, which outlives a
-# reinstall; the plugin's own directory does not.
+# The tab-bar segment runs from the host's state, which outlives a
+# reinstall; the plugin's own directory does not. The watcher refreshes the
+# copy as it starts, and an ensure leaves it (D12).
 # Each file replaced in one step, since herdr may be running it.
 copy_segment() {
-  mkdir -p "$base/segment/bin" "$base/segment/lib"
+  mkdir -p "$state/segment/bin" "$state/segment/lib"
   for f in bin/segment.sh lib/common.sh lib/words.jq; do
-    cp "$root/$f" "$base/segment/$f.tmp.$$" && mv -f "$base/segment/$f.tmp.$$" "$base/segment/$f"
+    cp "$root/$f" "$state/segment/$f.tmp.$$" && mv -f "$state/segment/$f.tmp.$$" "$state/segment/$f"
   done
 }
 
@@ -73,7 +74,6 @@ case ${1:-} in
   touch "$state/nudge"
   # A pane just made gets its sidebar line within a second, not a tick.
   touch "$state/dirty"
-  copy_segment
   ours && exit 0
   nohup sh "$root/bin/watch.sh" </dev/null >>"$state/watch.log" 2>&1 &
   exit 0
