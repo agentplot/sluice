@@ -1,15 +1,1 @@
-{
-  "hooks": {
-    "PostToolUse": [
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/vale.sh"
-          }
-        ]
-      }
-    ]
-  }
-}
+/nix/store/z4af48s5i42i4hjrb24x2jyrgnd21jkx--Users-chuck-.local-share-flume-places-8fbc1094d53c-chore--sluice-devenv-declares-its-mcp-servers-.claude-settings.json

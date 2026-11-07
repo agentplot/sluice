@@ -36,8 +36,6 @@ _: {
     "target/**"
     ".devenv/**"
     ".moon/cache/**"
-    # Claude Code rewrites it in its own layout when a setting changes.
-    ".claude/settings.json"
     # The engine's own declarations, copied whole from a session of the
     # pinned Claude Code (plugins/sluice-board/README.md).
     "plugins/sluice-board/engine-types/**"
