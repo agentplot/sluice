@@ -1,9 +1,12 @@
 # sluice as a nix package, for `nix profile install github:agentplot/sluice`
-# and for the GHA build. The development shell is devenv's (devenv.nix);
-# this flake only builds and installs. Rust is the version .prototools
-# names, so the release is built by the compiler the checks ran with. The
-# version is the release tag's: CI builds with `SLUICE_VERSION=<version>
-# nix build --impure`; any other build is 0.0.0, Cargo.toml's.
+# and for the GHA build, and services.sluice, the nix-darwin and NixOS
+# modules that write the host's own settings and install the package
+# (record 0098, core.51). The development shell is devenv's (devenv.nix);
+# everything else of the flake's is under nix/, the moon project `nix`.
+# Rust is the version .prototools names, so the release is built by the
+# compiler the checks ran with. The version is the release tag's: CI
+# builds with `SLUICE_VERSION=<version> nix build --impure`; any other
+# build is 0.0.0, Cargo.toml's.
 {
   description = "sluice: a merge queue for agents in worktrees";
 
@@ -13,6 +16,11 @@
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    # The tests' nix-darwin; a host's configuration brings its own.
+    nix-darwin = {
+      url = "github:nix-darwin/nix-darwin";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
@@ -20,11 +28,13 @@
       self,
       nixpkgs,
       rust-overlay,
+      ...
     }:
     let
+      # nixpkgs refuses x86_64-darwin since 26.11, and no release builds
+      # it (record 0098).
       systems = [
         "aarch64-darwin"
-        "x86_64-darwin"
         "aarch64-linux"
         "x86_64-linux"
       ];
@@ -43,8 +53,6 @@
       workspace = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).workspace.package;
       released = builtins.getEnv "SLUICE_VERSION";
       version = if released != "" then released else workspace.version;
-    in
-    {
       packages = forAll (
         pkgs:
         let
@@ -78,5 +86,19 @@
           };
         }
       );
+    in
+    {
+      inherit packages;
+
+      # services.sluice, the host's own settings and the package (record
+      # 0098, core.51).
+      darwinModules = rec {
+        sluice = import ./nix/modules/darwin.nix { inherit packages; };
+        default = sluice;
+      };
+      nixosModules = rec {
+        sluice = import ./nix/modules/nixos.nix { inherit packages; };
+        default = sluice;
+      };
     };
 }

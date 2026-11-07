@@ -44,6 +44,9 @@ _: {
     # The herdr plugin's fixture documents and frames, compared byte for
     # byte.
     "plugins/herdr/tests/docs/**"
+    # The module's rendered files, compared byte for byte by the flake's
+    # cases; taplo would rewrite them.
+    "nix/tests/files/**"
     # The herdr plugin's awk and jq programs: no formatter or linter for
     # either in the toolchain; plugin-herdr's tests run each under sh and
     # dash, and a parse error fails it.
