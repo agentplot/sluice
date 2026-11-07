@@ -1226,6 +1226,66 @@ fn a_worktree_on_a_bolt_behind_submits_origins_revision_and_a_round_levels_it() 
     assert!(!w.join("a.txt").exists() && !w.join("b.txt").exists());
 }
 
+/// 124, D2, 1, rule core.4: `bolt/x`, named from the repository with no
+/// worktree on it, is submitted to `main` at origin's revision, two
+/// landings ahead of this host's copy: no branch is pushed, no ref of it
+/// is written here or on origin, and nothing is said of this host's copy.
+/// The forecast of it names the same head (64).
+#[test]
+fn a_branch_by_name_is_submitted_at_its_remotes_revision() {
+    let s = Setup::new("remote-by-name", "origin");
+    s.repo.git(&["branch", "bolt/x", "main"]);
+    s.repo
+        .git(&["push", "-q", "origin", "bolt/x:refs/heads/bolt/x"]);
+    let made = s.repo.rev("bolt/x");
+    for n in ["a", "b"] {
+        let out = s.submit_to(n, "bolt/x", "bolt/x");
+        assert!(out.status.success(), "{}", text(&out));
+        step_bolt_until_out(&s);
+    }
+    let remote = remote_rev(&s, "refs/heads/bolt/x");
+    assert_ne!(remote, made);
+    // This host's bolt/x stands where it was before both landings, as an
+    // older sluice left it, past the protection.
+    set_copy(&s, "bolt/x", &made);
+    let main = s.repo.rev("main");
+    let refs = |s: &Setup| -> Vec<String> {
+        s.remote_refs()
+            .into_iter()
+            .filter(|r| r.starts_with("refs/heads/"))
+            .collect()
+    };
+    let before = refs(&s);
+
+    let out = s.sluice(&["submit", "main", "--check", "--head", "bolt/x", "--json"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let forecast: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(forecast["head"], remote.as_str(), "{forecast}");
+
+    let out = s.sluice(&["submit", "main", "--head", "bolt/x", "--no-wait"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let said = String::from_utf8_lossy(&out.stdout);
+    let line = said
+        .strip_prefix("submission ")
+        .and_then(|l| l.strip_suffix(" to main from bolt/x · nothing queued ahead\n"));
+    assert!(line.is_some(), "{}", text(&out));
+    assert!(!text(&out).contains("this host's"), "{}", text(&out));
+    let subs = s.status()["submissions"].clone();
+    assert_eq!(subs[0]["head"], remote.as_str(), "{subs}");
+    assert_eq!(subs[0]["from"]["head"], "bolt/x", "{subs}");
+
+    let out = s.sluice(&["submit", "main", "--head", "bolt/x", "--no-wait", "--json"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        v,
+        serde_json::json!({ "id": v["id"], "branch": "main", "ahead": [] })
+    );
+    assert_eq!(refs(&s), before, "nothing pushed to origin");
+    assert_eq!(s.repo.rev("bolt/x"), made, "nor written here");
+    assert_eq!(s.repo.rev("main"), main);
+}
+
 /// A `[[checkout.cache]]` table, which sluice no longer keeps and whose
 /// policy it refuses whole (ADR 0049).
 const CACHE: &str = "\n[[checkout.cache]]\nkey = [\"Cargo.lock\"]\npaths = [\"target\"]\n";
