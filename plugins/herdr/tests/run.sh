@@ -15,12 +15,13 @@ plugin=$(dirname "$here")
 # Under sluice's sandbox only SLUICE_TMP is writable beside the checkout.
 scratch=$(mktemp -d "${SLUICE_TMP:-${TMPDIR:-/tmp}}/sluice-herdr.XXXXXX")
 
+plugin_version=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$plugin/herdr-plugin.toml")
+
 # A lease this run holds for a test, as a watcher of this plugin would, so
-# --ensure starts none and what the test asks of the watcher stays put.
+# --ensure starts none and what the test asks of the watcher stays put:
+# the ensure's signal to it is counted in $woken.
 hold_lease() {
-  # shellcheck disable=SC2012 # the socket's inode, as watch.sh reads it.
-  printf '%s %s\n%s\n%s\n%s\n' $$ "$(date +%s)" "$plugin" "$(sed -n 's/^version = "\(.*\)"$/\1/p' "$plugin/herdr-plugin.toml")" \
-    "$(ls -di "$HERDR_SOCKET_PATH" | awk '{ print $1 }')" >"$S/watch.lease"
+  printf '%s\n%s\n%s\n%s\n' $$ "$(procs identity $$)" "$plugin" "$plugin_version" >"$S/watch.lease"
 }
 
 # Wait up to $1 seconds for the shell condition $2, checking each second.
@@ -47,6 +48,12 @@ ends_within() {
   took=$(($(date +%s) - began))
 }
 
+# Whether every process named has ended.
+ended() {
+  for p in "$@"; do kill -0 "$p" 2>/dev/null && return 1; done
+  return 0
+}
+
 # The fake sluice's watches this test started that still run, by the pids
 # they wrote in its own directory: never a pattern over command lines,
 # which another run of this suite from the same checkout matches as well.
@@ -60,10 +67,6 @@ watching() {
 # The pids of the sources a watcher started.
 sources_of() {
   cat "$S/run/$1"/*.pids 2>/dev/null | cut -f1
-}
-
-lease_age_at_least() {
-  [ $(($(date +%s) - $(head -1 "$S/watch.lease" | cut -d' ' -f2))) -ge "$1" ]
 }
 
 # One of lib/procs.sh's functions.
@@ -87,6 +90,8 @@ reap() {
   sleep 1
 }
 trap 'reap; rm -rf "$scratch"' EXIT
+woken=0
+trap 'woken=$((woken + 1))' USR1
 scratch=$(cd "$scratch" && pwd -P)
 # git looks for a repository no higher than the scratch directory: the gate
 # runs the suite with it inside sluice's own bare repository.
@@ -147,6 +152,7 @@ fresh() {
   mkdir -p "$S/docs" "$S/probe"
   : >"$FAKE/herdr-calls"
   : >"$FAKE/sluice-calls"
+  woken=0
   serve herdr
   panes front-none
 }
@@ -159,6 +165,11 @@ serve() {
   H=$HERDR_SOCKET_PATH.d
   [ -e "$HERDR_SOCKET_PATH" ] || : >"$HERDR_SOCKET_PATH"
   mkdir -p "$H"
+}
+
+# The folder in the host's state of the herdr server named $1.
+folder_of() {
+  echo "$S/servers/$(printf '%s' "$t/$1.sock" | cksum | cut -d' ' -f1)"
 }
 
 fail() {
@@ -290,16 +301,52 @@ pass
 fresh 'watch: started twice'
 hold_lease
 sh "$plugin/bin/watch.sh" --ensure || fail "ensure exited non-zero"
+[ "$woken" -ge 1 ] || fail "the lease's watcher was not woken"
+[ "$(cat "$(folder_of herdr)/socket" 2>/dev/null)" = "$HERDR_SOCKET_PATH" ] || fail "the server is not registered with the watcher"
 sleep 1
 [ "$(holder_of "$S/watch.lease")" = $$ ] || fail "a second watcher took the lease"
+grep -q 'watching' "$S/watch.log" 2>/dev/null && fail "a second watcher started: $(cat "$S/watch.log")"
 [ -s "$FAKE/sluice-calls" ] && fail "a second watcher ran sluice"
-[ -f "$S/dirty" ] || fail "a new pane waits a whole tick for its token"
+pass
+
+fresh 'watch: two servers, one watcher'
+doc >"$FAKE/overview-work.json"
+printf '%s\n' "$testing95" >"$FAKE/watch-work.jsonl"
+touch "$FAKE/hold"
+for s in one two; do
+  serve "$s"
+  panes front-none
+  SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ensure || fail "the ensure in $s exited non-zero"
+done
+within 20 'grep -q "^one.sock: pane report-metadata p1 .*--token sluice=#95 testing" "$FAKE/herdr-calls" &&
+  grep -q "^two.sock: pane report-metadata p1 .*--token sluice=#95 testing" "$FAKE/herdr-calls"' ||
+  fail "not both servers' panes have their tokens: $(calls)"
+for s in one two; do
+  grep -q "^$s.sock: pane list" "$FAKE/herdr-calls" || fail "server $s's panes were not read"
+done
+[ "$(grep -c 'watching (pid' "$S/watch.log")" = 1 ] || fail "not one watcher: $(cat "$S/watch.log")"
+w=$(holder_of "$S/watch.lease")
+kill -0 "$w" 2>/dev/null || fail "the lease's watcher is not running"
+rm -f "$FAKE/hold"
 pass
 
 fresh 'watch: watcher gone'
-echo "$$ $(($(date +%s) - 90))" >"$S/watch.lease"
-SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 1 >/dev/null 2>&1
-grep -q "overview --json" "$FAKE/sluice-calls" || fail "the new watcher did not look for repositories"
+# The lease names a watcher that has ended.
+dead=$(sh -c 'echo $$')
+printf '%s\n%s\n%s\n%s\n' "$dead" "pid:$dead" "$plugin" "$plugin_version" >"$S/watch.lease"
+SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ensure
+within 15 'w=$(holder_of "$S/watch.lease") && [ "$w" != "$dead" ] && kill -0 "$w" 2>/dev/null' ||
+  fail "no new watcher took the lease: $(cat "$S/watch.lease")"
+within 15 'grep -q "overview --json" "$FAKE/sluice-calls"' || fail "the new watcher did not look for repositories"
+kill "$w" 2>/dev/null
+ends_within "$w" 10 || fail "the new watcher did not stop"
+# Then one naming a pid another process has since: this one, with another
+# start time.
+printf '%s\n%s\n%s\n%s\n' $$ "start:1" "$plugin" "$plugin_version" >"$S/watch.lease"
+SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ensure
+[ "$woken" = 0 ] || fail "the process given the lease's pid was signalled"
+within 15 'w=$(holder_of "$S/watch.lease") && [ "$w" != $$ ] && kill -0 "$w" 2>/dev/null' ||
+  fail "no new watcher took a lease naming another process: $(cat "$S/watch.lease")"
 pass
 
 fresh 'watch: a lock left by a watcher that died'
@@ -315,37 +362,20 @@ SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 1 >/dev/null 2>&1
 grep -q "overview --json" "$FAKE/sluice-calls" || fail "a lock with no owner stopped the watcher"
 pass
 
-fresh 'watch: a long tick keeps the lease'
-echo 6 >"$FAKE/probe-sleep"
-SLUICE_HERDR_LEASE=3 SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 1 2>"$t/log" &
-first=$!
-sleep 4
-SLUICE_HERDR_LEASE=3 sh "$plugin/bin/watch.sh" --ensure
-wait "$first"
-sleep 1
-if grep -q 'watching' "$S/watch.log" 2>/dev/null; then
-  fail "a second watcher started during a long tick"
-  # Only the one this test started, never another herdr's.
-  stray=$(holder_of "$S/watch.lease")
-  [ -n "$stray" ] && [ "$stray" != "$first" ] && kill "$stray" 2>/dev/null
-fi
-pass
-
 fresh 'watch: a watcher stops only its own sources'
 if needs_ps; then
   doc >"$FAKE/overview-work.json"
   doc >"$FAKE/watch-work.jsonl"
   touch "$FAKE/hold"
-  SLUICE_HERDR_LOCK_HOLD=3 SLUICE_HERDR_LEASE=2 SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 60 2>/dev/null &
+  SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 60 2>/dev/null &
   a=$!
   within 15 'sources_of "$a" | grep -q .' || fail "the first watcher started no source"
-  # The first watcher stalls past its lease, its renewer in the middle of
-  # renewing it (holding the lock); a second takes over.
-  within 15 '[ "$(procs parent_of "$(cut -d" " -f1 "$S/lease.lock/pid" 2>/dev/null)")" = "$a" ]' ||
-    fail "the first watcher's renewer was not caught holding the lock"
+  # The first watcher stalls, and a reinstalled plugin's takes the lease
+  # and starts its own source before the first wakes.
   kill -STOP "$a" $(pgrep -P "$a") 2>/dev/null
-  within 10 'lease_age_at_least 3' || fail "the stalled watcher's lease did not go stale"
-  SLUICE_HERDR_LEASE=2 SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 60 2>/dev/null &
+  again=$t/reinstalled
+  cp -R "$plugin" "$again"
+  HERDR_PLUGIN_ROOT=$again SLUICE_HERDR_TICK=1 sh "$again/bin/watch.sh" --ticks 60 2>/dev/null &
   b=$!
   within 30 '[ "$(holder_of "$S/watch.lease")" = "$b" ] && sources_of "$b" | grep -q .' ||
     fail "the second watcher did not take over and start its source"
@@ -479,45 +509,51 @@ fresh 'watch: a reinstalled plugin replaces its watcher'
 doc >"$FAKE/overview-work.json"
 doc >"$FAKE/watch-work.jsonl"
 touch "$FAKE/hold"
-SLUICE_HERDR_LEASE=4 SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 30 2>/dev/null &
+SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 30 2>/dev/null &
 a=$!
 sleep 2
 # A reinstall is a new plugin directory, here with a segment that says so.
 again=$t/reinstalled
 cp -R "$plugin" "$again"
 echo '# reinstalled' >>"$again/bin/segment.sh"
-HERDR_PLUGIN_ROOT=$again SLUICE_HERDR_LEASE=4 SLUICE_HERDR_TICK=1 sh "$again/bin/watch.sh" --ensure
+HERDR_PLUGIN_ROOT=$again SLUICE_HERDR_TICK=1 sh "$again/bin/watch.sh" --ensure
 if ! ends_within "$a" 20; then
   fail "the old watcher kept running after ${took}s"
 elif [ "$took" -gt 4 ]; then
   echo "note: the old watcher took ${took}s to end"
 fi
-within 20 '[ "$(sed -n 2p "$S/watch.lease")" = "$again" ]' || fail "the lease is not the reinstalled watcher's: $(cat "$S/watch.lease")"
+within 20 '[ "$(sed -n 3p "$S/watch.lease")" = "$again" ]' || fail "the lease is not the reinstalled watcher's: $(cat "$S/watch.lease")"
 within 20 'grep -q "# reinstalled" "$HERDR_PLUGIN_STATE_DIR/segment/bin/segment.sh"' || fail "the segment was not copied again"
 rm -f "$FAKE/hold"
 kill "$a" 2>/dev/null
 pass
 
-fresh 'watch: a renewer killed holding the lock'
-if needs_ps; then
-  # The renewer holds the lock four seconds each time, so it is caught there.
-  SLUICE_HERDR_LOCK_HOLD=4 SLUICE_HERDR_LEASE=4 SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 30 2>/dev/null &
-  w=$!
-  for i in 1 2 3 4 5 6 7 8; do
-    [ -f "$S/lease.lock/pid" ] && break
-    sleep 1
-  done
-  owner=$(cut -d' ' -f1 "$S/lease.lock/pid" 2>/dev/null)
-  [ -n "$owner" ] || fail "the renewer never took the lock"
-  [ "$owner" != "$w" ] || fail "the renewer holds the lock as its watcher"
-  [ "$(procs parent_of "$owner")" = "$w" ] || fail "the lock's owner $owner is not the watcher's renewer"
-  began=$(date +%s)
-  kill -TERM "$w"
-  wait "$w" 2>/dev/null
-  [ $(($(date +%s) - began)) -lt 5 ] || fail "stop waited on the lock its renewer held"
-  [ -f "$S/watch.lease" ] && fail "stop left the lease"
-  pass
-fi
+fresh 'watch: a plugin put back stops the host'"'"'s watcher'
+doc >"$FAKE/overview-work.json"
+doc >"$FAKE/watch-work.jsonl"
+touch "$FAKE/hold"
+again=$t/installed
+cp -R "$plugin" "$again"
+HERDR_PLUGIN_ROOT=$again SLUICE_HERDR_TICK=1 sh "$again/bin/watch.sh" --ticks 60 2>"$t/log" &
+a=$!
+within 15 'sources_of "$a" | grep -q .' || fail "no source started"
+theirs=$(sources_of "$a")
+# A former version put back in the plugin's folder: its manifest is newer
+# than the lease, which was written a second or more before.
+sleep 1
+touch "$again/herdr-plugin.toml"
+ends_within "$a" 10 || fail "the watcher still runs ${took}s after its plugin was put back"
+within 5 'ended $theirs' || fail "its sources outlived it"
+[ -f "$S/watch.lease" ] && fail "it left its lease"
+# The next server's event starts the watcher of the folder installed.
+HERDR_PLUGIN_ROOT=$again SLUICE_HERDR_TICK=1 sh "$again/bin/watch.sh" --ensure
+within 15 'b=$(holder_of "$S/watch.lease") && [ -n "$b" ] && [ "$b" != "$a" ] && kill -0 "$b" 2>/dev/null' ||
+  fail "no watcher started after the plugin was put back"
+# A plugin folder removed stops it too.
+rm -f "$again/herdr-plugin.toml"
+ends_within "$b" 10 || fail "the watcher still runs ${took}s after its plugin was removed"
+rm -f "$FAKE/hold"
+pass
 
 fresh 'watch: herdr gone'
 touch "$H/down"
@@ -525,15 +561,10 @@ began=$(date +%s)
 SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 10 2>/dev/null
 [ $(($(date +%s) - began)) -lt 6 ] || fail "the watcher kept going without herdr"
 [ -f "$S/watch.lease" ] && fail "the watcher left its lease"
+[ -e "$(folder_of herdr)/socket" ] && fail "the server is still registered"
 pass
 
-# Whether every process named has ended.
-ended() {
-  for p in "$@"; do kill -0 "$p" 2>/dev/null && return 1; done
-  return 0
-}
-
-fresh 'watch: its herdr server stops'
+fresh 'watch: herdr stops'
 doc >"$FAKE/overview-work.json"
 doc >"$FAKE/watch-work.jsonl"
 touch "$FAKE/hold"
@@ -551,27 +582,126 @@ rm -f "$FAKE/hold"
 kill "$w" 2>/dev/null
 pass
 
-fresh 'watch: another herdr server in its place'
+fresh 'watch: one of two servers stops'
 doc >"$FAKE/overview-work.json"
 doc >"$FAKE/watch-work.jsonl"
 touch "$FAKE/hold"
+serve one
+panes front-none
+SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 60 2>/dev/null &
+w=$!
+within 15 'sources_of "$w" | grep -q .' || fail "no source started"
+theirs=$(sources_of "$w")
+serve two
+panes front-none
+sh "$plugin/bin/watch.sh" --ensure
+within 10 'grep -q "^two.sock: pane list" "$FAKE/herdr-calls"' || fail "the second server is not served"
+rm -f "$t/one.sock"
+within 10 '[ ! -e "$(folder_of one)/socket" ]' || fail "the stopped server is still served"
+: >"$FAKE/herdr-calls"
+within 10 '[ "$(grep -c "^two.sock: pane list$" "$FAKE/herdr-calls")" -ge 2 ]' || fail "the server still running is not called"
+grep -q '^one.sock:' "$FAKE/herdr-calls" && fail "the stopped server is called: $(calls)"
+kill -0 "$w" 2>/dev/null || fail "the watcher stopped with one of its servers"
+for p in $theirs; do kill -0 "$p" 2>/dev/null || fail "its source $p stopped with one of its servers"; done
+rm -f "$FAKE/hold"
+kill "$w" 2>/dev/null
+wait "$w" 2>/dev/null
+pass
+
+fresh 'watch: another herdr server in its place'
+doc >"$FAKE/overview-work.json"
+printf '%s\n' "$testing95" >"$FAKE/watch-work.jsonl"
+touch "$FAKE/hold"
 sock=$HERDR_SOCKET_PATH
-# Its ticks are long, so only the new server's watcher can end it here.
+# Its ticks are long, so only the new server's startup has it look here.
 SLUICE_HERDR_TICK=60 sh "$plugin/bin/watch.sh" --ticks 60 2>/dev/null &
 a=$!
-within 15 'sources_of "$a" | grep -q .' || fail "no source started"
+within 15 'grep -q "pane report-metadata p1 .*--token sluice=#95 testing" "$FAKE/herdr-calls"' || fail "the first server's pane got no token"
 theirs=$(sources_of "$a")
-# The server stops and another starts at its path within a tick, with a
-# socket of its own, and runs the plugin's startup.
+# The server stops and another starts at its path, with a socket of its
+# own, and runs the plugin's startup.
 rm -f "$sock"
 : >"$sock"
-SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ensure
-ends_within "$a" 15 || fail "the first server's watcher still runs after ${took}s"
-within 5 'ended $theirs' || fail "the first server's sources outlived it"
-within 15 'b=$(holder_of "$S/watch.lease") && [ -n "$b" ] && [ "$b" != "$a" ] && kill -0 "$b" 2>/dev/null' ||
-  fail "the new server has no watcher: $(cat "$S/watch.lease" 2>/dev/null)"
+: >"$FAKE/herdr-calls"
+sh "$plugin/bin/watch.sh" --ensure
+within 10 'grep -q "pane report-metadata p1 .*--token sluice=#95 testing" "$FAKE/herdr-calls"' ||
+  fail "the new server was not given the tokens the old one had: $(calls)"
+grep -q 'pane list' "$FAKE/herdr-calls" || fail "the new server's panes were not read"
+kill -0 "$a" 2>/dev/null || fail "the watcher did not go on"
+[ "$(holder_of "$S/watch.lease")" = "$a" ] || fail "the lease is not the watcher's: $(cat "$S/watch.lease")"
+for p in $theirs; do kill -0 "$p" 2>/dev/null || fail "its source $p stopped"; done
 rm -f "$FAKE/hold"
 kill "$a" 2>/dev/null
+wait "$a" 2>/dev/null
+pass
+
+fresh "watch: a former version's watchers give way"
+doc >"$FAKE/overview-work.json"
+doc >"$FAKE/watch-work.jsonl"
+# A former version's watcher of the server in the environment, as one ran
+# before record 0094: its lease, documents and sources in its server's
+# folder. It gives way once its lease no longer names it, its source ended
+# with it, as that version did.
+former() {
+  d=$(folder_of "$1")
+  mkdir -p "$d/docs" "$d/told.d/x" "$d/checks" "$d/probe" "$d/want" "$d/run" "$d/failed"
+  echo "its log" >"$d/watch.log"
+  : >"$d/nudge"
+  sh -c '
+    d=$1
+    sleep 300 &
+    echo $! >"$d/source"
+    mkdir -p "$d/run/$$"
+    printf "%s\tx\n" "$!" >"$d/run/$$/x.pids"
+    printf "%s %s\n" $$ "$(date +%s)" >"$d/watch.lease"
+    while sleep 1; do
+      [ "$(head -1 "$d/watch.lease" 2>/dev/null | cut -d" " -f1)" = $$ ] && continue
+      kill "$(cat "$d/source")"
+      rm -rf "$d/run/$$"
+      exit 0
+    done' _ "$d" &
+  echo $! >"$t/former-$1"
+  within 5 '[ -s "$d/watch.lease" ]' || fail "the former watcher of $1 did not start"
+}
+serve one
+panes front-none
+former one
+serve two
+panes front-none
+former two
+olds=$(cat "$(folder_of one)/source" "$(folder_of two)/source")
+# One killed outright before, leaving a source it listed, which is ended
+# where a process can be told by its identity.
+if [ "$ps_runs" = true ]; then
+  sleep 60 &
+  orphan=$!
+  dead=$(sh -c 'echo $$')
+  mkdir -p "$S/servers/3/run/$dead"
+  printf '%s\t%s\n' "$orphan" "$(procs identity "$orphan")" >"$S/servers/3/run/$dead/x.pids"
+fi
+serve one
+SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ensure
+for s in one two; do
+  ends_within "$(cat "$t/former-$s")" 10 || fail "the former watcher of $s still runs after ${took}s"
+done
+within 5 'ended $olds' || fail "the former watchers' sources outlived them"
+if [ "$ps_runs" = true ]; then
+  ends_within "$orphan" 10 || fail "a killed former watcher's source still runs after ${took}s"
+  kill "$orphan" 2>/dev/null
+fi
+serve two
+sh "$plugin/bin/watch.sh" --ensure
+within 10 '[ ! -e "$(folder_of one)/docs" ] && [ ! -e "$(folder_of two)/run" ]' || fail "the former folders are left: $(ls "$(folder_of one)")"
+for s in one two; do
+  [ "$(cat "$(folder_of "$s")/watch.log" 2>/dev/null)" = "its log" ] || fail "the former watch.log of $s is gone"
+  [ -e "$(folder_of "$s")/watch.lease" ] && fail "the former lease of $s is left"
+done
+[ -e "$S/servers/3/run" ] && fail "the killed former watcher's folder is left"
+[ "$(grep -c 'watching (pid' "$S/watch.log")" = 1 ] || fail "not one watcher: $(cat "$S/watch.log")"
+: >"$FAKE/herdr-calls"
+within 10 'grep -q "^one.sock: pane list" "$FAKE/herdr-calls" && grep -q "^two.sock: pane list" "$FAKE/herdr-calls"' ||
+  fail "one watcher does not serve both servers: $(calls)"
+for p in $olds; do kill "$p" 2>/dev/null; done
 pass
 
 fresh 'watch: no configuration'

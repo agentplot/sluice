@@ -81,7 +81,11 @@ renewer runs. Where the system cannot tell a process from a later one
 given its pid (no `ps`, no `/proc`), the pid alone is read, and the log
 says so once, as the watcher already does for its sources.
 `lib/lease.sh`'s lock moves beside the lease. It guards taking and
-releasing the lease alone.
+releasing the lease, and registering and dropping a server (D2), so that
+a server registered again as the watcher drops it is kept. A lock of its
+own for the servers was the path not taken: the lease's is held a moment
+at an ensure or a drop, and one lock is one less to break when its owner
+dies.
 
 An `--ensure` registers its server (D2). Where the lease's process lives
 and runs this plugin folder and version, the ensure sends it `USR1` and
@@ -108,14 +112,21 @@ The folder holds `socket`, the path, `herdr`, the server's
 `HERDR_BIN_PATH`, and `link`, a hard link to the socket where the
 filesystem allows one. The watcher calls herdr for a server with that
 server's `HERDR_SOCKET_PATH` and binary. A server is served while its
-folder exists.
+folder holds `socket`, which the registration writes last; a folder with
+no `socket` is what a former version or `tokens.sh` run outside the
+watcher left, and is no server. A server registered at a socket other
+than its link's is a server started at a stopped one's path: its link is
+made again, and its tokens and panes go, so the watcher sets every token
+in it.
 
 At each tick the watcher tests each server with builtins: `[ -e
 "$socket" ]`, and `[ "$socket" -ef "$link" ]` where a link was made. The
 `-e`, `-nt` and `-ef` tests are POSIX.1-2024's, and dash's, bash's and
-busybox's. A server that fails is dropped: its folder is removed, and
-with it its tokens and panes. So is a server whose herdr calls failed
-twice in a row. Once no server remains, the watcher stops, ends its
+busybox's. A server that fails is dropped, under the lease's lock and
+only if it still fails there: its registration is removed, and with it
+its tokens and panes, and its folder with them unless a former version's
+`watch.log` is left in it. So is a server whose herdr calls failed twice
+in a row. Once no server remains, the watcher stops, ends its
 sources and releases the lease. A server started at a stopped one's path
 has another socket file. It runs the startup, which registers it again
 with a fresh link.
@@ -317,12 +328,16 @@ shell's `: >`.
 
 A former version keeps a lease in each `servers/<sum>/watch.lease`, and
 its watcher stops within its second once that lease no longer names it.
-At its start, the host's watcher removes each such lease. Once each
-former holder has ended, or after two ticks, it ends any pid a former
-watcher killed outright listed under `servers/<sum>/run/`, by its
-identity (`end_listed`, as today). It then removes the former folders of
-each server: `docs`, `told`, `told.d`, `checks`, `probe`, `want`, `run`,
-`failed`, `problem`, `nudge`, `dirty` and `no-sha256`. Each server's
+At its start, the host's watcher removes each such lease, under that
+server's former lock, so a former renewer cannot write it back. Once each
+former holder has ended, or after two ticks, it ends each pid a former
+watcher listed under `servers/<sum>/run/` that is still the process
+listed, by its identity (`end_listed`, as today): a watcher killed
+outright left them, and one still running after two ticks is stuck. It
+then removes the former files of each server: `docs`, `told`, `told.d`,
+`checks`, `probe`, `want`, `run`, `failed`, `problem`, `nudge`, `dirty`,
+`no-sha256`, `probe.err`, `told-unwritable`, `watch.lease` and
+`lease.lock`. Each server's
 `watch.log` stays for the person to read. The watcher's own log is the
 host's `watch.log`.
 

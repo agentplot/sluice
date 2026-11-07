@@ -1,10 +1,12 @@
 #!/bin/sh
-# shellcheck disable=SC1091,SC2154,SC2016 # jq programs; common.sh, sourced, sets root, lib, state and config.
-# The plugin's one watcher. `--ensure` starts it unless a watcher holds a
-# lease renewed in the last 60 s, and nudges it to look for repositories.
-# Running, it finds the repositories the panes are in, runs each source
-# there, hands every document to document.sh, and keeps the sidebar and
-# the forecasts current. `--ticks N` stops it after N ticks (the tests).
+# shellcheck disable=SC1091,SC2154,SC2016 # jq programs; common.sh, sourced, sets root, lib, state, server and config.
+# The plugin's one watcher for all of a user's herdr servers on a host
+# (0094). `--ensure` registers the server in its environment and wakes the
+# lease's watcher where it lives and runs this plugin folder and version,
+# else starts one. Running, it finds the repositories every server's panes
+# are in, runs each source there, hands every document to document.sh, and
+# keeps each server's sidebar and the forecasts current, until it serves
+# no server. `--ticks N` stops it after N ticks (the tests).
 set -u
 . "$(dirname "$0")/../lib/common.sh"
 . "$lib/panes.sh"
@@ -14,48 +16,61 @@ set -u
 
 lease=$state/watch.lease
 tick=${SLUICE_HERDR_TICK:-15}
-# A lease is fresh for this long, and renewed four times as often.
-term=${SLUICE_HERDR_LEASE:-60}
-every=$((term / 4))
-[ "$every" -ge 1 ] || every=1
-
-# The lease: the watcher's pid and when it last renewed, then the plugin
-# directory and version it runs, so a reinstall replaces it, and the
-# server it serves, so a server started in a stopped one's place does too.
 version=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$root/herdr-plugin.toml")
 
-# The herdr server, known by its socket's inode: a server makes its socket
-# when it starts and removes it when it stops, so another server at the
-# same path has another socket. Nothing where there is no socket.
-socket_id() {
-  [ -e "${HERDR_SOCKET_PATH:-}" ] || return 0
-  # shellcheck disable=SC2012 # the inode comes first, whatever the name; find has no portable way to print it.
-  ls -di "$HERDR_SOCKET_PATH" 2>/dev/null | awk '{ print $1 }'
-}
-
-fresh() {
+# The lease, read by the shell alone: the pid of the watcher holding it,
+# that process's identity (lib/procs.sh), and the plugin folder and version
+# it runs, so a reinstall replaces it (D1). Nothing renews it.
+read_lease() {
+  lpid=
+  lid=
+  lroot=
+  lversion=
   [ -f "$lease" ] || return 1
-  read -r pid at <"$lease" || return 1
-  [ $(($(date +%s) - at)) -lt "$term" ] && kill -0 "$pid" 2>/dev/null
+  # Each line as written: an identity read from ps may end in a space.
+  {
+    IFS= read -r lpid
+    IFS= read -r lid
+    IFS= read -r lroot
+    IFS= read -r lversion
+  } 2>/dev/null <"$lease"
+  [ -n "$lpid" ]
 }
 
-# Fresh, and held by a watcher of this plugin directory and version,
-# started from this server.
+# Whether the lease's process lives and is still the one it names. Where
+# no process could be told from a later one given its pid when it took the
+# lease (no ps, no /proc), its pid alone is read.
+held() {
+  read_lease || return 1
+  case $lpid in *[!0-9]*) return 1 ;; esac
+  kill -0 "$lpid" 2>/dev/null || return 1
+  [ "$lid" = "pid:$lpid" ] || [ "$(identity "$lpid")" = "$lid" ]
+}
+
+# Held by a watcher of this plugin folder and version.
 ours() {
-  fresh && [ "$(sed -n 2p "$lease")" = "$root" ] && [ "$(sed -n 3p "$lease")" = "$version" ] &&
-    [ "$(sed -n 4p "$lease")" = "$(socket_id)" ]
+  held && [ "$lroot" = "$root" ] && [ "$lversion" = "$version" ]
 }
 
-holder() {
-  head -1 "$lease" 2>/dev/null | cut -d' ' -f1
-}
-
-# Written only while the lock is still this process's: a renewer stalled
-# past its lease (a laptop asleep) may find another watcher has broken its
-# lock and taken the lease, and must not write over it.
-write_lease() {
-  printf '%s %s\n%s\n%s\n%s\n' $$ "$(date +%s)" "$root" "$version" "$socket" >"$lease.tmp.$$" || return 1
-  if holds_lock; then mv -f "$lease.tmp.$$" "$lease"; else rm -f "$lease.tmp.$$"; fi
+# Register the server in the environment (D2): its socket's path, its
+# herdr, and a hard link to its socket where the filesystem allows one,
+# which tells a server started later at the same path from it. A server is
+# served while its folder holds `socket`. One registered at a socket other
+# than its link's is another server, which starts with nothing set, so the
+# watcher sets every token in it. Under the lock, so a watcher dropping
+# the server at that moment cannot remove what is written.
+register() {
+  take_lock || return 1
+  mkdir -p "$server"
+  sock=${HERDR_SOCKET_PATH:-}
+  if [ -n "$sock" ] && [ -e "$sock" ] && ! [ "$sock" -ef "$server/link" ]; then
+    [ -e "$server/link" ] && rm -f "$server/tokens.json" "$server/panes.json"
+    rm -f "$server/link"
+    ln "$sock" "$server/link" 2>/dev/null
+  fi
+  printf '%s\n' "${HERDR_BIN_PATH:-}" >"$server/herdr"
+  printf '%s\n' "$sock" >"$server/socket.tmp.$$" && mv -f "$server/socket.tmp.$$" "$server/socket"
+  drop_lock
 }
 
 # The tab-bar segment runs from the host's state, which outlives a
@@ -71,60 +86,46 @@ copy_segment() {
 
 case ${1:-} in
 --ensure)
+  register
   touch "$state/nudge"
-  # A pane just made gets its sidebar line within a second, not a tick.
-  touch "$state/dirty"
-  ours && exit 0
+  # The lease's watcher looks at this server's panes within its second.
+  if ours && kill -USR1 "$lpid" 2>/dev/null; then exit 0; fi
   nohup sh "$root/bin/watch.sh" </dev/null >>"$state/watch.log" 2>&1 &
   exit 0
   ;;
 esac
 
+# An ensure's signal, trapped before the lease can name this watcher.
+woke=0
+trap 'woke=1' USR1
+
 ticks=-1
 [ "${1:-}" = --ticks ] && ticks=$2
 
-# The server this watcher was started from.
-socket=$(socket_id)
+# Whether this system lets a process be told apart from one given its pid
+# later: not where ps cannot run and there is no /proc (sluice's sandbox on
+# macOS, where ps is refused).
+me=$(identity $$)
+if [ "$me" = "pid:$$" ]; then knowable=false; else knowable=true; fi
+unchecked=false
 
-# Take the lease, unless another watcher holds it.
+# The server it was started from is served, as an ensure would have it.
+register
+
+# Take the lease, unless a live watcher of this folder and version holds
+# it. One of another folder or version gives way once it reads the lease
+# naming another pid.
 take_lock || exit 0
 if ours; then
   drop_lock
   exit 0
 fi
-# Another plugin directory or version's watcher gives way when it sees the
-# lease is no longer its own.
-write_lease
+printf '%s\n%s\n%s\n%s\n' $$ "$me" "$root" "$version" >"$lease.tmp.$$" && mv -f "$lease.tmp.$$" "$lease"
 drop_lock
 copy_segment
 say "watching (pid $$)"
-
-# The lease is renewed on its own clock, however long a tick takes, for as
-# long as this watcher lives and holds it.
-(
-  # Its own pid, so a renewer killed holding the lock frees it.
-  # shellcheck disable=SC2034 # read by take_lock and drop_lock
-  lock_owner=$(exec sh -c 'echo $PPID')
-  while sleep "$every" && kill -0 $$ 2>/dev/null; do
-    take_lock || continue
-    if [ "$(holder)" = $$ ]; then
-      # The tests hold it a while here, to catch the renewer about to renew.
-      [ -n "${SLUICE_HERDR_LOCK_HOLD:-}" ] && sleep "$SLUICE_HERDR_LOCK_HOLD"
-      write_lease
-    else
-      drop_lock
-      exit 0
-    fi
-    drop_lock
-  done
-) &
-renewer=$!
-
-# Whether this system lets a process be told apart from one given its pid
-# later: not where ps cannot run and there is no /proc (sluice's sandbox on
-# macOS, where ps is refused).
-if [ "$(identity $$)" = "pid:$$" ]; then knowable=false; else knowable=true; fi
-unchecked=false
+[ "$knowable" = true ] ||
+  say "cannot tell a process from a later one given its pid here (no ps, no /proc); the lease names this watcher by its pid alone"
 
 # A source's subshell, this watcher's own child, kept with its identity
 # (lib/procs.sh) for a later watcher to check. While this watcher lives it
@@ -160,6 +161,12 @@ end_listed() {
   for p in $(listed "$1"); do kill "$p" 2>/dev/null; done
 }
 
+unknowable() {
+  [ "$knowable" = false ] && [ "$unchecked" = false ] || return 0
+  unchecked=true
+  say "cannot tell an ended watcher's sources from other processes here (no ps, no /proc); left alone"
+}
+
 # This watcher's own: its children by kill -0 alone; a source under one of
 # them by its identity, or, where none can be read, while that child lives.
 own_listed() {
@@ -183,38 +190,151 @@ for d in "$state"/run/*; do
   p=${d##*/}
   [ "$p" = $$ ] && continue
   kill -0 "$p" 2>/dev/null && continue
-  if [ "$knowable" = false ] && [ "$unchecked" = false ]; then
-    unchecked=true
-    say "cannot tell an ended watcher's sources from other processes here (no ps, no /proc); left alone"
-  fi
+  unknowable
   for f in "$d"/*.pids; do
     [ -e "$f" ] && end_listed "$f"
   done
   rm -rf "$d"
 done
 mkdir -p "$runs"
-# A link to its server's socket, so that while this watcher lives the
-# inode is no other socket's; none across filesystems, where the inode
-# alone tells.
-[ -n "$socket" ] && ln "$HERDR_SOCKET_PATH" "$runs/socket" 2>/dev/null
+
+# A former version's watchers, one for each server, each with its lease
+# and state in its server's folder (D11). Their leases go now, each under
+# its own lock, so each gives way within its second; once every holder has
+# ended, or after two ticks, the sources a killed one listed are ended by
+# their identity and each server's former folders go, its watch.log kept.
+olds='docs told told.d checks probe want run failed problem nudge dirty no-sha256 probe.err told-unwritable watch.lease lease.lock'
+former=false
+formers=
+for d in "$state"/servers/*; do
+  for f in $olds; do [ -e "$d/$f" ] && former=true; done
+  [ -f "$d/watch.lease" ] || continue
+  p=
+  read -r p _ 2>/dev/null <"$d/watch.lease"
+  formers="$formers $p"
+  host_lock=$lock
+  lock=$d/lease.lock
+  take_lock && taken=true || taken=false
+  rm -f "$d/watch.lease"
+  [ "$taken" = true ] && drop_lock
+  lock=$host_lock
+done
+
+clear_formers() {
+  for d in "$state"/servers/*/run/*; do
+    [ -d "$d" ] || continue
+    unknowable
+    for f in "$d"/*.pids; do
+      [ -e "$f" ] && end_listed "$f"
+    done
+  done
+  for d in "$state"/servers/*; do
+    for f in $olds; do
+      [ -e "$d/$f" ] && rm -rf "${d:?}/$f"
+    done
+  done
+  say "a former version's watchers have given way; each server's former state removed, its watch.log kept"
+  former=false
+}
+
+# Whether every former holder has ended.
+formers_ended() {
+  for p in $formers; do
+    case $p in '' | *[!0-9]*) continue ;; esac
+    kill -0 "$p" 2>/dev/null && return 1
+  done
+  return 0
+}
 
 stop() {
-  # Reaped as well as killed: dash leaves a zombie that kill -0 still finds,
-  # and the lock it may hold would wait out its ten seconds.
-  kill "$renewer" 2>/dev/null
-  wait "$renewer" 2>/dev/null
   for f in "$runs"/*.pids; do
     [ -e "$f" ] || continue
     for p in $(own_listed "$f"); do kill "$p" 2>/dev/null; done
   done
   rm -rf "$runs"
   if take_lock; then
-    [ "$(holder)" = $$ ] && rm -f "$lease"
+    read_lease && [ "$lpid" = $$ ] && rm -f "$lease"
     drop_lock
   fi
 }
 trap 'stop; exit 0' INT TERM
 trap stop EXIT
+
+# Run a command as the server registered in folder $1 runs one: with that
+# server's socket and herdr in its environment (D2).
+as() {
+  as_d=$1
+  shift
+  as_s=
+  as_b=
+  read -r as_s 2>/dev/null <"$as_d/socket"
+  read -r as_b 2>/dev/null <"$as_d/herdr"
+  (
+    if [ -n "$as_s" ]; then export HERDR_SOCKET_PATH="$as_s"; else unset HERDR_SOCKET_PATH; fi
+    if [ -n "$as_b" ]; then export HERDR_BIN_PATH="$as_b"; else unset HERDR_BIN_PATH; fi
+    "$@"
+  )
+}
+
+# Run a command once as each server served.
+each() {
+  for each_d in "$state"/servers/*; do
+    [ -f "$each_d/socket" ] && as "$each_d" "$@"
+  done
+  return 0
+}
+
+# Whether a server's socket is gone, or is a file other than its link's.
+gone() {
+  gone_s=
+  read -r gone_s 2>/dev/null <"$1/socket"
+  [ -n "$gone_s" ] || return 1
+  [ ! -e "$gone_s" ] || { [ -e "$1/link" ] && ! [ "$gone_s" -ef "$1/link" ]; }
+}
+
+# A server no longer served: its registration goes, with what was set in it
+# and its panes; a former version's watch.log stays.
+unregister() {
+  rm -rf "$1/socket" "$1/herdr" "$1/link" "$1/tokens.json" "$1/seq" "$1/panes.json"
+  rmdir "$1" 2>/dev/null
+  eval "missed_${1##*/}=0"
+}
+
+# Each server served, tested at a tick: its socket still there and still
+# the file its link is, by builtins, and its herdr answering. One whose
+# socket is gone or another's is dropped under the lock, if it still is,
+# so a server registered again at that moment is kept; one whose calls
+# failed twice in a row is dropped. Leaves in served how many remain.
+check_servers() {
+  served=0
+  for c in "$state"/servers/*; do
+    [ -f "$c/socket" ] || continue
+    if gone "$c" && take_lock; then
+      if gone "$c"; then
+        say "the herdr server at $gone_s has stopped; no longer served"
+        unregister "$c"
+        drop_lock
+        continue
+      fi
+      drop_lock
+    fi
+    k=${c##*/}
+    if as "$c" hd pane list >/dev/null 2>&1; then
+      eval "missed_$k=0"
+    else
+      eval "missed_$k=\$((\${missed_$k:-0} + 1))"
+      eval "m=\$missed_$k"
+      if [ "$m" -ge 2 ]; then
+        say "the herdr server at $as_s does not answer; no longer served"
+        take_lock && taken=true || taken=false
+        unregister "$c"
+        [ "$taken" = true ] && drop_lock
+        continue
+      fi
+    fi
+    served=$((served + 1))
+  done
+}
 
 # Run one source in a directory: its documents go to document.sh one by
 # one; its pids are kept so the next tick can tell it ended.
@@ -257,9 +377,9 @@ alive() {
 # Sources and repositories, every tick.
 look() {
   cfg=$(read_sources)
-  # Repositories the panes are in, each with a worktree to run in, and
-  # those the popup asked for.
-  found=$(panes_json | jq -r '[.[] | select(.repo)] | unique_by(.repo)[] | [.repo, .top] | @tsv')
+  # Repositories every server's panes are in, each with a worktree to run
+  # in, and those the popup asked for.
+  found=$(each panes_json | jq -s -r 'add // [] | [.[] | select(.repo)] | unique_by(.repo)[] | [.repo, .top] | @tsv')
   for w in "$state"/want/*; do
     [ -e "$w" ] || continue
     d=$(cat "$w")
@@ -318,43 +438,61 @@ look() {
   done
 }
 
-i=0
-gone=0
-while [ "$ticks" -ne 0 ]; do
-  # The watcher lives as long as the herdr server it was started from: once
-  # that server's socket is gone or another's, or after two ticks without
-  # an answer, it stops, with its sources.
-  if [ "$(socket_id)" != "$socket" ]; then
-    say "the herdr server it was started from is gone; stopping"
-    exit 0
-  fi
-  if hd pane list >/dev/null 2>&1; then gone=0; else gone=$((gone + 1)); fi
-  if [ "$gone" -ge 2 ]; then
-    say "herdr does not answer; stopping"
-    exit 0
-  fi
+# Look for repositories in every server's panes, forecast what moved, and
+# set each server's tokens: with --refresh, every token again, so its time
+# to live starts over.
+pass() {
   look
-  sh "$root/bin/forecast.sh"
-  sh "$root/bin/tokens.sh" --refresh
+  each sh "$root/bin/forecast.sh"
   rm -f "$state/dirty"
+  each sh "$root/bin/tokens.sh" "$@"
+}
+
+ticked=0
+while [ "$ticks" -ne 0 ]; do
+  # Its folder's manifest gone or newer than its lease: the plugin was
+  # reinstalled there, or a former version put back. The next server's
+  # event starts the watcher of the folder installed (D1).
+  if [ ! -e "$root/herdr-plugin.toml" ] || [ "$root/herdr-plugin.toml" -nt "$lease" ]; then
+    say "the plugin in $root was replaced or removed; stopping"
+    exit 0
+  fi
+  if [ "$former" = true ] && { formers_ended || [ "$ticked" -ge 2 ]; }; then clear_formers; fi
+  # The watcher lives while it serves a server: once every server's socket
+  # is gone or another's, or its herdr has not answered twice in a row, it
+  # stops, with its sources (D2).
+  check_servers
+  if [ "$served" -eq 0 ]; then
+    say "no herdr server left to serve; stopping"
+    exit 0
+  fi
+  pass --refresh
+  ticked=$((ticked + 1))
   [ "$ticks" -gt 0 ] && ticks=$((ticks - 1))
   if [ "$ticks" -eq 0 ]; then
-    # A bounded run lets its sources finish before it stops.
-    kill "$renewer" 2>/dev/null
-    wait
-    sh "$root/bin/tokens.sh"
+    # A bounded run lets its sources finish before it stops; a signal ends
+    # the shell's wait, which is taken up again.
+    until wait; do :; done
+    each sh "$root/bin/tokens.sh"
     break
   fi
-  # Between ticks, the sidebar follows each document within a second.
-  i=0
-  while [ "$i" -lt "$tick" ]; do
+  # Between ticks, the sidebar follows each document within a second, and
+  # an ensure's signal has every server's panes looked at.
+  sec=0
+  while [ "$sec" -lt "$tick" ]; do
     sleep 1
-    i=$((i + 1))
-    [ "$(holder)" = $$ ] || exit 0
-    if [ -f "$state/dirty" ]; then
-      rm -f "$state/dirty"
-      sh "$root/bin/tokens.sh"
+    sec=$((sec + 1))
+    read_lease
+    if [ "$lpid" != $$ ]; then
+      say "the lease names another watcher (${lpid:-none}); stopping"
+      exit 0
     fi
-    [ -n "$(ls "$state/want" 2>/dev/null)" ] && break
+    if [ "$woke" = 1 ]; then
+      woke=0
+      pass
+    elif [ -f "$state/dirty" ]; then
+      rm -f "$state/dirty"
+      each sh "$root/bin/tokens.sh"
+    fi
   done
 done
