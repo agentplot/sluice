@@ -14,3 +14,16 @@ tasks:
     inputs: ['/flake.nix', '/flake.lock', '/nix/**/*', '/devenv.nix', '/devenv.lock']
     tags: [check-fast]
     options: {runFromWorkspaceRoot: true}
+  # Every system's package evaluates, and each module in a system of its
+  # platform, against no store.
+  typecheck:
+    command: 'sh nix/check.sh typecheck'
+    inputs: ['/flake.nix', '/flake.lock', '/nix/**/*', '/devenv.nix', '/devenv.lock', '/Cargo.toml', '/Cargo.lock', '/.prototools', '/crates/**/*']
+    tags: [check-fast]
+    options: {runFromWorkspaceRoot: true}
+  # The evaluated cases under nix/tests, then the activation's.
+  test:
+    command: 'sh nix/check.sh test'
+    inputs: ['/flake.nix', '/flake.lock', '/nix/**/*', '/devenv.nix', '/devenv.lock']
+    tags: [check-fast]
+    options: {runFromWorkspaceRoot: true}
