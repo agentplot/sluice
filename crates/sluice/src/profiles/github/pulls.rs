@@ -2042,14 +2042,14 @@ const NEXT_SUBMIT: &str = "the next submit";
 
 /// The title of sluice's check on a pull request held for [`NEXT_SUBMIT`],
 /// which a host that does not take the requests in reads it by (record
-/// 0093).
+/// 0096).
 fn held_title() -> String {
     format!("waiting: {NEXT_SUBMIT}")
 }
 
 /// How the title of sluice's check on a pull request blamed begins, and on
 /// one in conflict, which a host that does not take the requests in reads
-/// it by (record 0093).
+/// it by (record 0096).
 const BLAMED: &str = "failed: ";
 const CONFLICTED: &str = "conflict: ";
 
@@ -2986,7 +2986,7 @@ impl crate::PullRequests for Pulls {
 /// `posting`, sluice's check on its head, and its draft mark, never from
 /// the check's status: GitHub keeps a check run completed once it was, and
 /// takes only the words of a queued or in-progress posting after
-/// (switchboard-kit #268; record 0093). `failed: …` is sent back, and
+/// (switchboard-kit #268; record 0096). `failed: …` is sent back, and
 /// `conflict: …` sent back as a conflict. `waiting: the next submit` is
 /// sent back while the pull request is a draft, which only a ready mark
 /// ends, the next submit's or a person's; once one has, the request has
@@ -3035,7 +3035,7 @@ fn as_its_check_says(posting: Option<Posting>, head: &str, draft: bool, host: &s
 /// says it was sent back, blamed or in conflict, or held for the next
 /// submit, draft or not: [`as_its_check_says`] read as of a draft, whose
 /// held row is sent back, so the reading names no host (120, C.5; record
-/// 0093).
+/// 0096).
 fn sent_back_or_held(posting: Option<Posting>, head: &str) -> bool {
     matches!(
         as_its_check_says(posting, head, true, ""),
@@ -3050,7 +3050,7 @@ impl Pulls {
     /// quarter of the host's interval (136), what was last read standing
     /// between. Merged is landed, and closed and not merged is closed; an
     /// open one is as [`as_its_check_says`] reads it, never as the
-    /// conclusion GitHub keeps for the check (record 0093).
+    /// conclusion GitHub keeps for the check (record 0096).
     fn follow_across(
         &self,
         forge: &dyn Forge,
@@ -3277,7 +3277,7 @@ impl Pulls {
             // on the head it held before the push says, read once on the
             // submitter's own act; a new request, a draft or one whose
             // leaving this host's records give reads nothing (rule core.32;
-            // record 0093). A check that says anything else leaves the
+            // record 0096). A check that says anything else leaves the
             // request as it is, never a draft even for a moment, since a
             // draft mark withdraws what the other host queued (C.5).
             let sent_back = match existing {
@@ -3547,7 +3547,7 @@ mod tests {
             ..view
         };
         post(&formed);
-        // Record 0093 (D3): GitHub keeps a completed run completed, so a
+        // Record 0096 (D3): GitHub keeps a completed run completed, so a
         // check that waits again is read by its title, as any host reads
         // it now; what sluice sent for each is queued.
         let held = forge.held().unwrap();
@@ -4006,7 +4006,7 @@ mod tests {
         assert!(s.contains("Forecast: merges onto main"), "{s}");
     }
 
-    /// request-intake-host, record 0093: across hosts a pull request reads
+    /// request-intake-host, record 0096: across hosts a pull request reads
     /// as sluice's check on its head says, whatever status GitHub keeps
     /// for it: each posting sluice makes, with its own status and with the
     /// `Failure` GitHub kept from an earlier one, draft and not.

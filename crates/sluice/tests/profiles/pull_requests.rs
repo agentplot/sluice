@@ -1349,7 +1349,7 @@ fn a_submits_pull_request_sent_back_says_so() {
     let pull = g.pull_from("unit/blamed");
     assert!(pull.draft, "{pull:?}");
     assert_eq!(g.of_after(pull.number, 2).len(), 1, "{:?}", g.subs());
-    // Record 0093 (D3): GitHub keeps the check failed once it was, so the
+    // Record 0096 (D3): GitHub keeps the check failed once it was, so the
     // held state is read by its title, as any host reads it now; what
     // sluice sent for it is queued.
     let (_, title, summary) = g.posted(&pull.head).unwrap();
@@ -5087,7 +5087,7 @@ fn blamed_on_another_host() {
 /// `wt submit` on host A opened from a session's worktree with `changes`,
 /// a `broken` among them, and marked it a draft, its check saying
 /// `waiting: the next submit` while the double keeps that check completed
-/// and failed, as GitHub kept switchboard-kit #268's (record 0093). Host
+/// and failed, as GitHub kept switchboard-kit #268's (record 0096). Host
 /// B, the worktree, and the pull request as it was opened; a second later
 /// than B's leaving, so a ready mark made next reads as since it (120).
 fn held_on_b<'g>(
@@ -5163,7 +5163,7 @@ fn held_on_b_then_marked_ready<'g>(
 /// marked it a draft, its check saying `waiting: the next submit`, and a
 /// submit on A marked it ready at the same head; before B's next pass, a
 /// wait on A reads it waiting to be taken in by B, not sent back, though
-/// GitHub keeps the check failed (120, 137, C.5; record 0093).
+/// GitHub keeps the check failed (120, 137, C.5; record 0096).
 #[test]
 fn held_then_marked_ready_waits_to_be_taken_in() {
     let g = OnGitHub::new("intake-held-ready", "");
@@ -5185,7 +5185,7 @@ fn held_then_marked_ready_waits_to_be_taken_in() {
 /// and B takes `#n` in again at the same head and lands it, its check
 /// saying `queued: …`, then `testing …`, while the double keeps that check
 /// completed and failed; a wait on A says each as it changes and exits 0
-/// at the landing (137; record 0093).
+/// at the landing (137; record 0096).
 #[test]
 fn taken_in_again_while_github_keeps_the_check_failed() {
     let g = OnGitHub::new("intake-taken-again", "");
@@ -5267,7 +5267,7 @@ fn taken_in_again_while_github_keeps_the_check_failed() {
 /// prints it sent back, with sluice's check's title and summary on its
 /// head, its head, its draft mark and `sends`, as `--status` answers where
 /// the host takes the request in; in words, the check's title (124, 137;
-/// record 0093).
+/// record 0096).
 #[test]
 fn status_of_a_request_another_host_sent_back() {
     let g = OnGitHub::new("intake-status-sent-back", "");
@@ -5304,7 +5304,7 @@ fn status_of_a_request_another_host_sent_back() {
 /// since, marks it ready at that head and answers that it waits for B; run
 /// again under a time limit, it pushes and marks nothing, follows `#n`, and
 /// exits 5 saying the same; and B's next pass takes `#n` in again at that
-/// head (67, 120, 137, C.5; record 0093).
+/// head (67, 120, 137, C.5; record 0096).
 #[test]
 fn run_again_marks_ready_a_draft_another_host_sent_back() {
     let g = OnGitHub::new("intake-again-draft", "");
@@ -5386,7 +5386,7 @@ fn mutations(g: &OnGitHub, mutation: &str) -> usize {
 /// on host A from a worktree on `unit/review`, nothing committed since,
 /// marks it a draft and then ready for review at that head, though A's
 /// records hold no submission of it, and B's next pass takes it in again
-/// (120, 137, C.5; record 0093).
+/// (120, 137, C.5; record 0096).
 #[test]
 fn a_submit_marks_ready_a_request_another_host_sent_back_not_a_draft() {
     let g = OnGitHub::new("intake-sent-back-ready", "");
@@ -5467,7 +5467,7 @@ fn a_submit_marks_ready_a_request_another_host_sent_back_not_a_draft() {
 /// queued, its check saying `queued: next on main`; `sluice submit main
 /// --no-wait` on host A, nothing committed since, marks it no draft, even
 /// for a moment, and B's submission of it stays in B's queue, which a
-/// draft mark would withdraw (C.5; record 0093).
+/// draft mark would withdraw (C.5; record 0096).
 #[test]
 fn a_submit_leaves_a_request_queued_on_another_host() {
     let g = OnGitHub::new("intake-still-queued", "");

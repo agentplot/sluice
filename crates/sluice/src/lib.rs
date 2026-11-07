@@ -606,7 +606,7 @@ pub enum Followed {
     /// 137: merged, while another host takes its branch's pull requests
     /// in: sluice's check's title and summary on its head, where it says
     /// it landed, and the head and draft mark the forge held for it, which
-    /// `--status` answers with (124; record 0093).
+    /// `--status` answers with (124; record 0096).
     Landed {
         title: String,
         summary: String,
@@ -616,7 +616,7 @@ pub enum Followed {
     /// 137: sent back on its head, while another host takes its branch's
     /// pull requests in: failed, or in conflict, as sluice's check there
     /// names it, and the head and draft mark the forge holds for it, which
-    /// `--status` answers with (124; record 0093).
+    /// `--status` answers with (124; record 0096).
     SentBack {
         conflict: bool,
         title: String,
@@ -3846,7 +3846,7 @@ fn submit_pull(
             }
             // 124, 137: `--status` says where it stands, and exits 0, as
             // it does where this host takes the request in; a wait and a
-            // waiting submit report the outcome with its exit (record 0093).
+            // waiting submit report the outcome with its exit (record 0096).
             Some(f @ (Followed::Landed { .. } | Followed::SentBack { .. })) if status => {
                 return across_status(s, worktree, number, branch, &f, copy.as_ref(), json, out);
             }
@@ -4307,7 +4307,7 @@ fn across(
 /// reads it as it reads a decided submission's record, landed standing at
 /// `sends` and sent back standing nowhere; otherwise the check's title and
 /// summary in words. It exits 0, as `--status` does wherever it finds the
-/// worktree's pull request (record 0093).
+/// worktree's pull request (record 0096).
 #[allow(clippy::too_many_arguments)]
 fn across_status(
     s: &Sluice<'_>,

@@ -325,11 +325,11 @@ pub enum Standing {
     Submission { id: u64, landed: bool },
     /// The worktree's pull request at that revision: open and ready, not
     /// yet decided, or `landed` there, on whichever host takes the
-    /// branch's pull requests in (137; record 0093).
+    /// branch's pull requests in (137; record 0096).
     PullRequest { number: u64, landed: bool },
     /// None: never submitted, or of another revision, or blamed,
     /// conflicting, withdrawn or closed, a pull request sent back on any
-    /// host among them (67, 120; record 0093).
+    /// host among them (67, 120; record 0096).
     Nothing,
 }
 
@@ -384,7 +384,7 @@ pub fn standing(
     };
     // Sent back, failed or in conflict, on whichever host took it in,
     // it stands at no revision, as a failed submission does, and the
-    // worktree submits it again (67, 120; record 0093).
+    // worktree submits it again (67, 120; record 0096).
     if pull.is_some() && matches!(state, "failed" | "conflict") {
         return Ok(Standing::Nothing);
     }
@@ -401,7 +401,7 @@ pub fn standing(
     }
     if let Some(number) = pull {
         // Landed on another host, it stands where it landed, draft or not
-        // (137; record 0093).
+        // (137; record 0096).
         let landed = state == "landed";
         let ready = doc["draft"] == false;
         return Ok(if at && (landed || ready) {
@@ -428,7 +428,7 @@ pub fn standing_in(branch: &str, worktree: &Path) -> std::result::Result<Standin
 
 /// Whether sluice records `worktree`'s submission to `branch` as landed:
 /// its last submission from the worktree, or its pull request another
-/// host took in (137; record 0093), has landed, and is of the revision a
+/// host took in (137; record 0096), has landed, and is of the revision a
 /// submit from the worktree would send now. A worktree is removed on
 /// this, never on an exit alone.
 pub fn landed(branch: &str, worktree: &Path) -> bool {
@@ -766,7 +766,7 @@ mod tests {
             ),
             Ok(Standing::Nothing)
         );
-        // Record 0093, 137: sent back on another host, failed or in
+        // Record 0096, 137: sent back on another host, failed or in
         // conflict, draft or not, it stands nowhere; landed there, it
         // stands at the revision it landed.
         for state in ["failed", "conflict"] {

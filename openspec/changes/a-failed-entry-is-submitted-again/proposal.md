@@ -65,7 +65,7 @@ the host's own records, and record 0065's reading holds.
 - **The GitHub double keeps a completed check run completed**, taking
   only its new words, as GitHub did on #268, so the suite meets what
   #268 met.
-- Record 0093 decides this; rule core.33 says it.
+- Record 0096 decides this; rule core.33 says it.
 
 ## Out of scope
 
@@ -120,4 +120,18 @@ None.
 - Site: the pull requests guide, the worktrunk guide and the commands
   reference say how a host follows a request another host sent back.
 - Statement: none. 50, 67, 120, 124, 137 and C.5's pull request and
-  worktrunk rows hold as written; record 0093 and rule core.33 cite them.
+  worktrunk rows hold as written at agentplot/blueprints a4eeec3, which
+  the bolt builds; record 0096 and rule core.33 cite them.
+- Against record 0093: `main`'s record 0093, the user's, accepted
+  2026-11-06, moves a host's queues into sluice's host process and
+  rewrites 120, 137, 140 and C.5's pull request row (agentplot/blueprints
+  ab5d788, ratified at 7c2fbf0, held on blueprints' `main` as 3f8b23f
+  and a0f0f2f). There no host takes requests in, and the intake mark
+  goes. This change decides for the sluice that keeps the mark, as every
+  released sluice and `main`'s code do, until record 0093 is built.
+  Reading the request by sluice's check, `--status`'s fields and
+  `wt submit`'s reading are what 137 as rewritten asks of every host,
+  and they carry over. `waiting to be taken in by <host>`, read from the
+  mark, goes with it. Where the bolt meets `main`, `main`'s rule core.33
+  stands, and this change's amendment carries over only what it rules
+  out, read of every host. Record 0096 says so (core.12).

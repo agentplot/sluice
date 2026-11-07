@@ -282,7 +282,7 @@ impl Forge for FileForge {
     /// `InProgress` stays completed and takes only the posting's title,
     /// summary and text, as GitHub kept WilldanGroup/switchboard-kit #268's
     /// check on `977138a9` failed under `waiting: the next submit` (record
-    /// 0093). Any other posting replaces the run whole. `posts` keeps what
+    /// 0096). Any other posting replaces the run whole. `posts` keeps what
     /// sluice sent.
     fn post_named(
         &self,
@@ -588,7 +588,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    /// Record 0093: a run posted `Failure` and patched `Queued` stays a
+    /// Record 0096: a run posted `Failure` and patched `Queued` stays a
     /// failure under the queued posting's words, as GitHub kept
     /// switchboard-kit #268's; a decided posting replaces it whole.
     #[test]

@@ -10,7 +10,7 @@
 //! would send now (124), undecided or landed, or its pull request open and
 //! ready there, or landed there. A pull request sent back, failed or in
 //! conflict, stands nowhere, on whichever host takes the branch's pull
-//! requests in, as a failed submission does (137; record 0093). Where one
+//! requests in, as a failed submission does (137; record 0096). Where one
 //! stands it submits nothing: a waiting run follows
 //! it with `sluice wait <branch>`, whose output and exit are its own, and
 //! removes the worktree on the same terms once it lands; a `--no-wait` run
