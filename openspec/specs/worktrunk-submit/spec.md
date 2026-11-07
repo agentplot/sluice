@@ -104,7 +104,7 @@ Where no submission stands, `wt submit <branch> --timeout <duration>` SHALL subm
 
 ### Requirement: A pull request stands while it is open and ready at the revision a submit would send
 
-On a branch that takes pull requests, the worktree's submission SHALL stand while its pull request is open, out of draft, and at the revision a submit from the worktree would send, taken in yet or not, and once its submission landed there. `wt submit <branch>` run again there SHALL follow it as `sluice wait <branch>` follows a pull request, and under `--no-wait` answer with it; a draft or another head SHALL be submitted.
+On a branch that takes pull requests, whichever host takes its requests in (137), the worktree's submission SHALL stand while its pull request is open, out of draft, and at the revision a submit from the worktree would send, taken in yet or not, and once its submission landed there. `wt submit <branch>` run again there SHALL follow it as `sluice wait <branch>` follows a pull request, and under `--no-wait` answer with it; a draft, another head, or a pull request sent back SHALL be submitted.
 
 #### Scenario: Waiting for a review, run again under a time limit
 
@@ -121,6 +121,11 @@ On a branch that takes pull requests, the worktree's submission SHALL stand whil
 - **WHEN** an agent's pull request was blamed and marked a draft, and the agent runs `wt submit main` with nothing committed since
 - **THEN** the pull request is marked ready for review at that head, as a submit does
 
+#### Scenario: Run again before the other host takes it in again
+
+- **WHEN** a `wt submit main --no-wait` on host A marked `<n>` ready after B sent it back, B has not taken it in again, and the agent runs `wt submit main --timeout 2s --json` on A with nothing committed since
+- **THEN** nothing is pushed and `<n>` is not marked again, the command exits 5, and it prints `pull_request` `<n>` with `state` `waiting to be taken in by b`
+
 ### Requirement: A worktree is removed only on its own landing
 
 `wt submit` SHALL remove a worktree only when sluice records the worktree's last submission to the branch as landed and of the revision a submit from the worktree would send now, after `sluice release` in it succeeded, and only where it waited, `--no-remove` is not given and worktrunk's `[merge] remove` is not false; a run that follows a submission SHALL remove on the same terms as a waiting submit (C.4; 25).
@@ -129,3 +134,12 @@ On a branch that takes pull requests, the worktree's submission SHALL stand whil
 
 - **WHEN** `wt submit main --timeout 9m` follows submission `<id>`, and the agent commits in the worktree before `<id>` lands
 - **THEN** when `<id>` lands the command exits 0, says sluice records no landing of the worktree's head, and the worktree stays
+
+### Requirement: A pull request sent back stands nowhere on any host
+
+On a branch that takes pull requests, a pull request sent back, failed or in conflict, or held for the next submit, SHALL stand nowhere, as a failed submission does, whichever host sent it back (67, 120, 137); on a host that does not take the branch's requests in, sluice's check on its head SHALL say which.
+
+#### Scenario: Sent back as a draft on another host
+
+- **WHEN** host B takes main's pull requests in, B blamed the agent's pull request `<n>` and marked it a draft, its `sluice` check saying `waiting: the next submit` and GitHub keeping that check completed and failed, and the agent runs `wt submit main --no-wait --json` on host A with nothing committed since
+- **THEN** `<n>` is marked ready for review at that head, the command exits 0 and prints `pull_request` `<n>` with `state` `waiting to be taken in by b`, and B's next pass takes `<n>` in again at that head
