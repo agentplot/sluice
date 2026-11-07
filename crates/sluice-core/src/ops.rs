@@ -146,9 +146,13 @@ pub enum Requester {
     Planner,
     Operator,
     /// A host's intake handing its own pull requests' submissions over to
-    /// the host that takes the branch's pull requests in, in these words
-    /// (137).
-    Intake(String),
+    /// `to`, the host that takes the branch's pull requests in, in
+    /// `words` (137). Its withdrawal's record names `to`, which is what
+    /// tells it a hand-over (120; record 0088 as amended).
+    HandOver {
+        to: String,
+        words: String,
+    },
 }
 
 impl Requester {
@@ -157,14 +161,23 @@ impl Requester {
             Requester::Session(a) => a.clone(),
             Requester::Planner => "planner".into(),
             Requester::Operator => "operator".into(),
-            Requester::Intake(words) => words.clone(),
+            Requester::HandOver { words, .. } => words.clone(),
+        }
+    }
+
+    /// 120, 137: the host a hand-over's withdrawal names; `None` for any
+    /// other withdrawal.
+    fn handed_over_to(&self) -> Option<String> {
+        match self {
+            Requester::HandOver { to, .. } => Some(to.clone()),
+            _ => None,
         }
     }
 
     fn may_change(&self, sub: &Submission) -> bool {
         match self {
             Requester::Session(a) => *a == sub.from.agent,
-            Requester::Planner | Requester::Operator | Requester::Intake(_) => true,
+            Requester::Planner | Requester::Operator | Requester::HandOver { .. } => true,
         }
     }
 }
@@ -1005,8 +1018,16 @@ impl Sluice<'_> {
             s.withdrawn = Some(Withdrawal {
                 by: by.word(),
                 at: now.clone(),
+                handed_over_to: by.handed_over_to(),
             });
-            l.log(&now, Event::Withdrawn { id, by: by.word() });
+            l.log(
+                &now,
+                Event::Withdrawn {
+                    id,
+                    by: by.word(),
+                    handed_over_to: by.handed_over_to(),
+                },
+            );
             Ok(Ok(Withdrew::Now))
         })
     }
@@ -1619,6 +1640,7 @@ fn admit(
             s.withdrawn = Some(Withdrawal {
                 by: "resubmission".into(),
                 at: now.into(),
+                handed_over_to: None,
             });
             withdrew.push(old);
         }
@@ -1629,6 +1651,7 @@ fn admit(
             Event::Withdrawn {
                 id: old,
                 by: "resubmission".into(),
+                handed_over_to: None,
             },
         );
     }
@@ -2278,6 +2301,7 @@ mod tests {
         blamed.withdrawn = Some(crate::records::Withdrawal {
             by: "resubmission".into(),
             at: "2026-10-29T02:40:56Z".into(),
+            handed_over_to: None,
         });
         keep(&h, &blamed);
         let mut doc = crate::records::BranchDoc::new(BRANCH);
