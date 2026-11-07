@@ -51,6 +51,6 @@ clauses by number and rules by id.
 
 ## 9. Main merged, and the gate
 
-- [ ] 9.1 Main merged into the branch, the siblings that landed first reconciled: their records' and rules' numbers against 0090 and core.50, and their changes to `ops.rs`, `step.rs` and `lib.rs`. True when `git merge-base --is-ancestor origin/main HEAD` holds and `sluice exec main -- moon run root:adrs root:changes site:rules` passes.
+- [x] 9.1 Main merged into the branch, the siblings that landed first reconciled: their records' and rules' numbers against 0090 and core.50, and their changes to `ops.rs`, `step.rs` and `lib.rs`. True when `git merge-base --is-ancestor origin/main HEAD` holds and `sluice exec main -- moon run root:adrs root:changes site:rules` passes.
 - [ ] 9.2 The whole gate on the committed branch. True when `sluice exec main` passes.
 - [ ] 9.3 The delivery names the release that carries this change, for Flume's task 5.2: the minor CI tags at its landing, v0.71.0 where it lands next after v0.70.0, otherwise the next minor after the latest tag then.
