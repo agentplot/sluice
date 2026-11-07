@@ -2172,6 +2172,19 @@ const RESUBMISSION: &str = "resubmission";
 /// submission left the queue.
 const NEXT_SUBMIT: &str = "the next submit";
 
+/// The title of sluice's check on a pull request held for [`NEXT_SUBMIT`],
+/// which a host that does not take the requests in reads it by (record
+/// 0096).
+fn held_title() -> String {
+    format!("waiting: {NEXT_SUBMIT}")
+}
+
+/// How the title of sluice's check on a pull request blamed begins, and on
+/// one in conflict, which a host that does not take the requests in reads
+/// it by (record 0096).
+const BLAMED: &str = "failed: ";
+const CONFLICTED: &str = "conflict: ";
+
 /// The branch a submit's pull request is submitted from, `None` for one a
 /// person opened by hand: a submit names its agent in the body, and is
 /// the act that stands for the pull request from then on.
@@ -2409,19 +2422,25 @@ enum Told {
     SentBack {
         conflict: bool,
     },
+    /// Held for [`NEXT_SUBMIT`], its submission having left the queue
+    /// (120; record 0096).
+    Held,
 }
 
 /// Design D6: the fields decide over the words. A check that carries its
-/// block is read from it alone: taken in and `failed` or `conflict` is
-/// sent back, `landed` is landed, and anything else is open, whatever
-/// GitHub kept of a run it completed earlier. A check with no block, as
-/// an older sluice posted it, is read by its words: a failure is sent
-/// back, a conflict where its title says so.
+/// block is read from it alone: waiting for the next submit is held,
+/// taken in and `failed` or `conflict` is sent back, `landed` is landed,
+/// and anything else is open, whatever GitHub kept of a run it completed
+/// earlier. A check with no block, as an older sluice posted it, is read
+/// by its title, never its status, as record 0096 reads it: `failed: …`
+/// sent back, `conflict: …` sent back as a conflict, and `waiting: the
+/// next submit` held.
 fn told(posting: Option<&Posting>) -> Told {
     let Some(posting) = posting else {
         return Told::Open;
     };
     match queue_of(&posting.summary) {
+        Some(q) if q.waits_for.iter().any(|w| w == NEXT_SUBMIT) => Told::Held,
         Some(q) if q.taken_in => match q.state.as_deref() {
             Some("landed") => Told::Landed,
             Some("failed") => Told::SentBack { conflict: false },
@@ -2429,9 +2448,9 @@ fn told(posting: Option<&Posting>) -> Told {
             _ => Told::Open,
         },
         Some(_) => Told::Open,
-        None if posting.status == Status::Failure => Told::SentBack {
-            conflict: posting.title.starts_with("conflict"),
-        },
+        None if posting.title == held_title() => Told::Held,
+        None if posting.title.starts_with(BLAMED) => Told::SentBack { conflict: false },
+        None if posting.title.starts_with(CONFLICTED) => Told::SentBack { conflict: true },
         None => Told::Open,
     }
 }
@@ -2480,10 +2499,7 @@ fn waiting_words(
     let rests = missing.iter().find_map(|m| m.strip_prefix(WITHDRAWN_BY));
     let draft = missing.iter().any(|m| m == "a draft");
     let (title, waits_for) = if held {
-        (
-            format!("waiting: {NEXT_SUBMIT}"),
-            vec![NEXT_SUBMIT.to_string()],
-        )
+        (held_title(), vec![NEXT_SUBMIT.to_string()])
     } else if let Some(who) = rests {
         let w = format!("{WITHDRAWN_BY}{who}");
         (format!("waiting: {w}"), vec![w])
@@ -2811,9 +2827,9 @@ fn outcome_shown(branch: &str, o: &Outcome, names: &BTreeMap<u64, String>, queue
         } => (
             Status::Failure,
             if *timed_out {
-                "failed: timed out".to_string()
+                format!("{BLAMED}timed out")
             } else {
-                format!("failed: {}", tasks.join(", "))
+                format!("{BLAMED}{}", tasks.join(", "))
             },
             format!(
                 "`{}` failed on {} (`{}`), and this pull request is to blame.",
@@ -2824,7 +2840,7 @@ fn outcome_shown(branch: &str, o: &Outcome, names: &BTreeMap<u64, String>, queue
         ),
         Outcome::Conflict { paths, with } => (
             Status::Failure,
-            format!("conflict: {}", paths.join(", ")),
+            format!("{CONFLICTED}{}", paths.join(", ")),
             format!(
                 "`{}` conflicts with {}.",
                 paths.join("`, `"),
@@ -3247,8 +3263,9 @@ impl crate::PullRequests for Pulls {
         // 136: GitHub is asked about the request no more often than once
         // in a quarter of the host's interval; between, what it last said.
         let now = clock.now();
-        if self.away.borrow().contains_key(branch) {
-            return self.follow_across(forge, &t, branch, n, now);
+        let away = self.away.borrow().get(branch).cloned();
+        if let Some(host) = away {
+            return self.follow_across(forge, &t, branch, n, now, &host);
         }
         let fresh = self
             .seen
@@ -3353,18 +3370,109 @@ impl crate::PullRequests for Pulls {
     }
 }
 
+/// 137: where a pull request at `head` stands, read on a host that does
+/// not take its branch's pull requests in, from `posting`, sluice's check
+/// on its head, as [`told`] reads it, and its draft mark, never from the
+/// check's status: GitHub keeps a check run completed once it was, and
+/// takes only the words of a queued or in-progress posting after
+/// (switchboard-kit #268; record 0096). Landed is landed, and failed or in
+/// conflict sent back. Held for the next submit is sent back while the
+/// pull request is a draft, which only a ready mark ends, the next
+/// submit's or a person's; once one has, the request has had its
+/// submitter's act and waits for `host`, which the branch's intake mark
+/// names, to take it in again (120, C.5). Anything else is open as the
+/// check says, with the queue it carries and its words beneath, the first
+/// line, which says the same as the queue, left out (design D2, D5); no
+/// check is open and `waiting`. Its `taken_in_by` is left for the caller,
+/// which reads the mark.
+fn as_its_check_says(posting: Option<Posting>, head: &str, draft: bool, host: &str) -> Followed {
+    let open = |title: String, lines: Vec<String>, queue: Option<Queue>| Followed::Open {
+        title,
+        lines,
+        taken_in_by: None,
+        queue,
+        submission: None,
+        names: BTreeMap::new(),
+        head: Some(head.to_string()),
+        draft,
+    };
+    let Some(posting) = posting else {
+        return open("waiting".into(), Vec::new(), None);
+    };
+    let queue = queue_of(&posting.summary);
+    let sent_back = |conflict: bool, posting: Posting| Followed::SentBack {
+        conflict,
+        summary: words(&posting.summary),
+        title: posting.title,
+        head: head.to_string(),
+        draft,
+    };
+    match told(Some(&posting)) {
+        Told::Landed => landed_as_it_says(Some(posting), head, draft),
+        Told::SentBack { conflict } => sent_back(conflict, posting),
+        Told::Held if draft => sent_back(false, posting),
+        Told::Held => open(
+            format!("waiting to be taken in by {host}"),
+            Vec::new(),
+            queue,
+        ),
+        Told::Open => {
+            let said = words(&posting.summary);
+            let first = queue.as_ref().map(first_line);
+            let rest = first.and_then(|f| said.strip_prefix(&f)).unwrap_or(&said);
+            let lines = rest
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .map(str::to_string)
+                .collect();
+            open(posting.title, lines, queue)
+        }
+    }
+}
+
+/// 137: a pull request at `head` landed, while another host takes its
+/// branch's pull requests in: titled and summed up as `posting`, sluice's
+/// check on its head, says, where it says it landed, and `landed` with no
+/// summary otherwise (124; record 0096).
+fn landed_as_it_says(posting: Option<Posting>, head: &str, draft: bool) -> Followed {
+    let (title, summary) = posting
+        .filter(|p| p.title.starts_with("landed"))
+        .map_or_else(
+            || ("landed".into(), String::new()),
+            |p| (p.title, words(&p.summary)),
+        );
+    Followed::Landed {
+        title,
+        summary,
+        head: head.to_string(),
+        draft,
+    }
+}
+
+/// Whether `posting`, sluice's check on an open pull request at `head`,
+/// says it was sent back, blamed or in conflict, or held for the next
+/// submit, draft or not: [`as_its_check_says`] read as of a draft, whose
+/// held row is sent back, so the reading names no host (120, C.5; record
+/// 0096).
+fn sent_back_or_held(posting: Option<Posting>, head: &str) -> bool {
+    matches!(
+        as_its_check_says(posting, head, true, ""),
+        Followed::SentBack { .. }
+    )
+}
+
 impl Pulls {
-    /// 137: where pull request `n` into `branch` stands while another
-    /// host takes its pull requests in: by GitHub's word and sluice's check
-    /// on its head, which that host posts, as the host's kept follows hold
+    /// 137: where pull request `n` into `branch` stands while `host`
+    /// takes its pull requests in: by GitHub's word and sluice's check on
+    /// its head, which that host posts, as the host's kept follows hold
     /// them, read again only once a quarter of the host's interval has
     /// passed since any process of the host read them (136; design D4).
-    /// Merged is landed; sluice's check failed on its head is sent back, as
-    /// the check names; closed and not merged is closed. A request said to
-    /// be landed or closed is followed no longer (design D3). One still
-    /// open names the host the intake mark names, as the branch's last
-    /// fetch brought it, and the queue the check carries, whose first
-    /// line, saying the same, its lines leave out (design D2, D5).
+    /// Merged is landed, and closed and not merged is closed; otherwise it
+    /// is as [`as_its_check_says`] reads the check, never as the conclusion
+    /// GitHub keeps for it (record 0096). A request said to be landed or
+    /// closed is followed no longer (design D3). One still open names the
+    /// host the intake mark names, as the branch's last fetch brought it
+    /// (design D2).
     fn follow_across(
         &self,
         forge: &dyn Forge,
@@ -3372,59 +3480,30 @@ impl Pulls {
         branch: &str,
         n: u64,
         now: DateTime<Utc>,
+        host: &str,
     ) -> Result<Followed> {
         let repo = &t.repo;
         let Some(f) = self.read_followed(forge, repo, branch, n, now)? else {
             return Ok(Followed::Closed);
         };
         let posting = f.check.map(|p| p.posting);
-        let told = told(posting.as_ref());
-        if f.merged || told == Told::Landed {
-            self.unfollow(repo, branch, &[n]);
-            let title = posting
-                .map(|p| p.title)
-                .filter(|t| t.starts_with("landed"))
-                .unwrap_or_else(|| "landed".into());
-            return Ok(Followed::Landed { title });
-        }
-        if let (Some(posting), Told::SentBack { conflict }) = (posting.as_ref(), told) {
-            if f.open {
-                return Ok(Followed::SentBack {
-                    conflict,
-                    title: posting.title.clone(),
-                    summary: words(&posting.summary),
-                });
+        let mut followed = if f.merged {
+            landed_as_it_says(posting, &f.head, f.draft)
+        } else {
+            match as_its_check_says(posting, &f.head, f.draft, host) {
+                landed @ Followed::Landed { .. } => landed,
+                _ if !f.open => Followed::Closed,
+                other => other,
             }
-        }
-        if !f.open {
-            self.unfollow(repo, branch, &[n]);
-            return Ok(Followed::Closed);
-        }
-        let queue = posting.as_ref().and_then(|p| queue_of(&p.summary));
-        let (title, lines) = match posting {
-            Some(posting) => {
-                let said = words(&posting.summary);
-                let first = queue.as_ref().map(first_line);
-                let rest = first.and_then(|f| said.strip_prefix(&f)).unwrap_or(&said);
-                let lines = rest
-                    .lines()
-                    .filter(|l| !l.trim().is_empty())
-                    .map(str::to_string)
-                    .collect();
-                (posting.title, lines)
-            }
-            None => ("waiting".into(), Vec::new()),
         };
-        Ok(Followed::Open {
-            title,
-            lines,
-            taken_in_by: self.taken_in_by(&t.remote, branch),
-            queue,
-            submission: None,
-            names: BTreeMap::new(),
-            head: Some(f.head),
-            draft: f.draft,
-        })
+        match &mut followed {
+            Followed::Landed { .. } | Followed::Closed => self.unfollow(repo, branch, &[n]),
+            Followed::Open { taken_in_by, .. } => {
+                *taken_in_by = self.taken_in_by(&t.remote, branch);
+            }
+            _ => {}
+        }
+        Ok(followed)
     }
 
     /// 136, 137, design D4: pull request `n` into `branch` and sluice's
@@ -3822,7 +3901,26 @@ impl Pulls {
                 .remove(&here);
             let log = Line::read_log(&s.seams().state.read(branch)?)?;
             let left = latest.filter(left_unlanded).map(|e| acts_from(&log, &e));
-            if n == 1 && (pull.draft || left.is_some()) {
+            // 120, C.5: a submit takes again a request sent back or held for
+            // it, draft or not, whichever host takes the branch's requests
+            // in; where another does, this host's records hold no submission
+            // of it that left the queue, and a request out of draft is held
+            // there all the same (a request opened by hand, or one sent back
+            // before that host's pass marked it a draft). So sluice's check
+            // on the head it held before the push says, read once on the
+            // submitter's own act; a new request, a draft or one whose
+            // leaving this host's records give reads nothing (rule core.32;
+            // record 0096). A check that says anything else leaves the
+            // request as it is, never a draft even for a moment, since a
+            // draft mark withdraws what the other host queued (C.5).
+            let sent_back = match existing {
+                Some(p) if n == 1 && !p.draft && left.is_none() => {
+                    let posted = forge.posted(&t.repo, &p.head)?;
+                    sent_back_or_held(posted.map(|p| p.posting), &p.head)
+                }
+                _ => false,
+            };
+            if n == 1 && (pull.draft || left.is_some() || sent_back) {
                 mark_ready(forge, &t.repo, number, pull.draft, left)?;
                 said.push_str(" · marked ready for review");
             }
@@ -4108,11 +4206,21 @@ mod tests {
             ..view
         };
         post(&formed);
+        // Record 0096 (D3): GitHub keeps a completed run completed, so a
+        // check that waits again is read by its title, as any host reads
+        // it now; what sluice sent for each is queued.
         let held = forge.held().unwrap();
-        assert!(held.posted["head"]
+        let per_check: Vec<&Posted> = held.posted["head"]
             .iter()
             .filter(|p| p.name != SLUICE_CHECK)
-            .all(|p| p.posting.status == Status::Queued));
+            .collect();
+        assert_eq!(per_check.len(), 3);
+        assert!(per_check.iter().all(|p| p.posting.title == "formed again"));
+        assert!(per_check.iter().all(|p| held
+            .posts
+            .iter()
+            .rfind(|(rev, name, _)| rev == "head" && *name == p.name)
+            .is_some_and(|(_, _, sent)| sent.status == Status::Queued)));
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -4800,9 +4908,10 @@ mod tests {
 
     /// request-intake-host, "A pull request's state across hosts is read
     /// from its check's fields": a run GitHub keeps completed as a failure
-    /// whose block reads `testing` is open, and the block's `failed`,
-    /// `conflict` and `landed` decide whatever the run's status; a check
-    /// with no block is read by its words (D6).
+    /// whose block reads `testing` is open, the block's `failed`,
+    /// `conflict` and `landed` decide whatever the run's status, and its
+    /// waiting for the next submit is held whatever its title; a check with
+    /// no block is read by its title, never its status (D6; record 0096).
     #[test]
     fn the_fields_decide_over_the_words() {
         let posting = |status, title: &str, state: Option<&str>| {
@@ -4840,15 +4949,27 @@ mod tests {
         let mut waiting = posting(Status::Failure, "waiting: the next submit", None);
         waiting.summary = summed(&queue_at("b", None, &status_of(&[])), "Held.");
         assert_eq!(told(Some(&waiting)), Told::Open);
+        let mut held = queue_at("b", None, &status_of(&[]));
+        held.taken_in = true;
+        held.state = Some("failed".into());
+        held.waits_for = vec![NEXT_SUBMIT.into()];
+        waiting.title = "waiting: needs 1 review".into();
+        waiting.summary = summed(&held, "Held.");
+        assert_eq!(told(Some(&waiting)), Told::Held);
 
         assert_eq!(
             read(Status::Failure, "failed: app:test", None),
             Told::SentBack { conflict: false }
         );
         assert_eq!(
-            read(Status::Failure, "conflict with #10", None),
+            read(Status::Failure, "conflict: plan.py", None),
             Told::SentBack { conflict: true }
         );
+        assert_eq!(
+            read(Status::Success, "waiting: the next submit", None),
+            Told::Held
+        );
+        assert_eq!(read(Status::Failure, "conflict with #10", None), Told::Open);
         assert_eq!(read(Status::Success, "landed as abc", None), Told::Open);
         assert_eq!(told(None), Told::Open);
     }
@@ -4895,6 +5016,236 @@ mod tests {
             "{s}"
         );
         assert!(s.contains("Forecast: merges onto main"), "{s}");
+    }
+
+    /// request-intake-host, records 0095 and 0096: across hosts a pull
+    /// request reads as sluice's check on its head says, whatever status
+    /// GitHub keeps for it: each posting sluice makes, with its own status
+    /// and with the `Failure` GitHub kept from an earlier one, draft and
+    /// not, read by its fields (D6) and, as an older sluice posted it with
+    /// no block, by its title, where a landed check is open as it says.
+    #[test]
+    fn a_request_across_hosts_reads_as_its_check_says() {
+        let names = BTreeMap::from([(12, "#12".to_string())]);
+        let testing: Submission = serde_json::from_value(serde_json::json!({
+            "schema": sluice_core::records::SUBMISSION_SCHEMA, "id": 12, "branch": "main",
+            "head": "h", "from": { "agent": "a", "worktree": "pull/12" },
+            "submitted": "2026-11-06T22:00:00Z", "after": [], "priority": 0, "attempt": 2,
+            "state": "testing",
+            "tested": { "combination": "c1c1c1c1", "on": "m0m0m0m0", "submissions": [12] },
+        }))
+        .unwrap();
+        let blamed = Outcome::Failed {
+            tasks: vec!["sh check.sh".into()],
+            logs: Vec::new(),
+            combination: Rev::new("c1c1c1c1"),
+            ids: vec![12],
+            timed_out: false,
+        };
+        let timed_out = Outcome::Failed {
+            tasks: Vec::new(),
+            logs: Vec::new(),
+            combination: Rev::new("c1c1c1c1"),
+            ids: vec![12],
+            timed_out: true,
+        };
+        let conflict = Outcome::Conflict {
+            paths: vec!["plan.py".into()],
+            with: vec!["#11".into()],
+        };
+        let landed = Outcome::Landed {
+            landed_as: Rev::new("l1l1l1l1"),
+            beside: false,
+            covered_by: None,
+        };
+        // Its queue on b, the host that posts it, its submission 12 there
+        // in `state`, or not taken in.
+        let on_b = |state: Option<&str>| {
+            let at = state.map(|st| submitted(12, "pull/12", st));
+            queue_at("b", at.as_ref(), &status_of(at.as_slice()))
+        };
+        // What each reads as, draft and not: sent back (and whether a
+        // conflict), landed, or open with the title a wait shows.
+        #[derive(Clone, Debug, PartialEq)]
+        enum Read {
+            SentBack(bool, String),
+            Landed(String),
+            Open(String),
+        }
+        let held = waiting(
+            "main",
+            Some("unit/x"),
+            &[NEXT_SUBMIT.into()],
+            None,
+            on_b(Some("failed")),
+        );
+        let cases: Vec<(Shown, Read, Read)> = vec![
+            (
+                held.clone(),
+                Read::SentBack(false, "waiting: the next submit".into()),
+                Read::Open("waiting to be taken in by b".into()),
+            ),
+            (
+                waiting("main", None, &["1 review".into()], None, on_b(None)),
+                Read::Open("waiting: needs 1 review".into()),
+                Read::Open("waiting: needs 1 review".into()),
+            ),
+            (
+                waiting("main", None, &["a draft".into()], None, on_b(None)),
+                Read::Open("waiting: a draft".into()),
+                Read::Open("waiting: a draft".into()),
+            ),
+            (
+                queued("main", &[], on_b(Some("queued"))),
+                Read::Open("queued: next on main".into()),
+                Read::Open("queued: next on main".into()),
+            ),
+            (
+                queued("main", &["#11".into()], on_b(Some("queued"))),
+                Read::Open("queued behind #11".into()),
+                Read::Open("queued behind #11".into()),
+            ),
+            (
+                queue_shown(
+                    "main",
+                    &testing,
+                    &status_of(std::slice::from_ref(&testing)),
+                    &names,
+                    on_b(Some("testing")),
+                ),
+                Read::Open("testing main + #12".into()),
+                Read::Open("testing main + #12".into()),
+            ),
+            (
+                outcome_shown("main", &blamed, &names, on_b(Some("failed"))),
+                Read::SentBack(false, "failed: sh check.sh".into()),
+                Read::SentBack(false, "failed: sh check.sh".into()),
+            ),
+            (
+                outcome_shown("main", &timed_out, &names, on_b(Some("failed"))),
+                Read::SentBack(false, "failed: timed out".into()),
+                Read::SentBack(false, "failed: timed out".into()),
+            ),
+            (
+                outcome_shown("main", &conflict, &names, on_b(Some("conflict"))),
+                Read::SentBack(true, "conflict: plan.py".into()),
+                Read::SentBack(true, "conflict: plan.py".into()),
+            ),
+            (
+                outcome_shown("main", &landed, &names, on_b(Some("landed"))),
+                Read::Landed("landed as l1l1l1l".into()),
+                Read::Landed("landed as l1l1l1l".into()),
+            ),
+        ];
+        let read = |posting: Option<Posting>, draft: bool| match as_its_check_says(
+            posting.clone(),
+            "h",
+            draft,
+            "b",
+        ) {
+            Followed::SentBack {
+                conflict,
+                title,
+                summary,
+                head,
+                draft: d,
+            } => {
+                let posting = posting.unwrap();
+                assert_eq!(summary, words(&posting.summary), "{title}");
+                assert_eq!((head.as_str(), d), ("h", draft), "{title}");
+                Read::SentBack(conflict, title)
+            }
+            Followed::Landed {
+                title,
+                summary,
+                head,
+                draft: d,
+            } => {
+                let posting = posting.unwrap();
+                assert_eq!(summary, words(&posting.summary), "{title}");
+                assert_eq!((head.as_str(), d), ("h", draft), "{title}");
+                Read::Landed(title)
+            }
+            Followed::Open {
+                title,
+                submission,
+                head,
+                draft: d,
+                ..
+            } => {
+                assert!(submission.is_none(), "{title}");
+                assert_eq!((head.as_deref(), d), (Some("h"), draft), "{title}");
+                Read::Open(title)
+            }
+            _ => panic!("neither sent back, landed nor open"),
+        };
+        // As an older sluice posted it, with no block: read by its title,
+        // where landed is open as it says.
+        let older = |r: &Read| match r {
+            Read::Landed(t) => Read::Open(t.clone()),
+            r => r.clone(),
+        };
+        for (shown, as_draft, out_of_draft) in cases {
+            let own = shown.posting.clone();
+            assert!(queue_of(&own.summary).is_some(), "{}", own.title);
+            let unblocked = Posting {
+                summary: words(&own.summary),
+                ..own.clone()
+            };
+            let forms = [
+                (own, as_draft.clone(), out_of_draft.clone()),
+                (unblocked, older(&as_draft), older(&out_of_draft)),
+            ];
+            for (form, as_draft, out_of_draft) in forms {
+                let sticky = Posting {
+                    status: Status::Failure,
+                    ..form.clone()
+                };
+                for posting in [form, sticky] {
+                    let status = posting.status;
+                    let block = queue_of(&posting.summary).is_some();
+                    // D4: a submit marks ready what reads sent back as a draft.
+                    assert_eq!(
+                        sent_back_or_held(Some(posting.clone()), "h"),
+                        matches!(as_draft, Read::SentBack(..)),
+                        "{status:?}, block {block}, a submit's reading"
+                    );
+                    assert_eq!(
+                        read(Some(posting.clone()), true),
+                        as_draft,
+                        "{status:?}, block {block}, a draft"
+                    );
+                    assert_eq!(
+                        read(Some(posting), false),
+                        out_of_draft,
+                        "{status:?}, block {block}, out of draft"
+                    );
+                }
+            }
+        }
+        // No check: open, and waiting.
+        for draft in [true, false] {
+            assert_eq!(read(None, draft), Read::Open("waiting".into()));
+        }
+        assert!(!sent_back_or_held(None, "h"));
+        // An open request's words beneath its state, as the check says
+        // them, the first line naming its submission on b left out, and
+        // the queue the check carries.
+        match as_its_check_says(
+            Some(queued("main", &[], on_b(Some("queued"))).posting),
+            "h",
+            false,
+            "b",
+        ) {
+            Followed::Open { lines, queue, .. } => {
+                assert_eq!(
+                    lines,
+                    ["In main's queue; it lands once its combination passes."]
+                );
+                assert_eq!(queue.map(|q| q.submission), Some(Some(12)));
+            }
+            _ => panic!("not open"),
+        }
     }
 
     /// pull-request-status, withdrawn by the operator: a hand-opened pull

@@ -347,11 +347,13 @@ impl Submit {
 pub enum Standing {
     /// A submission of that revision, undecided or landed.
     Submission { id: u64, landed: bool },
-    /// The worktree's pull request, open and ready at that revision, not
-    /// yet decided.
-    PullRequest(u64),
+    /// The worktree's pull request at that revision: open and ready, not
+    /// yet decided, or `landed` there, on whichever host takes the
+    /// branch's pull requests in (137; record 0096).
+    PullRequest { number: u64, landed: bool },
     /// None: never submitted, or of another revision, or blamed,
-    /// conflicting, withdrawn or closed.
+    /// conflicting, withdrawn or closed, a pull request sent back on any
+    /// host among them (67, 120; record 0096).
     Nothing,
 }
 
@@ -404,6 +406,12 @@ pub fn standing(
     let Some(sends) = doc["sends"].as_str() else {
         return Err(words());
     };
+    // Sent back, failed or in conflict, on whichever host took it in,
+    // it stands at no revision, as a failed submission does, and the
+    // worktree submits it again (67, 120; record 0096).
+    if pull.is_some() && matches!(state, "failed" | "conflict") {
+        return Ok(Standing::Nothing);
+    }
     let at = doc["head"] == sends;
     if let Some(id) = doc["id"].as_u64() {
         return Ok(if at && STANDS.contains(&state) {
@@ -415,10 +423,13 @@ pub fn standing(
             Standing::Nothing
         });
     }
-    if let Some(n) = pull {
+    if let Some(number) = pull {
+        // Landed on another host, it stands where it landed, draft or not
+        // (137; record 0096).
+        let landed = state == "landed";
         let ready = doc["draft"] == false;
-        return Ok(if at && ready {
-            Standing::PullRequest(n)
+        return Ok(if at && (landed || ready) {
+            Standing::PullRequest { number, landed }
         } else {
             Standing::Nothing
         });
@@ -440,13 +451,14 @@ pub fn standing_in(branch: &str, worktree: &Path) -> std::result::Result<Standin
 }
 
 /// Whether sluice records `worktree`'s submission to `branch` as landed:
-/// its last submission from the worktree has landed, and is of the
-/// revision a submit from the worktree would send now. A worktree is
-/// removed on this, never on an exit alone.
+/// its last submission from the worktree, or its pull request another
+/// host took in (137; record 0096), has landed, and is of the revision a
+/// submit from the worktree would send now. A worktree is removed on
+/// this, never on an exit alone.
 pub fn landed(branch: &str, worktree: &Path) -> bool {
     matches!(
         standing_in(branch, worktree),
-        Ok(Standing::Submission { landed: true, .. })
+        Ok(Standing::Submission { landed: true, .. } | Standing::PullRequest { landed: true, .. })
     )
 }
 
@@ -765,7 +777,10 @@ mod tests {
         };
         assert_eq!(
             read(0, pull("waiting: needs 1 review", Some(SENDS), false)),
-            Ok(Standing::PullRequest(12))
+            Ok(Standing::PullRequest {
+                number: 12,
+                landed: false
+            })
         );
         assert_eq!(
             read(0, pull("waiting: a draft", Some(SENDS), true)),
@@ -783,6 +798,36 @@ mod tests {
             ),
             Ok(Standing::Nothing)
         );
+        // Record 0096, 137: sent back on another host, failed or in
+        // conflict, draft or not, it stands nowhere; landed there, it
+        // stands at the revision it landed.
+        for state in ["failed", "conflict"] {
+            for draft in [true, false] {
+                assert_eq!(
+                    read(0, pull(state, Some(SENDS), draft)),
+                    Ok(Standing::Nothing),
+                    "{state}, draft {draft}"
+                );
+            }
+        }
+        assert_eq!(
+            read(0, pull("landed", Some(SENDS), false)),
+            Ok(Standing::PullRequest {
+                number: 12,
+                landed: true
+            })
+        );
+        assert_eq!(
+            read(0, pull("landed", Some(OTHER), false)),
+            Ok(Standing::Nothing)
+        );
+        // A document that names no such revision is no answer, sent back
+        // or not.
+        let unsent = serde_json::json!({
+            "pull_request": 12, "branch": "main", "state": "failed",
+            "head": SENDS, "draft": true,
+        });
+        assert!(read(0, unsent).is_err());
 
         // Never submitted from this worktree.
         let none = serde_json::json!({ "error": {

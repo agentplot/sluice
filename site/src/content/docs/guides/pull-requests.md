@@ -353,7 +353,7 @@ check reads:
 | the check reads | means |
 |---|---|
 | `waiting: a draft` | still a draft; sluice takes it once it is marked ready for review |
-| `waiting: the next submit` | an agent's pull request whose submission left the queue; sluice marked it a draft, and takes it again once the agent's next `sluice submit` from its branch, or a person, marks it ready for review |
+| `waiting: the next submit` | an agent's pull request whose submission left the queue; sluice marked it a draft. Once the agent's next `sluice submit` from its branch on any host, or a person, marks it ready for review, sluice takes it again |
 | `waiting: withdrawn by the operator` | a pull request a person opened, withdrawn with `sluice withdraw` (`by the planner` when a planner withdrew it); sluice takes it again on new commits, or once it is marked a draft and then ready for review |
 | `waiting: needs 1 review, qa/approved` | out of draft, and these are missing on its latest commit; the details add where it would land now: "merges without conflict behind #38, #40" or "conflicts with #40 in plan.py" |
 | `queued behind #38, #40` | in the queue, behind the pull requests it names |
@@ -483,6 +483,10 @@ sequenceDiagram
   a draft and then ready to retry the same commits. An agent's is
   marked a draft, and waits for the agent's next `sluice submit`, with a
   fix or the same commits, or for a person to mark it ready for review.
+  That submit marks it ready from any host, whichever host takes
+  `main`'s pull requests in. A submit from the branch of one sent back
+  that is no draft, such as one a person opened, marks it a draft and
+  then ready for review. sluice then takes it again.
 - **Withdrawn with `sluice withdraw`.** An agent's pull request is
   marked a draft, and waits the same way. One a person opened stays out
   of the queue as a blamed one does, however long its conditions hold:
