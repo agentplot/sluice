@@ -32,7 +32,8 @@ refused, however long the host has held a clean one. On deneb, flywheel-next's
 stayed refused at `2924aa2f` until a hand's `sluice step main` at
 2026-11-06T16:46:34Z. Intake's pass fetches the branch (`take_in`'s
 `Branch::read`) and then reads the queue through `status`. So it turned
-away main's requests after its own fetch had brought the clean revision.
+away main's requests, though the host had held the clean revision for
+nine days.
 
 ### Looking across
 
@@ -57,14 +58,17 @@ away main's requests after its own fetch had brought the clean revision.
 
 - A read of a branch outside a round reads its policy where 56, 124 and
   129 say: at the branch's revision as the host holds it.
-- A clean policy pushed to a quiet branch's remote ends the refusal at
-  the first read, or tick, after the host holds it, so submit, status,
-  intake and the overview take the branch again with no round run.
+- A clean policy pushed to a branch's remote ends sluice's refusal of
+  that branch the next time a sluice command reads the branch once this
+  host holds the clean revision, so submit and status take work again,
+  and the overview shows the branch whole, without anyone running a
+  round.
 
 **Non-goals:**
 
 - A fetch the tick does not make today (D2).
 - The round's reads before `decide` (D4).
+- Intake's own reads of the policy, and any requirement on intake (D2).
 - How a policy is parsed, what it refuses, and the routing's narrow
   read (record 0069), which stand as they are.
 
@@ -117,17 +121,16 @@ the host already holds, so it costs no process (rule core.31).
 ### D2. What brings the remote's revision to the host stays as it is
 
 This change adds no fetch. A quiet branch on a remote reads at its
-revision as last fetched, and that moves when one of these happens:
+revision as last fetched. So a clean policy pushed to the branch's
+remote ends sluice's refusal of that branch the next time a sluice
+command reads the branch once this host holds the clean revision, and
+submit and status take work again without anyone running a round. The
+host comes to hold it when one of these happens:
 
 - **The tick's ask**, where the branch's state is on that remote. It
   brings every branch there into its tracking ref in its one fetch
   (`remote_refs::ask`; 129). So a push ends the refusal at the next
   tick, on every host.
-- **Intake's fetch** at the branch's next discovery, where the branch
-  takes pull requests (136). `take_in` reads the branch's rules at
-  `held` (`target`), then, due or moved, fetches it (`Branch::read`)
-  before it reads the queue through `status`. So the same pass reads
-  the clean policy and takes the requests in.
 - **A submit's read**, which fetches the branch and judges the
   submission at the fetched revision (124). So a submit is never
   refused for a revision the remote has left. Status after it reads the
@@ -135,15 +138,32 @@ revision as last fetched, and that moves when one of these happens:
 - **A round**, or any other fetch of the branch on the host, flume's
   and the person's own included.
 
+Intake is none of these, and this change asks nothing of it. Its pass
+reads the default branch's policy for the branches it takes
+(`Pulls::branches`) and the branch's rules for its target (`take_in`'s
+`target`) at the revision this host holds, and both refuse there before
+`take_in`'s `Branch::read` fetches. So where this host still holds the
+refused revision, intake takes no request in until one of the above
+brings the clean one; where it holds the clean one, intake reads the
+queue through `status` and takes the requests in (D1). Those reads stay
+as they are. Record 0093 removes intake from the host: a branch's
+requests are taken in only where its records are on its remote, by the
+forge's jobs, and the unit `pull-requests-are-queued-on-the-forge`
+removes intake's code. Reading only what intake needs at `held`, as the
+routing does, or fetching at a due discovery where those reads refuse,
+would build into code that unit removes. The routing's narrow reading
+at the revisions the host holds (rule core.27, record 0069) stays as it
+stands.
+
 The option not taken: a tick fetching a branch whose policy is refused
 at the revision the host holds, at the discovery interval. Under 129, no
 branch is fetched on its own until a round forms on it or its intake is
 due. And the one read such a fetch would serve is a submit's, which
-already fetches. So a quiet branch whose state is on the host, which
-takes no pull requests and which nothing has fetched since the push,
-still shows the refusal at the revision it last fetched. Its next
-submit takes the work. This choice is the design agent's, inside 129;
-a tick's fetch would need 129 amended.
+already fetches. So a quiet branch whose state is on the host and which
+nothing has fetched since the push still shows the refusal at the
+revision it last fetched. Its next submit takes the work. This choice
+is the design agent's, inside 129; a tick's fetch would need 129
+amended.
 
 ### D3. The overview's order reads the default branch's policy where its view does
 
@@ -180,7 +200,12 @@ flywheel-next's `main` from 2026-10-28 to 2026-11-06 and the signal.
 These are this change's construct stage's own, inside the rules, and
 cheap to change. Record 0046's amendment keeps what the user decided
 there, a status read that fetches nothing, and changes only the
-revision the policy is read at.
+revision the policy is read at. D2's word on intake, that this change
+builds nothing more there and leaves `Pulls::branches` and `take_in` as
+they are, is the answer to the code stage's question of 2026-11-06, on
+record 0093 (accepted 2026-11-06; rule core.33; clause 137 as
+agentplot/blueprints 88a4cf0 words it). Record 0046's outcome says the
+same.
 
 ## Risks / Trade-offs
 
@@ -192,6 +217,10 @@ revision the policy is read at.
 - **A quiet branch the host never fetches shows a refusal the remote
   has cleared** (D2). It names the revision it read, and a submit is
   never refused by it.
+- **A branch that takes pull requests, where this host still holds the
+  refused revision, takes no request in** until the host holds the
+  clean one (D2). Its next submit, or any fetch of it, ends that, and
+  record 0093 takes intake off the host.
 - **A run left starting, or a landing left unfinished, on a revision
   whose policy this sluice refuses fails each round before the round
   reads the branch** (D4). This needs a sluice that refuses the policy

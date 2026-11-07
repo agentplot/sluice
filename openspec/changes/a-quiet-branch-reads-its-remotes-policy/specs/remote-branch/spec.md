@@ -9,13 +9,13 @@ the remote's revision and the refusal. A read of the branch outside a
 round SHALL read its policy at the remote's revision as this host last
 fetched it, never at the revision the branch's state last saw (see
 branch-refusal). A policy pushed to the remote that sluice reads SHALL
-clear the refusal on every host, at the first round, read or tick after
-that host holds the pushed revision, whether or not anything is queued,
-with no round run for it. That host holds the pushed revision after
-the tick's ask where the branch's state is on that remote, after
-intake's fetch at its next discovery where the branch takes pull
-requests, and after a submit's own read of the branch, which fetches it
-(56, 124, 129, 136).
+clear the refusal on every host the next time a sluice command, or a
+reader's tick, reads the branch once that host holds the pushed
+revision, whether or not anything is queued, so that submit and status
+take work again with no round run for it. That host holds the pushed
+revision after the tick's ask where the branch's state is on that
+remote, after a submit's own read of the branch, which fetches it, and
+after any other fetch of the branch on the host (56, 124, 129).
 
 #### Scenario: The bolt's own round runs past a copy that lags
 - **WHEN** this host's own `bolt/x` holds a policy with a `[[checkout.cache]]` table, origin's `bolt/x` holds a clean policy, and a submission to `bolt/x` is waiting
@@ -32,10 +32,6 @@ requests, and after a submit's own read of the branch, which fetches it
 #### Scenario: A quiet branch whose state is on its remote clears at the next tick
 - **WHEN** `main`'s state is on origin, nothing is queued, `main`'s state last saw a revision whose policy has a `[[checkout.cache]]` table, the overview watch is reading, and a commit removing that table is pushed to origin's `main` by hand
 - **THEN** the watch's line after its next tick shows `main` with no `unread`, `sluice status main` shows its queue, and no round has run: `main`'s state still names the revision it last saw as `at`
-
-#### Scenario: A quiet branch that takes pull requests takes them in after intake's fetch
-- **WHEN** `main` is on origin with its state on this host and takes pull requests, nothing is queued, `main`'s state last saw `R1`, whose policy has a `[[checkout.cache]]` table, origin's `main` is at `R2`, which removes it, a pull request is open against `main`, and `sluice run` passes once `main`'s discovery is due
-- **THEN** that pass takes the request in as a submission with no round run before it, and `sluice status main` shows the submission queued
 
 #### Scenario: A quiet branch this host fetched is read whole by status
 - **WHEN** `main` is on origin with its state on this host, nothing is queued, `main`'s state last saw `R1`, whose policy has a `[[checkout.cache]]` table, and this host's `origin/main` is at `R2`, which removes it

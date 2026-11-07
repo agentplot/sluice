@@ -15,6 +15,7 @@ id.
 ## 1. The decision recorded
 
 - [x] 1.1 Amend record 0046 with design D1 to D3: status reads the queue where its state last saw it, and the policy at the branch's revision as this host holds it, with D1's options weighed and D2's fetch not taken, accepted as this change's construct stage's own under 56, 124 and 129. Add record 0069's More information naming the amendment as how a quiet branch's refusal ends. Add to rule core.15's details: rule out a policy read for a status, a view or intake at the revision the state last saw while the host holds another, citing agentplot/flywheel-next's `main` from 2026-10-28 to 2026-11-06 and the signal `afterthought/crew-state:agentplot/main signals/2026-11-06-agentplot-ops-706fa293/01-sluice-reads-a-quiet-branchs-policy-at-its-last-round`. Write the site's rules page with `node site/scripts/rules.mjs`. True when `sluice exec main -- moon run root:adrs root:changes site:rules` passes.
+- [x] 1.2 State what the change owes in the proposal, design D2, record 0046's outcome, the remote-branch and branch-refusal requirements and task 6.1: a clean policy pushed to a branch's remote ends sluice's refusal of that branch the next time a sluice command reads the branch once this host holds the clean revision, so submit and status take work again without anyone running a round. They ask nothing of intake, whose own reads at the revision this host holds refuse before it fetches and which record 0093 removes from the host, and leave `Pulls::branches`, `take_in` and the routing's narrow reading (rule core.27, record 0069) as they stand. True when `sluice exec main -- moon run root:adrs root:changes` passes.
 
 ## 2. Status and a branch's view read the policy at the revision the host holds
 
@@ -24,7 +25,7 @@ id.
 
 ## 3. Intake takes a quiet branch's requests in after its own fetch
 
-- [x] 3.1 A forge-double case, `a_quiet_branch_that_takes_pull_requests_takes_them_in_after_intakes_fetch`, in `crates/sluice/tests/profiles/pull_requests.rs`. It sets up flywheel-next's shape: `main` on origin with its state on the host, `[branches.main.pull_requests]`, the state's `base` at a revision with a `[[checkout.cache]]` table, and origin's `main` clean. One `sluice run --rounds 1` pass, discovery due, takes the open request in, with no round run before it. Intake needs no code of its own, since it reads the queue through `status` (D2). True when `sluice exec main -- cargo test -p sluice --features tools --test pull_requests -- a_quiet_branch_that_takes_pull_requests` passes, failing with 2.1 undone.
+- [x] 3.1 A forge-double case, `a_quiet_branch_that_takes_pull_requests_takes_them_in_after_intakes_fetch`, in `crates/sluice/tests/profiles/pull_requests.rs`. It sets up flywheel-next's shape: `main` on origin with its state on the host, `[branches.main.pull_requests]`, the state's `base` at a revision with a `[[checkout.cache]]` table, and origin's `main` clean. One `sluice run --rounds 1` pass, discovery due, takes the open request in, with no round run before it. Intake needs no code of its own, since it reads the queue through `status` (D1). True when `sluice exec main -- cargo test -p sluice --features tools --test pull_requests -- a_quiet_branch_that_takes_pull_requests` passes, failing with 2.1 undone.
 
 ## 4. The reader's tick
 
@@ -36,7 +37,7 @@ id.
 
 ## 6. The site
 
-- [ ] 6.1 In the commands reference, the `sluice status` row says the queue is read where the branch's state last saw it and the policy at the branch's revision as this host holds it, never fetching. In the GitHub guide, the paragraph on a copy whose policy sluice refuses says a fixed policy pushed to GitHub clears the refusal once the machine has it: at the next look where the queue's state is on GitHub, at the next look for pull requests where `main` takes them, and at the next submit. Both pages speak to any host's operator (rule core.26). True when `sluice exec main -- moon run site:prose` passes.
+- [ ] 6.1 In the commands reference, the `sluice status` row says the queue is read where the branch's state last saw it and the policy at the branch's revision as this host holds it, never fetching. In the GitHub guide, the paragraph on a copy whose policy sluice refuses says a fixed policy pushed to GitHub ends sluice's refusal the next time a sluice command reads the branch once the machine has the fixed revision, so submit and status take work again with no one running a round: at the next look where the queue's state is on GitHub, and at the next submit, which fetches it. Both pages speak to any host's operator (rule core.26). True when `sluice exec main -- moon run site:prose` passes.
 
 ## 7. The gate
 

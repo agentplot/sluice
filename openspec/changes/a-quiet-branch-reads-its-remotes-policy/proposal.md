@@ -35,7 +35,7 @@ revision the branch's state last saw (`crates/sluice-core/src/ops.rs`,
 Intake's pass reads the queue through `status`
 (`crates/sluice/src/profiles/github/pulls.rs`, `take_in`). So a branch
 that takes pull requests turns away every request and every submit,
-even after intake's own fetch has brought the clean revision. Record
+however long the host has held the clean revision. Record
 0069 says a clean policy pushed to the remote ends the refusal "at the
 next round". On a quiet branch nothing runs that round.
 
@@ -52,21 +52,22 @@ read at all.
 
 - **Reads outside a round read the policy at the revision the host
   holds.** This covers `sluice status`, the overview, `sluice` with no
-  command, the reader's document, a wait's view and intake's pass.
+  command, the reader's document and a wait's view.
   Each reads the policy at the branch's revision as this host holds it:
   for a branch in the host's own refs, its own ref; for a branch on a
   remote, its tracking ref as last fetched. Nothing is fetched for it.
   The revision the state last saw is read only where the host holds
   none. Status's and the overview's `at` still name the revision the
   state last saw (record 0046).
-- **A clean policy ends the refusal at the first read after the host
-  holds it, with no round run.** Where the branch's state is on its
-  remote, the tick's own ask brings the branch, so a push ends the
-  refusal at the next tick (129). Where the branch takes pull requests,
-  intake's fetch at its next discovery brings it, and the same pass
-  takes the requests in (136). Otherwise the branch moves at the next
-  submit's read, a round, or any fetch of the branch. The submit's read
-  already reads the gate at the fetched revision (124).
+- **A clean policy pushed to a branch's remote ends sluice's refusal
+  of that branch the next time a sluice command reads the branch once
+  this host holds the clean revision**, so submit and status take work
+  again without anyone running a round. Where the branch's state is on
+  its remote, the tick's own ask brings the branch, so a push ends the
+  refusal at the next tick (129). Otherwise the host holds it after the
+  next submit's read, which fetches the branch and already reads the
+  gate at the fetched revision (124), a round, or any other fetch of the
+  branch.
 - **The overview's order reads the default branch's policy at the same
   revision its view reads.**
 
@@ -74,11 +75,16 @@ Out of scope:
 
 - **No fetch is added to a tick.** Under 129, no branch is fetched on
   its own until a round forms on it or its intake is due. So a quiet
-  branch whose state is on the host, which takes no pull requests and
-  which nothing has fetched since the push, shows its refusal at the
-  revision it last fetched until the next fetch. A submit to it is
-  never refused for that revision, since the submit reads the branch
-  fetched.
+  branch whose state is on the host and which nothing has fetched since
+  the push shows its refusal at the revision it last fetched until the
+  next fetch. A submit to it is never refused for that revision, since
+  the submit reads the branch fetched.
+- **Intake's own reads stay as they are.** `Pulls::branches` and
+  `take_in`'s target read the policy at the revision this host holds,
+  and refuse there before intake fetches, so intake brings no clean
+  revision to the host. Record 0093 removes intake from the host, and
+  the unit that builds it removes intake's code. The routing's narrow
+  reading (rule core.27, record 0069) stays as it stands.
 - **The round's own reads stay as they are.** These are the starts of
   runs already decided and an unfinished landing's comparison of
   gates. Each reads the revision its intent was decided on, and a quiet
