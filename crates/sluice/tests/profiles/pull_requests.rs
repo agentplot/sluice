@@ -5439,9 +5439,10 @@ fn a_refused_query_falls_back_to_the_reads_per_pull_request() {
 }
 
 // ---------------------------------------------------------------------------
-// remote-branch: a quiet branch that takes pull requests is read at the
-// revision this host holds, so intake's pass takes its requests in with no
-// round run first (56, 124, 129, 136; rule core.15)
+// design D1: intake reads the queue through status, which reads a quiet
+// branch's policy at the revision this host holds, so where the host holds
+// the clean one intake's pass takes its requests in with no round run first
+// (56, 124, 129, 136; rule core.15)
 // ---------------------------------------------------------------------------
 
 /// A `[[checkout.cache]]` table, which this sluice refuses (record 0049).
@@ -5474,8 +5475,8 @@ fn base(g: &OnGitHub) -> String {
     doc["base"].as_str().unwrap_or_default().to_string()
 }
 
-/// remote-branch's "A quiet branch that takes pull requests takes them in
-/// after intake's fetch" (124, 129, 136; rule core.15), in
+/// A quiet branch that takes pull requests takes them in once this host
+/// holds its clean policy (124, 129, 136; design D1; rule core.15), in
 /// agentplot/flywheel-next's shape from 2026-10-28 to 2026-11-06: `main`
 /// on origin, taking pull requests, its records in this host's files last
 /// seeing `r1`, whose policy holds a `[[checkout.cache]]` table, and
