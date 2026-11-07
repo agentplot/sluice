@@ -33,7 +33,7 @@ citing clauses by number and rules by id.
 ## 4. The site
 
 - [x] 4.1 In the commands reference, the `sluice status` row says the queue is read where the branch's state last saw it and the policy at the branch's revision as this host holds it, never fetching. True when `sluice exec main -- moon run site:prose` passes.
-- [ ] 4.2 In the GitHub guide, the paragraph on a copy whose policy sluice refuses says a fixed policy pushed to GitHub ends sluice's refusal the next time a sluice command reads `main`, so submit and status take work again with no one running a round and no copy to fix by hand: the next submit, which fetches `main`, takes the work, and status and the overview read `main` whole once the machine has fetched the fixed revision, by a submit or a `git fetch`. It names no watch, wait or `sluice run` as what fetches it. The page speaks to any host's operator (rule core.26). True when `sluice exec main -- moon run site:prose` passes.
+- [x] 4.2 In the GitHub guide, the paragraph on a copy whose policy sluice refuses says a fixed policy pushed to GitHub ends sluice's refusal the next time a sluice command reads `main`, so submit and status take work again with no one running a round and no copy to fix by hand: the next submit, which fetches `main`, takes the work, and status and the overview read `main` whole once the machine has fetched the fixed revision, by a submit or a `git fetch`. It names no watch, wait or `sluice run` as what fetches it. The page speaks to any host's operator (rule core.26). True when `sluice exec main -- moon run site:prose` passes.
 
 ## 5. No case of intake or of a reader's tick
 
