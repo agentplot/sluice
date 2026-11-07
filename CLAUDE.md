@@ -40,12 +40,17 @@ rules are in `docs/adr/`, one record each.
 
 Run suites through sluice, so the agents on this host take turns under
 its bound instead of all running at once, and so sluice is tested on
-itself:
+itself. Run them against your place's base, the branch your work lands
+on (flume 15), so they are that branch's gate (S66): `main` for a place
+cut from main, its bolt for a place cut from a bolt. A bolt's gate is
+`#check-fast`; `#check-tools` and `#check-e2e` are main's, run when the
+bolt merges onto main (`.config/sluice.toml`). With `<base>` that
+branch:
 
-- once your work is committed and before `sluice submit main`, the
-  gate's checks: `sluice exec main`;
+- once your work is committed and before it is submitted to `<base>`,
+  the gate's checks: `sluice exec <base>`;
 - while iterating, a crate's tests or a slow test:
-  `sluice exec main -- cargo test -p sluice --test moon a_key`.
+  `sluice exec <base> -- cargo test -p sluice --test moon a_key`.
 
 A quick, narrow call, such as `cargo check` or one unit test, is fine to
 run directly. When `sluice exec` misbehaves, find the cause and fix it

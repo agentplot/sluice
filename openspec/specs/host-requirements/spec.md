@@ -135,8 +135,9 @@ After a run of a branch whose policy says `docker = true` in which a test
 did not pass, the host SHALL look at the engine again. Where it no longer
 answers, each test that did not pass SHALL have no result, nothing
 recorded under its key and nobody blamed, with the reason, and the
-combination SHALL be tested again. A test that passed SHALL keep its
-result (114, 139).
+combination SHALL be tested again. A test failed by a task it depends
+on did not pass, and the task SHALL have no result either (149). A test
+that passed SHALL keep its result (114, 139).
 
 #### Scenario: The engine stopped during the run
 
@@ -145,6 +146,17 @@ result (114, 139).
 - **THEN** the passing test's result is recorded under its key, the
   failing test is listed as not run, saying the container engine no
   longer answers, with no result, and no submission is blamed
+
+#### Scenario: A test failed by a task it depends on
+
+- **WHEN** a run fails `api:integration`, moon skips `root:integration`,
+  which depends on it, and the container engine no longer answers when
+  the host looks after the run
+- **THEN** `results.jsonl` gains no line for `api:integration`,
+  `root:integration` is listed as not run, saying the container engine
+  no longer answers, and no submission is blamed
+  (`an_engine_gone_leaves_a_check_failed_by_a_dependency_unjudged` in
+  `crates/sluice-conformance/tests/engine.rs`)
 
 #### Scenario: The engine still answers
 

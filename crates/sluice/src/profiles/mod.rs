@@ -58,6 +58,12 @@ impl sluice_seams::Driver for Drivers {
         }
     }
 
+    /// 124: a branch named is no pull request's place, so worktrunk's
+    /// names its submitter (C.5).
+    fn named(&self, branch: &str) -> Result<sluice_seams::Submitter> {
+        self.worktrunk.named(branch)
+    }
+
     fn notify(&self, n: &sluice_seams::Notification) -> Result<sluice_seams::Delivery> {
         match github::pulls::number(&n.to.worktree) {
             Some(_) => self.pulls.notify(n),

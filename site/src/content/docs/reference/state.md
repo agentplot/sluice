@@ -381,6 +381,29 @@ is sluice's own. The field is left out when it is empty.
 added, so a script that reads `state`, such as an agent looping on
 `sluice wait --json`, can match all of them.
 
+`failed` lists each test that failed, with its `hash`, the key its
+result is recorded under, and its `log`, where what it printed is kept.
+A task a required test depends on is listed among them where it ran and
+failed, and the task runner skipped the required test for it: that task
+is the one to fix. The required test is listed too, with `failed_by`
+naming the tasks it depends on that failed, and no `hash` or `log`,
+since it never ran:
+
+```json
+"failed": [
+  { "task": "api:integration", "hash": "8c41a0e7d2",
+    "log": ".git/sluice/.logs/main/c4/api:integration.log" },
+  { "task": "root:integration", "failed_by": ["api:integration"] }
+]
+```
+
+A test with neither `hash` nor `failed_by` was left without a result:
+skipped for another reason, never reached or cut off by the time limit.
+Or it could not run, and then its `not_run` says why. A test read as
+failed because its key both passed and failed has `flaky`, as
+[`sluice overview --json`](/sluice/reference/commands/#sluice-overview)
+gives it. A record written by an older sluice has no `failed_by`.
+
 `after` lists submissions this one must land after. `attempt` counts how
 many times this worktree has submitted to this branch. `from.worktree`
 is the branch the work was submitted from; `from.path` is the worktree
@@ -459,6 +482,33 @@ submission from the same `pull/<n>`. A pull request still waiting for
 review or checks has no submission at all: its state is read from GitHub
 each round, and shown there as the `sluice` check. Submission ids
 are numbered in order, and that order is the queue's order.
+
+A [submission by
+name](/sluice/reference/commands/#submitting-a-branch-by-name), `sluice
+submit main --head feature/runner`, names the branch as its work and
+its head: `"from": { "agent": "feature/runner", "worktree":
+"feature/runner", "head": "feature/runner", "host": "build-1" }`. It
+has no `path` and no `session`, wherever the submit ran. Its agent is
+`SLUICE_AGENT` where the submit's session set it, and the branch
+otherwise. `from.head` equal to `from.worktree` marks a submission by
+name, and no other field does: a worktree's own submission has no
+`head`, and a pull request's `worktree` is `pull/<n>`. Its outcome goes
+to no session, so it never has `delivered` or `delivered_to`, and the
+log holds no `pending` or `delivered` event for it. A worktree that has
+checked out the branch submits the same work, by `from.worktree`, so
+each withdraws the other's earlier submission and `attempt` counts both.
+To a branch with pull requests, the submission is the pull request's,
+from `pull/<n>` with `head` the branch.
+
+A withdrawn submission has `"withdrawn": { "by": "operator", "at":
+"2026-10-11T09:30:02Z" }`: who withdrew it, and when. A host that found
+another host taking its branch's pull requests in withdrew its own
+submissions of them. Such a submission's `withdrawn` also has
+`"handed_over_to": "build-2"`, that host. It holds no pull request:
+whichever host takes the pull requests in submits it again, and its log
+line names the host the same way. A submission an older sluice withdrew
+so has no `handed_over_to`, and its `by` reads `build-2 takes main's
+pull requests in`.
 
 ## The log
 

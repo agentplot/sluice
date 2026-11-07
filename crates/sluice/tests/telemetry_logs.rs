@@ -26,7 +26,7 @@ use sluice::instance::Instance;
 use sluice::profiles::checks::Checks;
 use sluice::telemetry::{Logs, Telemetry};
 use sluice::{run, Cli, Followed, Opened, Pause, PullRequests, FAILED, LANDED};
-use sluice_core::{Clock, Seams, SubmitRefusal, OUTPUT};
+use sluice_core::{Clock, Seams, SubmitHead, SubmitRefusal, OUTPUT};
 use sluice_fakes::Fakes;
 use sluice_seams::{Limits, Outcome, Place, Progress, Rev, RunRequest, Setting, Settings, Tests};
 
@@ -154,7 +154,7 @@ impl PullRequests for Unreadable {
         &self,
         _: Seams<'_>,
         _: &dyn Clock,
-        _: &str,
+        _: &SubmitHead,
         branch: &str,
         _: Option<&str>,
     ) -> anyhow::Result<Result<Opened, SubmitRefusal>> {

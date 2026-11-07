@@ -35,6 +35,7 @@ queue; the policy's `[branches."<pattern>"]` tables are the whole list.
 ```sh
 sluice submit --check main      # would it conflict? writes nothing
 sluice submit --check main --head feature/x   # the same for a branch no worktree holds
+sluice submit main --head feature/x --no-wait --json   # submit that branch itself, by name
 sluice submit main              # submit, wait, exit with the outcome
 wt submit main                  # the same under worktrunk; removes the worktree on landing
 sluice submit main --subject "Batch review cards"   # one line saying what lands
@@ -44,6 +45,28 @@ sluice submit main --subject "Batch review cards"   # one line saying what lands
 pull requests, and names the landing commit on any branch:
 `chore(land): #12 Batch review cards`. Without it, both are named by your
 branch.
+
+`--head` without `--check` submits a branch sluice lands on, such as a
+feature branch, by name, in place of your worktree's head. `feature/x`
+stands for the project's own branch here: name the branch as its policy
+and its remote name it. It runs anywhere in the repository, a bare clone's
+git directory included, and reads nothing of the folder it runs in. It
+submits the branch as its policy holds it, the remote's revision where
+the policy names a remote, and pushes nothing. `--check --head` on the
+same branch forecasts the revision it would send. A branch no
+`[branches]` table names, the target itself and a missing branch are
+refused (exit 2); `--head` with `--worktree` or `--status` exits `64`.
+
+Its record names the branch as both `from.worktree` and `from.head`, with
+no `path` and no `session`. Its outcome goes to no session: no notice, and
+no `sluice inbox` collects it anywhere. Read it with `sluice wait <id>`,
+or from `sluice status main --all --json`: the submission whose
+`from.head` is the branch, with its `notice`, `failed` or `conflict`, and
+`tested.on`. When it fails, land a fix on the branch, then submit it by
+name again. A worktree that has checked out the branch submits the same
+work, so each withdraws the other's earlier submission: submit a branch
+one way at a time. On a branch that takes pull requests, it opens or
+updates the pull request from the branch, pushing nothing.
 
 Exit codes: `0` landed, whatever failed after the landing (what failed is
 on stderr, after `sluice: after the landing:`), `1` failed (this
@@ -109,8 +132,9 @@ read its `state` and the exit. Exit `5` leaves it `queued`, `waiting`, `testing`
 `landing`; run `sluice wait` again. Never search `sluice status <branch>`'s
 listing for `landed` or `failed`: a decided submission leaves that listing,
 and a loop waiting for it there never ends. `sluice status 12 --json` reads
-the record once without waiting, and `sluice submit main --status` this
-worktree's last submission or its pull request.
+the record once without waiting, with `notice`, the inbox's one line, once
+it has landed, failed or conflicts; `sluice submit main --status` reads this worktree's last
+submission or its pull request.
 
 A session that starts again, after a restart or on another host, runs
 `sluice inbox` once to collect the outcomes of its submissions it
