@@ -13,7 +13,9 @@ refresh=false
 [ "${1:-}" = --refresh ] && refresh=true
 ttl=${SLUICE_HERDR_TTL_MS:-120000}
 t=$(now)
-panes=$(panes_json)
+# A server that does not list its panes is set nothing, and what was set in
+# it stays as kept; 3 tells the watcher it did not answer (D2).
+panes=$(panes_json) || exit 3
 docs=$(all_docs)
 
 # Each document's learned submissions and blamed tests, by repository.
@@ -34,6 +36,8 @@ done
 
 checks='{}'
 for c in "$state"/checks/*; do
+  # A head's stamp beside its forecast is the watcher's (D10).
+  case $c in *.stamp) continue ;; esac
   [ -e "$c" ] || continue
   checks=$(printf '%s' "$checks" | jq -c --slurpfile v "$c" '. + {($v[0].path): $v[0]}')
 done

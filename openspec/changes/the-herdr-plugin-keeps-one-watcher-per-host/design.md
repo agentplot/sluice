@@ -126,7 +126,9 @@ busybox's. A server that fails is dropped, under the lease's lock and
 only if it still fails there: its registration is removed, and with it
 its tokens and panes, and its folder with them unless a former version's
 `watch.log` is left in it. So is a server whose herdr calls failed twice
-in a row. Once no server remains, the watcher stops, ends its
+in a row; the call that tells is the pane list that every setting of a
+server's tokens makes, `tokens.sh` exiting 3, with nothing set, when herdr
+does not list its panes. Once no server remains, the watcher stops, ends its
 sources and releases the lease. A server started at a stopped one's path
 has another socket file. It runs the startup, which registers it again
 with a fresh link.
@@ -152,7 +154,7 @@ and the `herdr` command offers no stream.
 | forecasts and head stamps | `checks/<sum of worktree>`, `.stamp` | tokens, the tick |
 | probes, the popup's asks, the problem | `probe/`, `want/`, `problem` | the watcher, the popup |
 | the sources of the running watcher | `run/<pid>/` | the watcher, the next watcher |
-| a server's socket, herdr, link | `servers/<sum>/socket`, `herdr`, `link` | the watcher |
+| a server's socket, herdr, link, its ask to be read | `servers/<sum>/socket`, `herdr`, `link`, `due` | the watcher |
 | what the watcher last set in a server, its sequence | `servers/<sum>/tokens.json`, `seq` | the watcher |
 | a server's panes as last read | `servers/<sum>/panes.json` | the watcher |
 
@@ -173,13 +175,15 @@ These wake it:
 
 | Waker | Marker | The watcher then |
 |---|---|---|
-| a server's `--ensure` | `servers/<sum>/` new or touched | reads that server's panes now and again at the next tick (D6), and looks for repositories (D7) |
+| a server's `--ensure` | `servers/<sum>/due`, written after `socket` | reads that server's panes now and again at the next tick (D6), and looks for repositories (D7) |
 | a source's reader that kept a document | `dirty` | sets the tokens of the servers with a pane in that repository (D9), forecasts what moved (D10) |
 | a source's reader at its end | `run/<pid>/<source>.ended` | restarts it at the next tick |
 | the popup asking for a repository | `want/<sum>` | looks for that repository now |
 
 A signal that arrives while the loop is working leaves its marker, and
-the next turn reads it before it waits.
+the next turn reads it before it waits. A reader signals only while the
+lease names the watcher's pid, so a reader a killed watcher left signals
+no process the system has given that pid since.
 
 The path not taken is a FIFO the watcher reads. A writer that finds no
 reader blocks, so a herdr event's command could hang on a watcher that
@@ -194,7 +198,9 @@ At each tick, fifteen seconds (`SLUICE_HERDR_TICK`), the watcher tests:
 - each watched worktree's head, by the age of the worktree's git `HEAD`
   and `logs/HEAD` against its stamp (D10);
 - each source whose end is marked, which it restarts;
-- its own folder's manifest (D1).
+- its own folder's manifest (D1);
+- the wakers' markers, which a signal that came as the loop began to wait
+  leaves for the tick.
 
 These are builtins: `-e`, `-ef`, `-nt`, `read`, and the shell's own
 arithmetic. The tick forks nothing more unless one of them found a
@@ -322,7 +328,9 @@ it tests the age of `HEAD` and `logs/HEAD` there against
 `checks/<sum>.stamp` with `-nt`. A time equal to the stamp's counts as
 moved, and the forecast's own key stops a repeat. A head that moved
 gets its count and forecast at that tick. The stamp is renewed by the
-shell's `: >`.
+shell's `: >` before the forecast reads the head, so a commit after that
+read is newer than the stamp, and the look makes one for a worktree that
+has none.
 
 ### D11. A former version's watchers give way, and their folders go
 

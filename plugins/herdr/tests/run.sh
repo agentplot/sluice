@@ -48,6 +48,39 @@ ends_within() {
   took=$(($(date +%s) - began))
 }
 
+# Wait up to 30 seconds for what the plugin runs, the herdr, sluice, jq and
+# git calls logged, to stand still for three seconds.
+settled() {
+  st_n=30
+  st_last=
+  st_same=0
+  while [ "$st_n" -gt 0 ]; do
+    st_now=$(cat "$FAKE"/*-calls 2>/dev/null | wc -c)
+    if [ "$st_now" = "$st_last" ]; then
+      st_same=$((st_same + 1))
+      [ "$st_same" -ge 3 ] && return 0
+    else
+      st_same=0
+      st_last=$st_now
+    fi
+    sleep 1
+    st_n=$((st_n - 1))
+  done
+  return 1
+}
+
+# Have the running watcher look three times, by an ensure each, made with
+# the folder $1 first on PATH as the watcher was started, each look known
+# by its pane list; then a tick, at which it looks again.
+looks() {
+  for i in 1 2 3; do
+    : >"$FAKE/herdr-calls"
+    PATH="$1:$PATH" sh "$plugin/bin/watch.sh" --ensure
+    within 10 'grep -q ": pane list$" "$FAKE/herdr-calls"' || fail "the watcher did not look at ensure $i"
+  done
+  sleep 2
+}
+
 # Whether every process named has ended.
 ended() {
   for p in "$@"; do kill -0 "$p" 2>/dev/null && return 1; done
@@ -419,11 +452,11 @@ if needs_ps; then
   touch "$FAKE/hold"
   PATH="$here/fake-busybox-ps:$PATH" SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 60 2>/dev/null &
   w=$!
-  # Three ticks at least, each starting with a look at herdr's panes, while
-  # the source is held open.
-  within 30 '[ "$(grep -c ": pane list$" "$FAKE/herdr-calls")" -ge 12 ]' || fail "the watcher did not tick"
+  within 15 'grep -q "^work: overview --watch --json" "$FAKE/sluice-calls"' || fail "no source started"
+  # Looks at three ensures and their ticks, while the source is held open.
+  looks "$here/fake-busybox-ps"
   [ "$(grep -c '^work: overview --watch --json' "$FAKE/sluice-calls")" = 1 ] ||
-    fail "a new source every tick: $(grep -c 'overview --watch' "$FAKE/sluice-calls") started"
+    fail "a new source at a look: $(grep -c 'overview --watch' "$FAKE/sluice-calls") started"
   kill "$w" 2>/dev/null
   wait "$w" 2>/dev/null
   rm -f "$FAKE/hold"
@@ -466,9 +499,10 @@ touch "$FAKE/hold"
 # No ps that runs, and on macOS no /proc: nothing can be told by identity.
 PATH="$here/fake-no-ps:$PATH" SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 60 2>"$t/log" &
 w=$!
-within 30 '[ "$(grep -c ": pane list$" "$FAKE/herdr-calls")" -ge 12 ]' || fail "the watcher did not tick"
+within 15 'grep -q "^work: overview --watch --json" "$FAKE/sluice-calls"' || fail "no source started"
+looks "$here/fake-no-ps"
 [ "$(grep -c '^work: overview --watch --json' "$FAKE/sluice-calls")" = 1 ] ||
-  fail "a new source every tick: $(grep -c 'overview --watch' "$FAKE/sluice-calls") started"
+  fail "a new source at a look: $(grep -c 'overview --watch' "$FAKE/sluice-calls") started"
 kill "$w" 2>/dev/null
 wait "$w" 2>/dev/null
 within 5 '[ -z "$(watching)" ]' || fail "the source outlived its watcher"
@@ -598,8 +632,10 @@ sh "$plugin/bin/watch.sh" --ensure
 within 10 'grep -q "^two.sock: pane list" "$FAKE/herdr-calls"' || fail "the second server is not served"
 rm -f "$t/one.sock"
 within 10 '[ ! -e "$(folder_of one)/socket" ]' || fail "the stopped server is still served"
+# The server still running, which shows `3 ahead · clean`, is called at
+# the minute's pass.
 : >"$FAKE/herdr-calls"
-within 10 '[ "$(grep -c "^two.sock: pane list$" "$FAKE/herdr-calls")" -ge 2 ]' || fail "the server still running is not called"
+within 15 'grep -q "^two.sock: pane list$" "$FAKE/herdr-calls"' || fail "the server still running is not called"
 grep -q '^one.sock:' "$FAKE/herdr-calls" && fail "the stopped server is called: $(calls)"
 kill -0 "$w" 2>/dev/null || fail "the watcher stopped with one of its servers"
 for p in $theirs; do kill -0 "$p" 2>/dev/null || fail "its source $p stopped with one of its servers"; done
@@ -633,6 +669,56 @@ for p in $theirs; do kill -0 "$p" 2>/dev/null || fail "its source $p stopped"; d
 rm -f "$FAKE/hold"
 kill "$a" 2>/dev/null
 wait "$a" 2>/dev/null
+pass
+
+fresh 'watch: idle ticks run nothing'
+# Panes in a worktree with nothing to say and outside git: no token.
+jq -n -c --arg other "$other" --arg home "$scratch/home" '{result: {panes: [
+  {pane_id: "p2", tab_id: "t2", workspace_id: "w2", agent: "claude", cwd: $other, foreground_cwd: $other, focused: false},
+  {pane_id: "p3", tab_id: "t1", workspace_id: "w1", cwd: $home, foreground_cwd: $home, focused: false}]}}' >"$H/panes.json"
+doc >"$FAKE/overview-other.json"
+doc >"$FAKE/watch-other.jsonl"
+touch "$FAKE/hold"
+PATH="$here/fake-logged:$PATH" SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 60 2>"$t/log" &
+w=$!
+within 15 '[ -n "$(ls "$S"/docs/*.json 2>/dev/null)" ]' || fail "no document kept"
+settled || fail "the watcher did not settle"
+for f in herdr sluice jq git; do : >"$FAKE/$f-calls"; done
+# Five ticks and more, with nothing changed.
+sleep 6
+for f in herdr sluice jq git; do
+  [ -s "$FAKE/$f-calls" ] && fail "$f ran in idle ticks: $(cat "$FAKE/$f-calls")"
+done
+grep -q '^other: overview --watch' "$FAKE/sluice-calls" && fail "the source was started again"
+# Its ticks still test the server: one that stops is seen at the next.
+rm -f "$HERDR_SOCKET_PATH"
+ends_within "$w" 5 || fail "the watcher still runs ${took}s after its server stopped"
+rm -f "$FAKE/hold"
+kill "$w" 2>/dev/null
+wait "$w" 2>/dev/null
+pass
+
+fresh 'watch: a change wakes it'
+doc >"$FAKE/overview-work.json"
+doc >"$FAKE/watch-work.jsonl"
+touch "$FAKE/hold"
+# A tick of a minute: whatever follows within seconds came from a wake.
+SLUICE_HERDR_TICK=60 sh "$plugin/bin/watch.sh" --ticks 60 2>"$t/log" &
+w=$!
+within 15 'grep -q "pane report-metadata p1 .*--token sluice=3 ahead · clean" "$FAKE/herdr-calls"' || fail "no token at the start: $(calls)"
+# The source prints a document with #95 under test, from p1's worktree.
+: >"$FAKE/herdr-calls"
+printf '%s\n' "$testing95" >"$FAKE/next-work.tmp" && mv "$FAKE/next-work.tmp" "$FAKE/next-work.jsonl"
+within 5 'grep -q "pane report-metadata p1 .*--token sluice=#95 testing 3m/15m" "$FAKE/herdr-calls"' ||
+  fail "the token did not follow the document: $(calls)"
+# The popup asks for a repository the watcher does not read: it is looked
+# for at once.
+SLUICE_HERDR_DIR=$scratch/plain sh "$plugin/bin/status.sh" --once </dev/null >/dev/null
+within 5 'grep -q "^plain: overview --json" "$FAKE/sluice-calls"' || fail "the popup's ask was not looked for: $(cat "$FAKE/sluice-calls")"
+kill -0 "$w" 2>/dev/null || fail "the watcher stopped: $(cat "$t/log")"
+rm -f "$FAKE/hold"
+kill "$w" 2>/dev/null
+wait "$w" 2>/dev/null
 pass
 
 fresh "watch: a former version's watchers give way"
@@ -1688,6 +1774,24 @@ has '--token sluice=#94 landed 12m'
 SLUICE_HERDR_NOW=$((NOW + 1200)) tokens
 has 'pane report-metadata p2 --source agentplot.sluice'
 has '--clear-token sluice'
+# The watcher, on the clock, moves it with no document: a landing ten
+# seconds short of half an hour is gone at a minute's pass.
+: >"$FAKE/herdr-calls"
+at=$(jq -n -r --argjson t "$(($(date +%s) - 1790))" '$t | todate')
+doc >"$FAKE/overview-work.json"
+{
+  doc ".branches[0].depth = 1 | .branches[0].submissions = [$(sub 94 '$other' testing)]"
+  doc ".branches[0].recent += [{schema: \"sluice/log@1\", at: \"$at\", event: \"landed\", ids: [94], to: \"46cc4290c0\"}]"
+} >"$FAKE/watch-work.jsonl"
+touch "$FAKE/hold"
+SLUICE_HERDR_NOW='' SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 60 2>"$t/log" &
+w=$!
+within 15 'grep -q "pane report-metadata p2 .*--token sluice=#94 landed 29m" "$FAKE/herdr-calls"' || fail "no landed token: $(calls)"
+within 25 'grep -q "pane report-metadata p2 .*--clear-token sluice" "$FAKE/herdr-calls"' ||
+  fail "the landing was not gone at a minute's pass: $(grep p2 "$FAKE/herdr-calls")"
+rm -f "$FAKE/hold"
+kill "$w" 2>/dev/null
+wait "$w" 2>/dev/null
 git -C "$scratch/other" checkout -q other
 pass
 
@@ -1872,6 +1976,54 @@ done
 [ "$(find "$S/docs" -name '*.json' | wc -l)" -eq 2 ] || fail "not two documents: $(ls "$S/docs")"
 tokens
 has '--token sluice_q=1 held: release failed'
+pass
+
+fresh 'sidebar: a shown token is set again once a minute'
+doc >"$FAKE/overview-work.json"
+doc >"$FAKE/watch-work.jsonl"
+touch "$FAKE/hold"
+SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 60 2>"$t/log" &
+w=$!
+within 15 'grep -q "pane report-metadata p1 .*--token sluice=3 ahead · clean" "$FAKE/herdr-calls"' || fail "no token: $(calls)"
+# The start's tick and the next have read the panes.
+sleep 2
+: >"$FAKE/herdr-calls"
+began=$(date +%s)
+sleep 10
+took=$(($(date +%s) - began))
+sets=$(grep -c 'pane report-metadata p1 .*--ttl-ms 120000 --token sluice=3 ahead · clean' "$FAKE/herdr-calls")
+lists=$(grep -c ': pane list$' "$FAKE/herdr-calls")
+# A minute is four ticks: two or three in ten seconds, never one a tick.
+[ "$sets" -ge 1 ] || fail "the token was not set again in ${took}s: $(calls)"
+[ "$lists" -le $((took / 4 + 1)) ] || fail "the panes were listed $lists times in ${took}s"
+# Each pass lists the panes once and sets each token shown.
+[ "$lists" = "$sets" ] || fail "$lists pane lists for $sets tokens set: $(calls)"
+grep -q -e 'tab list' -e 'workspace list' "$FAKE/herdr-calls" && fail "tabs or workspaces were listed: $(calls)"
+grep -q 'p1 .*--clear-token' "$FAKE/herdr-calls" && fail "the token was cleared"
+rm -f "$FAKE/hold"
+kill "$w" 2>/dev/null
+wait "$w" 2>/dev/null
+pass
+
+fresh 'sidebar: a commit is forecast within a tick'
+doc >"$FAKE/overview-work.json"
+doc >"$FAKE/watch-work.jsonl"
+touch "$FAKE/hold"
+SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 60 2>"$t/log" &
+w=$!
+within 15 'grep -q "pane report-metadata p1 .*--token sluice=3 ahead · clean" "$FAKE/herdr-calls"' || fail "no token: $(calls)"
+sleep 2
+: >"$FAKE/sluice-calls"
+# One more commit, and no document or herdr event follows.
+git -C "$work" commit -q --allow-empty -m w4
+within 5 'grep -q "pane report-metadata p1 .*--token sluice=4 ahead · clean" "$FAKE/herdr-calls"' || fail "the token did not follow the commit: $(calls)"
+# Forecast once: the ticks after see the head no newer than its stamp.
+sleep 3
+[ "$(grep -c '^work: submit main --check --json' "$FAKE/sluice-calls")" = 1 ] || fail "not one forecast: $(cat "$FAKE/sluice-calls")"
+rm -f "$FAKE/hold"
+kill "$w" 2>/dev/null
+wait "$w" 2>/dev/null
+git -C "$work" reset -q --hard HEAD~1
 pass
 
 fresh 'sidebar: tokens fade without the watcher'

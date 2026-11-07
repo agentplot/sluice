@@ -6,7 +6,9 @@
 # else starts one. Running, it finds the repositories every server's panes
 # are in, runs each source there, hands every document to document.sh, and
 # keeps each server's sidebar and the forecasts current, until it serves
-# no server. `--ticks N` stops it after N ticks (the tests).
+# no server. Between changes it waits on its tick's one sleep, and a tick
+# forks nothing unless the shell's own tests find a change (D4, D5).
+# `--ticks N` stops it after N ticks, the first at its start (the tests).
 set -u
 . "$(dirname "$0")/../lib/common.sh"
 . "$lib/panes.sh"
@@ -16,6 +18,8 @@ set -u
 
 lease=$state/watch.lease
 tick=${SLUICE_HERDR_TICK:-15}
+nl='
+'
 version=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$root/herdr-plugin.toml")
 
 # The lease, read by the shell alone: the pid of the watcher holding it,
@@ -58,7 +62,9 @@ ours() {
 # served while its folder holds `socket`. One registered at a socket other
 # than its link's is another server, which starts with nothing set, so the
 # watcher sets every token in it. Under the lock, so a watcher dropping
-# the server at that moment cannot remove what is written.
+# the server at that moment cannot remove what is written. `due`, written
+# after `socket`, is the watcher's marker that the server asked to be read
+# (D4).
 register() {
   take_lock || return 1
   mkdir -p "$server"
@@ -70,6 +76,7 @@ register() {
   fi
   printf '%s\n' "${HERDR_BIN_PATH:-}" >"$server/herdr"
   printf '%s\n' "$sock" >"$server/socket.tmp.$$" && mv -f "$server/socket.tmp.$$" "$server/socket"
+  : >"$server/due"
   drop_lock
 }
 
@@ -88,7 +95,7 @@ case ${1:-} in
 --ensure)
   register
   touch "$state/nudge"
-  # The lease's watcher looks at this server's panes within its second.
+  # The lease's watcher, woken, reads this server's panes at once (D4).
   if ours && kill -USR1 "$lpid" 2>/dev/null; then exit 0; fi
   nohup sh "$root/bin/watch.sh" </dev/null >>"$state/watch.log" 2>&1 &
   exit 0
@@ -247,6 +254,7 @@ formers_ended() {
 }
 
 stop() {
+  [ -n "${timer:-}" ] && kill "$timer" 2>/dev/null
   for f in "$runs"/*.pids; do
     [ -e "$f" ] || continue
     for p in $(own_listed "$f"); do kill "$p" 2>/dev/null; done
@@ -295,18 +303,38 @@ gone() {
 # A server no longer served: its registration goes, with what was set in it
 # and its panes; a former version's watch.log stays.
 unregister() {
-  rm -rf "$1/socket" "$1/herdr" "$1/link" "$1/tokens.json" "$1/seq" "$1/panes.json"
+  rm -rf "$1/socket" "$1/herdr" "$1/link" "$1/tokens.json" "$1/seq" "$1/panes.json" "$1/due"
   rmdir "$1" 2>/dev/null
   eval "missed_${1##*/}=0"
 }
 
-# Each server served, tested at a tick: its socket still there and still
-# the file its link is, by builtins, and its herdr answering. One whose
-# socket is gone or another's is dropped under the lock, if it still is,
-# so a server registered again at that moment is kept; one whose calls
-# failed twice in a row is dropped. Leaves in served how many remain.
+# What a call made through `as` to the server in folder $1 said of it, by
+# its status $2: 3, no answer (tokens.sh's when herdr does not list the
+# server's panes), else an answer. One that has not answered twice in a row
+# is dropped, under the lock where it can be had, and 1 returned (D2).
+answered() {
+  an_k=${1##*/}
+  if [ "$2" -ne 3 ]; then
+    eval "missed_$an_k=0"
+    return 0
+  fi
+  eval "missed_$an_k=\$((\${missed_$an_k:-0} + 1))"
+  eval "an_m=\$missed_$an_k"
+  [ "$an_m" -ge 2 ] || return 0
+  say "the herdr server at $as_s does not answer; no longer served"
+  take_lock && an_t=true || an_t=false
+  unregister "$1"
+  [ "$an_t" = true ] && drop_lock
+  return 1
+}
+
+# Each server served, tested at a tick by builtins alone: its socket still
+# there and still the file its link is. One whose socket is gone or
+# another's is dropped under the lock, if it still is, so a server
+# registered again at that moment is kept. A server with no socket's path,
+# the tests' stand-in run outside herdr, is asked for its panes, since
+# nothing else can tell it gone (D2).
 check_servers() {
-  served=0
   for c in "$state"/servers/*; do
     [ -f "$c/socket" ] || continue
     if gone "$c" && take_lock; then
@@ -318,26 +346,71 @@ check_servers() {
       fi
       drop_lock
     fi
-    k=${c##*/}
-    if as "$c" hd pane list >/dev/null 2>&1; then
-      eval "missed_$k=0"
-    else
-      eval "missed_$k=\$((\${missed_$k:-0} + 1))"
-      eval "m=\$missed_$k"
-      if [ "$m" -ge 2 ]; then
-        say "the herdr server at $as_s does not answer; no longer served"
-        take_lock && taken=true || taken=false
-        unregister "$c"
-        [ "$taken" = true ] && drop_lock
-        continue
-      fi
-    fi
-    served=$((served + 1))
+    [ -n "$gone_s" ] && continue
+    if as "$c" hd pane list >/dev/null 2>&1; then answered "$c" 0; else answered "$c" 3; fi
   done
 }
 
+# The watcher lives while it serves a server: once every server's socket
+# is gone or another's, or none answers, it stops, with its sources (D2).
+enough() {
+  for en_f in "$state"/servers/*/socket; do
+    [ -f "$en_f" ] && return 0
+  done
+  say "no herdr server left to serve; stopping"
+  exit 0
+}
+
+# Set one server's tokens by tokens.sh with its flags: the pane list it
+# makes is the call that tells whether the server answers.
+tokens_of() {
+  tk_d=$1
+  shift
+  as "$tk_d" sh "$root/bin/tokens.sh" "$@"
+  answered "$tk_d" $?
+}
+
+# Every server's tokens.
+each_tokens() {
+  for et_d in "$state"/servers/*; do
+    [ -f "$et_d/socket" ] && tokens_of "$et_d" "$@"
+  done
+  return 0
+}
+
+# Whether the server in folder $1 shows a token of the plugin's: a value in
+# the one line of its tokens.json that is not empty, read by the shell.
+shows() {
+  sh_l=
+  IFS= read -r sh_l 2>/dev/null <"$1/tokens.json"
+  case $sh_l in *':"'[!\"]*) return 0 ;; esac
+  return 1
+}
+
+# The minute's pass (D5): each server that shows a token has its panes
+# listed once and every token shown set again, so none lapses within its
+# two minutes and the clocks in them move; a server showing none has none.
+minute() {
+  for mp_d in "$state"/servers/*; do
+    [ -f "$mp_d/socket" ] && shows "$mp_d" && tokens_of "$mp_d" --refresh
+  done
+  return 0
+}
+
+# Wake the watcher from a source's reader, a subshell of it, where $$ is
+# still the watcher's pid: only while the lease names that pid, so a reader
+# a killed watcher left signals no process the pid was given since.
+rouse() {
+  ro_p=
+  IFS= read -r ro_p 2>/dev/null <"$lease"
+  [ "$ro_p" = $$ ] && kill -USR1 $$ 2>/dev/null
+  return 0
+}
+
 # Run one source in a directory: its documents go to document.sh one by
-# one; its pids are kept so the next tick can tell it ended.
+# one, and its reader wakes the watcher for each document kept; its pids
+# are kept so a stop can end it, and its reader marks it ended at its
+# input's end, for the next tick to start it again (D4, D7).
 start() {
   # $1 run file, $2 source name, $3 directory ("" for a source run once), $4 argv as JSON
   run=$1
@@ -362,9 +435,14 @@ start() {
         settle "$inner" "$run.pids"
       ) &
       wait "$inner"
-    } | while IFS= read -r line; do
-      printf '%s\n' "$line" | sh "$root/bin/document.sh" "$name" "$where"
-    done
+    } | {
+      while IFS= read -r line; do
+        printf '%s\n' "$line" | sh "$root/bin/document.sh" "$name" "$where"
+        [ -e "$state/dirty" ] && rouse
+      done
+      { : >"$run.ended"; } 2>/dev/null
+      rouse
+    }
   ) &
   remember $! "$run.pids"
 }
@@ -374,17 +452,90 @@ alive() {
   [ -n "$(own_listed "$1.pids")" ]
 }
 
-# Sources and repositories, every tick.
+# Whether a source is to be started: its reader marked it ended when the
+# look began, or none of its processes runs.
+dead() {
+  case $ended in *" ${1##*/} "*) return 0 ;; esac
+  ! alive "$1"
+}
+
+# Keep the git folder of the worktree at $1, for the ticks to test its head
+# against its stamp, made here where it has none (D10). Read by the shell
+# from the worktree's `.git`, a folder or a file naming one.
+keep_head() {
+  kh_g=$1/.git
+  if [ -f "$kh_g" ]; then
+    kh_l=
+    IFS= read -r kh_l 2>/dev/null <"$kh_g"
+    kh_g=${kh_l#gitdir: }
+    case $kh_g in /*) ;; *) kh_g=$1/$kh_g ;; esac
+  fi
+  [ -d "$kh_g" ] || return 0
+  kh_k=$(sum "$1")
+  [ -e "$state/checks/$kh_k.stamp" ] || : >"$state/checks/$kh_k.stamp"
+  heads="$heads$kh_g	$kh_k$nl"
+}
+
+# Whether a kept worktree's head moved: its HEAD or logs/HEAD no older than
+# its stamp, a time equal to the stamp's counting as moved, by the shell's
+# `-nt` alone; their keys in moved (D10).
+heads_moved() {
+  moved=
+  [ -n "$heads" ] || return 1
+  hm_ifs=$IFS
+  IFS=$nl
+  set -f
+  for hm in $heads; do
+    hm_g=${hm%	*}
+    hm_s=$state/checks/${hm##*	}.stamp
+    [ -e "$hm_g/HEAD" ] || continue
+    if ! [ "$hm_s" -nt "$hm_g/HEAD" ] ||
+      { [ -e "$hm_g/logs/HEAD" ] && ! [ "$hm_s" -nt "$hm_g/logs/HEAD" ]; }; then
+      moved="$moved ${hm##*	}"
+    fi
+  done
+  set +f
+  IFS=$hm_ifs
+  [ -n "$moved" ]
+}
+
+# Sources and repositories, and the worktrees whose heads the ticks test:
+# at a server's ensure and its next tick, the popup's asking, and a tick
+# after a source ended.
 look() {
   cfg=$(read_sources)
+  # The sources whose readers marked them ended, those marks taken up.
+  ended=' '
+  set --
+  for f in "$runs"/*.ended; do
+    [ -e "$f" ] || continue
+    set -- "$@" "$f"
+    f=${f##*/}
+    ended="$ended${f%.ended} "
+  done
+  [ $# -gt 0 ] && rm -f "$@"
   # Repositories every server's panes are in, each with a worktree to run
-  # in, and those the popup asked for.
-  found=$(each panes_json | jq -s -r 'add // [] | [.[] | select(.repo)] | unique_by(.repo)[] | [.repo, .top] | @tsv')
+  # in, and those the popup asked for; each worktree's git folder kept.
+  listed=$(each panes_json | jq -s -r 'add // [] | [.[] | select(.repo)]
+    | (unique_by(.repo)[] | ["r", .repo, .top]), (unique_by(.top)[] | ["h", .top]) | @tsv')
+  found=
+  heads=
+  old_ifs=$IFS
+  IFS=$nl
+  set -f
+  for line in $listed; do
+    case $line in
+    "r	"*) found="$found${line#r	}$nl" ;;
+    "h	"*) keep_head "${line#h	}" ;;
+    esac
+  done
+  set +f
+  IFS=$old_ifs
   for w in "$state"/want/*; do
     [ -e "$w" ] || continue
     d=$(cat "$w")
     rm -f "$w"
-    r=$(repo_of "$d") && t=$(top_of "$d") && found=$(printf '%s\n%s\t%s' "$found" "$r" "$t")
+    r=$(repo_of "$d") && t=$(top_of "$d") && found="$found$r	$t$nl"
   done
   n=$(printf '%s' "$cfg" | jq '.sources | length')
   i=0
@@ -395,7 +546,7 @@ look() {
     argv=$(printf '%s' "$s" | jq -c .command)
     if [ "$(printf '%s' "$s" | jq -r .each_repository)" != true ]; then
       run=$runs/$(sum "$name")
-      alive "$run" || {
+      dead "$run" && {
         rm -f "$run.pids"
         start "$run" "$name" "" "$argv"
       }
@@ -406,17 +557,16 @@ look() {
       continue
     fi
     old_ifs=$IFS
-    IFS='
-'
+    IFS=$nl
     for line in $found; do
       [ -n "$line" ] || continue
       r=${line%%	*}
       t=${line#*	}
       run=$runs/$(sum "$name $r")
-      alive "$run" && continue
+      dead "$run" || continue
       rm -f "$run.pids"
-      # Probed once, and again after five minutes or a nudge: a source runs
-      # only where sluice has records.
+      # Probed once, and again at a look five minutes on or after a nudge:
+      # a source runs only where sluice has records.
       probe=$state/probe/$(sum "$r")
       if [ -f "$probe" ] && [ "$(cut -d' ' -f1 "$probe")" = none ]; then
         since=$(($(now) - $(cut -d' ' -f2 "$probe")))
@@ -438,18 +588,61 @@ look() {
   done
 }
 
-# Look for repositories in every server's panes, forecast what moved, and
-# set each server's tokens: with --refresh, every token again, so its time
-# to live starts over.
-pass() {
-  look
-  each sh "$root/bin/forecast.sh"
+# Forecast what moved and set each server's tokens: with --refresh, every
+# token shown again, so its time to live starts over. The forecast is
+# followed by the tokens here, so it marks nothing dirty itself.
+changed() {
   rm -f "$state/dirty"
-  each sh "$root/bin/tokens.sh" "$@"
+  each sh "$root/bin/forecast.sh"
+  each_tokens "$@"
 }
 
-ticked=0
-while [ "$ticks" -ne 0 ]; do
+# Look for repositories in every server's panes, then forecast and set the
+# tokens.
+pass() {
+  look
+  changed "$@"
+}
+
+# Whether the lease names this watcher still: one that reads another pid
+# there stops with its sources (D1).
+mine() {
+  read_lease
+  [ "$lpid" = $$ ] && return 0
+  say "the lease names another watcher (${lpid:-none}); stopping"
+  exit 0
+}
+
+# Whether an ensure or the popup asked for a look since the last, their
+# markers taken up: an ensure's `due` in its server's folder, the popup's
+# `want/<sum>`, which the look reads (D4).
+asked() {
+  ak=false
+  for ak_f in "$state"/servers/*/due "$state"/want/*; do
+    [ -e "$ak_f" ] && ak=true && break
+  done
+  [ "$ak" = true ] || return 1
+  rm -f "$state"/servers/*/due
+}
+
+# A wake (D4): an ensure's server, or the popup's repository, is read now,
+# an ensure's again at the next tick; a document kept has the tokens set
+# and what moved forecast. A source's end waits for the tick.
+wake() {
+  mine
+  if asked; then
+    again=true
+    pass
+  elif [ -e "$state/dirty" ]; then
+    changed
+  fi
+}
+
+# A tick (D5). The shell's own tests read its folder's manifest, the
+# lease, each server's socket, the sources' ends, each worktree's head and
+# the markers; it forks for what they found changed and, every fourth
+# tick, for the minute's pass.
+tock() {
   # Its folder's manifest gone or newer than its lease: the plugin was
   # reinstalled there, or a former version put back. The next server's
   # event starts the watcher of the folder installed (D1).
@@ -457,42 +650,71 @@ while [ "$ticks" -ne 0 ]; do
     say "the plugin in $root was replaced or removed; stopping"
     exit 0
   fi
+  mine
   if [ "$former" = true ] && { formers_ended || [ "$ticked" -ge 2 ]; }; then clear_formers; fi
-  # The watcher lives while it serves a server: once every server's socket
-  # is gone or another's, or its herdr has not answered twice in a row, it
-  # stops, with its sources (D2).
   check_servers
-  if [ "$served" -eq 0 ]; then
-    say "no herdr server left to serve; stopping"
-    exit 0
+  enough
+  tk_read=$again
+  again=false
+  if asked; then
+    tk_read=true
+    again=true
   fi
-  pass --refresh
+  # A moved head's stamp is renewed before its forecast reads it, so a
+  # commit after the forecast's read is no older than the stamp.
+  if heads_moved; then
+    for k in $moved; do : >"$state/checks/$k.stamp"; done
+  fi
+  tk_all=
+  [ "$ticked" -gt 0 ] && [ $((ticked % 4)) -eq 0 ] && tk_all=--refresh
+  if [ "$tk_read" = true ]; then
+    pass $tk_all
+    return
+  fi
+  tk_ended=false
+  for f in "$runs"/*.ended; do
+    [ -e "$f" ] && tk_ended=true && break
+  done
+  [ "$tk_ended" = true ] && look
+  if [ -n "$moved" ] || [ -e "$state/dirty" ]; then
+    changed $tk_all
+  elif [ -n "$tk_all" ]; then
+    minute
+  fi
+}
+
+ticked=0
+# The first tick, at its start, reads every server registered, and the
+# next reads them again.
+again=true
+timer=
+heads=
+while :; do
+  tock
+  enough
   ticked=$((ticked + 1))
   [ "$ticks" -gt 0 ] && ticks=$((ticks - 1))
   if [ "$ticks" -eq 0 ]; then
     # A bounded run lets its sources finish before it stops; a signal ends
     # the shell's wait, which is taken up again.
     until wait; do :; done
-    each sh "$root/bin/tokens.sh"
+    each_tokens
     break
   fi
-  # Between ticks, the sidebar follows each document within a second, and
-  # an ensure's signal has every server's panes looked at.
-  sec=0
-  while [ "$sec" -lt "$tick" ]; do
-    sleep 1
-    sec=$((sec + 1))
-    read_lease
-    if [ "$lpid" != $$ ]; then
-      say "the lease names another watcher (${lpid:-none}); stopping"
-      exit 0
-    fi
+  # The tick's one sleep, waited on until it ends: a signal ends the wait
+  # at once, the markers say what changed, and the wait is taken up again
+  # on the same sleep (D4).
+  sleep "$tick" &
+  timer=$!
+  while :; do
     if [ "$woke" = 1 ]; then
       woke=0
-      pass
-    elif [ -f "$state/dirty" ]; then
-      rm -f "$state/dirty"
-      each sh "$root/bin/tokens.sh"
+      wake
+      enough
+      continue
     fi
+    wait "$timer"
+    [ "$woke" = 1 ] || break
   done
+  timer=
 done

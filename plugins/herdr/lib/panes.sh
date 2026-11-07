@@ -4,11 +4,22 @@
 # the user (it, its tab and its workspace all focused), and the branch its
 # `sluice_branch` token names, which any source may set. Sourced.
 
-# Prints [{pane_id, tab_id, workspace_id, agent, top, repo, front, named}].
+# Prints [{pane_id, tab_id, workspace_id, agent, top, repo, front, named}],
+# [] and 1 when herdr does not list the panes. Only with --front are tabs
+# and workspaces listed too, to tell the pane in front, which a landing's
+# toast alone reads (D6); without it no pane is in front.
 panes_json() {
-  raw=$(hd pane list 2>/dev/null) || raw='{}'
-  tabs=$(hd tab list 2>/dev/null) || tabs='{}'
-  spaces=$(hd workspace list 2>/dev/null) || spaces='{}'
+  pj=0
+  raw=$(hd pane list 2>/dev/null) || {
+    raw='{}'
+    pj=1
+  }
+  tabs='{}'
+  spaces='{}'
+  if [ "${1:-}" = --front ]; then
+    tabs=$(hd tab list 2>/dev/null) || tabs='{}'
+    spaces=$(hd workspace list 2>/dev/null) || spaces='{}'
+  fi
   dirs=$(printf '%s' "$raw" | jq -r '.result.panes // [] | .[] | (.foreground_cwd // .cwd // empty)' | sort -u)
   where='{}'
   old_ifs=$IFS
@@ -28,6 +39,7 @@ panes_json() {
            front: (.focused == true and ($ft | index($tab)) != null and ($fw | index($ws)) != null),
            named: (.tokens.sluice_branch // null | if type == "string" then gsub("[[:cntrl:]]"; "") else null end
              | if . == "" then null else . end)} ]'
+  return "$pj"
 }
 
 # Bring a pane forward: an agent's pane by `agent focus`, which brings its

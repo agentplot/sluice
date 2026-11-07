@@ -93,6 +93,5 @@ EOF
     --argjson count "$count" --arg result "$result" --argjson with "$with" --argjson paths "$conflicted" \
     --argjson checked "$check" \
     '{path: $path, head: $head, key: $key, branch: $branch, count: $count, result: $result, with: $with, paths: $paths, checked: $checked}' | put "$out"
-  touch "$state/dirty"
 done
 IFS=$old_ifs

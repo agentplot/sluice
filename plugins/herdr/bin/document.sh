@@ -134,7 +134,7 @@ for e in $events; do
       --body "$(printf '%s' "$e" | jq -r '.event.paths // [] | join(", ")')" >/dev/null 2>&1
     ;;
   landed)
-    [ -n "$panes" ] || panes=$(panes_json)
+    [ -n "$panes" ] || panes=$(panes_json --front)
     for id in $(printf '%s' "$e" | jq -r '.event.ids[]'); do
       learn "$id"
       p=$(jq -r --arg i "$id" '.[$i].path // empty' "$paths")
