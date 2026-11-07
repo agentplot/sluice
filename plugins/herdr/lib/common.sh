@@ -46,6 +46,8 @@ as() {
   read -r as_s 2>/dev/null <"$as_d/socket"
   read -r as_b 2>/dev/null <"$as_d/herdr"
   (
+    # The export is meant to stay in this subshell, with the call it is for.
+    # shellcheck disable=SC2030
     if [ -n "$as_s" ]; then export HERDR_SOCKET_PATH="$as_s"; else unset HERDR_SOCKET_PATH; fi
     if [ -n "$as_b" ]; then export HERDR_BIN_PATH="$as_b"; else unset HERDR_BIN_PATH; fi
     "$@"
@@ -119,7 +121,9 @@ set_problem() {
 # Have the host's watcher serve the herdr server in the environment, where
 # a lease stands and that server is not served, or is served at a socket
 # another server has since taken: the popup's or the setup action's server
-# the watcher dropped, or never heard from (D2).
+# the watcher dropped, or never heard from (D2). The environment's socket is
+# read as the process was given it: as() changes it only in its subshell.
+# shellcheck disable=SC2031
 enlist() {
   [ -n "${HERDR_SOCKET_PATH:-}" ] && [ -f "$state/watch.lease" ] || return 0
   if [ -f "$server/socket" ] && { [ ! -e "$server/link" ] || [ "$HERDR_SOCKET_PATH" -ef "$server/link" ]; }; then

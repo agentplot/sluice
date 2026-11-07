@@ -352,7 +352,7 @@ tokens_of() {
 # Every server's tokens.
 each_tokens() {
   for et_d in "$state"/servers/*; do
-    [ -f "$et_d/socket" ] && tokens_of "$et_d" "$@"
+    [ -f "$et_d/socket" ] && tokens_of "$et_d"
   done
   return 0
 }
