@@ -67,7 +67,9 @@ use crate::identity::Identity;
 use crate::profiles::local_refs::LocalRefs;
 use crate::profiles::pushed_refs::{Holder, Mark, PushedRefs};
 use crate::retry;
-use crate::{Ahead, Followed, GroupRefused, Opened, Queue, Short, TakenInBy, Taker};
+use crate::{
+    Across, AcrossRow, Ahead, Followed, GroupRefused, Opened, Queue, Short, TakenInBy, Taker,
+};
 use sluice_core::verdict_view::{Standing as Stands, VerdictView};
 
 /// The place a pull request's entry is submitted from.
@@ -2934,6 +2936,80 @@ impl crate::PullRequests for Pulls {
 
     fn handed_over(&self, sub: &Submission) -> bool {
         handed_over(sub, &sub.branch)
+    }
+
+    fn across(&self, seams: Seams<'_>, clock: &dyn Clock, branch: &str) -> Result<Option<Across>> {
+        let s = Sluice::new(seams, clock);
+        // 26, 80: where the branch's records are on its remote, every host
+        // reads the request's submission from them, as its queue shows it.
+        let Some(t) = self.target(&s, branch)?.filter(|t| !t.signed) else {
+            return Ok(None);
+        };
+        let repo = &t.repo;
+        let follows = self.kept.follows(repo, branch).requests;
+        if follows.is_empty() {
+            return Ok(None);
+        }
+        let places: Vec<String> = follows.keys().map(|n| place(*n)).collect();
+        let latest = self.latest_of(&s, branch, &places)?;
+        let held = |n: u64, head: &str| latest.get(&place(n)).is_some_and(|e| e.head.0 == head);
+        // A read that cannot be made is warned of, and the request shown as
+        // the host last read it.
+        let warn = |e: &anyhow::Error| crate::telemetry::warn(&format!("sluice: warning: {e:#}"));
+        let forge = self.forge(branch).map_err(|e| warn(&e)).ok();
+        let now = clock.now();
+        let (mut rows, mut gone) = (Vec::new(), Vec::new());
+        for (n, kept) in follows {
+            if held(n, &kept.head) {
+                continue;
+            }
+            let read = match forge.map(|forge| self.read_followed(forge, repo, branch, n, now)) {
+                Some(Ok(read)) => read,
+                Some(Err(e)) => {
+                    warn(&e.context(format!("reading #{n} into {branch}")));
+                    Some(kept.clone())
+                }
+                None => Some(kept.clone()),
+            };
+            let f = match read {
+                Some(f) if held(n, &f.head) => continue,
+                Some(f) => f,
+                // GitHub has no such pull request: followed no longer.
+                None => Follow {
+                    open: false,
+                    ..kept
+                },
+            };
+            let posting = f.check.as_ref().map(|p| &p.posting);
+            let state = if f.merged || told(posting) == Told::Landed {
+                gone.push(n);
+                crate::ACROSS_LANDED.to_string()
+            } else if !f.open {
+                gone.push(n);
+                crate::ACROSS_CLOSED.to_string()
+            } else {
+                posting.map_or_else(|| "waiting".into(), |p| p.title.clone())
+            };
+            rows.push(AcrossRow {
+                pull_request: n,
+                queue: posting.and_then(|p| queue_of(&p.summary)),
+                state,
+                title: f.title,
+                from: f.from,
+                head: f.head,
+                draft: f.draft,
+                read_at: f.read_at,
+            });
+        }
+        // Design D3: one read merged or closed is said once, here.
+        self.unfollow(repo, branch, &gone);
+        if rows.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(Across {
+            taken_in_by: self.taken_in_by(&t.remote, branch),
+            pull_requests: rows,
+        }))
     }
 
     fn branches(&self, seams: Seams<'_>) -> Result<Vec<String>> {

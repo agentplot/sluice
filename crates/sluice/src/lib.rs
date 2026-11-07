@@ -636,6 +636,90 @@ impl TakenInBy {
     }
 }
 
+/// 137, design D5: the pull requests into a branch this host follows and
+/// its queue does not hold at their heads, each as the host that takes
+/// them in shows it, for `sluice status <branch>`.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Across {
+    /// The host the branch's intake mark names and its holder, as this
+    /// host's last fetch brought it; `None` where no mark stands.
+    pub taken_in_by: Option<TakenInBy>,
+    pub pull_requests: Vec<AcrossRow>,
+}
+
+/// 137, design D5: one pull request a host follows, as last read.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct AcrossRow {
+    pub pull_request: u64,
+    /// Its title, which a person knows it by (26).
+    pub title: String,
+    /// The branch it is opened from.
+    pub from: String,
+    pub head: String,
+    pub draft: bool,
+    /// Where it stands, as a wait across hosts prints it: sluice's check's
+    /// title on its head, `waiting` where none stands; `landed` or `closed
+    /// without landing` once a read found it so, said once.
+    pub state: String,
+    /// The queue sluice's check on its head carries; `None` where the
+    /// check carries none, or none stands.
+    pub queue: Option<Queue>,
+    /// When a process of the host last read it from GitHub; `None` where
+    /// none has.
+    pub read_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// The state of an [`AcrossRow`] found merged.
+pub const ACROSS_LANDED: &str = "landed";
+/// The state of an [`AcrossRow`] found closed and not merged.
+pub const ACROSS_CLOSED: &str = "closed without landing";
+
+impl Across {
+    /// Design D5: the heading of the rows in words: the host that takes
+    /// `branch`'s pull requests in and its holder, or that no host holds
+    /// the mark.
+    pub fn heading(&self, branch: &str) -> String {
+        match &self.taken_in_by {
+            Some(by) if by.holder == Holder::Driver => {
+                format!("pull requests {} takes in, by its sluice run:", by.host)
+            }
+            Some(by) => format!("pull requests {} takes in, by {}:", by.host, by.said()),
+            None => {
+                format!("pull requests this host follows; no host holds {branch}'s intake mark:")
+            }
+        }
+    }
+
+    /// Design D2, D5: one row in words: its number and title (26), then
+    /// the submission the check names on the host that posted it and
+    /// where it stands there, or that it waits to be taken in by the mark's
+    /// host and on what.
+    pub fn line(&self, row: &AcrossRow) -> String {
+        let mark = self.taken_in_by.as_ref().map(|by| by.host.as_str());
+        let held = row
+            .queue
+            .as_ref()
+            .filter(|q| q.taken_in)
+            .and_then(|q| Some((q.submission?, q.host.as_str())));
+        let at = match held {
+            _ if row.state == ACROSS_LANDED || row.state == ACROSS_CLOSED => row.state.clone(),
+            Some((id, host)) if Some(host) == mark => {
+                format!("submission {id} there · {}", row.state)
+            }
+            Some((id, host)) => format!("submission {id} on {host} · {}", row.state),
+            None => {
+                let by = mark.map_or(String::new(), |h| format!(" by {h}"));
+                match row.state.strip_prefix("waiting: ") {
+                    Some(on) => format!("waiting to be taken in{by}: {on}"),
+                    None => format!("waiting to be taken in{by}"),
+                }
+            }
+        };
+        let draft = if row.draft { " (a draft)" } else { "" };
+        format!("#{} {}{draft} · {at}", row.pull_request, row.title)
+    }
+}
+
 /// Where a pull request stands, for a submit that follows it.
 pub enum Followed {
     /// Not decided yet: its state, and lines beneath it.
@@ -786,6 +870,21 @@ pub trait PullRequests {
         branch: &str,
         number: u64,
     ) -> Result<Followed>;
+
+    /// 137, design D5: the pull requests into `branch` this host follows
+    /// whose submissions its queue does not hold at their heads, each read
+    /// as the host's one bound allows (design D4), with the host the
+    /// branch's intake mark names; one read merged or closed is given once
+    /// and followed no longer (design D3). `None` where it follows none, or
+    /// the branch's records are on its remote (26, 80).
+    fn across(
+        &self,
+        _seams: Seams<'_>,
+        _clock: &dyn Clock,
+        _branch: &str,
+    ) -> Result<Option<Across>> {
+        Ok(None)
+    }
 
     /// The pull request a submission's place names, where it names one.
     fn request_of(&self, _place: &str) -> Option<u64> {
@@ -1535,10 +1634,21 @@ pub fn run(
                 } else {
                     in_queue(&status.submissions).cloned().collect()
                 };
+                // 137, design D5: the pull requests this host follows that
+                // another host takes in, as that host shows them; one that
+                // cannot be read is warned of, and the queue still shown.
+                let across = pulls.across(s.seams(), clock, &target).unwrap_or_else(|e| {
+                    telemetry::warn(&format!("sluice: warning: {e:#}"));
+                    None
+                });
                 if json {
                     let mut doc = status_json(&status, &shown);
                     // 84, record 0074: what each combination waits for.
                     doc["waiting"] = progress::waiting_json(&s.branch_view_of(&target)?);
+                    if let Some(a) = &across {
+                        doc["taken_in_by"] = serde_json::to_value(&a.taken_in_by)?;
+                        doc["pull_requests"] = serde_json::to_value(&a.pull_requests)?;
+                    }
                     writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
                 } else {
                     let pusher = pushers.pusher(&target)?;
@@ -1564,6 +1674,12 @@ pub fn run(
                             out,
                             "{earlier} no longer in the queue: sluice status {target} --all"
                         )?;
+                    }
+                    if let Some(a) = &across {
+                        writeln!(out, "{}", a.heading(&target))?;
+                        for row in &a.pull_requests {
+                            writeln!(out, "  {}", a.line(row))?;
+                        }
                     }
                 }
                 Ok(0)
