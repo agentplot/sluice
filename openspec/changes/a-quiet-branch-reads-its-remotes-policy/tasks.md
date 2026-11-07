@@ -41,4 +41,4 @@ id.
 
 ## 7. The gate
 
-- [ ] 7.1 The whole gate on the committed branch. True when `sluice exec main` passes.
+- [x] 7.1 The whole gate on the committed branch. True when `sluice exec main` passes.
