@@ -1,91 +1,41 @@
 # Verify
 
 The work on `change/the-herdr-plugin-keeps-one-watcher-per-host` at
-34e2bd21, cut from `bolt/the-herdr-plugin-watches-once-per-host` at
+4127fb7c, cut from `bolt/the-herdr-plugin-watches-once-per-host` at
 ed8474b6, checked on 2026-11-07 against this change's proposal, design,
 its four delta specs (`herdr-watch`, `herdr-sidebar`, `herdr-toasts` and
 `herdr-status`) and its tasks.
 
-**The work falls short, and the change is not archived.** Each
-scenario of the delta specs has a test, and every test that ran passed.
-All 20 tasks are ticked. Three things fail:
-
-1. **The gate fails at `root:format`.** treefmt's shellcheck refuses
-   `plugins/herdr/bin/watch.sh` and `plugins/herdr/lib/common.sh`, as
-   shown under "Checks" below.
-2. **Archived, the change fails `root:specs`.** `herdr-sidebar`'s
-   requirement "The ahead token forecasts the merge" grows from 447 to
-   594 characters. The pinned openspec 1.14.3 warns on more than 500,
-   and `--strict` makes that warning a failure. The check is made only
-   on the main specs, so `openspec validate --strict` on the change
-   passes.
-3. **One requirement's only test never runs in the gate.** Task 4.2's
-   condition names `watch: three servers, two repositories, six
-   processes` among the tests that pass under `sluice exec main -- moon
-   run plugin-herdr:test-sh`. There it is skipped, because sluice's
-   sandbox refuses `/bin/ps`. It is the only test of the requirement
-   "The host runs one watcher and two processes for each source".
-
-The four tests that skip without `ps` were not run outside the sandbox
-for this report, since suites here run through sluice. Whether they
-pass where `ps` runs is not known from this verify.
-
-## What the code stage needs to do
-
-- **`root:format`.**
-  - `each_tokens` (`bin/watch.sh:353`) passes `"$@"` to `tokens_of`,
-    but both of its callers (709, 842) pass it nothing (SC2120, SC2119).
-    Drop the `"$@"`, or pass the arguments it is meant to carry.
-  - `as` (`lib/common.sh:49`) exports `HERDR_SOCKET_PATH` inside its
-    `( … )` group, on purpose, so the export stays with the call.
-    shellcheck then reads `enlist`'s uses at 124 and 125 as possibly
-    lost (SC2030, SC2031). A `# shellcheck disable=SC2030` at 49, with
-    the reason, says it is meant.
-  - Then run `sluice exec main` in full, not only `plugin-herdr`'s
-    tasks.
-- **`root:specs`.**
-  - Bring "The ahead token forecasts the merge" back under 500
-    characters. One way: keep its former text, which ends at "…the set
-    of submissions waiting on the branch changes." Then add a
-    requirement of its own, such as "A worktree is forecast once and
-    follows its head", that states "A worktree SHALL be forecast once,
-    whichever herdr servers' panes are in it, and its count SHALL
-    follow its head within a tick of the head moving." Move the
-    scenarios "Two servers, one worktree" and "A commit" under it.
-  - Show the archive passing, as this report does in a scratch copy:
-    `openspec archive … --yes`, then `openspec validate --specs
-    --strict --no-interactive` with the pinned openspec.
-- **Task 4.2.**
-  - Either make `watch: three servers, two repositories, six processes`
-    run where the gate runs, or have task 4.2's condition say why the
-    gate cannot run it and where it is shown (rule core.21 allows that
-    when the task says why).
-  - The test needs every process whose parent is the watcher, and those
-    processes' own children. The watcher's own records of its pids do
-    not show that nothing else runs, so they cannot stand for `ps`.
+**The work holds, and the change is archived.** Every scenario of the
+delta specs has a test that passes in the gate under both shells. All 21
+tasks are ticked and their conditions are met. The gate passes, and the
+change, archived, passes `root:specs` under the pinned openspec.
 
 ## Checks
 
 | Check | Result |
 |---|---|
-| `sluice exec main` on 34e2bd21 | **exit 1**: 5 of 6 tasks passed in 6m 4s, recorded under their keys for 34e2bd2. `root:format` failed. `plugin-herdr:test-sh` and `plugin-herdr:test-dash` each reported "all 135 passed, 4 skipped". `plugin-herdr:manifest`, `site:prose` and `root:changes` (11 of 11) passed |
-| `root:format`'s shellcheck | `bin/watch.sh:353` SC2120, `each_tokens` references arguments but none are ever passed; `bin/watch.sh:709` and `:842` SC2119, its callers; `lib/common.sh:49` SC2030, `HERDR_SOCKET_PATH` exported in `as`'s subshell; `lib/common.sh:124` and `:125` SC2031, `enlist`'s reads of it. The other 297 files were formatted with no change |
-| The four skips, under both shells | `watch: a watcher stops only its own sources`, `watch: a killed watcher's sources are ended`, `watch: a source is known without ps's start times`, `watch: three servers, two repositories, six processes`: `/bin/ps: Operation not permitted` |
-| `openspec validate the-herdr-plugin-keeps-one-watcher-per-host --strict` | valid |
-| `openspec archive the-herdr-plugin-keeps-one-watcher-per-host --yes` in a scratch copy of `openspec/` at 34e2bd21, then `openspec validate --specs --strict --no-interactive` (`root:specs`), with the pinned openspec 1.14.3 from `devenv shell` and with 1.16.0 | the archive applies + 5, ~ 8, → 1 across the four specs; **64 of 65 specs pass**, and `herdr-sidebar` fails on `requirements[2]: Requirement text is very long (>500 characters)` |
-| "The ahead token forecasts the merge", its text up to its first scenario, in characters | 447 at ed8474b6; 594 archived |
+| `sluice exec main` on 4127fb7c, against main at 5db8b48 | **exit 0**: `passed: 6 tasks` in 6m 15s, `recorded 1 result under its key for 4127fb7` |
+| `root:format` | treefmt formatted 340 files, 0 changed; shellcheck passes `bin/watch.sh` and `lib/common.sh` |
+| `plugin-herdr:test-sh`, `plugin-herdr:test-dash` | each `all 136 passed, 3 skipped` |
+| Their three skips, under both shells | `watch: a watcher stops only its own sources`, `watch: a killed watcher's sources are ended`, `watch: a source is known without ps's start times`: `/bin/ps: Operation not permitted`, the three task 6.1 names |
+| `plugin-herdr:manifest`, `site:prose` | pass; `site:prose` 0 errors, 0 warnings |
+| `root:changes` | 11 of 11 changes valid, this one among them |
+| `openspec archive the-herdr-plugin-keeps-one-watcher-per-host --yes` in a scratch copy of `openspec/` at 4127fb7c, then `openspec validate --specs --strict --no-interactive` (`root:specs`), with openspec 1.14.3 from `devenv shell` | **65 of 65 specs pass** |
+| "The ahead token forecasts the merge", archived | the same as on main, 447 characters to its first scenario |
+| "A worktree is forecast once and follows its head", archived | 146 characters to its first scenario |
 | `git merge-tree --write-tree HEAD origin/main`, main at 5db8b483 | merges cleanly |
 
 The gate ran with this report outside the worktree, so the run was
-recorded under its keys (rule core.18). moon warned that it could not
-package the plugin tasks' outputs under its cache, and those tasks still
-passed. That warning does not come from this change.
+recorded under its key (rule core.18). moon warned that it could not
+store the tasks' outputs in its caches, and every task still passed.
+That warning does not come from this change.
 
 ## Requirements and scenarios
 
 Every scenario has a test that sets up its WHEN and asserts its THEN.
 Every test named below passed under both `test-sh` and `test-dash` in
-the gate, except the one marked skipped.
+the gate.
 
 ### herdr-watch
 
@@ -110,25 +60,25 @@ the gate, except the one marked skipped.
 | Nothing is forked while nothing changes (added) | Idle, no token shown | `watch: idle ticks run nothing` |
 | | A token shown | `sidebar: a shown token is set again once a minute` |
 | | A change wakes it | `watch: a change wakes it` |
-| The host runs one watcher and two processes for each source (added) | Three servers, two repositories | `watch: three servers, two repositories, six processes`: **skipped in the gate** (`/bin/ps: Operation not permitted`) |
+| The host runs one watcher and two processes for each source (added) | Three servers, two repositories | `watch: three servers, two repositories, six processes`, listing the watcher's children and its readers' by `pgrep` in the gate, where the sandbox refuses `ps` |
 
 ### herdr-sidebar
 
 | Requirement | Scenario | Test |
 |---|---|---|
-| The ahead token forecasts the merge (modified; **594 characters archived**) | Clean | `sidebar: clean` |
-| | Conflicts | `sidebar: conflicts` |
-| | Conflicts with what landed | `sidebar: conflicts with what landed` |
-| | Nothing changed | `sidebar: nothing changed` |
-| | Forecasts off | `sidebar: forecasts off` |
-| | Two servers, one worktree | `sidebar: two servers forecast once` |
-| | A commit | `sidebar: a commit is forecast within a tick` |
 | A named pane gets no forecast (modified) | No forecast | `sidebar: no forecast for a named pane` |
 | | Named in one server, not in another | `sidebar: named in one server, not in another` |
+| A worktree is forecast once and follows its head (added) | Two servers, one worktree | `sidebar: two servers forecast once` |
+| | A commit | `sidebar: a commit is forecast within a tick` |
 | Every server's panes get their tokens (added) | Two servers, one worktree | `sidebar: two servers, one worktree` |
 | | A server stops | `sidebar: a server stops` |
 | A pane's folder and named branch are read at herdr's events (added) | Named just after it opens | `sidebar: named just after it opens` |
 | | Named later | `sidebar: named later` |
+
+"The ahead token forecasts the merge" is left as main has it, and its
+scenarios keep their tests (`sidebar: clean`, `sidebar: conflicts`,
+`sidebar: conflicts with what landed`, `sidebar: nothing changed`,
+`sidebar: forecasts off`), which pass.
 
 ### herdr-toasts
 
@@ -152,23 +102,36 @@ the gate, except the one marked skipped.
 
 ## Tasks
 
-All 20 tasks are ticked. Every test a task names is in `tests/run.sh`
+All 21 tasks are ticked. Every test a task names is in `tests/run.sh`
 under its name. The tests that tasks 2.1 and 4.3 say leave the suite are
 gone: `watch: a long tick keeps the lease`, `watch: a renewer killed
 holding the lock`, `watch: one watcher per herdr server` and `toasts:
 two watchers tell an event once`.
 
-- Every task's condition is `sluice exec main -- moon run
+- Every task's condition but 6.1's is `sluice exec main -- moon run
   plugin-herdr:test-sh` (3.1's `test-dash`) passing with the tests it
   names. Those tasks pass in the gate, and so do the tests, apart from
-  4.2's.
-- Task 4.2's condition is not met as written. Of the tests it names,
-  four skip under sluice's sandbox: `watch: a watcher stops only its
-  own sources`, `watch: a killed watcher's sources are ended`, `watch:
-  a source is known without ps's start times`, and `watch: three
-  servers, two repositories, six processes`. The first three test
-  behaviour that predates this change. The fourth is new, and it is
-  the only test of a new requirement.
+  the three of 4.2's that 6.1 says the gate skips and why.
+- Task 6.1's condition holds. `sluice exec main` passes. `test-sh` and
+  `test-dash` each skip only `watch: a watcher stops only its own
+  sources`, `watch: a killed watcher's sources are ended` and `watch: a
+  source is known without ps's start times`, and each says why. Those
+  three test the plugin's reading of a start time through `ps`
+  (`lib/procs.sh`) and predate this change; rule core.21 allows a check
+  the gate cannot run when its task says why. The change, archived in a
+  scratch copy, passes `openspec validate --specs --strict
+  --no-interactive` under openspec 1.14.3.
+  - In `bin/watch.sh`, `each_tokens` hands `tokens_of` its server folder
+    alone.
+  - In `lib/common.sh`, `as` says its export is meant to stay in its
+    subshell (SC2030), and `enlist` says it reads the environment's own
+    socket (SC2031).
+  - `watch: three servers, two repositories, six processes` lists
+    processes by `ps` where it runs, else by `pgrep -lf -P`. It is
+    skipped only where neither can run. The test still asserts every
+    child of the watcher and every child of each reader, as
+    `command command reader reader sleep`, so nothing beside the six
+    passes unseen.
 - Tasks 2.5 and 5.6 were read against the specs by hand.
   `plugins/herdr/README.md` and `site/src/content/docs/guides/herdr.md`
   say:
