@@ -54,9 +54,23 @@ A test that could not run (it exited as `[tests] not_run` names, or it
 could not be started) is listed as `could not run: <test>: <why>` and
 recorded nowhere. A command after `--` is not held to `not_run`.
 
+A required test the task runner skipped because a task it depends on ran
+and failed is failed by that task. The task is listed under `failed:`, the
+test on the line beneath, and the task's fail is recorded under its key
+when the worktree is clean. The test never ran: fix the task.
+
+```console
+failed: api:integration
+  root:integration failed by api:integration, a task it depends on
+recorded 1 result under its key for 8d41b6c
+```
+
 `--json` prints one document on stdout:
-`{branch, tasks[{task,hash,outcome,recorded}], missing, not_run[{task,reason}], timed_out, ports, exit}`;
-the run's output goes to stderr.
+`{branch, tasks[{task,hash,outcome,recorded}], dependencies[{task,hash,outcome,recorded}], failed_by[{task,by}], missing, not_run[{task,reason}], timed_out, ports, forecast, exit}`;
+the run's output goes to stderr. `dependencies` holds each task that failed
+a required test, `failed_by` each test so failed with the tasks (`by`) that
+failed it; neither is in `missing`, which lists only the required tests
+left without a result.
 
 Exit codes: `0` all passed, `1` a test failed, was not run, could not run
 or timed out, `2` refused, `130` Ctrl-C (which ends the run).
