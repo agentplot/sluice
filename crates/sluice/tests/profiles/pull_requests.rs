@@ -6329,6 +6329,10 @@ fn held_on_b<'g>(
     // The ready mark later than the leaving, to the second GitHub and the
     // records keep, as B reads a ready mark since (120).
     std::thread::sleep(Duration::from_millis(1100));
+    // A quarter of `discovery` has passed since A's submit last read the
+    // request, as B's blame takes on a host, so A's next follow reads what
+    // B's check says now (136; record 0095 D4).
+    g.follow_due(pull.number);
     (b, w, pull)
 }
 
@@ -6478,6 +6482,15 @@ fn status_of_a_request_another_host_sent_back() {
         serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
     let (_, title, summary) = g.posted(&pull.head).unwrap();
     assert_eq!(title, "waiting: the next submit");
+    // The check's summary as a person reads it, its queue block left out
+    // (record 0095 D1).
+    let summary = summary
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("<!-- sluice:queue "))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim_end()
+        .to_string();
     assert_eq!(
         doc,
         serde_json::json!({
@@ -6510,8 +6523,16 @@ fn run_again_marks_ready_a_draft_another_host_sent_back() {
     let g = OnGitHub::new("intake-again-draft", "");
     let (b, w, pull) = held_on_b(&g, "redrafted", &[("broken", "b\n")]);
     let n = pull.number;
+    // Beside its state, the mark's host and holder and the queue B's check
+    // carries, B's submission of it failed and held for the next submit
+    // (record 0095 D5).
     let waiting = serde_json::json!({
         "pull_request": n, "branch": "main", "state": "waiting to be taken in by b",
+        "taken_in_by": { "host": "b", "holder": "driver" },
+        "queue": {
+            "host": "b", "taken_in": true, "submission": b.of(n)[0]["id"],
+            "state": "failed", "ahead": [], "waits_for": ["the next submit"],
+        },
     });
     let out = g.wt_submit(&w, &["--no-wait", "--json"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
