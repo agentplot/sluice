@@ -12,7 +12,7 @@
 | `landed` | on the branch; `landed_as` is the landing commit |
 | `failed` | blamed for a failure |
 | `conflict` | does not merge with what is ahead of it |
-| `withdrawn` | taken out, by its agent, a planner, the operator, or a resubmission |
+| `withdrawn` | taken out, by its agent, a planner, the operator, a resubmission, or a hand-over to the host that takes its pull requests in (`withdrawn.handed_over_to`) |
 
 `failed` and `conflict` are out of the queue until you submit again.
 These nine are all the states there are: `sluice wait --json` and
@@ -52,9 +52,24 @@ the agent working in batch-review fixes it there and submits again
   Read the log. A test that stopped printing is waiting on something that
   never exits; a test still making progress on a busy host only needs the
   same head submitted again.
-- A test with no result (skipped, never reached, or ended by the time
-  limit) counts as failed and has no `hash`. One that never started has no
-  log either.
+- `failed by <task>, a task it depends on`: the task runner skipped a
+  required test because a task it depends on ran and failed. That task is
+  listed under `failed:` with its log, and the test itself never ran, so it
+  has no log and is never `not run`. Read the task's log and fix the task:
+
+  ```
+  failed: api:integration
+    root:integration failed by api:integration, a task it depends on
+    on feature/x + #14 (e20a6f9)
+    log of api:integration: .git/sluice/.logs/feature/x/c7/api:integration.log
+  the agent working in cards fixes it there and submits again
+  ```
+
+  The task's fail is recorded under its own key, with its `hash`, and a
+  flake of it is weighed there; nothing is recorded under the test's.
+- A test with no result (skipped for another reason, never reached, or
+  ended by the time limit) counts as failed and has no `hash` and no
+  `failed_by`. One that never started has no log either.
 
 From JSON:
 
@@ -63,7 +78,16 @@ sluice status 13 --json | jq '{state, result, tested, failed}'
 ```
 
 `tested.combination` is the revision, `tested.submissions` who was in it,
-`failed[].task` and `failed[].log` the tests and their logs.
+`failed[].task` and `failed[].log` the tests and their logs. A task a
+required test depends on that failed it is in `failed[]` with its `hash`
+and `log`; the test it failed has `failed_by`, naming the task, and no
+`hash`:
+
+```json
+[ { "task": "api:integration", "hash": "8c41a0e7d2",
+    "log": ".git/sluice/.logs/feature/x/c7/api:integration.log" },
+  { "task": "root:integration", "failed_by": ["api:integration"] } ]
+```
 
 ## Tests a host cannot run as the policy asks
 
@@ -195,7 +219,9 @@ and `other`, the result that contradicts it: its `outcome`, `at`,
 
 A pull request your submit opened, sent back (blamed, timed out, in
 conflict or withdrawn), is marked a draft and waits for your next
-submit: nothing else takes it again in your name. Submit again from its
+submit: nothing else takes it again in your name. A hand-over to the
+host that takes the pull requests in is none of these: that host takes
+it again, and a wait on it follows it there. Submit again from its
 worktree, with a fix or with the same commits after a time-out, and
 sluice marks it ready for review and tests it again like any other
 submission. A pull request a person opened is tested again only on new

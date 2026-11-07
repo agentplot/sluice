@@ -76,7 +76,7 @@ fn places_of_two_lines_on_one_host_never_collide() {
     h.w().session("unit/y", "agent-y", &head);
     let s = h.sluice();
     s.submit(&sluice_core::SubmitRequest {
-        worktree: "unit/y".into(),
+        head: sluice_core::SubmitHead::Worktree("unit/y".into()),
         branch: other.into(),
         after: vec![],
         priority: 0,

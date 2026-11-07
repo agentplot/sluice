@@ -12,6 +12,8 @@ decision-makers:
 
 Status: accepted with the amendment of 137 that says it, which the user approved on 2026-11-06 and which is on agentplot/blueprints main at 421c77e. It reads 137's "a wait that holds it lets it go when it ends" for a host with several waits at once, and is built here on that reading.
 
+Superseded by record 0093, accepted on 2026-11-06: no host takes a branch's requests in, so no intake mark is kept, renewed or handed over (137).
+
 Deciders: the code stage of `fix/a-hosts-intake-never-withdraws-anothers-submission`; the user, on the amendment.
 Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 73, 135 and 137, at c94c496, and 137 as main words it at 421c77e; rule core.33; record 0088; chuck-herdr-alpha's records of WilldanGroup/switchboard-kit's `main` for 2026-11-06 and its processes, crew's `sluice wait <id> --timeout 9m --json` run again while it times out, one per landing; `crates/sluice/src/profiles/github/pulls.rs` (`held`, `let_go_marks`) as main held it at b2263f63; `crates/sluice/src/host_count.rs`, whose runs are counted by files locked while they live.
 

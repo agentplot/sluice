@@ -1,0 +1,4 @@
+#!/bin/sh
+# A stand-in jq that logs each call: tests/logged.sh.
+# shellcheck disable=SC1091 # beside this folder
+. "${0%/*}/../logged.sh"

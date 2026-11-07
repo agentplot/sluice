@@ -419,7 +419,7 @@ fn a_branch_whose_limits_the_host_cannot_hold_ends_no_round() {
     let s = h.sluice();
     let y = s
         .submit(&sluice_core::SubmitRequest {
-            worktree: "unit/y".into(),
+            head: sluice_core::SubmitHead::Worktree("unit/y".into()),
             branch: other.into(),
             after: vec![],
             priority: 0,
@@ -595,4 +595,54 @@ fn a_run_claimed_in_one_round_reads_the_host_again_at_its_start() {
     );
     let r = &runs(&h)[0];
     assert_eq!((r.state, r.host.clone()), (RunState::Open, None));
+}
+
+/// The results log, as the fake keeps it.
+fn results(h: &Harness) -> Vec<sluice_core::records::ResultLine> {
+    sluice_core::records::parse_lines(h.w().results_log().as_bytes()).unwrap()
+}
+
+/// satisfies: 149, 84, 114, 139; record 0074 (design D5); the
+/// host-requirements spec's "A test failed by a task it depends on"
+#[test]
+fn an_engine_gone_leaves_a_check_failed_by_a_dependency_unjudged() {
+    const GONE: &str = "no container engine answers: /var/run/docker.sock refused the connection";
+    let h = Harness::new(&docker().replace(
+        "required = [\"#gate\"]",
+        "required = [\"root:integration\", \"b:test\"]",
+    ));
+    h.w().task("api:integration", "a/");
+    h.w().task("root:integration", "r/");
+    h.f.tests.depends_on("root:integration", "api:integration");
+    h.w().hold_runs(true);
+    h.fails_with("api:integration", "a/lib", "broken");
+    h.work(
+        "unit/a",
+        "agent-a",
+        &[("a/lib", Some("broken")), ("b/lib", Some("b2"))],
+    );
+    let one = h.submit("unit/a");
+    h.step();
+    assert_eq!(h.w().started().len(), 1);
+    h.w().engine_unmet(Some(GONE));
+    h.w().complete_all();
+    h.step();
+    assert_eq!(
+        not_run(&h),
+        [vec![(
+            "root:integration".to_string(),
+            format!("after the run, {GONE}")
+        )]]
+    );
+    let lines = results(&h);
+    assert!(
+        lines.iter().all(|r| r.task != "api:integration"),
+        "{lines:?}"
+    );
+    assert!(lines.iter().all(|r| r.task != "root:integration"));
+    assert!(lines
+        .iter()
+        .any(|r| r.task == "b:test" && r.outcome == sluice_seams::Outcome::Pass));
+    assert_ne!(h.sub(one).state, State::Failed);
+    assert!(h.w().delivered().is_empty(), "nobody is blamed");
 }

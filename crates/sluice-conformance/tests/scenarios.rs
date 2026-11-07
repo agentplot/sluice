@@ -7,7 +7,7 @@ use sluice_conformance::{policy, shared, Crash, Harness, Rig, BRANCH};
 use sluice_core::records::{Event, State};
 use sluice_core::{Forecast, Step};
 use sluice_fakes::Fakes;
-use sluice_seams::Outcome;
+use sluice_seams::{Decided, Outcome};
 
 /// satisfies: S1, 1, 10, 11, 22, 23, 33, 34, 37, 42, 43, 44, 45, 47, 50
 #[test]
@@ -553,7 +553,7 @@ fn s58_a_bolts_landing_worktree_submits_the_bolt_as_its_remote_holds_it() {
     let accepted = h
         .sluice()
         .submit(&sluice_core::SubmitRequest {
-            worktree: BRANCH.into(),
+            head: sluice_core::SubmitHead::Worktree(BRANCH.into()),
             branch: "main".into(),
             after: Vec::new(),
             priority: 0,
@@ -681,4 +681,83 @@ fn s73_a_timers_refused_writes_are_one_command_counted_and_shown_until_a_day_aft
             last: cause.last,
         }]
     );
+}
+
+/// satisfies: S74, 15, 16, 20, 114, 149; record 0084
+#[test]
+fn s74_a_check_that_runs_nothing_is_failed_by_the_task_it_depends_on() {
+    let h = Harness::new(&policy(false, "fail", 4).replace(
+        "required = [\"#gate\"]",
+        "required = [\"root:integration\"]",
+    ));
+    h.w().task("api:integration", "a/");
+    h.w().task("root:integration", "r/");
+    h.f.tests.depends_on("root:integration", "api:integration");
+    h.fails_with("api:integration", "a/lib", "two tests fail");
+    h.work("unit/a", "agent-a", &[("a/lib", Some("two tests fail"))]);
+    let one = h.submit("unit/a");
+    h.settle();
+    let sub = h.sub(one);
+    assert_eq!(sub.state, State::Failed);
+    // Its session is told the task failed, with what it printed, and the
+    // check it failed.
+    match &h.delivered_to("agent-a")[0].decided {
+        Decided::Failed { failed, logs, .. } => {
+            assert_eq!(failed, &["api:integration", "root:integration"]);
+            let logged: Vec<&str> = logs.iter().map(|l| l.task.as_str()).collect();
+            assert_eq!(logged, ["api:integration"]);
+        }
+        other => panic!("delivered {other:?}"),
+    }
+    // A tool that reads the record finds a check that ran and failed.
+    let dep = sub
+        .failed
+        .iter()
+        .find(|f| f.task == "api:integration")
+        .expect("the task that failed");
+    assert!(!dep.hash.is_empty() && dep.log.is_some(), "{dep:?}");
+    let check = sub
+        .failed
+        .iter()
+        .find(|f| f.task == "root:integration")
+        .expect("the check it failed");
+    assert_eq!(check.failed_by, ["api:integration"]);
+    assert!(check.hash.is_empty() && check.not_run.is_none());
+    let lines = h.results();
+    assert!(lines
+        .iter()
+        .any(|r| r.task == "api:integration" && r.hash == dep.hash && r.outcome == Outcome::Fail));
+    assert!(lines.iter().all(|r| r.task != "root:integration"));
+
+    // On another candidate the task exits as `[tests] not_run` names.
+    h.w().cannot_run(
+        "api:integration",
+        Some("exited 77, which [tests] not_run names: it could not run here"),
+    );
+    h.work("unit/b", "agent-b", &[("a/lib", Some("a3"))]);
+    let two = h.submit("unit/b");
+    let lost = |h: &Harness| {
+        h.events().into_iter().find_map(|e| match e {
+            Event::Lost { not_run, .. } if !not_run.is_empty() => Some(not_run),
+            _ => None,
+        })
+    };
+    for _ in 0..8 {
+        if lost(&h).is_some() {
+            break;
+        }
+        h.step();
+    }
+    let not_run = lost(&h).expect("the run left its check not run");
+    assert_eq!(not_run.len(), 1);
+    assert_eq!(not_run[0].task, "root:integration");
+    assert!(not_run[0]
+        .reason
+        .starts_with("its dependency api:integration could not run: exited 77"));
+    assert_ne!(h.sub(two).state, State::Failed);
+    assert!(h.delivered_to("agent-b").is_empty(), "nobody is blamed");
+    assert!(h.results().iter().all(|r| r.task != "root:integration"));
+    h.w().cannot_run("api:integration", None);
+    h.settle();
+    assert_eq!(h.sub(two).state, State::Landed, "tested again");
 }
