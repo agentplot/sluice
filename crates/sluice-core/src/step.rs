@@ -943,7 +943,7 @@ impl Sluice<'_> {
             }
             let system = xr.system.clone();
             let system = system.as_deref().or(home);
-            if let Some(named) = read_not_run(l, c, i, report, false, system, &now) {
+            if let Some(named) = read_not_run(l, c, i, &report.not_run, false, system, &now) {
                 let x = l.candidate_mut(&c.id).expect("a read candidate");
                 let xr = &mut x.runs[i];
                 xr.state = RunState::Failed;
@@ -1476,6 +1476,7 @@ impl Sluice<'_> {
                                 flaky: None,
                                 system: r.system.clone(),
                                 not_run: waited.clone(),
+                                failed_by: Vec::new(),
                             }));
                         }
                     }
@@ -1490,12 +1491,15 @@ impl Sluice<'_> {
     /// read with what the host lacks after it. Where a check did not pass
     /// in a run its time limit did not end, the host is looked at again,
     /// once, as the report is first taken; where what the run asked of it
-    /// has gone, every check that failed or was left without a result has
-    /// no outcome, with why, and a check that passed keeps its pass. A run
-    /// that asks nothing of the host is never looked at, and a required
-    /// check the runner keeps out of its CI mode stays missing.
+    /// has gone, every check that failed, was failed by a task it depends
+    /// on or was left without a result has no outcome, with why, the tasks
+    /// it was failed by none either, and a check that passed keeps its
+    /// pass (84, 149). A run that asks nothing of the host is never looked
+    /// at, and a required check the runner keeps out of its CI mode stays
+    /// missing.
     pub(crate) fn after_run(&self, limits: &Limits, mut report: RunReport) -> Result<RunReport> {
         let unpassed = report.tasks.iter().any(|t| t.outcome == Outcome::Fail)
+            || !report.failed_by.is_empty()
             || report.missing.iter().any(|m| !report.kept_out.contains(m));
         if !limits.docker || report.timed_out || !unpassed {
             return Ok(report);
@@ -1518,10 +1522,15 @@ impl Sluice<'_> {
             .partition(|m| report.kept_out.contains(m));
         let missing: Vec<String> = missing;
         report.missing = kept_out;
+        // 149: a task a check was failed by has no outcome either, and is
+        // recorded nowhere.
+        report.dependencies.clear();
+        let failed_by = std::mem::take(&mut report.failed_by);
         report.not_run.extend(
             failed
                 .into_iter()
                 .map(|t| t.task)
+                .chain(failed_by.into_iter().map(|f| f.task))
                 .chain(missing)
                 .map(|task| NotRun {
                     task,
@@ -1563,13 +1572,15 @@ impl Sluice<'_> {
         let mut fresh = Vec::new();
         // Design D9 (C.6): on a branch whose records are on its remote, a
         // result is recorded signed, and only for a key the candidate's
-        // tree bears out.
+        // tree bears out, a task a check was failed by as a check (149).
         let proven: Option<Vec<String>> = if rules.signed {
             Some(self.seams.tests.proven(run, &report)?)
         } else {
             None
         };
-        for t in &report.tasks {
+        // 149, 16: the run of a task a check was failed by is recorded
+        // under its own key as any check's run is (rule core.7).
+        for t in report.tasks.iter().chain(&report.dependencies) {
             if proven.as_ref().is_some_and(|p| !p.contains(&t.task)) {
                 continue;
             }
@@ -1630,24 +1641,10 @@ impl Sluice<'_> {
                 results.extend(fresh);
             }
         }
-        let mut v = verdict::read(&report, &results, rules, system, home);
-        // Design D9: a check whose key the tree did not bear out was signed
-        // by no one, so it is no pass (15), as a check with no result.
-        if let Some(p) = &proven {
-            for t in report.tasks.iter().filter(|t| !p.contains(&t.task)) {
-                if let Some(at) = v.missing.iter().position(|m| *m == t.task) {
-                    v.missing.remove(at);
-                    v.failed.push(FailedTask {
-                        task: t.task.clone(),
-                        hash: t.hash.clone(),
-                        log: None,
-                        flaky: None,
-                        system: system.map(str::to_string),
-                        not_run: None,
-                    });
-                }
-            }
-        }
+        // Design D9: a check, or a task a check was failed by, whose key
+        // the tree did not bear out was signed by no one, so it is no pass
+        // (15, 149): the verdict reads it failed under that key.
+        let mut v = verdict::read(&report, &results, rules, system, home, proven.as_deref());
         // 108: a replay no trusted pass proved counts for nothing, and the
         // checks run again with no replay.
         if !v.unproven.is_empty() && !r.no_replay {
@@ -1703,18 +1700,27 @@ impl Sluice<'_> {
         if c.every_check && !checks.is_empty() && report.tasks.is_empty() {
             v.passed = false;
         }
-        if !report.not_run.is_empty() {
+        // 149, 114: a check every task it was failed by reads passed was
+        // judged by nothing, and is read as one the run did not judge.
+        let not_run: Vec<NotRun> = report.not_run.iter().chain(&v.unjudged).cloned().collect();
+        if !not_run.is_empty() {
             let judged = !v.failed.is_empty() || v.timed_out;
-            let Some(named) = read_not_run(line, c, i, &report, judged, system, now) else {
+            let Some(named) = read_not_run(line, c, i, &not_run, judged, system, now) else {
                 return Ok(());
             };
             v.passed = false;
             v.failed.extend(named);
         }
         // 20: what the failed tasks printed, kept while the place still
-        // holds it.
+        // holds it; a check failed by a task it depends on never ran, and
+        // printed nothing of its own (149).
         if !v.passed && !v.failed.is_empty() {
-            let tasks: Vec<String> = v.failed.iter().map(|f| f.task.clone()).collect();
+            let tasks: Vec<String> = v
+                .failed
+                .iter()
+                .filter(|f| f.failed_by.is_empty())
+                .map(|f| f.task.clone())
+                .collect();
             let logs = self.seams.tests.logs(run, &tasks)?;
             let key = match system {
                 Some(s) if c.runs.len() > 1 => format!("{}-{s}", c.id),
@@ -1762,6 +1768,7 @@ impl Sluice<'_> {
                 let kind = report
                     .tasks
                     .iter()
+                    .chain(&report.dependencies)
                     .find(|t| t.task == f.task && t.hash == f.hash)
                     .map(|t| match t.source {
                         Source::Ran { .. } => ResultKind::Ran,
@@ -3490,8 +3497,9 @@ impl Sluice<'_> {
 }
 
 /// Could-not-run-1 114, 115 (design D1): the checks run `i` of `c` left
-/// not run, read from its report alone and no run handle, so a run that
-/// came back and one whose tests could not be started are read alike.
+/// not run, `not_run`, read from its report alone and no run handle, so a
+/// run that came back and one whose tests could not be started are read
+/// alike; a check judged by nothing among them (149).
 /// `judged` says a check failed on its own result or the time limit ended
 /// the run. Unjudged and under the bound, the run is open again for any
 /// host, its place to be released and its loss logged, and nobody is
@@ -3501,7 +3509,7 @@ fn read_not_run(
     line: &mut Line,
     c: &Candidate,
     i: usize,
-    report: &RunReport,
+    not_run: &[NotRun],
     judged: bool,
     system: Option<&str>,
     now: &str,
@@ -3521,15 +3529,14 @@ fn read_not_run(
                 now,
                 Event::Lost {
                     combination: c.revision.clone(),
-                    not_run: report.not_run.clone(),
+                    not_run: not_run.to_vec(),
                 },
             );
             return None;
         }
     }
     Some(
-        report
-            .not_run
+        not_run
             .iter()
             .map(|n| FailedTask {
                 task: n.task.clone(),
@@ -3538,6 +3545,7 @@ fn read_not_run(
                 flaky: None,
                 system: system.map(str::to_string),
                 not_run: Some(n.reason.clone()),
+                failed_by: Vec::new(),
             })
             .collect(),
     )
@@ -3600,6 +3608,8 @@ fn unstarted(checks: &[String], kind: &str, reason: String) -> RunReport {
                 reason: reason.clone(),
             })
             .collect(),
+        dependencies: Vec::new(),
+        failed_by: Vec::new(),
         timed_out: false,
         detail: None,
         kept_out: Vec::new(),

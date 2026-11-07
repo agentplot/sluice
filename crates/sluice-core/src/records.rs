@@ -142,7 +142,8 @@ pub struct Tested {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FailedTask {
     pub task: String,
-    /// Empty for a required check the run left without a result (15).
+    /// Empty for a required check no run gave a key: left without a
+    /// result (15), or failed by a task it depends on (149).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub hash: String,
     /// Where what it printed is kept (20).
@@ -163,6 +164,12 @@ pub struct FailedTask {
     /// a result.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub not_run: Option<String>,
+    /// 149: the tasks this required check depends on that ran and failed,
+    /// which its runner skipped it for; each is in the same list with its
+    /// key. Empty for a check that failed, or was left without a result,
+    /// on its own.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failed_by: Vec<String>,
 }
 
 /// A task read as failed for its key holding a pass and a fail (19): what
@@ -2129,6 +2136,7 @@ mod tests {
                     flaky: None,
                     system: None,
                     not_run: None,
+                    failed_by: Vec::new(),
                 },
                 FailedTask {
                     task: "core:test".into(),
@@ -2137,6 +2145,7 @@ mod tests {
                     flaky: None,
                     system: None,
                     not_run: None,
+                    failed_by: Vec::new(),
                 },
             ],
             ..submission(None)
@@ -2260,5 +2269,36 @@ mod tests {
         let k = f.flaky.as_ref().expect("flaky");
         assert_eq!((&k.at, &k.host, &k.other.host), (&None, &None, &None));
         assert_eq!(serde_json::to_string(&f).unwrap(), old);
+    }
+
+    /// 149: a failed check recorded before `failed_by` reads with none,
+    /// and is written back as it was; one failed by a task it depends on
+    /// names it, with no key of its own.
+    #[test]
+    fn a_failed_check_written_before_failed_by_reads_as_it_was() {
+        for old in [
+            r#"{"task":"root:integration"}"#,
+            r#"{"task":"a:test","hash":"h","log":"logs/c1/a-test.log"}"#,
+            r#"{"task":"site:check","not_run":"exited 77"}"#,
+        ] {
+            let f: FailedTask = serde_json::from_str(old).unwrap();
+            assert!(f.failed_by.is_empty());
+            assert_eq!(serde_json::to_string(&f).unwrap(), old);
+        }
+        let by = FailedTask {
+            task: "root:integration".into(),
+            hash: String::new(),
+            log: None,
+            flaky: None,
+            system: None,
+            not_run: None,
+            failed_by: vec!["api:integration".into()],
+        };
+        let json = serde_json::to_string(&by).unwrap();
+        assert_eq!(
+            json,
+            r#"{"task":"root:integration","failed_by":["api:integration"]}"#
+        );
+        assert_eq!(serde_json::from_str::<FailedTask>(&json).unwrap(), by);
     }
 }

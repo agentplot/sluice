@@ -3338,6 +3338,7 @@ fn report(
             let t = sub.tested.clone().expect("a blamed submission was tested");
             let Failure {
                 ran,
+                failed_by,
                 timed_out,
                 cut,
                 not_run,
@@ -3352,6 +3353,9 @@ fn report(
             if !ran.is_empty() {
                 let named: Vec<String> = ran.iter().map(|f| failed_name(f)).collect();
                 writeln!(out, "failed: {}", named.join(", "))?;
+            }
+            for f in &failed_by {
+                writeln!(out, "  {}", words::failed_by(&failed_name(f), &f.failed_by))?;
             }
             if !not_run.is_empty() {
                 writeln!(out, "not run: {}", not_run.join(", "))?;
@@ -3460,6 +3464,10 @@ fn report(
 struct Failure<'a> {
     /// The checks that ran and failed, each with its key.
     ran: Vec<&'a FailedTask>,
+    /// 149: the checks failed by the tasks they depend on, with no key of
+    /// their own and never run: said after the tasks that failed them,
+    /// never as not run or cut off.
+    failed_by: Vec<&'a FailedTask>,
     /// Its run's time limit ended it (time-limit-1 66).
     timed_out: bool,
     /// The checks the time limit cut off: with no key, and able to run.
@@ -3476,17 +3484,23 @@ struct Failure<'a> {
 impl<'a> Failure<'a> {
     fn of(sub: &'a Submission) -> Failure<'a> {
         let ran: Vec<&FailedTask> = sub.failed.iter().filter(|f| !f.hash.is_empty()).collect();
+        let failed_by: Vec<&FailedTask> = sub
+            .failed
+            .iter()
+            .filter(|f| !f.failed_by.is_empty())
+            .collect();
         let timed_out = sub.result.as_deref() == Some("timed out");
+        let keyless = |f: &&FailedTask| f.hash.is_empty() && f.failed_by.is_empty();
         let cut: Vec<&str> = sub
             .failed
             .iter()
-            .filter(|f| timed_out && f.hash.is_empty() && f.not_run.is_none())
+            .filter(|f| timed_out && keyless(f) && f.not_run.is_none())
             .map(|f| f.task.as_str())
             .collect();
         let not_run: Vec<&str> = sub
             .failed
             .iter()
-            .filter(|f| f.hash.is_empty())
+            .filter(keyless)
             .map(|f| f.task.as_str())
             .filter(|t| !cut.contains(t))
             .collect();
@@ -3499,6 +3513,7 @@ impl<'a> Failure<'a> {
             sub.failed.iter().filter(|f| f.not_run.is_some()).collect();
         Failure {
             ran,
+            failed_by,
             timed_out,
             cut,
             not_run,

@@ -665,18 +665,35 @@ pub struct NotRun {
     pub reason: String,
 }
 
+/// 149: a required check the runner skipped because the tasks `by` it
+/// depends on ran and failed; its outcome is theirs.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FailedBy {
+    pub task: String,
+    pub by: Vec<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunReport {
     pub tasks: Vec<TaskResult>,
     /// 84: what the executor held the run to.
     pub executor: Enforced,
     /// 15: required checks the run was to run that it left without a
-    /// result: skipped, never reached, or, in a run its time limit ended,
-    /// cut off by it (time-limit-1 66). None of them passes.
+    /// result, and no task they depend on failed or could not run:
+    /// skipped for another reason, never reached, or, in a run its time
+    /// limit ended, cut off by it (time-limit-1 66). None of them passes.
     pub missing: Vec<String>,
     /// Checks the run did not judge (could-not-run-1 114): in neither
     /// `tasks` nor `missing`.
     pub not_run: Vec<NotRun>,
+    /// 149, 16: the result of each task a check of `failed_by` was failed
+    /// by that is no check of the run, recorded under its own key as any
+    /// result is; never a replay, since a runner answers no failed task
+    /// from its cache.
+    pub dependencies: Vec<TaskResult>,
+    /// 149: required checks the runner skipped for a task they depend on
+    /// that ran and failed, in neither `tasks`, `missing` nor `not_run`.
+    pub failed_by: Vec<FailedBy>,
     /// The run hit its time limit and was ended with everything it
     /// started (66).
     pub timed_out: bool,
@@ -685,6 +702,18 @@ pub struct RunReport {
     /// Required checks the runner keeps out of its CI mode, so never runs
     /// (moon's `runInCI: false`); each is also in `missing`.
     pub kept_out: Vec<String>,
+}
+
+impl RunReport {
+    /// A check failed on its own result, was failed by a task it depends
+    /// on, or was left without a result (15, 149); a check not run is
+    /// none of them (could-not-run-1 114). Every reader of a run reads
+    /// it, so none counts a check failed by a dependency as passed.
+    pub fn failed(&self) -> bool {
+        !self.missing.is_empty()
+            || !self.failed_by.is_empty()
+            || self.tasks.iter().any(|t| t.outcome == Outcome::Fail)
+    }
 }
 
 /// ADR 0050: a task a branch's gate requires that the runner keeps out
@@ -818,9 +847,10 @@ pub trait Tests {
     fn running(&self) -> Result<Running>;
 
     /// Design D9 (C.6): the tasks of a finished run whose keys the
-    /// candidate's tree bears out, read while its place still exists,
-    /// running nothing. A signer signs only these, so no check signs a
-    /// pass under a key it does not hold.
+    /// candidate's tree bears out, its checks and the tasks a check was
+    /// failed by alike (149), read while its place still exists, running
+    /// nothing. A signer signs only these, so no check signs a pass under
+    /// a key it does not hold.
     fn proven(&self, run: &RunHandle, report: &RunReport) -> Result<Vec<String>>;
 
     /// ADR 0035: the session runs running on this host, as `running`
@@ -1346,7 +1376,8 @@ pub struct Row {
     pub task: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system: Option<String>,
-    /// Its key's hash; `None` for a check left with no result.
+    /// Its key's hash; `None` for a check left with no result, or failed
+    /// by a task it depends on (149).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
     pub result: RowResult,
@@ -1370,6 +1401,11 @@ pub struct Row {
     /// Could-not-run-1 115: why it could not run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub not_run: Option<String>,
+    /// 149: the tasks it depends on that ran and failed, which its runner
+    /// skipped it for; each has a row of its own with its key. Empty for a
+    /// check that ran, or was left without a result, on its own.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failed_by: Vec<String>,
     /// Could-not-run-1 116: why its result was set aside.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub set_aside: Option<String>,
@@ -1723,6 +1759,66 @@ mod tests {
         assert!(state
             .to_string()
             .starts_with("fetching refs/sluice/state/main from origin failed: "));
+    }
+
+    fn report() -> RunReport {
+        RunReport {
+            tasks: vec![TaskResult {
+                task: "app:test".into(),
+                hash: "h1".into(),
+                outcome: Outcome::Pass,
+                source: Source::Ran { host: "box".into() },
+                took_ms: None,
+                attempts: None,
+            }],
+            executor: Enforced {
+                kind: "open".into(),
+                confined: false,
+                processors: None,
+                memory: None,
+                network: None,
+                docker: false,
+            },
+            missing: vec![],
+            not_run: vec![],
+            dependencies: vec![],
+            failed_by: vec![],
+            timed_out: false,
+            detail: None,
+            kept_out: vec![],
+        }
+    }
+
+    /// 15, 114, 149: a fail, a check failed by a task it depends on and a
+    /// check left without a result each fail a run; a check not run alone
+    /// does not.
+    #[test]
+    fn a_run_fails_on_a_fail_a_failed_dependency_or_a_missing_check() {
+        assert!(!report().failed());
+        let mut fail = report();
+        fail.tasks[0].outcome = Outcome::Fail;
+        assert!(fail.failed());
+        let by = RunReport {
+            failed_by: vec![FailedBy {
+                task: "root:all".into(),
+                by: vec!["app:test".into()],
+            }],
+            ..report()
+        };
+        assert!(by.failed());
+        let missing = RunReport {
+            missing: vec!["root:all".into()],
+            ..report()
+        };
+        assert!(missing.failed());
+        let not_run = RunReport {
+            not_run: vec![NotRun {
+                task: "root:all".into(),
+                reason: "exited 77".into(),
+            }],
+            ..report()
+        };
+        assert!(!not_run.failed());
     }
 
     /// The core finds a refused read under whatever context a caller

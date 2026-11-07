@@ -344,6 +344,19 @@ fn info(r: &Row, markdown: bool) -> String {
     if let Some(why) = &r.not_run {
         parts.push(cell(why));
     }
+    // 149: the tasks it depends on that failed it, each with a row of its
+    // own; in a check's title, which GitHub shows as it is, unquoted.
+    if !r.failed_by.is_empty() {
+        let named: Vec<String> = r
+            .failed_by
+            .iter()
+            .map(|t| match markdown {
+                true => format!("`{t}`"),
+                false => t.clone(),
+            })
+            .collect();
+        parts.push(format!("failed by {}", crate::words::and_list(&named)));
+    }
     if let Some(why) = &r.set_aside {
         parts.push(format!("set aside: {}", cell(why)));
     }
@@ -548,6 +561,7 @@ mod tests {
             attempts: Some(1),
             flaky: None,
             not_run: None,
+            failed_by: Vec::new(),
             set_aside: None,
             log: None,
         }
@@ -682,6 +696,57 @@ mod tests {
         assert!(s.find("app:test").unwrap() < s.find("app:lint").unwrap());
         // Deterministic: drawn twice, the same.
         assert_eq!(s, with(None, |cx| report(&blamed(), cx)));
+    }
+
+    /// 149; the verdict-report spec's "The pull request's check": a check
+    /// failed by a task it depends on is drawn failed, saying which task,
+    /// with no key, and the task failed with its key and its log.
+    #[test]
+    fn a_check_failed_by_a_dependency() {
+        let mut dep = row("api:integration", RowResult::Failed);
+        dep.log = Some("/kept/api-integration.log".into());
+        let mut check = row("root:integration", RowResult::Failed);
+        check.key = None;
+        check.host = None;
+        check.executor = None;
+        check.took_ms = None;
+        check.attempts = None;
+        check.failed_by = vec!["api:integration".into()];
+        let v = view(Standing::Blamed { timed_out: false }, vec![dep, check]);
+        let s = with(None, |cx| report(&v, cx));
+        assert!(
+            s.contains("| 🟥 | `root:integration` |  | Failed | failed by `api:integration` |"),
+            "{s}"
+        );
+        assert!(
+            s.contains("| 🟥 | `api:integration` | 18s | Failed | sandbox on h1 |"),
+            "{s}"
+        );
+        assert!(
+            s.contains("- `api:integration`: `/kept/api-integration.log`"),
+            "{s}"
+        );
+        assert!(!s.contains("- `root:integration`:"), "{s}");
+
+        let (name, posting) = with(None, |cx| row_check(&v.rows[1], cx));
+        assert_eq!(name, check_name("root:integration", None));
+        assert_eq!(posting.status, Status::Failure);
+        assert_eq!(posting.title, "failed · failed by api:integration");
+        assert!(!posting.summary.contains("Key "), "{}", posting.summary);
+        let (_, posting) = with(None, |cx| row_check(&v.rows[0], cx));
+        assert!(
+            posting.summary.contains("\nKey `api:integration-key`.\n"),
+            "{}",
+            posting.summary
+        );
+
+        // Two tasks: each named, the last joined with `and`.
+        let mut two = v.rows[1].clone();
+        two.failed_by.push("ui:integration".into());
+        assert_eq!(
+            info(&two, true),
+            "failed by `api:integration` and `ui:integration`"
+        );
     }
 
     #[test]

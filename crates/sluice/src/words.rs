@@ -273,6 +273,26 @@ pub fn could_not_run(task: &str, why: &str) -> String {
     format!("{task} could not run: {why}")
 }
 
+/// 149: a required check its runner skipped for the tasks `by` it depends
+/// on, which ran and failed; the tasks joined with `, ` and the last with
+/// ` and `.
+pub fn failed_by(check: &str, by: &[String]) -> String {
+    let what = if by.len() > 1 {
+        "tasks it depends on"
+    } else {
+        "a task it depends on"
+    };
+    format!("{check} failed by {}, {what}", and_list(by))
+}
+
+/// `items` joined with `, `, the last with ` and `.
+pub fn and_list(items: &[String]) -> String {
+    match items {
+        [rest @ .., last] if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
+        _ => items.concat(),
+    }
+}
+
 /// ADR 0050: a submission refused because `branch` requires checks the
 /// task runner in the submitting worktree keeps out of CI: each, through
 /// the tag that names it, with its line of the policy, and the way on for
@@ -426,6 +446,28 @@ mod tests {
             "nothing was recorded for tests:a, tests:b: if the host was slow, the agent \
              working in unit/a submits the same head again; if one never ends, it fixes it \
              there and submits again"
+        );
+    }
+
+    /// 149: a check failed by the tasks it depends on names each, the
+    /// last joined with ` and `, as design D8 words it.
+    #[test]
+    fn a_check_failed_by_its_dependencies_names_each() {
+        assert_eq!(
+            failed_by("root:integration", &["api:integration".into()]),
+            "root:integration failed by api:integration, a task it depends on"
+        );
+        assert_eq!(
+            failed_by(
+                "root:integration",
+                &[
+                    "api:integration".into(),
+                    "ui:integration".into(),
+                    "web:integration".into()
+                ]
+            ),
+            "root:integration failed by api:integration, ui:integration and web:integration, \
+             tasks it depends on"
         );
     }
 

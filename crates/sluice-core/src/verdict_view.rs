@@ -254,13 +254,15 @@ fn rows(
                     .and_then(|f| f.flaky.as_ref())
                     .map(|k| contradicted(&k.other)),
                 not_run: None,
+                failed_by: Vec::new(),
                 set_aside: aside.map(|a| a.reason.clone()),
                 log: failed.and_then(|f| f.log.clone()),
             }
         })
         .collect();
     // Checks the records name as failed with no result line: could not
-    // run, timed out, or left without a result (15, 66, 114, 115).
+    // run, failed by a task it depends on, timed out, or left without a
+    // result (15, 66, 114, 115, 149).
     for f in &sub.failed {
         if rows
             .iter()
@@ -270,6 +272,8 @@ fn rows(
         }
         let result = if f.not_run.is_some() {
             RowResult::NotRun
+        } else if !f.failed_by.is_empty() {
+            RowResult::Failed
         } else if timed_out {
             RowResult::TimedOut
         } else if f.hash.is_empty() {
@@ -290,6 +294,7 @@ fn rows(
             attempts: None,
             flaky: f.flaky.as_ref().map(|k| contradicted(&k.other)),
             not_run: f.not_run.clone(),
+            failed_by: f.failed_by.clone(),
             set_aside: None,
             log: f.log.clone(),
         });
@@ -425,6 +430,35 @@ mod tests {
             .contains("3 runs"));
         assert_eq!(by("app:lint").result, RowResult::SetAside);
         assert_eq!(by("app:lint").set_aside.as_deref(), Some("host overloaded"));
+    }
+
+    /// 149: a check failed by a task it depends on is failed, with no key
+    /// and the task named, never missing; the task's row comes from its
+    /// result line, failed with its key and its log.
+    #[test]
+    fn a_check_failed_by_a_dependency() {
+        let s = sub(serde_json::json!({"failed": [
+            {"task": "api:integration", "hash": "api:integration-k", "log": "/kept/api.log"},
+            {"task": "root:integration", "failed_by": ["api:integration"]}
+        ]}));
+        let v = verdict_view(
+            &s,
+            &[],
+            &[line("api:integration", None, "ran", "fail")],
+            &[],
+            &[],
+        );
+        let by = |t: &str| v.rows.iter().find(|r| r.task == t).unwrap();
+        let dep = by("api:integration");
+        assert_eq!(dep.result, RowResult::Failed);
+        assert_eq!(dep.key.as_deref(), Some("api:integration-k"));
+        assert_eq!(dep.log.as_deref(), Some("/kept/api.log"));
+        assert!(dep.failed_by.is_empty());
+        let check = by("root:integration");
+        assert_eq!(check.result, RowResult::Failed);
+        assert_eq!(check.key, None);
+        assert_eq!(check.failed_by, ["api:integration"]);
+        assert!(check.log.is_none() && check.host.is_none());
     }
 
     /// Behind a blamed submission: formed again, and nothing of the

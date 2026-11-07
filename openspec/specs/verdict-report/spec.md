@@ -34,6 +34,8 @@ names, the report SHALL give the check's name, system and key, and one
 of these results:
 - passed;
 - failed;
+- failed by a task it depends on, naming the task, with no key of its
+  own (149);
 - flaky, with the result it contradicts (19);
 - could not run, with why and in how many runs in a row (114, 115);
 - missing;
@@ -134,3 +136,19 @@ result, a flaky reading, whether a check was replayed, or a verdict
 
 - **WHEN** moon reports that `app:test` passed on its second attempt
 - **THEN** its result is passed, the branch's gate reads it as a pass, not as flaky, and the report notes 2 attempts
+
+### Requirement: The report lists each task a required check was failed by
+
+The report SHALL list each task a required check was failed by as a
+check is listed, with its key, its result and where its log is kept,
+whether or not the branch requires the task itself (149).
+
+#### Scenario: Failed by a task it depends on
+
+- **WHEN** `main` requires `root:integration`, and a combination's run fails `api:integration`, which it depends on, so moon skips `root:integration`
+- **THEN** the report lists `api:integration` failed, with its key and its log, and `root:integration` failed by `api:integration`, with no key, not as missing (`the_report_names_the_task_a_check_was_failed_by` in `crates/sluice-conformance/tests/reports.rs`)
+
+#### Scenario: The pull request's check
+
+- **WHEN** the same submission came from a pull request
+- **THEN** its check shows `root:integration` failed, saying "failed by `api:integration`", and `api:integration` failed with its key
