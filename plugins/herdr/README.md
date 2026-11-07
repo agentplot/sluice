@@ -105,8 +105,8 @@ withdraws or lands anything.
   `· 1 held: release failed`, and gets one with nothing queued:
   `sluice main · 0 submissions · 1 held: release failed`.
 
-Every token is set again at least every 15 seconds and expires after two
-minutes, so nothing stale stays if the plugin stops.
+Every token is set again within a minute and expires two minutes after,
+so nothing stale stays if the plugin stops.
 
 ## Setting it up
 
@@ -193,9 +193,13 @@ Any source may set the token; let one own it on each pane. Reported
 without `--ttl-ms`, herdr keeps it until it is replaced, cleared
 (`--clear-token sluice_branch`) or the pane closes, but not across a
 restart of herdr's server: report it again when the agent is restarted or
-resumed. The plugin reads it at each tick, within 15 seconds. herdr gives
-every pane `HERDR_PANE_ID`; from elsewhere, use the id `herdr pane list`
-shows. A Claude Code session's board reads the same from `SLUICE_BRANCH`
+resumed. The plugin reads a server's panes, and the token with them, when
+the server opens a pane or a worktree. It reads them again 15 seconds or
+so later, and once a minute while the server shows a row of the plugin's.
+A token reported as its pane opens shows within 15 seconds; one changed
+later, with no event, within a minute, since a named pane always shows a
+row. herdr gives every pane `HERDR_PANE_ID`; from elsewhere, use the id
+`herdr pane list` shows. A Claude Code session's board reads the same from `SLUICE_BRANCH`
 in the session's environment.
 
 ## Sources

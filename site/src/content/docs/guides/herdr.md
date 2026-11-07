@@ -204,8 +204,9 @@ the first file in conflict. It asks again only when the worktree's head,
 the branch's revision or the submissions queued on it move. Each workspace's row shows how many submissions
 its repositories hold, then how many checkouts, worktrees and previews are
 held because their release failed: `4 submissions · 1 held: release failed`. A checkout that several
-hosts list counts once. Every row expires two minutes after the plugin last
-set it, so nothing stale stays if the plugin stops.
+hosts list counts once. The plugin sets every row again within a minute,
+and a row expires two minutes after it was last set, so nothing stale stays
+if the plugin stops.
 
 ## Naming a pane's branch
 
@@ -231,8 +232,13 @@ say it.
 Reported without `--ttl-ms`, the token stays until it is replaced,
 cleared with `--clear-token sluice_branch`, or the pane closes, but not
 across a restart of herdr's server: report it again when the agent is
-restarted or resumed. The plugin reads it within 15 seconds. A Claude Code
-session reads the same from `SLUICE_BRANCH`, as
+restarted or resumed. The plugin reads a server's panes, and the token
+with them, when the server opens a pane or a worktree. It reads them again
+15 seconds or so later, and once a minute while the server shows a row of
+the plugin's. A token reported as its pane opens shows within 15 seconds.
+One changed later, with no event, shows within a minute, since a named
+pane always shows a row. A Claude Code session reads the same from
+`SLUICE_BRANCH`, as
 [the Claude Code guide](/sluice/guides/claude-code/#naming-a-sessions-branch) says.
 
 ## Other sources
