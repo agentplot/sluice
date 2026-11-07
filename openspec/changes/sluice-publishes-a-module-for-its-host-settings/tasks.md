@@ -16,7 +16,7 @@ site's rules page are in the change's own commit.
 
 ## 1. The flake's checks
 
-- [ ] 1.1 Give the flake its checks' tools, inputs and project, as the design's Decisions 1 and 8 and Task note 1.1 say. `flake.nix` gives aarch64-darwin, aarch64-linux and x86_64-linux and takes nix-darwin as the tests' input, and `flake.lock` locks it. `nix/inputs.nix` is Boomdrive's at 3f428cf. `devenv.nix` pins nix and statix by version and sets `SLUICE_FLAKE_INPUTS`. `nix/moon.yml` holds the project `nix` with its `lint` task, and `.moon/workspace.yml` lists it. True when `sluice exec bolt/sluices-own-module-writes-a-hosts-settings -- moon run nix:lint` passes.
+- [x] 1.1 Give the flake its checks' tools, inputs and project, as the design's Decisions 1 and 8 and Task note 1.1 say. `flake.nix` gives aarch64-darwin, aarch64-linux and x86_64-linux and takes nix-darwin as the tests' input, and `flake.lock` locks it. `nix/inputs.nix` is Boomdrive's at 3f428cf. `devenv.nix` pins nix and statix by version and sets `SLUICE_FLAKE_INPUTS`. `nix/moon.yml` holds the project `nix` with its `lint` task, and `.moon/workspace.yml` lists it. True when `sluice exec bolt/sluices-own-module-writes-a-hosts-settings -- moon run nix:lint` passes.
 - [ ] 1.2 Add the type check and the test's frame, as Decision 8 and Task note 1.2 say: `nix/check.sh`, `nix/tests/default.nix`, `nix/tests/lib.nix`, and `nix/tests/typecheck.nix` with the host-settings-module spec's "Every system's package"; `nix/moon.yml` gains `typecheck` and `test`. True when `sluice exec bolt/sluices-own-module-writes-a-hosts-settings -- moon run nix:typecheck` passes.
 
 ## 2. The module's settings and file

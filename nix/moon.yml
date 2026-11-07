@@ -1,0 +1,16 @@
+$schema: 'https://moonrepo.dev/schemas/project.json'
+
+# The flake: flake.nix and flake.lock at the root, everything else of it
+# under nix/ (record 0098). Each check is one task, in the fast tier,
+# run from the workspace root by the tools devenv.nix pins (core.21,
+# core.24). Its format is root:format's, whose nixfmt and deadnix read
+# its .nix files and whose shellcheck and shfmt read its .sh files.
+language: 'nix'
+
+tasks:
+  # statix over the flake's own files.
+  lint:
+    script: 'statix check flake.nix && statix check nix'
+    inputs: ['/flake.nix', '/flake.lock', '/nix/**/*', '/devenv.nix', '/devenv.lock']
+    tags: [check-fast]
+    options: {runFromWorkspaceRoot: true}
