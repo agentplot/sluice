@@ -2250,6 +2250,10 @@ mod tests {
             unreachable!("a submit runs nothing")
         }
 
+        fn switched(&self, _: &RunHandle) -> Result<Option<String>> {
+            Ok(None)
+        }
+
         fn bound(&self) -> Result<usize> {
             unreachable!("a submit runs nothing")
         }

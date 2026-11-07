@@ -1652,6 +1652,10 @@ impl Tests for Checks {
         Ok(engine_unmet(&self.engines()))
     }
 
+    fn switched(&self, _run: &RunHandle) -> Result<Option<String>> {
+        Ok(None)
+    }
+
     fn progress(&self, run: &RunHandle) -> Result<Progress> {
         let ended = match self.runs.state(&run.0)? {
             RunState::Running => return Ok(Progress::Running),

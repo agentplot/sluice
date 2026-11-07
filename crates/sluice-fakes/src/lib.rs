@@ -2194,6 +2194,10 @@ impl Tests for FakeTests {
         Ok(inner.unmet.get(&host).cloned())
     }
 
+    fn switched(&self, _run: &RunHandle) -> Result<Option<String>> {
+        Ok(None)
+    }
+
     fn bound(&self) -> Result<usize> {
         Ok(self.0 .0.borrow().host_limit.unwrap_or(usize::MAX))
     }
