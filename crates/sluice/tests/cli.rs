@@ -5148,6 +5148,108 @@ fn exec_json_is_one_document() {
     assert_eq!(doc["tasks"][0]["recorded"], false);
 }
 
+/// 149: the check a branch requires, a task that runs nothing of its own.
+const FAILED_CHECK: &str = "root:integration";
+
+/// 149: the task it depends on, which no gate requires.
+const FAILED_DEP: &str = "api:integration";
+
+/// 149: `root:integration`, required by name, depends on
+/// `api:integration`, which fails on `api/lib` = `broken`; the worktree
+/// `unit/a` holds that.
+fn failed_by_its_dependency() -> Fakes {
+    let f = Fakes::new();
+    let policy = POLICY.replace(
+        "required = [\"#gate\"]",
+        &format!("required = [\"{FAILED_CHECK}\"]"),
+    );
+    f.world.init(
+        BRANCH,
+        &[
+            (".config/sluice.toml", policy.as_str()),
+            ("api/lib", "fine"),
+            ("root/lib", "noop"),
+        ],
+    );
+    f.world.task(FAILED_DEP, "api/");
+    f.world.task(FAILED_CHECK, "root/");
+    f.tests.depends_on(FAILED_CHECK, FAILED_DEP);
+    f.world.fails_with(FAILED_DEP, "api/lib", "broken");
+    work(&f, "unit/a", "agent-a", &[("api/lib", Some("broken"))]);
+    f
+}
+
+/// 149, 92, 16 (rules core.7, core.18): a session's run in which the
+/// check a branch requires was failed by a task it depends on names the
+/// task failed and the check failed by it, never as not run, and exits
+/// 1; the task's fail is recorded under its key and nothing under the
+/// check's, and the worktree's last result is failed.
+#[test]
+fn exec_names_a_check_failed_by_its_dependency() {
+    let f = failed_by_its_dependency();
+    let head = sluice_seams::Driver::session(&f.driver, "unit/a")
+        .unwrap()
+        .head;
+    let (code, out) = exec(&f, &[BRANCH, "--worktree", "unit/a"]);
+    assert_eq!(code, FAILED, "{out}");
+    assert!(out.contains("failed: api:integration\n"), "{out}");
+    assert!(
+        out.contains("  root:integration failed by api:integration, a task it depends on\n"),
+        "{out}"
+    );
+    assert!(!out.contains("not run:"), "{out}");
+    assert!(!out.contains("passed:"), "{out}");
+    assert!(
+        out.contains(&format!(
+            "recorded 1 result under its key for {}\n",
+            head.short()
+        )),
+        "{out}"
+    );
+    let lines = result_lines(&f);
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    let l = &lines[0];
+    assert_eq!(l.task, FAILED_DEP);
+    assert_eq!(l.outcome, Outcome::Fail);
+    assert!(!l.hash.is_empty());
+    assert_eq!(l.kind, sluice_core::records::ResultKind::Ran);
+    assert_eq!(l.combination, head);
+    assert_eq!(l.worktree.as_deref(), Some("unit/a"));
+    let last = &overview_doc(&f, 0)["sessions"][0]["last_result"];
+    assert_eq!(last["outcome"], "fail", "{last}");
+    assert_eq!(last["recorded"], true, "{last}");
+    assert_eq!(last["reused"], false, "{last}");
+}
+
+/// 149: `sluice exec --json` gives the task a check was failed by in
+/// `dependencies`, with its key, its fail and that it was recorded, and
+/// the check in `failed_by`, never in `missing`; the exit is 1.
+#[test]
+fn exec_json_gives_dependencies_and_failed_by() {
+    let f = failed_by_its_dependency();
+    let (code, out) = exec(&f, &[BRANCH, "--worktree", "unit/a", "--json"]);
+    assert_eq!(code, FAILED, "{out}");
+    let doc: serde_json::Value =
+        serde_json::from_str(&out).unwrap_or_else(|e| panic!("{e}: {out}"));
+    assert_eq!(out.lines().count(), 1, "{out}");
+    assert_eq!(doc["exit"], 1);
+    assert_eq!(
+        doc["failed_by"],
+        serde_json::json!([{"task": FAILED_CHECK, "by": [FAILED_DEP]}])
+    );
+    let deps = doc["dependencies"].as_array().unwrap();
+    assert_eq!(deps.len(), 1, "{doc}");
+    assert_eq!(deps[0]["task"], FAILED_DEP);
+    assert_eq!(deps[0]["outcome"], "fail");
+    assert_eq!(deps[0]["recorded"], true);
+    assert!(
+        deps[0]["hash"].as_str().is_some_and(|h| !h.is_empty()),
+        "{doc}"
+    );
+    assert_eq!(doc["missing"], serde_json::json!([]));
+    assert_eq!(doc["tasks"], serde_json::json!([]));
+}
+
 // ---------------------------------------------------------------------------
 // sluice release (session-runs-1 clauses 94, 95)
 // ---------------------------------------------------------------------------
