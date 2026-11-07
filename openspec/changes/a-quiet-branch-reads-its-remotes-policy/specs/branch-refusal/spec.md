@@ -3,11 +3,11 @@
 ### Requirement: A read outside a round reads the policy at the revision this host holds
 
 `sluice status`, `sluice submit --status`, `sluice overview`, `sluice`
-with no command, the watch's document and a wait's view SHALL read a
-branch's policy at its revision as this host holds it: its own ref, or
-for a branch on a remote its tracking ref as last fetched. They SHALL
-read it at the revision the branch's state last saw only where this host
-holds none (26, 56, 124, 129).
+with no command, and what a watch or a wait shows SHALL read a branch's
+policy at its revision as this host holds it: its own ref, or for a
+branch on a remote its tracking ref as last fetched. They SHALL read it
+at the revision the branch's state last saw only where this host holds
+none (26, 56, 124, 129).
 
 #### Scenario: A quiet branch mended outside sluice
 

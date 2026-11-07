@@ -5,17 +5,18 @@ Once a branch is on its remote, sluice SHALL read its policy whole at the
 branch's revision on the remote, fetched, for its gate and every move of
 it, and SHALL NOT judge the rest of the policy at the host's own copy. A
 policy refused there SHALL refuse that branch's round, naming the branch,
-the remote's revision and the refusal. A read of the branch outside a
-round SHALL read its policy at the remote's revision as this host last
-fetched it, never at the revision the branch's state last saw (see
-branch-refusal). A policy pushed to the remote that sluice reads SHALL
-clear the refusal on every host the next time a sluice command, or a
-reader's tick, reads the branch once that host holds the pushed
-revision, whether or not anything is queued, so that submit and status
-take work again with no round run for it. That host holds the pushed
-revision after the tick's ask where the branch's state is on that
-remote, after a submit's own read of the branch, which fetches it, and
-after any other fetch of the branch on the host (56, 124, 129).
+the remote's revision and the refusal. A policy pushed to the remote that
+sluice reads SHALL clear the refusal on every host the next time a
+sluice command reads the branch, whether or not anything is queued, so
+that submit and status take work again with no round run for it. A
+submit SHALL read the branch fetched and judge the submission there, so
+the next submit takes the work. A read of the branch outside a round,
+by status, the overview, `sluice` with no command, or what a watch or a
+wait shows, SHALL read its policy at the remote's revision as this host
+last fetched it, never at the revision the branch's state last saw (see
+branch-refusal), and SHALL fetch nothing for it, so that it reads the
+branch whole once a fetch on this host, a submit's among them, has
+brought the pushed revision (56, 124, 129).
 
 #### Scenario: The bolt's own round runs past a copy that lags
 - **WHEN** this host's own `bolt/x` holds a policy with a `[[checkout.cache]]` table, origin's `bolt/x` holds a clean policy, and a submission to `bolt/x` is waiting
@@ -29,13 +30,9 @@ after any other fetch of the branch on the host (56, 124, 129).
 - **WHEN** origin's `bolt/x` was refused for a `[[checkout.cache]]` table, and a commit removing that table is pushed to origin's `bolt/x` by hand while this host's own `bolt/x` still holds it
 - **THEN** the next round on this host reads origin's new revision, tests the waiting submission and lands it
 
-#### Scenario: A quiet branch whose state is on its remote clears at the next tick
-- **WHEN** `main`'s state is on origin, nothing is queued, `main`'s state last saw a revision whose policy has a `[[checkout.cache]]` table, the overview watch is reading, and a commit removing that table is pushed to origin's `main` by hand
-- **THEN** the watch's line after its next tick shows `main` with no `unread`, `sluice status main` shows its queue, and no round has run: `main`'s state still names the revision it last saw as `at`
-
 #### Scenario: A quiet branch this host fetched is read whole by status
 - **WHEN** `main` is on origin with its state on this host, nothing is queued, `main`'s state last saw `R1`, whose policy has a `[[checkout.cache]]` table, and this host's `origin/main` is at `R2`, which removes it
-- **THEN** `sluice status main` and `sluice overview` show `main` whole, nothing is fetched, and nothing is written
+- **THEN** `sluice status main` and `sluice overview` show `main` whole, nothing is fetched, nothing is written, and no round has run
 
 #### Scenario: A quiet branch this host never fetched takes a submit
 - **WHEN** `bolt/x` is on origin with its state on this host, nothing is queued, `bolt/x`'s state last saw `R1`, whose policy has a `[[checkout.cache]]` table, origin's `bolt/x` is at `R2`, which removes it, and this host's `origin/bolt/x` is still `R1`
