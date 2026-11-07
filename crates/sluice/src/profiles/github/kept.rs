@@ -20,6 +20,14 @@
 //! - `requests/<owner>/<repo>/<base>.moved`: touched by a submit on the
 //!   host that opened, updated or marked ready a request into the branch;
 //!   newer than the last asking, it asks at once.
+//! - `follows/<owner>/<repo>/<base>.json`: on a host that does not take
+//!   the branch's pull requests in, each it follows ([`Follows`]): one a
+//!   submit on the host opened, updated or marked ready, one its hand-over
+//!   withdrew, or one a wait or status on it followed, by number, with when
+//!   GitHub was last read for it, what that read found of it and sluice's
+//!   check on its head; changed under the exclusive lock of the `.lock`
+//!   beside it, so that every process of the host reads a request once in
+//!   a quarter of the interval between them (137, design D3, D4).
 //! - `intake/<owner>/<repo>/<base>.json`: the branch's intake mark as
 //!   this host last saw it on the remote ([`Observed`]): its commit, when
 //!   this host first saw that commit there, and when this host last
@@ -129,6 +137,32 @@ pub struct Reading {
     /// stands for the pass, whatever it is; never kept.
     #[serde(skip)]
     pub whole: bool,
+}
+
+/// 137: the pull requests into a branch a host that does not take them
+/// in follows, by number (design D3).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Follows {
+    #[serde(default)]
+    pub requests: BTreeMap<u64, Follow>,
+}
+
+/// 137: what a host last read of one pull request it follows.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Follow {
+    /// When a process of the host last read it and sluice's check on its
+    /// head from GitHub, or began to; `None` where the host knows it only
+    /// by its own act on it, so the next process to follow it reads it.
+    pub read_at: Option<DateTime<Utc>>,
+    pub head: String,
+    pub open: bool,
+    pub merged: bool,
+    pub draft: bool,
+    pub title: String,
+    /// The branch it is opened from.
+    pub from: String,
+    /// sluice's check on `head`, as last read; `None` where none stood.
+    pub check: Option<Posted>,
 }
 
 /// 137: a branch's intake mark as this host last saw it: its commit,
@@ -284,6 +318,46 @@ impl Kept {
             return false;
         };
         asked.is_none_or(|asked| DateTime::<Utc>::from(at) > asked)
+    }
+
+    /// Where the pull requests into `base` of `repo` the host follows are
+    /// kept, before `.json` or `.lock`.
+    fn follows_path(&self, repo: &Repo, base: &str, ext: &str) -> PathBuf {
+        self.dir
+            .join("follows")
+            .join(&repo.owner)
+            .join(&repo.name)
+            .join(format!("{}.{ext}", crate::runs::flat_name(base)))
+    }
+
+    /// 137: the pull requests into `base` of `repo` the host follows; none
+    /// when none are kept, or the file is torn.
+    pub fn follows(&self, repo: &Repo, base: &str) -> Follows {
+        read(&self.follows_path(repo, base, "json")).unwrap_or_default()
+    }
+
+    /// 137: change the pull requests into `base` of `repo` the host follows
+    /// by `f`, under their lock, and keep what it leaves, written whole.
+    pub fn change_follows<T>(
+        &self,
+        repo: &Repo,
+        base: &str,
+        f: impl FnOnce(&mut Follows) -> T,
+    ) -> Result<T> {
+        let path = self.follows_path(repo, base, "lock");
+        let dir = path.parent().expect("a kept file has a directory");
+        std::fs::create_dir_all(dir).with_context(|| format!("making {}", dir.display()))?;
+        let lock = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)
+            .with_context(|| path.display().to_string())?;
+        lock.lock().with_context(|| path.display().to_string())?;
+        let mut follows = self.follows(repo, base);
+        let out = f(&mut follows);
+        write(&self.follows_path(repo, base, "json"), &follows)?;
+        Ok(out)
     }
 
     fn intake_path(&self, repo: &Repo, base: &str) -> PathBuf {
@@ -584,6 +658,59 @@ mod tests {
         let after = Utc::now() + TimeDelta::seconds(5);
         assert!(!kept.moved_since(&repo, "main", Some(after)));
         assert!(!kept.moved_since(&repo, "bolt/x", Some(before)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 137: a followed request is kept under its lock with what was read
+    /// of it, read back, each branch apart, and leaves when taken out; a
+    /// torn file reads as none.
+    #[test]
+    fn a_followed_request_is_kept_and_leaves() {
+        let dir = scratch("follows");
+        let kept = Kept::new(&dir);
+        let repo = Repo::from_url("https://github.com/o/r.git").unwrap();
+        assert_eq!(kept.follows(&repo, "main"), Follows::default());
+        let check = Posted {
+            id: 9,
+            name: "sluice".into(),
+            posting: super::super::forge::Posting {
+                status: super::super::forge::Status::Queued,
+                title: "queued: next on bolt/x".into(),
+                summary: "Submission 4 on b.".into(),
+                text: None,
+            },
+        };
+        let follow = Follow {
+            read_at: Some(Utc::now()),
+            head: "abc".into(),
+            open: true,
+            merged: false,
+            draft: false,
+            title: "Add the thing".into(),
+            from: "unit/thing".into(),
+            check: Some(check),
+        };
+        let kept_now = kept
+            .change_follows(&repo, "bolt/x", |f| {
+                f.requests.insert(12, follow.clone());
+                f.requests.len()
+            })
+            .unwrap();
+        assert_eq!(kept_now, 1);
+        assert_eq!(kept.follows(&repo, "bolt/x").requests[&12], follow);
+        assert_eq!(kept.follows(&repo, "bolt"), Follows::default());
+        assert!(dir.join("forge/follows/o/r/bolt%2Fx.json").exists());
+        assert!(dir.join("forge/follows/o/r/bolt%2Fx.lock").exists());
+        // The lock is free once the change is kept: another takes it.
+        kept.change_follows(&repo, "bolt/x", |f| f.requests.remove(&12))
+            .unwrap();
+        assert!(kept.follows(&repo, "bolt/x").requests.is_empty());
+        std::fs::write(
+            dir.join("forge/follows/o/r/bolt%2Fx.json"),
+            b"{\"requests\"",
+        )
+        .unwrap();
+        assert_eq!(kept.follows(&repo, "bolt/x"), Follows::default());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
