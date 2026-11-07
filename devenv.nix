@@ -229,10 +229,15 @@ let
 
   # OpenSpec, which root:specs validates openspec/specs with: the release
   # the specs are written with, built as nixpkgs builds its older one. Bump
-  # the version, then each hash from the mismatch the build reports.
+  # the version, then each hash from the mismatch the build reports, then
+  # write OpenSpec's Claude Code skills and commands under .claude/ again
+  # with it, `sh check-openspec-claude.sh --write` in the shell, since the
+  # tree tracks them as this release writes them and root:openspec-claude
+  # holds them to it (record 0097).
+  openspecVersion = "1.14.3";
   openspec = pkgs.openspec.overrideAttrs (
     finalAttrs: _: {
-      version = "1.14.3";
+      version = openspecVersion;
       src = pkgs.fetchFromGitHub {
         owner = "Fission-AI";
         repo = "OpenSpec";
