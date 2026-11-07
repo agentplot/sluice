@@ -1,7 +1,7 @@
 ---
 number: 93
 title: A host's queues move in sluice's own host process, started when work arrives and gone when idle, and pull requests are queued on the forge
-status: proposed
+status: accepted
 date: 2026-11-06
 decision-makers:
 - Chuck Swanberg
@@ -10,7 +10,7 @@ decision-makers:
 
 # A host's queues move in sluice's own host process, started when work arrives and gone when idle, and pull requests are queued on the forge
 
-Status: proposed to the user on 2026-11-06, as `briefs.15` has it; accepted only on their yes.
+Status: accepted by the user on 2026-11-06, in agentplot-design's pane: "I approved 93."
 
 Supersedes record 0092. Amends records 0056, 0068 and 0071, and supersedes records 0088 and 0089, each marked so where it stands.
 
@@ -44,8 +44,7 @@ Option 1.
 
 - Rules core.31 and core.33 are rewritten, each marked proposed; core.25 holds, its reader being the host process.
 - The README's "No daemon" paragraph says sluice starts its own process when work arrives and nothing is installed.
-- Record 0092 is superseded and rejected; records 0088 and 0089, which keep and hand over the intake mark, are superseded once this record is accepted; records 0056, 0068 and 0071 are amended where they name a driver a host runs or a host taking requests in.
-- The change `a-queues-test-keeps-the-slot-it-counted` (record 0087 on its branch), which keeps the slot across processes, and the fix `a-hand-overs-withdrawal-holds-no-request` build what this record removes, and are told so.
+- Record 0092 is superseded and rejected; records 0088 and 0089, which keep and hand over the intake mark, are superseded; records 0056, 0068 and 0071 are amended where they name a driver a host runs or a host taking requests in.
+- The change `a-queues-test-keeps-the-slot-it-counted`, which kept the slot across processes, is dropped; record 0087, its decision, stands amended in part by this one. The fix `a-hand-overs-withdrawal-holds-no-request` builds what this record removes, and is told so.
 - A host where several users run sluice keeps one host process and one bound for each user.
 - What each family repository owes, Boomdrive's core.13 and record 0003 and flume's C.6, is in `host-process-1.md`'s last section; the per-repository `sluice run` services on any host retire once a sluice with the host process is released.
-- No unit is queued from this record while it is proposed.
