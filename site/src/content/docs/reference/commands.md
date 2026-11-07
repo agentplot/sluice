@@ -973,6 +973,24 @@ with exit `1` or `conflict: …` with exit `2`. Closed without landing is
 closed. Under `--json` it prints `{"pull_request","branch","state",
 "title"}`, the state `landed`, `failed` or `conflict`.
 
+While the pull request is open, the wait reads where it stands from the
+words of sluice's check, and never from the color GitHub keeps for the
+check. Once a check has failed, GitHub shows it failed for good, while
+sluice posts its new words on it as the pull request is held, taken in
+again and tested. A pull request held for the next submit, its check
+saying `waiting: the next submit`, is sent back while it is a draft,
+with exit `1`. Once a submit or a person marks it ready for review, it
+waits for the host that takes the branch's pull requests in to take it
+in again. The wait then prints `waiting to be taken in by` and that
+host's name, and goes on following it.
+
+On a host where another takes the branch's pull requests in, `sluice
+submit <branch> --status --json` prints a pull request landed or sent
+back as it prints a decided submission's record. It names its `state`,
+`landed`, `failed` or `conflict`, the check's `title` and `summary`, and
+its `head`, `draft` and `sends`. It exits `0`, as `--status` does
+wherever it finds the worktree's pull request.
+
 A submission that landed beside the queue ends with `landed as 4e1a07c
 beside the queue: no required check reads its changes`, exit `0`, and
 under `--json` its record has `"beside": true`. While one waits behind
