@@ -1,3 +1,11 @@
+## Purpose
+
+How sluice reads a required check its task runner skipped because a
+task the check depends on ran and failed: failed by that task, never
+left without a result, the task's run recorded and weighed under its
+own key, and the task named to whoever fixes the submission (15, 16,
+19, 20, 114, 149).
+
 ## ADDED Requirements
 
 ### Requirement: A required check skipped for a task it depends on that failed is failed by that task

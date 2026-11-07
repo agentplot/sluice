@@ -14,9 +14,6 @@ of these results:
 - missing;
 - set aside, with its reason (116).
 
-The report SHALL also list each task a required check was failed by, as
-a check is listed, with its key, its result and where its log is kept.
-
 #### Scenario: Two systems
 
 - **WHEN** `main` needs `cli:build` on `linux-x64` and `macos-arm64`, and a combination passed it on `linux-x64` and failed it on `macos-arm64`
@@ -31,6 +28,14 @@ a check is listed, with its key, its result and where its log is kept.
 
 - **WHEN** `app:e2e` failed on the combination and a pass for the same key is recorded, and the policy reads a flaky key as not passed
 - **THEN** the report lists `app:e2e` as flaky, naming the pass and when it was recorded
+
+## ADDED Requirements
+
+### Requirement: The report lists each task a required check was failed by
+
+The report SHALL list each task a required check was failed by as a
+check is listed, with its key, its result and where its log is kept,
+whether or not the branch requires the task itself (149).
 
 #### Scenario: Failed by a task it depends on
 

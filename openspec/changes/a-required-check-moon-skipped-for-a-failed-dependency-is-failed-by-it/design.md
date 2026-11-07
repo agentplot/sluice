@@ -410,8 +410,29 @@ its own temporary folder, never the host's state.
 
 Nothing to migrate. Records gain `failed_by` and results gain
 dependencies' lines as runs finish. A record without them reads as
-today. The release CI makes from the landing is a new minor version.
-The orchestrator gives crew the words change of D9.
+today. No task of this change waits on the landing. Once it lands, the
+orchestrator:
+
+1. **Confirms the release.** The change carries a `feat(core)` commit,
+   so the release CI makes from the landing's commit is a new minor
+   version. `gh release list --repo agentplot/sluice --limit 3` names
+   it, and `gh release view <tag> --repo agentplot/sluice --json
+   tagName,targetCommitish,publishedAt` names the landing's commit as
+   its target.
+2. **Gives crew the words change of D9,** in afterthought/crew, through
+   its planner: `verdict_of` reads each failed entry's `failed_by` and
+   says `<check> failed by <task>, a task it depends on`, sluice's own
+   words, rather than listing the check as not run. `landing_blame`
+   needs no change: it already reads the dependency's `hash` and gives
+   the bolt its fix. The change decides nothing in crew.
+3. **Gives Boomdrive its change of D9:** `carried`, in
+   `crates/boomdrive/src/sluice.rs`, carries `failed_by` with each
+   failed row, so the control plane stops reading the skipped check as
+   not run. It decides nothing either.
+4. **Asks the host that ran #1305,** switchboard-kit's queue on `main`,
+   to run the new release before its next submission, so a check moon
+   skips for a failed dependency is failed by it and crew files the
+   bolt's fix rather than a host stop.
 
 ## Open Questions
 
