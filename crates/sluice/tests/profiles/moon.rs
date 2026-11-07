@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use sluice::instance::{HostCache, Instance};
 use sluice::profiles::checks::Checks;
 use sluice_seams::{
-    Limits, Network, Outcome, Place, Progress, Reading, Reads, Rev, RunHandle, RunReport,
+    FailedBy, Limits, Network, Outcome, Place, Progress, Reading, Reads, Rev, RunHandle, RunReport,
     RunRequest, Setting, Settings, Source, TaskState, Tests,
 };
 use support::Repo;
@@ -540,8 +540,8 @@ fn a_run_without_replay_runs_every_task() {
     assert_eq!(keys(&first), keys(&second));
 }
 
-/// 15, 16: a failing task is a fail under its key; its dependent, never
-/// run, has no result and is named missing.
+/// 15, 16, 149: a failing task is a fail under its key; its dependent,
+/// which moon skipped for it, is failed by it, and never missing.
 #[test]
 fn a_failure_and_its_dependent() {
     let repo = workspace("moon-fail");
@@ -550,7 +550,16 @@ fn a_failure_and_its_dependent() {
     let (run, r) = finish_run(&c, &request(&repo, "p1", &["#check-fast"], None));
     assert_eq!(tasks(&r), [("alpha:test".into(), Outcome::Fail, false)]);
     assert_eq!(r.tasks[0].hash.len(), 64);
-    assert_eq!(r.missing, ["beta:test"]);
+    assert_eq!(
+        r.failed_by,
+        [FailedBy {
+            task: "beta:test".into(),
+            by: vec!["alpha:test".into()],
+        }]
+    );
+    // A dependency that is itself required is listed as a check, once.
+    assert!(r.dependencies.is_empty(), "{:?}", r.dependencies);
+    assert!(r.missing.is_empty(), "{:?}", r.missing);
     // 20: what the failed task printed, as moon kept it; the dependent
     // moon never ran has the run's own output.
     let logs = c
@@ -560,9 +569,9 @@ fn a_failure_and_its_dependent() {
     assert!(!logs[1].text.is_empty());
 }
 
-/// could-not-run-1 114: a task that exits as the policy's `not_run`
+/// could-not-run-1 114, 149: a task that exits as the policy's `not_run`
 /// says could not run here, so no fail is recorded under its key; its
-/// dependent, never run, is missing as before.
+/// dependent, which moon skipped for it, is not run, saying so.
 #[test]
 fn a_task_that_could_not_run_records_no_fail() {
     let repo = workspace("moon-not-run");
@@ -579,10 +588,96 @@ fn a_task_that_could_not_run_records_no_fail() {
         "recorded as failed: {:?}",
         r.tasks
     );
-    assert_eq!(r.not_run.len(), 1, "{:?}", r.not_run);
+    assert_eq!(r.not_run.len(), 2, "{:?}", r.not_run);
     assert_eq!(r.not_run[0].task, "alpha:test");
     assert!(r.not_run[0].reason.contains("exited 77"));
-    assert_eq!(r.missing, ["beta:test"]);
+    assert_eq!(r.not_run[1].task, "beta:test");
+    assert!(
+        r.not_run[1]
+            .reason
+            .starts_with("its dependency alpha:test could not run: exited 77"),
+        "{}",
+        r.not_run[1].reason
+    );
+    assert!(r.failed_by.is_empty() && r.dependencies.is_empty());
+    assert!(r.missing.is_empty(), "{:?}", r.missing);
+}
+
+/// The workspace with a `root` project whose `all` task runs nothing of
+/// its own, `noop`, and depends on what `deps` names, in moon.yml's words.
+fn noop_workspace(name: &str, deps: &str) -> Repo {
+    let repo = workspace(name);
+    let ws = std::fs::read_to_string(repo.dir().join(".moon/workspace.yml")).unwrap();
+    repo.write(
+        ".moon/workspace.yml",
+        &ws.replace("projects:\n", "projects:\n  root: 'root'\n"),
+    );
+    repo.write(
+        "root/moon.yml",
+        &format!("tasks:\n  all:\n    command: 'noop'\n    deps:\n{deps}"),
+    );
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "root"]);
+    repo
+}
+
+/// 149, 16, 20; the failed-dependency spec's "The run report from moon":
+/// a required `root:all` that runs nothing and depends on `alpha:test`,
+/// which no gate requires, is failed by it when it fails; `alpha:test`'s
+/// result is the run's, ran here under its own key, and its log is what
+/// it printed, as moon kept it.
+#[test]
+fn a_noop_check_is_failed_by_the_task_it_depends_on() {
+    let repo = noop_workspace("moon-noop", "      - 'alpha:test'\n");
+    let c = checks(&repo);
+    change(&repo, &[("alpha/value.txt", "broken\n")]);
+    let (run, r) = finish_run(&c, &request(&repo, "p1", &["root:all"], None));
+    assert!(r.tasks.is_empty(), "{:?}", r.tasks);
+    assert!(r.missing.is_empty(), "{:?}", r.missing);
+    assert!(r.not_run.is_empty(), "{:?}", r.not_run);
+    assert_eq!(
+        r.failed_by,
+        [FailedBy {
+            task: "root:all".into(),
+            by: vec!["alpha:test".into()],
+        }]
+    );
+    assert_eq!(r.dependencies.len(), 1, "{:?}", r.dependencies);
+    let dep = &r.dependencies[0];
+    assert_eq!(
+        (dep.task.as_str(), dep.outcome),
+        ("alpha:test", Outcome::Fail)
+    );
+    assert_eq!(dep.hash.len(), 64, "{}", dep.hash);
+    assert!(matches!(dep.source, Source::Ran { .. }), "{:?}", dep.source);
+    let logs = c.logs(&run, &["alpha:test".into()]).unwrap();
+    assert!(logs[0].text.contains("alpha: broken"), "{}", logs[0].text);
+}
+
+/// 149: a task moon runs after a check to clean up fails no check: moon
+/// runs the check, which passes, and the cleanup's fail is no
+/// dependency's.
+#[test]
+fn a_cleanup_dependency_that_fails_fails_no_check() {
+    let repo = noop_workspace(
+        "moon-cleanup",
+        "      - target: 'alpha:stop'\n        type: 'cleanup'\n",
+    );
+    let alpha = std::fs::read_to_string(repo.dir().join("alpha/moon.yml")).unwrap();
+    repo.write(
+        "alpha/moon.yml",
+        &format!(
+            "{alpha}  stop:\n    command: 'sh -c \"exit 1\"'\n    options: {{ cache: false }}\n"
+        ),
+    );
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "cleanup"]);
+    let c = checks(&repo);
+    let r = finish(&c, &request(&repo, "p1", &["root:all"], None));
+    assert_eq!(tasks(&r), [("root:all".into(), Outcome::Pass, false)]);
+    assert!(r.failed_by.is_empty(), "{:?}", r.failed_by);
+    assert!(r.dependencies.is_empty(), "{:?}", r.dependencies);
+    assert!(r.missing.is_empty(), "{:?}", r.missing);
 }
 
 /// 70: with no verified revision every required task runs; two tags run

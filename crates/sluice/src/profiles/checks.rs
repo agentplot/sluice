@@ -157,6 +157,10 @@ pub struct Plan {
     /// Whether the run holds a test `[tests] cold` names, so is given none
     /// of the host's caches (35).
     pub cold: bool,
+    /// 149: each target's dependencies at any depth of the runner's graph,
+    /// read as the run is planned, since the runner's report names no edge
+    /// of it; empty for the command runner, which runs one command.
+    pub deps: BTreeMap<String, Vec<String>>,
 }
 
 /// What a run's request carries for reading its result.
@@ -178,6 +182,10 @@ struct Meta {
     /// `Plan::kept_out`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     kept_out: Vec<String>,
+    /// `Plan::deps`; a run an older sluice started has none, and reads no
+    /// target through a dependency (149).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    deps: BTreeMap<String, Vec<String>>,
     /// Where moon keeps the run's manifests, found as the run started
     /// (design D8); a run recorded without it keeps them in its place's
     /// `.moon/cache`.
@@ -1494,6 +1502,7 @@ impl Tests for Checks {
                     targets: vec![command.to_string()],
                     holds_processors: false,
                     kept_out: Vec::new(),
+                    deps: BTreeMap::new(),
                     // The command is the runner's one test.
                     cold: cold_tests(&request.tests)?.iter().any(|c| c == command),
                     // A command in a checkout that lists proto's tools may
@@ -1608,6 +1617,7 @@ impl Tests for Checks {
             started_ms: Some(chrono::Utc::now().timestamp_millis()),
             not_run,
             kept_out: plan.kept_out,
+            deps: plan.deps,
             store,
         };
         self.runs.start(
@@ -1653,6 +1663,8 @@ impl Tests for Checks {
             .with_context(|| format!("reading run {}", run.0))?;
         // Could-not-run-1 114: a runner that never started judged nothing.
         let mut detail = None;
+        let mut dependencies = Vec::new();
+        let mut failed_by = Vec::new();
         let (mut tasks, not_run) = match &ended.error {
             Some(e) => (
                 Vec::new(),
@@ -1666,10 +1678,18 @@ impl Tests for Checks {
             ),
             None => match meta.runner.as_str() {
                 "moon" => {
-                    let (tasks, not_run, d) =
-                        Moon.read(&meta.place, &meta.targets, &meta.not_run, &meta.host)?;
-                    detail = d;
-                    (tasks, not_run)
+                    // 66: in a run its time limit ended, nothing is read
+                    // through a dependency, since one the limit ended
+                    // reports the exit it took on the signal, which is no
+                    // fail (149).
+                    let none = BTreeMap::new();
+                    let deps = if ended.timed_out { &none } else { &meta.deps };
+                    let read =
+                        Moon.read(&meta.place, &meta.targets, deps, &meta.not_run, &meta.host)?;
+                    detail = read.detail;
+                    dependencies = read.dependencies;
+                    failed_by = read.failed_by;
+                    (read.tasks, read.not_run)
                 }
                 _ => command_result(&meta, &ended),
             },
@@ -1704,6 +1724,7 @@ impl Tests for Checks {
                 .iter()
                 .filter(|t| !tasks.iter().any(|r| &r.task == *t))
                 .filter(|t| !not_run.iter().any(|n| &n.task == *t))
+                .filter(|t| !failed_by.iter().any(|f| &f.task == *t))
                 .cloned()
                 .collect()
         };
@@ -1714,6 +1735,8 @@ impl Tests for Checks {
             executor: meta.executor,
             missing,
             not_run,
+            dependencies,
+            failed_by,
             timed_out: ended.timed_out,
         }))
     }
@@ -1771,8 +1794,9 @@ impl Tests for Checks {
     fn proven(&self, run: &RunHandle, report: &RunReport) -> Result<Vec<String>> {
         let meta: Meta = serde_json::from_value(self.runs.request(&run.0)?.meta)
             .with_context(|| format!("reading run {}", run.0))?;
+        let tasks = report.tasks.iter().chain(&report.dependencies);
         if meta.runner != "moon" {
-            return Ok(report.tasks.iter().map(|t| t.task.clone()).collect());
+            return Ok(tasks.map(|t| t.task.clone()).collect());
         }
         let store = meta
             .store
@@ -1781,7 +1805,7 @@ impl Tests for Checks {
         let blob = |k: &str| super::moon::blob_in(&store, k);
         let tree = |p: &str| super::moon::file_at(&meta.place, &meta.revision, p);
         let mut out = Vec::new();
-        for t in &report.tasks {
+        for t in tasks {
             match super::moon::check_key(&t.hash, &t.task, &blob, &tree) {
                 Ok(()) => out.push(t.task.clone()),
                 Err(e) => tracing::warn!(

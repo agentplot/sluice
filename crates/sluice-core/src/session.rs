@@ -238,7 +238,7 @@ impl Sluice<'_> {
             RunOutcome::TimedOut
         } else if passed(report) {
             RunOutcome::Pass
-        } else if failed(report) {
+        } else if report.failed() {
             RunOutcome::Fail
         } else {
             RunOutcome::NotRun
@@ -353,8 +353,9 @@ impl Sluice<'_> {
     }
 
     /// 92, 16, core.7: a clean session run's observed results, recorded
-    /// under their keys as runs on `head` from `worktree`; a replay is
-    /// never recorded as a run. Returns how many were written.
+    /// under their keys as runs on `head` from `worktree`, a task a check
+    /// was failed by as a check (149); a replay is never recorded as a
+    /// run. Returns how many were written.
     pub fn record_session(
         &self,
         plan: &SessionPlan,
@@ -366,7 +367,7 @@ impl Sluice<'_> {
         let have = self.results(&plan.branch)?;
         let mut bytes = Vec::new();
         let mut n = 0;
-        for t in &report.tasks {
+        for t in report.tasks.iter().chain(&report.dependencies) {
             if !matches!(t.source, Source::Ran { .. }) {
                 continue;
             }
@@ -392,8 +393,6 @@ impl Sluice<'_> {
     }
 }
 
-/// Every check the run named reported and passed, within its time limit:
-/// what `sluice exec` exits 0 on.
 /// What a finished run of the checks is worth when its head is submitted
 /// (ADR 0035): its tasks as they ended, and whether the gate takes them.
 struct Worth {
@@ -420,18 +419,11 @@ fn ended_tasks(report: &RunReport) -> Vec<TaskProgress> {
         .collect()
 }
 
+/// Every check the run named reported and passed, within its time limit:
+/// what `sluice exec` exits 0 on. A check failed by a task it depends on
+/// is no pass (149).
 fn passed(report: &RunReport) -> bool {
-    !report.timed_out && report.not_run.is_empty() && !failed(report)
-}
-
-/// A check failed on its own result, or was left without one (15); a
-/// check not run is neither (could-not-run-1 114).
-fn failed(report: &RunReport) -> bool {
-    !report.missing.is_empty()
-        || report
-            .tasks
-            .iter()
-            .any(|t| t.outcome == sluice_seams::Outcome::Fail)
+    !report.timed_out && report.not_run.is_empty() && !report.failed()
 }
 
 impl Sluice<'_> {

@@ -2071,12 +2071,18 @@ fn status_shows_a_combinations_progress() {
 /// 23: submission `id` as if its submit gave `subject`, written on its
 /// live record, since no submit here takes one yet.
 fn give_subject(f: &Fakes, id: u64, subject: &str) {
+    edit_record(f, id, |doc| doc["subject"] = subject.into());
+}
+
+/// Submission `id`'s record on `BRANCH`, changed by `edit`, as another
+/// version of sluice would have written it.
+fn edit_record(f: &Fakes, id: u64, edit: impl FnOnce(&mut serde_json::Value)) {
     let state = f.seams().state;
     let _lock = state.wait_lock(BRANCH).unwrap();
     let read = state.read(BRANCH).unwrap();
     let path = format!("submissions/{id}.json");
     let mut doc: serde_json::Value = serde_json::from_slice(&read.files[&path]).unwrap();
-    doc["subject"] = subject.into();
+    edit(&mut doc);
     let mut changes = sluice_seams::Changes::default();
     changes
         .put
@@ -5226,6 +5232,202 @@ fn exec_json_is_one_document() {
     assert_eq!(doc["tasks"][0]["recorded"], false);
 }
 
+/// 149: the check a branch requires, a task that runs nothing of its own.
+const FAILED_CHECK: &str = "root:integration";
+
+/// 149: the task it depends on, which no gate requires.
+const FAILED_DEP: &str = "api:integration";
+
+/// 149: `root:integration`, required by name, depends on
+/// `api:integration`, which fails on `api/lib` = `broken`; the worktree
+/// `unit/a` holds that.
+fn failed_by_its_dependency() -> Fakes {
+    let f = Fakes::new();
+    let policy = POLICY.replace(
+        "required = [\"#gate\"]",
+        &format!("required = [\"{FAILED_CHECK}\"]"),
+    );
+    f.world.init(
+        BRANCH,
+        &[
+            (".config/sluice.toml", policy.as_str()),
+            ("api/lib", "fine"),
+            ("root/lib", "noop"),
+        ],
+    );
+    f.world.task(FAILED_DEP, "api/");
+    f.world.task(FAILED_CHECK, "root/");
+    f.tests.depends_on(FAILED_CHECK, FAILED_DEP);
+    f.world.fails_with(FAILED_DEP, "api/lib", "broken");
+    work(&f, "unit/a", "agent-a", &[("api/lib", Some("broken"))]);
+    f
+}
+
+/// 149, 92, 16 (rules core.7, core.18): a session's run in which the
+/// check a branch requires was failed by a task it depends on names the
+/// task failed and the check failed by it, never as not run, and exits
+/// 1; the task's fail is recorded under its key and nothing under the
+/// check's, and the worktree's last result is failed.
+#[test]
+fn exec_names_a_check_failed_by_its_dependency() {
+    let f = failed_by_its_dependency();
+    let head = sluice_seams::Driver::session(&f.driver, "unit/a")
+        .unwrap()
+        .head;
+    let (code, out) = exec(&f, &[BRANCH, "--worktree", "unit/a"]);
+    assert_eq!(code, FAILED, "{out}");
+    assert!(out.contains("failed: api:integration\n"), "{out}");
+    assert!(
+        out.contains("  root:integration failed by api:integration, a task it depends on\n"),
+        "{out}"
+    );
+    assert!(!out.contains("not run:"), "{out}");
+    assert!(!out.contains("passed:"), "{out}");
+    assert!(
+        out.contains(&format!(
+            "recorded 1 result under its key for {}\n",
+            head.short()
+        )),
+        "{out}"
+    );
+    let lines = result_lines(&f);
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    let l = &lines[0];
+    assert_eq!(l.task, FAILED_DEP);
+    assert_eq!(l.outcome, Outcome::Fail);
+    assert!(!l.hash.is_empty());
+    assert_eq!(l.kind, sluice_core::records::ResultKind::Ran);
+    assert_eq!(l.combination, head);
+    assert_eq!(l.worktree.as_deref(), Some("unit/a"));
+    let last = &overview_doc(&f, 0)["sessions"][0]["last_result"];
+    assert_eq!(last["outcome"], "fail", "{last}");
+    assert_eq!(last["recorded"], true, "{last}");
+    assert_eq!(last["reused"], false, "{last}");
+}
+
+/// 149: `sluice exec --json` gives the task a check was failed by in
+/// `dependencies`, with its key, its fail and that it was recorded, and
+/// the check in `failed_by`, never in `missing`; the exit is 1.
+#[test]
+fn exec_json_gives_dependencies_and_failed_by() {
+    let f = failed_by_its_dependency();
+    let (code, out) = exec(&f, &[BRANCH, "--worktree", "unit/a", "--json"]);
+    assert_eq!(code, FAILED, "{out}");
+    let doc: serde_json::Value =
+        serde_json::from_str(&out).unwrap_or_else(|e| panic!("{e}: {out}"));
+    assert_eq!(out.lines().count(), 1, "{out}");
+    assert_eq!(doc["exit"], 1);
+    assert_eq!(
+        doc["failed_by"],
+        serde_json::json!([{"task": FAILED_CHECK, "by": [FAILED_DEP]}])
+    );
+    let deps = doc["dependencies"].as_array().unwrap();
+    assert_eq!(deps.len(), 1, "{doc}");
+    assert_eq!(deps[0]["task"], FAILED_DEP);
+    assert_eq!(deps[0]["outcome"], "fail");
+    assert_eq!(deps[0]["recorded"], true);
+    assert!(
+        deps[0]["hash"].as_str().is_some_and(|h| !h.is_empty()),
+        "{doc}"
+    );
+    assert_eq!(doc["missing"], serde_json::json!([]));
+    assert_eq!(doc["tasks"], serde_json::json!([]));
+}
+
+/// 149, 20: `sluice wait` for a submission blamed for a check failed by a
+/// task it depends on names the task failed, then the check failed by it,
+/// and where the task's log is kept; it never names the check not run,
+/// nor gives a log of a check that never ran.
+#[test]
+fn wait_names_the_task_a_check_was_failed_by() {
+    let f = failed_by_its_dependency();
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"]);
+    let (code, out) = sluice(&f, &["wait", "1"]);
+    assert_eq!(code, FAILED, "{out}");
+    let lines = outcome(&out);
+    let at = lines
+        .iter()
+        .position(|l| *l == "failed: api:integration")
+        .unwrap_or_else(|| panic!("{out}"));
+    assert_eq!(
+        lines[at + 1],
+        "  root:integration failed by api:integration, a task it depends on"
+    );
+    assert!(
+        lines[at + 2].starts_with(&format!("  on {BRANCH} + #1 (")),
+        "{out}"
+    );
+    let log = lines
+        .iter()
+        .find_map(|l| l.strip_prefix("  log of api:integration: "))
+        .unwrap_or_else(|| panic!("{out}"));
+    assert!(f
+        .world
+        .kept_log(log)
+        .unwrap()
+        .starts_with("api:integration failed"));
+    assert!(!out.contains("not run:"), "{out}");
+    assert!(!out.contains("log of root:integration"), "{out}");
+    assert_eq!(
+        lines.last(),
+        Some(&"the agent working in unit/a fixes it there and submits again"),
+        "{out}"
+    );
+}
+
+/// 149: `sluice wait --json` and `sluice status --json` give the record's
+/// `failed` as it is: the task that ran and failed with a non-empty
+/// `hash` and its `log`, the shape a tool reads as a check that ran and
+/// failed, and the check it failed with `failed_by` and no `hash`.
+#[test]
+fn the_record_names_a_failed_check_with_its_key() {
+    let f = failed_by_its_dependency();
+    let (code, out) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/a"]);
+    assert_eq!(code, FAILED, "{out}");
+    let (code, out) = sluice(&f, &["wait", "1", "--json"]);
+    assert_eq!(code, FAILED, "{out}");
+    let doc = json(&out);
+    let failed = doc["failed"].as_array().unwrap();
+    assert_eq!(failed.len(), 2, "{doc}");
+    let dep = failed.iter().find(|e| e["task"] == FAILED_DEP).unwrap();
+    assert!(dep["hash"].as_str().is_some_and(|h| !h.is_empty()), "{doc}");
+    assert!(dep["log"].is_string(), "{doc}");
+    assert!(dep.get("failed_by").is_none(), "{doc}");
+    let check = failed.iter().find(|e| e["task"] == FAILED_CHECK).unwrap();
+    assert_eq!(check["failed_by"], serde_json::json!([FAILED_DEP]));
+    assert!(
+        check.get("hash").is_none() && check.get("log").is_none(),
+        "{doc}"
+    );
+    let (_, out) = sluice(&f, &["status", "1", "--json"]);
+    assert_eq!(json(&out)["failed"], doc["failed"]);
+}
+
+/// 149: a record written before `failed_by`, as sluice 0.66.0 wrote one,
+/// its `failed` naming the required check with no `hash` and nothing of
+/// the task it depends on, reads as it did: the check not run, its log
+/// given, and its `--json` as it is.
+#[test]
+fn an_older_record_reads_as_before() {
+    let f = failed_by_its_dependency();
+    let (code, out) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/a"]);
+    assert_eq!(code, FAILED, "{out}");
+    let older = serde_json::json!([{"task": FAILED_CHECK, "log": "logs/run.log"}]);
+    edit_record(&f, 1, |doc| doc["failed"] = older.clone());
+    let (code, out) = sluice(&f, &["wait", "1"]);
+    assert_eq!(code, FAILED, "{out}");
+    let lines = outcome(&out);
+    assert!(lines.contains(&"not run: root:integration"), "{out}");
+    assert!(
+        lines.contains(&"  log of root:integration: logs/run.log"),
+        "{out}"
+    );
+    assert!(!out.contains("failed:"), "{out}");
+    assert!(!out.contains("failed by"), "{out}");
+    let (_, out) = sluice(&f, &["status", "1", "--json"]);
+    assert_eq!(json(&out)["failed"], older);
+}
+
 // ---------------------------------------------------------------------------
 // sluice release (session-runs-1 clauses 94, 95)
 // ---------------------------------------------------------------------------
@@ -6147,7 +6349,7 @@ impl sluice::PullRequests for Pull7 {
         &self,
         _: sluice_core::Seams<'_>,
         _: &dyn sluice_core::Clock,
-        _: &str,
+        _: &sluice_core::SubmitHead,
         _: &str,
         subject: Option<&str>,
     ) -> anyhow::Result<Result<sluice::Opened, sluice_core::SubmitRefusal>> {
@@ -7483,6 +7685,134 @@ fn several_worktrees_take_neither_check_nor_status() {
     assert!(queued(&f).is_empty());
 }
 
+/// 124, D1: a submit by name reads no worktree, so `--head` with
+/// `--worktree`, with `--status` or with two subjects is a command line
+/// sluice cannot read, saying why, which submits nothing; `--check
+/// --head` still forecasts, as before.
+#[test]
+fn head_takes_no_worktree_and_no_status() {
+    let f = setup();
+    f.world.set_branch("bolt/w", &f.world.tip(BRANCH));
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    let head = ["submit", BRANCH, "--head", "bolt/w", "--no-wait"];
+    for (args, said) in [
+        (
+            vec!["--worktree", "unit/a"],
+            "--head names what is submitted, from anywhere in the repository; give no \
+             --worktree with it",
+        ),
+        (
+            vec!["--status"],
+            "--status reads a worktree's last submission; a branch's are in sluice status \
+             <target> --all",
+        ),
+        (
+            vec!["--subject", "a", "--subject", "b"],
+            "--head submits one branch; give one --subject with it, or none",
+        ),
+    ] {
+        let args = [&head[..], &args].concat();
+        let (code, out) = sluice(&f, &args);
+        assert_eq!(code, sluice::USAGE, "{args:?}: {out}");
+        assert_eq!(out, format!("sluice submit: {said}\n"), "{args:?}");
+    }
+    assert!(queued(&f).is_empty());
+    let (code, out) = sluice(
+        &f,
+        &[
+            "submit",
+            BRANCH,
+            "--check",
+            "--head",
+            "bolt/w",
+            "--worktree",
+            "unit/a",
+        ],
+    );
+    assert_eq!(code, LANDED, "{out}");
+    assert_eq!(
+        out,
+        format!("no conflict with {BRANCH} or anything queued\n")
+    );
+    assert!(queued(&f).is_empty());
+}
+
+/// 124, D2: only a branch sluice lands on is submitted by name: a branch
+/// that does not exist, the target itself and a branch no table names
+/// are each refused, exit 2, naming why, with nothing written; under
+/// `--json`, as the error document.
+#[test]
+fn head_takes_only_a_branch_sluice_lands_on() {
+    let f = setup();
+    f.world.set_branch("unit/a", &f.world.tip(BRANCH));
+    for (head, said) in [
+        (
+            "bolt/gone",
+            "refused: no branch bolt/gone to submit".to_string(),
+        ),
+        (
+            BRANCH,
+            format!("refused: {BRANCH} is not submitted to itself"),
+        ),
+        (
+            "unit/a",
+            "refused: unit/a is no branch sluice lands on: a branch of a worktree's own is \
+             submitted from that worktree"
+                .to_string(),
+        ),
+    ] {
+        let (code, out) = sluice(&f, &["submit", BRANCH, "--head", head, "--no-wait"]);
+        assert_eq!(code, CONFLICT, "{head}: {out}");
+        assert_eq!(out.lines().next(), Some(said.as_str()), "{head}: {out}");
+        let (code, out) = sluice(
+            &f,
+            &["submit", BRANCH, "--head", head, "--no-wait", "--json"],
+        );
+        assert_eq!(code, CONFLICT, "{head}: {out}");
+        let doc = json(&out);
+        let message = said.strip_prefix("refused: ").unwrap();
+        assert_eq!(doc["error"]["message"], message, "{doc}");
+    }
+    assert!(queued(&f).is_empty());
+}
+
+/// 124, D9: a branch submitted by name is said by its name, `submission
+/// <n> to <target> from <branch> · <ahead>`, and under `--no-wait
+/// --json` answered as any submit that does not wait; its head is the
+/// branch's revision and its record names no worktree and no session.
+#[test]
+fn head_takes_a_branch_by_name_and_says_it() {
+    let f = setup();
+    let w = f
+        .world
+        .work(&f.world.tip(BRANCH), &[("plugin/w", Some("w"))]);
+    f.world.set_branch("bolt/w", &w);
+    let (code, out) = sluice(&f, &["submit", BRANCH, "--head", "bolt/w", "--no-wait"]);
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(
+        out,
+        format!("submission 1 to {BRANCH} from bolt/w · nothing queued ahead\n")
+    );
+    let v = f.world.work(&w, &[("plugin/v", Some("v"))]);
+    f.world.set_branch("bolt/v", &v);
+    let (code, out) = sluice(
+        &f,
+        &["submit", BRANCH, "--head", "bolt/v", "--no-wait", "--json"],
+    );
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(
+        json(&out),
+        serde_json::json!({ "id": 2, "branch": BRANCH, "ahead": [1] })
+    );
+    let subs = queued(&f);
+    assert_eq!(subs[0]["head"], w.0.as_str());
+    assert_eq!(subs[1]["head"], v.0.as_str());
+    assert_eq!(subs[1]["from"]["worktree"], "bolt/v");
+    assert_eq!(subs[1]["from"]["head"], "bolt/v");
+    assert!(subs[1]["from"].get("path").is_none(), "{}", subs[1]);
+    assert!(subs[1]["from"].get("session").is_none(), "{}", subs[1]);
+}
+
 /// S59: on a branch that batches, a waiting act of three is tested once as
 /// one combination of all three and lands in one move, in the order given;
 /// it reports each one's outcome in that order and exits 0. Under
@@ -8685,7 +9015,7 @@ mod read_once {
     use sluice::profiles::local_files::LocalFiles;
     use sluice::{run, Cli, Pause};
     use sluice_core::policy::POLICY_PATH;
-    use sluice_core::{Seams, Sluice, SubmitRequest};
+    use sluice_core::{Seams, Sluice, SubmitHead, SubmitRequest};
     use sluice_fakes::Fakes;
     use sluice_seams::State as _;
 
@@ -8808,7 +9138,7 @@ mod read_once {
         let files = LocalFiles::new(dir);
         let s = Sluice::new(with_files(f, &files), &f.clock);
         s.submit(&SubmitRequest {
-            worktree: worktree.into(),
+            head: SubmitHead::Worktree(worktree.into()),
             branch: BRANCH.into(),
             after: vec![],
             priority: 0,

@@ -1,7 +1,7 @@
 #!/bin/sh
 # shellcheck disable=SC1091,SC2154,SC2016 # jq programs; common.sh, sourced, sets root, lib, state and config.
 # The status popup, and with --dashboard the same view in its own tab:
-# the focused pane's repository's queue, read from the watcher's state and
+# the focused pane's repository's queue, read from the host's state and
 # redrawn as it changes. Keys: q or Escape closes, j jumps to the culprit's
 # pane, a switches between this repository and every one held, the arrows
 # and Page Up and Down scroll a frame taller than the pane.
@@ -135,10 +135,15 @@ draw() {
   top=$(cat "$top_file" 2>/dev/null || echo 0)
 }
 
-# A repository the watcher has not read yet: ask it to.
+# A repository the watcher has not read yet: asked for, and the watcher,
+# woken or started, looks for it at once (D13). Else, where a watcher has
+# the lease and does not serve this popup's server, that server is
+# registered with it (D2).
 if [ -n "$repo" ] && [ "$(all_docs | jq --arg r "$repo" 'any(.repository == $r)')" = false ]; then
   printf '%s\n' "$dir" >"$state/want/$(sum "$repo")"
   sh "$root/bin/watch.sh" --ensure
+else
+  enlist
 fi
 
 if [ "$once" = true ]; then

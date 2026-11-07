@@ -429,6 +429,8 @@ def queue_token: ([.[].branches[].depth] | add // 0) as $n
 
 # --- Events ------------------------------------------------------------
 
-def event_key($branch): "\($branch)|\(.event)|\(.id // (.ids | map(tostring) | join(",")))|\(.at)";
+# An event's key in its repository's told list: its branch, kind,
+# submissions and time. One that names no submission is keyed by the rest.
+def event_key($branch): "\($branch)|\(.event)|\(.id // ((.ids // []) | map(tostring) | join(",")))|\(.at)";
 
 def events: .branches[] | .branch as $b | .recent[] | {branch: $b, key: event_key($b), event: .};

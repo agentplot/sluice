@@ -1,11 +1,20 @@
 #!/bin/sh
-# A stand-in herdr: logs each call, answers the lists from the test's files.
-printf '%s\n' "$*" >>"$FAKE/herdr-calls"
-[ -f "$FAKE/down" ] && exit 1
+# A stand-in herdr: the server at the socket in HERDR_SOCKET_PATH, which a
+# test makes as a file in its scratch folder. It answers the lists from that
+# socket's files, in <socket>.d: panes.json, tabs.json and spaces.json;
+# down there is a server that no longer answers, no-agent one whose agents
+# cannot be focused. Each call is logged in $FAKE/herdr-calls after the
+# socket's name. A server whose socket is gone answers nothing, as herdr's
+# command does once its server has stopped.
+sock=${HERDR_SOCKET_PATH:-}
+printf '%s: %s\n' "${sock##*/}" "$*" >>"$FAKE/herdr-calls"
+[ -n "$sock" ] && [ -e "$sock" ] || exit 1
+files=$sock.d
+[ -f "$files/down" ] && exit 1
 case "$1 $2" in
-"pane list") cat "$FAKE/panes.json" 2>/dev/null || echo '{"result":{"panes":[]}}' ;;
-"tab list") cat "$FAKE/tabs.json" 2>/dev/null || echo '{"result":{"tabs":[]}}' ;;
-"workspace list") cat "$FAKE/spaces.json" 2>/dev/null || echo '{"result":{"workspaces":[]}}' ;;
-"agent focus") [ ! -f "$FAKE/no-agent" ] ;;
+"pane list") cat "$files/panes.json" 2>/dev/null || echo '{"result":{"panes":[]}}' ;;
+"tab list") cat "$files/tabs.json" 2>/dev/null || echo '{"result":{"tabs":[]}}' ;;
+"workspace list") cat "$files/spaces.json" 2>/dev/null || echo '{"result":{"workspaces":[]}}' ;;
+"agent focus") [ ! -f "$files/no-agent" ] ;;
 *) echo '{"result":{}}' ;;
 esac

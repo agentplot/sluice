@@ -9,6 +9,7 @@
 //! the tick's one ask of its remote, so a reader that asks every second
 //! asks a remote no more than for its records (56, 64, 124, 129).
 
+use std::cell::OnceCell;
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -62,6 +63,12 @@ pub struct BranchView {
     /// before it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revision: Option<Rev>,
+    /// 105: the branch itself is gone: the host holds no revision of it,
+    /// and the read of its records was not refused. Its records stay, and
+    /// are read as any branch's; left out while the branch is there, and
+    /// in a document from before it (record 0091).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub gone: bool,
     /// The records' version: it moves on every write, so a reader redraws
     /// only when it does.
     pub version: u64,
@@ -135,6 +142,7 @@ impl BranchView {
             branch: branch.to_string(),
             at: None,
             revision: None,
+            gone: false,
             version: 0,
             window: 0,
             parallel: None,
@@ -297,6 +305,7 @@ pub fn branch_view(read: BranchRead) -> Result<BranchView> {
         branch,
         at: line.doc.base.clone(),
         revision: None,
+        gone: false,
         version: line.version,
         window: line.doc.window,
         parallel: rules.as_ref().map(|r| r.parallel),
@@ -502,6 +511,9 @@ impl Sluice<'_> {
             Some(_) => None,
             None => held,
         };
+        // 105: a branch the host holds no revision of, read with no
+        // refusal, is gone; its records are shown all the same.
+        view.gone = stale.is_none() && view.revision.is_none();
         view.stale = stale.map(|r| r.to_string());
         view.refused_writes = crate::refused_writes::standing(&view.refused_writes, || self.now());
         Ok(view)
@@ -659,31 +671,73 @@ pub fn in_queue<'a>(
     subs.into_iter().filter(|s| !s.state.is_out())
 }
 
-/// The worktree a home view is for: its path, and the branch it is on,
-/// empty when it is on none.
-#[derive(Clone, Copy, Debug)]
+/// The worktree a reading of whose a submission is is for: the branch it
+/// is on, empty when it is on none, and its path where its own
+/// submissions are read by it, as the home view reads them.
+#[derive(Debug)]
 pub struct Here<'a> {
-    pub path: &'a str,
-    pub branch: &'a str,
+    path: Option<&'a str>,
+    branch: &'a str,
+    /// Whether sluice lands on `branch`, read once, when a pull request
+    /// opened from it is first found.
+    lands_on: OnceCell<bool>,
 }
 
-impl Here<'_> {
-    /// Whether `from` is this worktree, by what its record says: the path
-    /// it was submitted from, or the branch a pull request was opened
-    /// from (ADR 0025). A record naming neither is no worktree's, and
-    /// a worktree's own submission is never matched by its branch's name.
-    pub fn made(&self, from: &Submitter) -> bool {
-        from.path.as_deref() == Some(self.path)
-            || (!self.branch.is_empty() && from.head.as_deref() == Some(self.branch))
+impl<'a> Here<'a> {
+    /// The worktree at `path` on `branch`, its own submissions read by
+    /// its path: the home view's.
+    pub fn at(path: &'a str, branch: &'a str) -> Here<'a> {
+        Here {
+            path: Some(path),
+            branch,
+            lands_on: OnceCell::new(),
+        }
+    }
+
+    /// The worktree on `branch`, its own submissions read by the work
+    /// they name: the inbox's and a wait's delivery (51, 135).
+    pub fn on(branch: &'a str) -> Here<'a> {
+        Here {
+            path: None,
+            branch,
+            lands_on: OnceCell::new(),
+        }
+    }
+
+    /// The branch the worktree is on, empty when it is on none.
+    pub fn branch(&self) -> &str {
+        self.branch
+    }
+
+    /// Design D6 (51, 124; ADR 0025; rule core.50): whether `from` is
+    /// this worktree's. Never a submission by name, which no worktree
+    /// made. Its own: the path it was submitted from where the worktree
+    /// is read by its path, else a submission naming no head whose work is
+    /// the worktree's branch. A pull request's opened from the worktree's
+    /// branch, where sluice lands on that branch nowhere, as `lands_on`
+    /// says, asked only when such a request is found and once for this
+    /// worktree: no worktree pushes a branch sluice lands on (1, 124).
+    pub fn made(&self, from: &Submitter, lands_on: impl FnOnce(&str) -> bool) -> bool {
+        if from.by_name() {
+            return false;
+        }
+        let own = match self.path {
+            Some(path) => from.path.as_deref() == Some(path),
+            None => from.head.is_none() && from.worktree == self.branch,
+        };
+        own || (!self.branch.is_empty()
+            && from.head.as_deref() == Some(self.branch)
+            && !*self.lands_on.get_or_init(|| lands_on(self.branch)))
     }
 }
 
-/// The latest submission still in a chain from the worktree `here`.
-pub fn in_play<'a>(branches: &'a [BranchView], here: Here<'_>) -> Option<&'a Submission> {
+/// The latest submission still in a chain that `made` says the worktree
+/// made.
+pub fn in_play(branches: &[BranchView], made: impl Fn(&Submitter) -> bool) -> Option<&Submission> {
     branches
         .iter()
         .flat_map(|b| &b.submissions)
-        .filter(|s| here.made(&s.from))
+        .filter(|s| made(&s.from))
         .max_by_key(|s| s.id)
 }
 
@@ -714,12 +768,30 @@ pub fn recent_ids(branches: &[BranchView]) -> Vec<(&str, u64)> {
 }
 
 impl Sluice<'_> {
+    /// Design D6 (51, 124; rule core.50): whether `from` is the worktree
+    /// `here`'s, by the one reading of [`Here::made`].
+    pub fn made(&self, here: &Here<'_>, from: &Submitter) -> bool {
+        here.made(from, |branch| self.lands_on_held(branch))
+    }
+
+    /// Design D6 (124; rule core.27): whether sluice lands on `branch`, as
+    /// the protection reads it: the policy at the branch's revision as
+    /// the host holds it, with no fetch. A branch the host holds no
+    /// revision of, or whose policy cannot be read, is one it lands on
+    /// nowhere.
+    pub fn lands_on_held(&self, branch: &str) -> bool {
+        match self.seams.branch.held(branch) {
+            Ok(Some(at)) => self.protects(branch, &at).unwrap_or(false),
+            _ => false,
+        }
+    }
+
     /// The worktree `here`'s submission, as the home view shows it: the
     /// latest still in a chain, else the latest the branches' recent
     /// lines name. A read, as the overview is, of each branch's records
     /// once at most, however many recent lines name it.
-    pub fn home(&self, branches: &[BranchView], here: Here<'_>) -> Result<Option<Submission>> {
-        if let Some(s) = in_play(branches, here) {
+    pub fn home(&self, branches: &[BranchView], here: &Here<'_>) -> Result<Option<Submission>> {
+        if let Some(s) = in_play(branches, |from| self.made(here, from)) {
             return Ok(Some(s.clone()));
         }
         let mut read: BTreeMap<&str, crate::line::Line> = BTreeMap::new();
@@ -734,7 +806,7 @@ impl Sluice<'_> {
                 None if line.finished.contains_key(&id) => self.finished_sub(branch, id)?,
                 None => None,
             };
-            if let Some(s) = s.filter(|s| here.made(&s.from)) {
+            if let Some(s) = s.filter(|s| self.made(here, &s.from)) {
                 return Ok(Some(s));
             }
         }
@@ -789,6 +861,7 @@ mod tests {
             branch: branch.into(),
             at: None,
             revision: None,
+            gone: false,
             version: 0,
             window: 0,
             parallel: None,
@@ -1124,29 +1197,148 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_worktree_made_what_names_its_path_or_its_branch_as_a_pull_requests_head() {
-        let from = |worktree: &str, path: Option<&str>, head: Option<&str>| Submitter {
+    fn from(worktree: &str, path: Option<&str>, head: Option<&str>) -> Submitter {
+        Submitter {
             agent: "a".into(),
             worktree: worktree.into(),
             path: path.map(Into::into),
             head: head.map(Into::into),
             host: None,
             session: None,
+        }
+    }
+
+    /// Design D6 (ADR 0025): a worktree made what names its path, or its
+    /// branch as a pull request's head where sluice lands on that branch
+    /// nowhere; read by its branch, what names its branch as its work and
+    /// no head.
+    #[test]
+    fn a_worktree_made_what_names_its_path_or_its_branch_as_a_pull_requests_head() {
+        let nowhere = |_: &str| false;
+        let here = Here::at("/w/unit", "unit");
+        assert!(here.made(&from("unit", Some("/w/unit"), None), nowhere));
+        assert!(here.made(&from("pull/9", None, Some("unit")), nowhere));
+        assert!(!here.made(&from("unit", None, None), nowhere));
+        assert!(!here.made(&from("pull/9", None, Some("other")), nowhere));
+        let detached = Here::at("/w/unit", "");
+        assert!(!detached.made(&from("pull/9", None, Some("")), nowhere));
+
+        let on = Here::on("unit");
+        assert!(on.made(&from("unit", None, None), nowhere));
+        assert!(on.made(&from("pull/9", None, Some("unit")), nowhere));
+        assert!(!on.made(&from("unit-b", None, None), nowhere));
+        assert!(!on.made(&from("pull/9", None, Some("other")), nowhere));
+    }
+
+    /// Design D6 (124, 1; rule core.50): a submission by name is no
+    /// worktree's, and a pull request from a branch sluice lands on is no
+    /// worktree's either; whether sluice lands on the branch is asked once,
+    /// and only when such a request is found.
+    #[test]
+    fn a_submission_by_name_or_a_request_from_a_branch_sluice_lands_on_is_no_worktrees() {
+        let asked = std::cell::Cell::new(0);
+        let lands_on = |branch: &str| {
+            assert_eq!(branch, "bolt/x");
+            asked.set(asked.get() + 1);
+            true
         };
-        let here = Here {
-            path: "/w/unit",
-            branch: "unit",
+        let on = Here::on("bolt/x");
+        assert!(!on.made(&from("bolt/x", None, Some("bolt/x")), lands_on));
+        assert!(on.made(&from("bolt/x", None, None), lands_on), "its own");
+        assert_eq!(asked.get(), 0, "asked only for a request");
+        assert!(!on.made(&from("pull/9", None, Some("bolt/x")), lands_on));
+        assert!(!on.made(&from("pull/10", None, Some("bolt/x")), lands_on));
+        assert_eq!(asked.get(), 1, "asked once");
+        let at = Here::at("/w/bolt-x", "bolt/x");
+        assert!(!at.made(&from("bolt/x", None, Some("bolt/x")), lands_on));
+        assert!(!at.made(&from("pull/9", None, Some("bolt/x")), lands_on));
+        assert!(at.made(&from("bolt/x", Some("/w/bolt-x"), None), lands_on));
+    }
+
+    /// 124, design D6 (rule core.50), scenario "The home view on the
+    /// branch": a submission by name of the branch a worktree has checked
+    /// out is not shown as the worktree's, queued or landed, nor a request
+    /// from that branch, which sluice lands on; the worktree's own is.
+    #[test]
+    fn the_home_view_takes_no_submission_by_name() {
+        use chrono::{DateTime, TimeZone, Utc};
+        use sluice_fakes::Fakes;
+
+        use crate::{Clock, SubmitHead, SubmitRequest};
+
+        struct Noon;
+
+        impl Clock for Noon {
+            fn now(&self) -> DateTime<Utc> {
+                Utc.with_ymd_and_hms(2026, 11, 6, 12, 0, 0).unwrap()
+            }
+        }
+
+        let f = Fakes::new();
+        let tip = f.world.init(
+            "main",
+            &[
+                (
+                    crate::policy::POLICY_PATH,
+                    "[tests]\nrunner = \"fake\"\n\n[checkout]\n\n\
+                     [branches.main]\nrequired = []\n\
+                     [branches.\"bolt/*\"]\nrequired = []\n",
+                ),
+                ("a/lib", "a1"),
+            ],
+        );
+        let at = f.world.work(&tip, &[("a/lib", Some("a2"))]);
+        f.world.set_branch("bolt/x", &at);
+        let s = Sluice::new(
+            crate::Seams {
+                checkout: &f.checkout,
+                tests: &f.tests,
+                branch: &f.branch,
+                driver: &f.driver,
+                state: &f.state,
+            },
+            &Noon,
+        );
+        let submit = |head: SubmitHead| {
+            s.submit(&SubmitRequest {
+                head,
+                branch: "main".into(),
+                after: Vec::new(),
+                priority: 0,
+                subject: None,
+            })
+            .unwrap()
+            .unwrap()
+            .id
         };
-        assert!(here.made(&from("unit", Some("/w/unit"), None)));
-        assert!(here.made(&from("pull/9", None, Some("unit"))));
-        assert!(!here.made(&from("unit", None, None)));
-        assert!(!here.made(&from("pull/9", None, Some("other"))));
-        let detached = Here {
-            path: "/w/unit",
-            branch: "",
-        };
-        assert!(!detached.made(&from("pull/9", None, Some(""))));
+        let by_name = submit(SubmitHead::Branch("bolt/x".into()));
+        let here = Here::at("/w/bolt-x", "bolt/x");
+        let branches = s.overview(None).unwrap();
+        assert!(branches[0].submissions.iter().any(|x| x.id == by_name));
+        assert_eq!(s.home(&branches, &here).unwrap(), None, "queued");
+        for _ in 0..24 {
+            s.step("main").unwrap();
+        }
+        assert_eq!(
+            s.state(by_name).unwrap().unwrap().state,
+            crate::records::State::Landed
+        );
+        let branches = s.overview(None).unwrap();
+        assert!(recent_ids(&branches).contains(&("main", by_name)));
+        assert_eq!(s.home(&branches, &here).unwrap(), None, "landed");
+
+        // A request from the branch, which sluice lands on, is no
+        // worktree's; one from a branch sluice lands on nowhere is.
+        let mut request = s.state(by_name).unwrap().unwrap();
+        request.from = from("pull/9", None, Some("bolt/x"));
+        assert!(!s.made(&here, &request.from));
+        f.world.set_branch("unit", &at);
+        assert!(s.made(
+            &Here::at("/w/unit", "unit"),
+            &from("pull/9", None, Some("unit"))
+        ));
+        // The worktree's own, by its path.
+        assert!(s.made(&here, &from("bolt/x", Some("/w/bolt-x"), None)));
     }
 
     /// ADR 0036: the policy's tables in the order written, a pattern's

@@ -43,7 +43,7 @@ fn a_key_that_holds_a_pass_is_read_from_it_on_any_line_and_recorded_as_a_replay(
     let s = h.sluice();
     let two = s
         .submit(&sluice_core::SubmitRequest {
-            worktree: "unit/y".into(),
+            head: sluice_core::SubmitHead::Worktree("unit/y".into()),
             branch: other.into(),
             after: vec![],
             priority: 0,
@@ -313,7 +313,7 @@ fn live_runs_serving(serves: sluice_core::Serves) -> usize {
         h.w().session(&format!("unit/y{n}"), "agent", &head);
         h.sluice()
             .submit(&sluice_core::SubmitRequest {
-                worktree: format!("unit/y{n}"),
+                head: sluice_core::SubmitHead::Worktree(format!("unit/y{n}")),
                 branch: other.into(),
                 after: vec![],
                 priority: 0,
@@ -428,6 +428,8 @@ fn a_session_run_records_what_it_ran_and_never_a_replay() {
         },
         missing: vec![],
         not_run: vec![],
+        dependencies: Vec::new(),
+        failed_by: Vec::new(),
         timed_out: false,
     };
     assert_eq!(s.record_session(&plan, &head, "/w/a", &report).unwrap(), 1);
@@ -635,7 +637,7 @@ fn a_replay_no_trusted_pass_proves_runs_again_with_no_replay() {
     let s = h.sluice();
     let two = s
         .submit(&sluice_core::SubmitRequest {
-            worktree: "unit/y".into(),
+            head: sluice_core::SubmitHead::Worktree("unit/y".into()),
             branch: other.into(),
             after: vec![],
             priority: 0,
