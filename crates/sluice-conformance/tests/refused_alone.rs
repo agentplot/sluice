@@ -3,8 +3,11 @@
 //! reads, and say which branches were not read only when the number is on
 //! none of those that were; a round of another branch runs past it, and
 //! leaves its places for a later pass (26, rule core.14), over the fakes.
+//! A branch whose policy is mended outside sluice is read whole at the
+//! revision this host holds, with no round run, and one refused there is
+//! refused naming that revision (56, 124, 129; rule core.15).
 
-use sluice_conformance::{policy, previewed, Harness, Rig, BRANCH};
+use sluice_conformance::{policy, previewed, shared, Harness, Rig, BRANCH};
 use sluice_core::records::State;
 use sluice_core::{
     AmendRefusal, Lookup, Requester, Serves, Step, SubmitRequest, Unread, WithdrawRefusal, Withdrew,
@@ -209,4 +212,28 @@ fn an_unusable_preview_on_a_branch_that_cannot_be_read_waits_for_it() {
     assert_eq!(h.w().preview_releases().len(), 1);
     assert!(s.preview_of(&rev).unwrap().unwrap().failed.is_some());
     assert!(logged_on_refused(&h, &made.name));
+}
+
+/// satisfies: 26, 56, 124, 129, rule core.15
+#[test]
+fn a_quiet_branch_mended_outside_sluice_is_read_whole() {
+    shared::a_quiet_branch_mended_outside_sluice_is_read_whole(&Harness::bolt());
+}
+
+/// satisfies: 26, 56, 124
+#[test]
+fn status_of_a_submission_on_a_mended_branch_answers_for_it() {
+    shared::status_of_a_submission_on_a_mended_branch_answers_for_it(&Harness::bolt());
+}
+
+/// satisfies: 26, 56, 124, S64
+#[test]
+fn a_refusal_names_the_revision_this_host_holds() {
+    shared::a_refusal_names_the_revision_this_host_holds(&Harness::bolt());
+}
+
+/// satisfies: 26, 129
+#[test]
+fn a_read_of_a_mended_branch_leaves_its_state_as_it_was() {
+    shared::a_read_of_a_mended_branch_leaves_its_state_as_it_was(&Harness::bolt());
 }
