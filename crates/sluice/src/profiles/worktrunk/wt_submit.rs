@@ -8,7 +8,10 @@
 //! A submit from one worktree first reads what stands: the worktree's last
 //! submission to the branch, at the revision sluice says a submit from it
 //! would send now (124), undecided or landed, or its pull request open and
-//! ready there. Where one stands it submits nothing: a waiting run follows
+//! ready there, or landed there. A pull request sent back, failed or in
+//! conflict, stands nowhere, on whichever host takes the branch's pull
+//! requests in, as a failed submission does (137; record 0096). Where one
+//! stands it submits nothing: a waiting run follows
 //! it with `sluice wait <branch>`, whose output and exit are its own, and
 //! removes the worktree on the same terms once it lands; a `--no-wait` run
 //! answers with `sluice submit <branch> --status`; a run naming `--after`
@@ -105,7 +108,8 @@ fn main() {
         }
         standing => {
             let what = match standing {
-                Standing::PullRequest(_) => "already open",
+                Standing::PullRequest { landed: true, .. } => "landed",
+                Standing::PullRequest { .. } => "already open",
                 _ => "already submitted",
             };
             eprintln!(
@@ -169,7 +173,7 @@ fn follow(one: &Single) -> i32 {
 fn named(standing: &Standing) -> String {
     match standing {
         Standing::Submission { id, .. } => format!("submission {id}"),
-        Standing::PullRequest(n) => format!("pull request #{n}"),
+        Standing::PullRequest { number, .. } => format!("pull request #{number}"),
         Standing::Nothing => "nothing".to_string(),
     }
 }

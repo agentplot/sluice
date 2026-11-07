@@ -604,15 +604,25 @@ pub enum Followed {
     /// each submission is called on a pull request.
     Done(Submission, BTreeMap<u64, String>),
     /// 137: merged, while another host takes its branch's pull requests
-    /// in: sluice's check's title on its head, where it says it landed.
-    Landed { title: String },
+    /// in: sluice's check's title and summary on its head, where it says
+    /// it landed, and the head and draft mark the forge held for it, which
+    /// `--status` answers with (124; record 0096).
+    Landed {
+        title: String,
+        summary: String,
+        head: String,
+        draft: bool,
+    },
     /// 137: sent back on its head, while another host takes its branch's
     /// pull requests in: failed, or in conflict, as sluice's check there
-    /// names it.
+    /// names it, and the head and draft mark the forge holds for it, which
+    /// `--status` answers with (124; record 0096).
     SentBack {
         conflict: bool,
         title: String,
         summary: String,
+        head: String,
+        draft: bool,
     },
     /// Closed without landing.
     Closed,
@@ -3834,6 +3844,12 @@ fn submit_pull(
                     out,
                 );
             }
+            // 124, 137: `--status` says where it stands, and exits 0, as
+            // it does where this host takes the request in; a wait and a
+            // waiting submit report the outcome with its exit (record 0096).
+            Some(f @ (Followed::Landed { .. } | Followed::SentBack { .. })) if status => {
+                return across_status(s, worktree, number, branch, &f, copy.as_ref(), json, out);
+            }
             Some(f @ (Followed::Landed { .. } | Followed::SentBack { .. })) => {
                 return across(number, branch, &f, copy.as_ref(), json, out);
             }
@@ -4284,11 +4300,65 @@ fn across(
     Ok(across_exit(f))
 }
 
+/// 124, 137: `--status` of pull request `number`, which another host
+/// landed or sent back: under `json`, [`across_json`]'s document with the
+/// check's summary, the head and draft mark the forge holds, and `sends`,
+/// the revision a submit from `worktree` would send now, so a driver
+/// reads it as it reads a decided submission's record, landed standing at
+/// `sends` and sent back standing nowhere; otherwise the check's title and
+/// summary in words. It exits 0, as `--status` does wherever it finds the
+/// worktree's pull request (record 0096).
+#[allow(clippy::too_many_arguments)]
+fn across_status(
+    s: &Sluice<'_>,
+    worktree: &str,
+    number: u64,
+    branch: &str,
+    f: &Followed,
+    copy: Option<&CopyDiffers>,
+    json: bool,
+    out: &mut dyn Write,
+) -> Result<i32> {
+    let (summary, head, draft) = match f {
+        Followed::Landed {
+            summary,
+            head,
+            draft,
+            ..
+        }
+        | Followed::SentBack {
+            summary,
+            head,
+            draft,
+            ..
+        } => (summary, head, *draft),
+        _ => return Ok(0),
+    };
+    if json {
+        let mut doc = across_json(f);
+        doc["summary"] = serde_json::json!(summary);
+        doc["pull_request"] = serde_json::json!(number);
+        doc["branch"] = serde_json::json!(branch);
+        doc["head"] = serde_json::json!(head);
+        doc["draft"] = serde_json::json!(draft);
+        let doc = with_sends(doc, s, worktree)?;
+        writeln!(out, "{}", with_copy(doc, copy)?)?;
+        return Ok(0);
+    }
+    across_lines(f, out)?;
+    if let Followed::Landed { summary, .. } = f {
+        for l in summary.lines().filter(|l| !l.trim().is_empty()) {
+            writeln!(out, "  {l}")?;
+        }
+    }
+    Ok(0)
+}
+
 /// 137: [`across`]'s words: `passed · landed as …` for a landing, and
 /// sluice's check's title and summary for a pull request sent back.
 fn across_lines(f: &Followed, out: &mut dyn Write) -> Result<()> {
     match f {
-        Followed::Landed { title } => writeln!(out, "passed · {title}")?,
+        Followed::Landed { title, .. } => writeln!(out, "passed · {title}")?,
         Followed::SentBack { title, summary, .. } => {
             writeln!(out, "{title}")?;
             for l in summary.lines().filter(|l| !l.trim().is_empty()) {
@@ -4303,11 +4373,12 @@ fn across_lines(f: &Followed, out: &mut dyn Write) -> Result<()> {
 /// 137: [`across`]'s document: the state, and sluice's check's title.
 fn across_json(f: &Followed) -> serde_json::Value {
     match f {
-        Followed::Landed { title } => serde_json::json!({ "state": "landed", "title": title }),
+        Followed::Landed { title, .. } => serde_json::json!({ "state": "landed", "title": title }),
         Followed::SentBack {
             conflict,
             title,
             summary,
+            ..
         } => serde_json::json!({
             "state": if *conflict { "conflict" } else { "failed" },
             "title": title,
