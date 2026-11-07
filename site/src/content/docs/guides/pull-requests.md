@@ -378,6 +378,12 @@ pull request in, `taken_in` is `false`, `submission` and `state` are
 such as `["1 review", "qa/approved"]`. sluice posts only when the state
 or a field of the block changes.
 
+sluice on another host reads where the pull request stands from this
+block, not from the check's title or whether GitHub shows the run
+failed. Taken in and `failed` or `conflict` is sent back, `landed` is
+landed, and anything else is still open. A check an older sluice
+posted has no block, so sluice reads its title and whether it failed.
+
 The forecast runs no tests. It only checks whether the pull request
 would merge on top of `main` and the queue as they are now, so a
 conflict shows up while people are still reviewing.

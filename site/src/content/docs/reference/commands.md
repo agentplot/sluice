@@ -970,8 +970,13 @@ and summary as they change. It reports what GitHub shows with the words
 and exit of a submission's outcome. Merged is `passed · landed as
 b7d2e94`, exit `0`. Sent back is as the check names it, `failed: …`
 with exit `1` or `conflict: …` with exit `2`. Closed without landing is
-closed. Under `--json` it prints `{"pull_request","branch","state",
-"title"}`, the state `landed`, `failed` or `conflict`.
+closed. Where the check's summary carries its `sluice:queue` block,
+the block's `state` decides: `failed` or `conflict` is sent back and
+`landed` is landed, even while GitHub still shows a run an earlier
+failure completed. A check with no block, as an older sluice posts it,
+is sent back when it failed. Under `--json` it prints
+`{"pull_request","branch","state","title"}`, the state `landed`,
+`failed` or `conflict`.
 
 A submission that landed beside the queue ends with `landed as 4e1a07c
 beside the queue: no required check reads its changes`, exit `0`, and

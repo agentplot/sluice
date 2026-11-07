@@ -19,7 +19,7 @@ use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
-use sluice::profiles::github::forge::{Forge as _, Standing, Status};
+use sluice::profiles::github::forge::{Forge as _, Posting, Standing, Status};
 use support::{Repo, Scratch};
 
 const KEY: &[u8] = include_bytes!("forge/test-key.pem");
@@ -5349,6 +5349,99 @@ fn blamed_on_another_host() {
     let said = g.posted(&pull.head).unwrap().1;
     assert!(said.starts_with("failed: "), "{said}");
     assert!(text(&out).contains(&said), "{}", text(&out));
+}
+
+impl OnGitHub {
+    /// This host's next follow of pull request `n` into `main` reads it
+    /// from GitHub, as if no process of the host had read it within a
+    /// quarter of `discovery` (D4).
+    fn follow_due(&self, n: u64) {
+        let path = self.state.path().join("sluice/forge/follows/o/r/main.json");
+        let mut v: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        v["requests"][n.to_string()]["read_at"] = Value::Null;
+        std::fs::write(&path, v.to_string()).unwrap();
+    }
+
+    /// sluice's check on `head` as another host's sluice left it, on
+    /// GitHub alone: `status`, `title` and `summary`. Host A's next follow
+    /// of pull request `n` reads it.
+    fn posted_elsewhere(&self, n: u64, head: &str, status: Status, title: &str, summary: &str) {
+        let posting = Posting {
+            status,
+            title: title.into(),
+            summary: summary.into(),
+            text: None,
+        };
+        self.gh
+            .forge
+            .post_named(&github::repo(), head, "sluice", None, &posting)
+            .unwrap();
+        self.follow_due(n);
+    }
+}
+
+/// request-intake-host, "GitHub keeps a run completed": host B's `sluice
+/// run` holds main's mark, and GitHub shows sluice's run on the head of
+/// host A's pull request completed as a failure from an earlier blame,
+/// while its block now reads it taken in and under test. A's wait reads
+/// it under test and does not end (D6).
+#[test]
+fn a_run_github_keeps_completed_reads_by_its_block() {
+    let g = OnGitHub::new("fields-completed", "");
+    g.named("a", "");
+    let b = g.other("b", "", "");
+    b.run("1");
+    let w = g.session("kept", &[("k.txt", "k\n")]);
+    let out = g.wt_submit(&w, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let pull = g.pull_from("unit/kept");
+    let n = pull.number;
+    let block = serde_json::json!({
+        "host": "b", "taken_in": true, "submission": 1406, "state": "testing",
+        "ahead": [], "waits_for": [],
+    });
+    let testing = format!("testing main + #{n}");
+    g.posted_elsewhere(
+        n,
+        &pull.head,
+        Status::Failure,
+        &testing,
+        &format!(
+            "Submission 1406 on b.\n\nUnder test in main + #{n}.\n\n\
+             <!-- sluice:queue {block} -->"
+        ),
+    );
+    let out = g.skipping(&w, &["wait", "main", "--timeout", "3s"]);
+    assert_eq!(out.status.code(), Some(sluice::WAITING), "{}", text(&out));
+    assert!(text(&out).contains(&testing), "{}", text(&out));
+    assert!(g.follows()[n.to_string()].is_object(), "{}", g.follows());
+    assert!(g.of(n).is_empty(), "A took nothing in");
+}
+
+/// request-intake-host, "An older sluice's check": host B's older sluice
+/// posted the check on the head of host A's pull request with no block,
+/// titled `failed: app:test`, and A's wait reads it sent back by its
+/// words, as it did before checks carried their fields (D6).
+#[test]
+fn an_older_sluices_check_reads_by_its_words() {
+    let g = OnGitHub::new("fields-older", "");
+    g.named("a", "");
+    let b = g.other("b", "", "");
+    b.run("1");
+    let w = g.session("older", &[("o.txt", "o\n")]);
+    let out = g.wt_submit(&w, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let pull = g.pull_from("unit/older");
+    g.posted_elsewhere(
+        pull.number,
+        &pull.head,
+        Status::Failure,
+        "failed: app:test",
+        "app:test failed. Push a fix and submit again.",
+    );
+    let out = g.skipping(&w, &["wait", "main", "--timeout", "1m"]);
+    assert_eq!(out.status.code(), Some(sluice::FAILED), "{}", text(&out));
+    assert!(text(&out).contains("failed: app:test"), "{}", text(&out));
 }
 
 /// request-intake-host, "A wait lets go", stopped by Ctrl-C: a wait on

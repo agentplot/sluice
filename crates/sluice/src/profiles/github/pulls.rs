@@ -2337,6 +2337,44 @@ pub fn queue_of(summary: &str) -> Option<Queue> {
     serde_json::from_str(&rest[..rest.find(" -->")?]).ok()
 }
 
+/// What sluice's check on a pull request's head says of it, for a host
+/// that follows it across hosts (137, C.5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Told {
+    /// Not decided, or not taken in.
+    Open,
+    Landed,
+    /// Failed, or a conflict.
+    SentBack {
+        conflict: bool,
+    },
+}
+
+/// Design D6: the fields decide over the words. A check that carries its
+/// block is read from it alone: taken in and `failed` or `conflict` is
+/// sent back, `landed` is landed, and anything else is open, whatever
+/// GitHub kept of a run it completed earlier. A check with no block, as
+/// an older sluice posted it, is read by its words: a failure is sent
+/// back, a conflict where its title says so.
+fn told(posting: Option<&Posting>) -> Told {
+    let Some(posting) = posting else {
+        return Told::Open;
+    };
+    match queue_of(&posting.summary) {
+        Some(q) if q.taken_in => match q.state.as_deref() {
+            Some("landed") => Told::Landed,
+            Some("failed") => Told::SentBack { conflict: false },
+            Some("conflict") => Told::SentBack { conflict: true },
+            _ => Told::Open,
+        },
+        Some(_) => Told::Open,
+        None if posting.status == Status::Failure => Told::SentBack {
+            conflict: posting.title.starts_with("conflict"),
+        },
+        None => Told::Open,
+    }
+}
+
 /// D1: a check's summary as a person reads it, its block left out.
 fn words(summary: &str) -> String {
     summary
@@ -3185,7 +3223,8 @@ impl Pulls {
             return Ok(Followed::Closed);
         };
         let posting = f.check.map(|p| p.posting);
-        if f.merged {
+        let told = told(posting.as_ref());
+        if f.merged || told == Told::Landed {
             self.unfollow(repo, branch, &[n]);
             let title = posting
                 .map(|p| p.title)
@@ -3193,10 +3232,10 @@ impl Pulls {
                 .unwrap_or_else(|| "landed".into());
             return Ok(Followed::Landed { title });
         }
-        if let Some(posting) = posting.as_ref().filter(|p| p.status == Status::Failure) {
+        if let (Some(posting), Told::SentBack { conflict }) = (posting.as_ref(), told) {
             if f.open {
                 return Ok(Followed::SentBack {
-                    conflict: posting.title.starts_with("conflict"),
+                    conflict,
                     title: posting.title.clone(),
                     summary: words(&posting.summary),
                 });
@@ -4411,6 +4450,61 @@ mod tests {
         later.host = "c".into();
         let twice = format!("{summary}\n\n{}", summed(&later, "Again."));
         assert_eq!(queue_of(&twice), Some(later));
+    }
+
+    /// request-intake-host, "A pull request's state across hosts is read
+    /// from its check's fields": a run GitHub keeps completed as a failure
+    /// whose block reads `testing` is open, and the block's `failed`,
+    /// `conflict` and `landed` decide whatever the run's status; a check
+    /// with no block is read by its words (D6).
+    #[test]
+    fn the_fields_decide_over_the_words() {
+        let posting = |status, title: &str, state: Option<&str>| {
+            let mut q = queue_at("b", None, &[]);
+            if let Some(state) = state {
+                q.taken_in = true;
+                q.submission = Some(1406);
+                q.state = Some(state.into());
+            }
+            let words = "In main's queue.";
+            Posting {
+                status,
+                title: title.into(),
+                summary: match state {
+                    Some(_) => summed(&q, words),
+                    None => words.into(),
+                },
+                text: None,
+            }
+        };
+        let read = |status, title: &str, state| told(Some(&posting(status, title, state)));
+        assert_eq!(
+            read(Status::Failure, "testing main + #12", Some("testing")),
+            Told::Open
+        );
+        assert_eq!(
+            read(Status::InProgress, "failed: app:test", Some("failed")),
+            Told::SentBack { conflict: false }
+        );
+        assert_eq!(
+            read(Status::Failure, "failed: app:test", Some("conflict")),
+            Told::SentBack { conflict: true }
+        );
+        assert_eq!(read(Status::Queued, "queued", Some("landed")), Told::Landed);
+        let mut waiting = posting(Status::Failure, "waiting: the next submit", None);
+        waiting.summary = summed(&queue_at("b", None, &[]), "Held.");
+        assert_eq!(told(Some(&waiting)), Told::Open);
+
+        assert_eq!(
+            read(Status::Failure, "failed: app:test", None),
+            Told::SentBack { conflict: false }
+        );
+        assert_eq!(
+            read(Status::Failure, "conflict with #10", None),
+            Told::SentBack { conflict: true }
+        );
+        assert_eq!(read(Status::Success, "landed as abc", None), Told::Open);
+        assert_eq!(told(None), Told::Open);
     }
 
     /// pull-request-status, a draft with no head: shown as a draft, with
