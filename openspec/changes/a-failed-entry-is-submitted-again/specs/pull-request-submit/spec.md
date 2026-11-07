@@ -2,7 +2,7 @@
 
 ### Requirement: A pull request's status names its head and whether it is a draft
 
-On a branch that takes pull requests, `sluice submit <branch> --status --json`, and `wt submit <branch> --status --json`, SHALL print, for a pull request open and not yet decided, its `head`, the revision the forge holds as its head, `draft`, `true` while it is a draft, and `sends`, the revision a submit from the worktree would send now (124), beside `pull_request`, `branch` and `state`. A decided one SHALL still print its submission's record, with `sends`. On a host that does not take the branch's requests in (137), a pull request landed or sent back SHALL print `state` `landed`, `failed` or `conflict`, the `title` and `summary` of sluice's check on its head, and its `head`, `draft` and `sends`, and the command SHALL exit 0, as `--status` does wherever it finds the worktree's pull request.
+On a branch that takes pull requests, `sluice submit <branch> --status --json`, and `wt submit <branch> --status --json`, SHALL print, for a pull request open and not yet decided, its `head`, the revision the forge holds as its head, `draft`, `true` while it is a draft, and `sends`, the revision a submit from the worktree would send now (124), beside `pull_request`, `branch` and `state`. A decided one SHALL still print its submission's record, with `sends`, where the host holds one.
 
 #### Scenario: Waiting for a review
 
@@ -14,12 +14,16 @@ On a branch that takes pull requests, `sluice submit <branch> --status --json`, 
 - **WHEN** an agent's pull request is open as a draft at `<rev>`, and `wt submit main --status --json` runs in the agent's worktree
 - **THEN** it prints `head` `<rev>` and `draft` `true`
 
+## ADDED Requirements
+
+### Requirement: A pull request's status on another host names sluice's check
+
+On a host that does not take the branch's pull requests in (137), `sluice submit <branch> --status --json` and `wt submit <branch> --status --json` SHALL print a pull request landed or sent back with `state` `landed`, `failed` or `conflict`, the `title` and `summary` of sluice's check on its head, and its `pull_request`, `branch`, `head`, `draft` and `sends`, and SHALL exit 0, as `--status` does wherever it finds the worktree's pull request.
+
 #### Scenario: Sent back on another host
 
 - **WHEN** host B takes main's pull requests in, B blamed an agent's pull request `<n>` at `<rev>` and marked it a draft, and `wt submit main --status --json` runs in the agent's worktree on host A
 - **THEN** it exits 0 and prints `pull_request` `<n>`, `branch` `main`, `state` `failed`, the `title` and `summary` of sluice's check on `<rev>`, `head` `<rev>`, `draft` `true` and `sends` `<rev>`
-
-## ADDED Requirements
 
 ### Requirement: A submit takes again a pull request another host sent back
 
