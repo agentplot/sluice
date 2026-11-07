@@ -4,10 +4,11 @@
 # (0094). `--ensure` registers the server in its environment and wakes the
 # lease's watcher where it lives and runs this plugin folder and version,
 # else starts one. Running, it finds the repositories every server's panes
-# are in, runs each source there, hands every document to document.sh, and
-# keeps each server's sidebar and the forecasts current, until it serves
-# no server. Between changes it waits on its tick's one sleep, and a tick
-# forks nothing unless the shell's own tests find a change (D4, D5).
+# are in, runs one source in each, its command and its reader, document.sh,
+# stops it once no pane of any server is in it (D7), and keeps each
+# server's sidebar and the forecasts current, until it serves no server.
+# Between changes it waits on its tick's one sleep, and a tick forks
+# nothing unless the shell's own tests find a change (D4, D5).
 # `--ticks N` stops it after N ticks, the first at its start (the tests).
 set -u
 . "$(dirname "$0")/../lib/common.sh"
@@ -397,20 +398,14 @@ minute() {
   return 0
 }
 
-# Wake the watcher from a source's reader, a subshell of it, where $$ is
-# still the watcher's pid: only while the lease names that pid, so a reader
-# a killed watcher left signals no process the pid was given since.
-rouse() {
-  ro_p=
-  IFS= read -r ro_p 2>/dev/null <"$lease"
-  [ "$ro_p" = $$ ] && kill -USR1 $$ 2>/dev/null
-  return 0
-}
-
-# Run one source in a directory: its documents go to document.sh one by
-# one, and its reader wakes the watcher for each document kept; its pids
-# are kept so a stop can end it, and its reader marks it ended at its
-# input's end, for the next tick to start it again (D4, D7).
+# Run one source in a directory, as one pipeline of two processes, both
+# the watcher's children (D7): its command, in the directory, and its
+# reader, document.sh, which keeps each document it prints, wakes the
+# watcher for each kept, and marks the source ended at its input's end, for
+# the next tick to start it again (D4). The command's pid is kept as it
+# starts, so a stop in its first second still ends it, and its identity
+# once it has become the source's command, by a helper that runs that once;
+# the reader's, as the watcher's child.
 start() {
   # $1 run file, $2 source name, $3 directory ("" for a source run once), $4 argv as JSON
   run=$1
@@ -418,32 +413,16 @@ start() {
   where=$3
   argv=$4
   (
-    {
-      (
-        cd "${where:-$config}" || exit 1
-        eval "set -- $(printf '%s' "$argv" | jq -r 'map(@sh) | join(" ")')"
-        exec "$@"
-      ) &
-      inner=$!
-      # Its pid at once, so a stop in the next second still ends it; its
-      # identity once it has become the source's command, since where only
-      # the command line tells processes apart, the fork's would not match.
-      group=$(exec sh -c 'echo $PPID')
-      printf '%s\tpid:%s:%s\n' "$inner" "$inner" "$group" >>"$run.pids"
-      (
-        sleep "${SLUICE_HERDR_IDENTITY_DELAY:-1}"
-        settle "$inner" "$run.pids"
-      ) &
-      wait "$inner"
-    } | {
-      while IFS= read -r line; do
-        printf '%s\n' "$line" | sh "$root/bin/document.sh" "$name" "$where"
-        [ -e "$state/dirty" ] && rouse
-      done
-      { : >"$run.ended"; } 2>/dev/null
-      rouse
-    }
-  ) &
+    cd "${where:-$config}" || exit 1
+    eval "set -- $(printf '%s' "$argv" | jq -r 'map(@sh) | join(" ")')"
+    me=$(exec sh -c 'echo $PPID')
+    printf '%s\tpid:%s:%s\n' "$me" "$me" $$ >>"$run.pids"
+    (
+      sleep "${SLUICE_HERDR_IDENTITY_DELAY:-1}"
+      settle "$me" "$run.pids"
+    ) </dev/null >/dev/null 2>&1 &
+    exec "$@"
+  ) | sh "$root/bin/document.sh" "$name" "$where" "$run" $$ &
   remember $! "$run.pids"
 }
 
@@ -499,6 +478,52 @@ heads_moved() {
   [ -n "$moved" ]
 }
 
+# What a look found no pane of any server in (D7): each repository's
+# source run in it is stopped, and its documents, learned worktrees,
+# blamed tests and told list go with it, so its return is a first sight;
+# a source run once is never stopped for want of panes. Each worktree's
+# head stamp and forecast go too.
+gone_by() {
+  for gb_f in "$runs"/*.repo; do
+    [ -e "$gb_f" ] || continue
+    gb_r=
+    IFS= read -r gb_r 2>/dev/null <"$gb_f"
+    case "$nl$found" in *"$nl$gb_r	"*) continue ;; esac
+    leave "${gb_f%.repo}" "$gb_r"
+  done
+  set --
+  for gb_f in "$state"/checks/*.stamp; do
+    [ -e "$gb_f" ] || continue
+    gb_k=${gb_f##*/}
+    case $heads in *"	${gb_k%.stamp}$nl"*) continue ;; esac
+    set -- "$@" "$gb_f" "${gb_f%.stamp}"
+  done
+  [ $# -gt 0 ] && rm -f "$@"
+  return 0
+}
+
+# Stop the source of run file $1, run in repository $2, and forget the
+# repository: every host's documents of it, by the key document.sh keeps
+# them under, as the segment finds them.
+leave() {
+  lv_run=$1
+  lv_r=$2
+  if [ -f "$lv_run.pids" ]; then
+    for p in $(own_listed "$lv_run.pids"); do kill "$p" 2>/dev/null; done
+  fi
+  lv_s=$(name_of "$lv_r")-$(sum "$lv_r")
+  set -- "$lv_run.pids" "$lv_run.repo" "$lv_run.ended"
+  for lv_f in "$state"/docs/*--"$lv_s".* "$state"/told/*--"$lv_s".json "$state"/failed/*--"$lv_s"-*; do
+    [ -e "$lv_f" ] || continue
+    case $lv_f in
+    "$state"/failed/*) case ${lv_f##*--"$lv_s"-} in '' | *[!0-9]*) continue ;; esac ;;
+    esac
+    set -- "$@" "$lv_f"
+  done
+  rm -f "$@"
+  say "no pane is in $lv_r; its watch stopped"
+}
+
 # Sources and repositories, and the worktrees whose heads the ticks test:
 # at a server's ensure and its next tick, the popup's asking, and a tick
 # after a source ended.
@@ -516,7 +541,18 @@ look() {
   [ $# -gt 0 ] && rm -f "$@"
   # Repositories every server's panes are in, each with a worktree to run
   # in, and those the popup asked for; each worktree's git folder kept.
-  listed=$(each panes_json | jq -s -r 'add // [] | [.[] | select(.repo)]
+  # Whether every server listed its panes, since only then is a repository
+  # known to have no pane.
+  lk_n=0
+  lk_failed=false
+  listed=
+  for lk_d in "$state"/servers/*; do
+    [ -f "$lk_d/socket" ] || continue
+    lk_n=$((lk_n + 1))
+    lk_p=$(as "$lk_d" panes_json) || lk_failed=true
+    listed="$listed$lk_p$nl"
+  done
+  listed=$(printf '%s' "$listed" | jq -s -r 'add // [] | [.[] | select(.repo)]
     | (unique_by(.repo)[] | ["r", .repo, .top]), (unique_by(.top)[] | ["h", .top]) | @tsv')
   found=
   heads=
@@ -537,6 +573,7 @@ look() {
     rm -f "$w"
     r=$(repo_of "$d") && t=$(top_of "$d") && found="$found$r	$t$nl"
   done
+  [ "$lk_n" -gt 0 ] && [ "$lk_failed" = false ] && gone_by
   n=$(printf '%s' "$cfg" | jq '.sources | length')
   i=0
   while [ "$i" -lt "$n" ]; do
@@ -564,7 +601,7 @@ look() {
       t=${line#*	}
       run=$runs/$(sum "$name $r")
       dead "$run" || continue
-      rm -f "$run.pids"
+      rm -f "$run.pids" "$run.repo"
       # Probed once, and again at a look five minutes on or after a nudge:
       # a source runs only where sluice has records.
       probe=$state/probe/$(sum "$r")
@@ -576,6 +613,7 @@ look() {
         set_problem ""
         if [ "$(printf '%s' "$got" | jq '((.branches // []) | length) + ((.sessions // []) | length)' 2>/dev/null)" -gt 0 ] 2>/dev/null; then
           echo "records $(now)" >"$probe"
+          printf '%s\n' "$r" >"$run.repo"
           start "$run" "$name" "$t" "$argv"
           continue
         fi

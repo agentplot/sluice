@@ -81,6 +81,18 @@ looks() {
   sleep 2
 }
 
+# A folder of stand-ins, made for the test, that log each call of the
+# tools named as tests/fake-logged does jq's and git's, in
+# $FAKE/<tool>-calls; its path printed.
+logging() {
+  mkdir -p "$t/logged"
+  for x in "$@"; do
+    printf '#!/bin/sh\n. "%s/logged.sh"\n' "$here" >"$t/logged/$x"
+    chmod +x "$t/logged/$x"
+  done
+  echo "$t/logged"
+}
+
 # Whether every process named has ended.
 ended() {
   for p in "$@"; do kill -0 "$p" 2>/dev/null && return 1; done
@@ -248,6 +260,20 @@ panes() {
 named() {
   jq -c --arg p "$1" --arg b "$2" '.result.panes |= map(if .pane_id == $p then .tokens = {sluice_branch: $b, other_tool: "x"} else . end)' \
     "$H/panes.json" >"$H/panes.next" && mv "$H/panes.next" "$H/panes.json"
+}
+
+# The server's panes, one for each pair of arguments: a pane's id and its
+# folder, each in workspace w1 and tab t1, none in front.
+panes_at() {
+  pa=
+  while [ $# -ge 2 ]; do
+    pa="$pa$1	$2
+"
+    shift 2
+  done
+  printf '%s' "$pa" | jq -R -s -c 'split("\n") | map(select(length > 0) | split("\t"))
+    | {result: {panes: map({pane_id: .[0], tab_id: "t1", workspace_id: "w1", agent: "claude",
+        cwd: .[1], foreground_cwd: .[1], focused: false})}}' >"$H/panes.json"
 }
 
 # A document for repo: main with nothing queued, changed by the jq in $1.
@@ -791,13 +817,147 @@ for p in $olds; do kill "$p" 2>/dev/null; done
 pass
 
 fresh 'watch: no configuration'
+# A pane in the worktree work, of a repository with sluice's records, and
+# one in plain, a repository without.
+panes_at p1 "$work" p4 "$scratch/plain"
 doc >"$FAKE/overview-work.json"
 doc ".branches[0].depth = 1 | .branches[0].submissions = [$(sub 12 '$work' queued)]" >"$FAKE/watch-work.jsonl"
 SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 1 2>/dev/null
+grep -q '^plain: overview --json' "$FAKE/sluice-calls" || fail "the repository without records was not probed"
 [ "$(grep -c 'overview --watch --json' "$FAKE/sluice-calls")" = 1 ] || fail "watch ran other than once: $(cat "$FAKE/sluice-calls")"
 grep -q '^work: overview --watch --json' "$FAKE/sluice-calls" || fail "watch did not run in the repository with records"
 [ -n "$(ls "$S/docs/"*.json 2>/dev/null)" ] || fail "no document kept"
 pass
+
+fresh 'watch: panes of two servers in one repository'
+for d in work other; do
+  doc >"$FAKE/overview-$d.json"
+  doc >"$FAKE/watch-$d.jsonl"
+done
+touch "$FAKE/hold"
+# Server one's pane is in the worktree work, server two's in other: two
+# worktrees of one repository.
+serve one
+panes_at p1 "$work"
+serve two
+panes_at p2 "$other"
+SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ensure
+serve one
+sh "$plugin/bin/watch.sh" --ensure
+within 15 '[ -n "$(watching)" ]' || fail "no watch started"
+within 10 'grep -q "^one.sock: pane list" "$FAKE/herdr-calls" && grep -q "^two.sock: pane list" "$FAKE/herdr-calls"' ||
+  fail "not both servers' panes were read: $(calls)"
+# Looked at again at each server's ensure and at the ticks.
+for s in two one; do
+  serve "$s"
+  sh "$plugin/bin/watch.sh" --ensure
+  sleep 2
+done
+[ "$(grep -c 'overview --watch --json' "$FAKE/sluice-calls")" = 1 ] || fail "watch ran other than once: $(cat "$FAKE/sluice-calls")"
+[ "$(watching | wc -l | tr -d ' ')" = 1 ] || fail "not one watch runs: $(watching)"
+rm -f "$FAKE/hold"
+pass
+
+fresh 'watch: the last pane leaves'
+doc >"$FAKE/overview-work.json"
+status_of 87 "$work" withdrawn '["tests:t-cards"]'
+{
+  doc ".branches[0].depth = 1 | .branches[0].submissions = [$(sub 87 '$work' testing)]"
+  doc "$blamed87"
+} >"$FAKE/watch-work.jsonl"
+touch "$FAKE/hold"
+for s in one two; do
+  serve "$s"
+  panes_at p1 "$work"
+done
+# Long ticks: only the servers' ensures have it read their panes.
+serve one
+SLUICE_HERDR_TICK=60 sh "$plugin/bin/watch.sh" --ensure
+serve two
+sh "$plugin/bin/watch.sh" --ensure
+within 15 'ls "$S"/failed/*-87 >/dev/null 2>&1 && grep -q "notification show sluice: #87" "$FAKE/herdr-calls"' ||
+  fail "the blame was not learned and told: $(calls)"
+src=$(watching)
+[ -n "$src" ] || fail "no watch runs"
+# The repository's pane closes in server one: server two's is in it still.
+serve one
+panes_at p3 "$scratch/home"
+: >"$FAKE/herdr-calls"
+sh "$plugin/bin/watch.sh" --ensure
+within 10 'grep -q "^one.sock: pane list" "$FAKE/herdr-calls"' || fail "server one's panes were not read again"
+sleep 2
+for p in $src; do kill -0 "$p" 2>/dev/null || fail "the watch stopped while a pane of another server is in its repository"; done
+[ -n "$(ls "$S"/docs/*.json 2>/dev/null)" ] || fail "the document went while a pane is in its repository"
+# Then server two's: no pane of any server is in the repository.
+serve two
+panes_at p3 "$scratch/home"
+sh "$plugin/bin/watch.sh" --ensure
+within 10 'ended $src' || fail "the repository's watch still runs"
+within 5 '[ -z "$(find "$S/docs" "$S/told" "$S/failed" -type f)" ]' ||
+  fail "the repository's state is left: $(find "$S/docs" "$S/told" "$S/failed" -type f)"
+for v in --once '--dashboard --once'; do
+  # shellcheck disable=SC2086 # the flags, split
+  out=$(SLUICE_HERDR_DIR=$scratch/home sh "$plugin/bin/status.sh" $v </dev/null)
+  printf '%s' "$out" | grep -qF -e "$common" -e '#87' && fail "status.sh $v still holds the repository: $out"
+done
+w=$(holder_of "$S/watch.lease")
+kill -0 "$w" 2>/dev/null || fail "the watcher stopped with the repository's watch"
+# A pane back in it is a first sight: the blame its watch prints first is
+# not told again.
+doc "$blamed87" >"$FAKE/watch-work.jsonl"
+: >"$FAKE/herdr-calls"
+panes_at p1 "$work"
+sh "$plugin/bin/watch.sh" --ensure
+within 15 '[ -n "$(ls "$S"/docs/*.json 2>/dev/null)" ]' || fail "the repository was not read again"
+settled
+hasnt 'notification show'
+rm -f "$FAKE/hold"
+pass
+
+fresh 'watch: three servers, two repositories, six processes'
+if needs_ps; then
+  # Two repositories with sluice's records: repo, in its worktree other,
+  # and plain. Nothing in them gives a pane a token.
+  plain_common=$(cd "$scratch/plain/.git" && pwd -P)
+  doc >"$FAKE/overview-other.json"
+  doc >"$FAKE/watch-other.jsonl"
+  doc | jq -c --arg r "$plain_common" '.repository = $r' >"$FAKE/overview-plain.json"
+  cp "$FAKE/overview-plain.json" "$FAKE/watch-plain.jsonl"
+  touch "$FAKE/hold"
+  serve one
+  panes_at p2 "$other"
+  serve two
+  panes_at p4 "$scratch/plain"
+  serve three
+  panes_at p2 "$other" p4 "$scratch/plain"
+  for s in one two three; do
+    serve "$s"
+    SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ensure
+  done
+  within 15 '[ "$(watching | wc -l | tr -d " ")" = 2 ]' || fail "not two watches: $(cat "$FAKE/sluice-calls")"
+  w=$(holder_of "$S/watch.lease")
+  settled || fail "the watcher did not settle"
+  # The watcher's processes, a tick on: itself and its children, and the
+  # readers' children; what a source's command starts is its own.
+  got=
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    got=$(ps -A -o pid=,ppid=,args= | awk -v w="$w" '
+      { pid[NR] = $1; ppid[NR] = $2; a = $0; sub(/^ *[0-9]+ +[0-9]+ +/, "", a); args[NR] = a }
+      END {
+        for (i = 1; i <= NR; i++) if (ppid[i] == w) {
+          k = args[i] ~ /overview --watch --json/ ? "command" : args[i] ~ /bin\/document\.sh/ ? "reader" : args[i] ~ /^sleep / ? "sleep" : "other: " args[i]
+          print k
+          if (k == "reader") for (j = 1; j <= NR; j++) if (ppid[j] == pid[i]) print "the reader'"'"'s: " args[j]
+        }
+      }' | sort | tr '\n' ' ')
+    [ "$got" = 'command command reader reader sleep ' ] && break
+    sleep 1
+  done
+  [ "$got" = 'command command reader reader sleep ' ] || fail "the watcher's processes beside it: $got"
+  kill -0 "$w" 2>/dev/null || fail "the watcher is not running"
+  rm -f "$FAKE/hold"
+  pass
+fi
 
 fresh "watch: a source of the user's"
 cat >"$HERDR_PLUGIN_CONFIG_DIR/sources.toml" <<'EOF'
@@ -807,11 +967,20 @@ name = "build machine"
 command = ["my-overview-stream", "app"]
 EOF
 jq -n -c '{schema: "sluice/overview@1", host: "build", repository: "/srv/app.git", at: "2026-10-16T19:45:10Z", branches: [], sessions: [], previews: []}' >"$FAKE/stream.jsonl"
-SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 1 2>/dev/null
-[ "$(cat "$FAKE/stream-calls" 2>/dev/null)" = app ] || fail "the source did not run once with its argv"
-set -- "$S"/docs/build--app-*.json
-[ -e "$1" ] || fail "its document is not kept under its host and repository"
+touch "$FAKE/hold"
+SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 60 2>/dev/null &
+w=$!
+within 15 '[ -n "$(ls "$S"/docs/build--app-*.json 2>/dev/null)" ]' || fail "its document is not kept under its host and repository"
+# No pane is in its repository: looked at again, it is left running, and
+# its document kept.
+looks "$here/fake"
+[ "$(cat "$FAKE/stream-calls" 2>/dev/null)" = app ] || fail "the source did not run once with its argv: $(cat "$FAKE/stream-calls")"
+[ -n "$(ls "$S"/docs/build--app-*.json 2>/dev/null)" ] || fail "its document went for want of panes"
+kill -0 "$(sources_of "$w" | head -1)" 2>/dev/null || fail "the source was stopped"
 grep -q 'overview --watch' "$FAKE/sluice-calls" && fail "the default source ran beside the user's"
+rm -f "$FAKE/hold"
+kill "$w" 2>/dev/null
+wait "$w" 2>/dev/null
 pass
 
 fresh 'watch: configuration it cannot read'
@@ -836,6 +1005,33 @@ f=$(ls "$S"/docs/*.json)
 [ "$(jq -r '.branches[0].recent[0].ids[0]' "$f")" = 95 ] || fail "the state file is not the last document"
 set -- "$S"/docs/*.tmp.*
 [ -e "$1" ] && fail "a temporary file was left"
+pass
+
+fresh 'watch: a large document costs what a small one does'
+# Every tool the reader may run, logged, beside the stand-in herdr and
+# sluice, which log their own.
+L=$(logging jq git mv rm cat cksum cut basename mkdir date sed awk grep head tail tr sort touch ln wc shasum sha256sum openssl)
+started() { cat "$FAKE"/*-calls | grep -vc 'notification show'; }
+feed "$(doc)"
+small=$(doc ".branches[0].depth = 1 | .branches[0].submissions = [$(sub 1 '$work' queued)]")
+# Twenty submissions across three branches, and five conflicts not yet
+# told, of submissions whose worktrees it carries.
+large=$(doc '.branches = [range(3) as $i | .branches[0] + {branch: ["main", "release", "next"][$i],
+    submissions: [range(101; 121) | select((. - 101) % 3 == $i)
+      | {id: ., state: "queued", from: {agent: "claude", worktree: "w", path: (if . % 2 == 0 then $work else $other end)}}],
+    recent: (if $i == 0 then [range(101; 106) | {schema: "sluice/log@1", at: "2026-10-16T19:44:\(. - 90)Z",
+      event: "conflict", id: ., paths: ["a.rs"], with: []}] else [] end)}]
+  | .branches |= map(.depth = (.submissions | length))')
+for f in "$FAKE"/*-calls; do : >"$f"; done
+printf '%s\n' "$small" | PATH="$L:$PATH" sh "$plugin/bin/document.sh" local "$work"
+one=$(started)
+for f in "$FAKE"/*-calls; do : >"$f"; done
+printf '%s\n' "$large" | PATH="$L:$PATH" sh "$plugin/bin/document.sh" local "$work"
+twenty=$(started)
+[ "$(grep -c 'notification show sluice: #10[1-5] conflicts on main' "$FAKE/herdr-calls")" = 5 ] || fail "not five toasts: $(calls)"
+[ "$one" -gt 0 ] || fail "nothing was logged"
+[ "$twenty" -le "$one" ] || fail "the large document started $twenty processes, the small one $one: $(cat "$FAKE"/*-calls)"
+[ "$(jq '[.[]] | length' "$S"/docs/*.paths)" = 20 ] || fail "not every submission's worktree learned: $(cat "$S"/docs/*.paths)"
 pass
 
 fresh 'watch: read by every server'
@@ -1595,27 +1791,14 @@ feed "$(doc)" "$(doc "$blamed87")" "$(doc "$blamed87")"
 [ "$(grep -c 'notification show' "$FAKE/herdr-calls")" = 1 ] || fail "told twice: $(calls)"
 pass
 
-fresh 'toasts: two watchers tell an event once'
-feed "$(doc)"
-for i in 1 2 3 4 5; do
-  status_of "$((80 + i))" "$work" withdrawn '["t"]'
-  d=$(doc ".branches[0].recent += [{schema: \"sluice/log@1\", at: \"2026-10-16T19:44:0${i}Z\", event: \"blamed\", id: $((80 + i)), combination: \"c\"}]")
-  printf '%s\n' "$d" | sh "$plugin/bin/document.sh" local "$work" &
-  printf '%s\n' "$d" | sh "$plugin/bin/document.sh" local "$work" &
-  wait
-done
-[ "$(grep -c 'notification show' "$FAKE/herdr-calls")" = 5 ] || fail "not one toast per blame: $(grep 'notification show' "$FAKE/herdr-calls")"
-pass
-
 fresh 'toasts: what is told is kept only while it is recent'
 status_of 53 "$work" withdrawn
 feed "$(doc "$blamed87 | $landed94")" "$(doc "$landed94 | $conflict53")"
-d=$(ls -d "$S"/told.d/*)
-got=$(for e in "$d"/*; do echo "${e##*/}"; done | sort)
-want=$(for k in 'main|conflict|53|2026-10-16T19:44:30Z' 'main|landed|94|2026-10-16T19:33:10Z'; do
-  sh -c '. "$HERDR_PLUGIN_ROOT/lib/common.sh"; digest "$1"' "$plugin/bin/x" "$k"
-done | sort)
-[ "$got" = "$want" ] || fail "told holds: $got, not $want"
+# One list for the repository, its events' keys.
+set -- "$S"/told/*.json
+[ "$#" = 1 ] && [ -f "$1" ] || fail "not one told list: $(ls "$S/told")"
+got=$(jq -c 'sort' "$1")
+[ "$got" = '["main|conflict|53|2026-10-16T19:44:30Z","main|landed|94|2026-10-16T19:33:10Z"]' ] || fail "told holds: $got"
 pass
 
 fresh 'toasts: an event on a long branch, or of many submissions'
@@ -1626,12 +1809,10 @@ first=$(doc "$on_long")
 second=$(doc "$on_long | $blamed87 | $many")
 feed "$first" "$second" 2>"$t/err"
 has "notification show sluice: #87 blamed on $long"
-n=0
-for f in "$S"/told.d/*/*; do
-  [ "${#f}" -lt 400 ] || fail "a told name is ${#f} long"
-  n=$((n + 1))
-done
-[ "$n" = 2 ] || fail "not both events are recorded as told: $(cat "$t/err")"
+# Kept in the list whole, however long: no file is named by an event.
+[ "$(jq -r --arg b "$long" 'map(select(startswith($b + "|"))) | length' "$S"/told/*.json)" = 2 ] ||
+  fail "not both events are recorded as told: $(cat "$S"/told/*.json) $(cat "$t/err")"
+grep -q 'cannot' "$t/err" && fail "logged: $(cat "$t/err")"
 pass
 
 fresh 'toasts: none when what was told cannot be kept'
@@ -1639,13 +1820,18 @@ status_of 87 "$work" withdrawn '["t"]'
 status_of 53 "$work" withdrawn
 feed "$(doc)"
 # Unwritable even to root, as the containers run it: a file where the
-# repository's directory of told events was.
-for d in "$S"/told.d/*; do
-  rmdir "$d" && : >"$d"
-done
+# folder of the told lists was.
+rm -rf "$S/told" && : >"$S/told"
 for i in 1 2 3; do feed "$(doc "$blamed87 | $conflict53 | .branches[0].version = $i")"; done 2>"$t/err"
 hasnt 'notification show'
 [ "$(grep -c 'cannot record' "$t/err")" = 1 ] || fail "not logged once: $(cat "$t/err")"
+# Once it can be kept again, what follows is told.
+rm -f "$S/told"
+mkdir "$S/told"
+feed "$(doc "$blamed87 | $conflict53")" "$(doc "$blamed87 | $conflict53 | $landed94")" 2>"$t/err"
+hasnt 'notification show'
+feed "$(doc "$blamed87 | $conflict53 | .branches[0].recent += [{schema: \"sluice/log@1\", at: \"2026-10-16T19:45:00Z\", event: \"blamed\", id: 88, combination: \"c\"}]")" 2>"$t/err"
+has 'notification show sluice: #88 blamed on main'
 pass
 
 fresh 'toasts: first sight of a repository'
