@@ -23,7 +23,7 @@ check task passing.
 
 - [x] 2.1 In `crates/sluice/src/profiles/github/fake.rs`, make `post_named`, given an existing run whose posting is `Failure` or `Success` and a posting that is `Queued` or `InProgress`, keep the run's status and take the posting's title, summary and text; any other posting replaces the run whole, as now (D5). Its doc comment cites switchboard-kit #268 and record 0093. Add `a_completed_check_run_stays_completed` beside the fake's tests: a run posted `Failure` and patched `Queued` reads `Failure` with the queued posting's title. True when `cargo test -p sluice --lib fake` passes.
 - [x] 2.2 Run the pull request and worktrunk suites and mend each test that read a reopened check's status: it reads the title instead, as any host now reads it (D3), and says so in its comment. True when `sluice exec main -- cargo test -p sluice --features tools --test pull_requests --test worktrunk` passes, and the only failures before the mend were tests that read a reopened run's status.
-- [ ] 2.3 Check the group: commit, then run `sluice exec main -- moon run cli:test`. True when it passes.
+- [x] 2.3 Check the group: commit, then run `sluice exec main -- moon run cli:test`. True when it passes.
 
 ## 3. A request's state across hosts is what sluice's check says
 
