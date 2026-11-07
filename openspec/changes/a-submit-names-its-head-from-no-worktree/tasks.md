@@ -39,7 +39,7 @@ clauses by number and rules by id.
 
 ## 6. A target that takes pull requests
 
-- [ ] 6.1 `PullRequests::open` and `opening` in `crates/sluice/src/lib.rs` and `profiles/github/pulls.rs` take a head named, its session the core's: the request from the branch opened or updated, nothing pushed, marked ready, titled by the subject or the branch (124, C.5; D7). True when `sluice exec main -- cargo test -p sluice --features tools --test pull_requests -- by_name` passes `a_submit_by_name_opens_the_request_from_the_branch` and `a_request_by_name_is_collected_by_no_worktree`, against the forge double.
+- [x] 6.1 `PullRequests::open` and `opening` in `crates/sluice/src/lib.rs` and `profiles/github/pulls.rs` take a head named, its session the core's: the request from the branch opened or updated, nothing pushed, marked ready, titled by the subject or the branch (124, C.5; D7). True when `sluice exec main -- cargo test -p sluice --features tools --test pull_requests -- by_name` passes `a_submit_by_name_opens_the_request_from_the_branch` and `a_request_by_name_is_collected_by_no_worktree`, against the forge double.
 
 ## 7. A status gives an inbox's words
 
