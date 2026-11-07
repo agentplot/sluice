@@ -103,10 +103,11 @@ The paths not taken:
 
 ### D2. What the report reads of a required check with no result
 
-`read_report` takes the map. For each target with no result of its own,
-neither passed, failed nor cached, and not in `not_run`, it reads its
-dependencies' actions, `RunTask(…)` and `RunPersistentTask(…)` alike,
-since a helper the check waits on is a task it depends on:
+`read_report` takes the map. For each target whose action the report
+names `skipped`, with no result of its own, neither passed, failed nor
+cached, and not in `not_run`, it reads its dependencies' actions,
+`RunTask(…)` and `RunPersistentTask(…)` alike, since a helper the check
+waits on is a task it depends on:
 
 1. **Failed by.** The dependencies whose action is `failed`, not
    `allowFailure`, with a hash, and whose last try's exit is not one
@@ -121,6 +122,13 @@ since a helper the check waits on is a task it depends on:
    gives and the dependency named first where there are several (114).
    Its dependencies give nothing.
 3. **Missing.** Otherwise, the target stays missing, as today (15).
+
+A target the report does not name as skipped is read through nothing
+and stays missing: moon skipped it for no task it depends on. One moon
+keeps out of its CI mode is absent from the report (ADR 0044), and may
+share a dependency that failed another target. The path not taken:
+*every target with no result read through its dependencies*, which
+reads such a target as failed by a task moon never skipped it for.
 
 A failure is a failure whichever kind of dependency it is in, so one
 that failed outweighs another that could not run. A target's failed
