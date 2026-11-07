@@ -171,7 +171,8 @@ merged and draft, its title and the branch it is opened from, and the
 `sluice` check's posting on that head. A request enters it when:
 
 - a submit on this host opens, updates or marks ready the request, in
-  `opening`, beside the `.moved` touch it already leaves;
+  `opening`, beside the `.moved` touch it already leaves, where the mark
+  as this host last fetched it names another host;
 - this host's hand-over withdraws its submission (`hand_over`);
 - a wait or `submit --status` on this host follows it across hosts
   (`follow_across`).
@@ -194,9 +195,14 @@ reads alone (core.14, core.41).
 its last read is younger than a quarter of `[forge] discovery`, every
 process uses it. Otherwise the process reads the pull and the check on
 its head, each conditional on the answer kept for its address (136,
-core.32), and writes what it found. Two waits and a status on one host
-read a request together no more often than one wait did. `Pulls::seen`
-keeps only the timeline a wait reads for itself.
+core.32), and writes what it found. The process that finds the read due
+claims it under the file's lock, its time set as the read begins, and
+gives the claim back where the read failed. A wait whose pass finds
+another process of the host holding intake's lock follows the host the
+mark as last fetched names. Two waits and a status on one host read a
+request together no more often than one wait did. `Pulls::seen` keeps
+only what a wait on the host that takes the request in reads for
+itself.
 
 *Not taken:* the per-process bound kept as it is. Each process reads on
 its own clock, and a one-shot status would read at every call.
