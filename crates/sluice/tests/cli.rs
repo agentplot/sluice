@@ -1124,9 +1124,11 @@ fn home_shows_the_worktrees_submission_by_its_path() {
     let v = home(&f, "unit/a");
     assert_eq!(v["submission"]["id"], 1);
     assert_eq!(v["submission"]["state"], "queued");
+    // No round has read the branch, and its gate is read where this host
+    // holds it all the same (56, 129; rule core.15).
     assert_eq!(
         v["branches"],
-        serde_json::json!([{"branch": BRANCH, "depth": 1, "testing": 0, "parallel": null}])
+        serde_json::json!([{"branch": BRANCH, "depth": 1, "testing": 0, "parallel": 4}])
     );
     assert_eq!(
         v["next"],
