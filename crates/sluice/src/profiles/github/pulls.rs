@@ -67,7 +67,7 @@ use crate::identity::Identity;
 use crate::profiles::local_refs::LocalRefs;
 use crate::profiles::pushed_refs::{Holder, Mark, PushedRefs};
 use crate::retry;
-use crate::{Followed, GroupRefused, Opened, Short, Taker};
+use crate::{Ahead, Followed, GroupRefused, Opened, Queue, Short, Taker};
 use sluice_core::verdict_view::{Standing as Stands, VerdictView};
 
 /// The place a pull request's entry is submitted from.
@@ -1272,6 +1272,10 @@ impl Pulls {
         r: &mut Reading,
     ) -> Result<Considered> {
         let here = place(p.number);
+        // D1: its queue on this host, as sluice's check on its head
+        // carries it, from its submission at that head, if any.
+        let at = latest.filter(|e| e.head.0 == p.head);
+        let queue = || queue_at(&self.peer.name, at, subs);
         // A submit's pull request whose submission left the queue without
         // landing waits for its submitter's act, a submit or a person's
         // ready mark, at or after the second it left: whatever its head,
@@ -1294,7 +1298,7 @@ impl Pulls {
         // its person's act, a new head or a ready mark, offers it again
         // (120, C.5).
         let mut rests = None;
-        if let Some(e) = latest.filter(|e| e.head.0 == p.head) {
+        if let Some(e) = at {
             match e.state {
                 State::Withdrawn => {
                     if let Some(by) = withdrawn_by_another(e).filter(|_| from.is_none()) {
@@ -1305,7 +1309,9 @@ impl Pulls {
                         }
                     }
                 }
-                State::Landed => return Ok(outcome_shown(branch, &Outcome::of(e)?, names).into()),
+                State::Landed => {
+                    return Ok(outcome_shown(branch, &Outcome::of(e)?, names, queue()).into())
+                }
                 State::Failed | State::Conflict => {
                     // Sent back: one opened by hand is submitted again only
                     // once it is marked ready for review after it was sent
@@ -1324,11 +1330,11 @@ impl Pulls {
                             self.comment_once(forge, &t.repo, p.number, &id, &body, r)?;
                         }
                         if !held {
-                            return Ok(outcome_shown(branch, &outcome, names).into());
+                            return Ok(outcome_shown(branch, &outcome, names, queue()).into());
                         }
                     }
                 }
-                _ => return Ok(queue_shown(branch, e, subs, names).into()),
+                _ => return Ok(queue_shown(branch, e, subs, names, queue()).into()),
             }
         }
         // Waiting: what is missing, and where it would land now. One of a
@@ -1348,8 +1354,8 @@ impl Pulls {
         if let Err(e) = self.fetch_head(pushed, p) {
             return Ok(Considered {
                 shown: (p.draft || !missing.is_empty() || group.is_some()).then(|| match group {
-                    Some(g) => waiting_in_group(branch, from, &missing, g, None),
-                    None => waiting(branch, from, &missing, None),
+                    Some(g) => waiting_in_group(branch, from, &missing, g, None, queue()),
+                    None => waiting(branch, from, &missing, None, queue()),
                 }),
                 failed: Some(e),
             });
@@ -1375,13 +1381,32 @@ impl Pulls {
                         },
                     );
                     let ahead: Vec<String> = a.ahead.iter().map(|i| name(*i, names)).collect();
-                    queued(branch, &ahead)
+                    let queue = Queue {
+                        host: self.peer.name.clone(),
+                        taken_in: true,
+                        submission: Some(a.id),
+                        state: Some(State::Queued.word().to_string()),
+                        ahead: a
+                            .ahead
+                            .iter()
+                            .map(|i| Ahead {
+                                submission: *i,
+                                pull_request: subs
+                                    .iter()
+                                    .find(|x| x.id == *i)
+                                    .and_then(|x| number(&x.from.worktree)),
+                            })
+                            .collect(),
+                        waits_for: Vec::new(),
+                    };
+                    queued(branch, &ahead, queue)
                 }
                 Err(refused) => waiting(
                     branch,
                     from,
                     &[format!("refused: {}", refusal_word(&refused))],
                     None,
+                    queue(),
                 ),
             }));
         }
@@ -1389,8 +1414,8 @@ impl Pulls {
         // the request do.
         if let Some(forecast) = r.forecast.clone() {
             return Ok(match group {
-                Some(g) => waiting_in_group(branch, from, &missing, g, Some(forecast)),
-                None => waiting(branch, from, &missing, Some(forecast)),
+                Some(g) => waiting_in_group(branch, from, &missing, g, Some(forecast), queue()),
+                None => waiting(branch, from, &missing, Some(forecast), queue()),
             }
             .into());
         }
@@ -1426,8 +1451,8 @@ impl Pulls {
         };
         r.forecast = Some(forecast.clone());
         Ok(match group {
-            Some(g) => waiting_in_group(branch, from, &missing, g, Some(forecast)),
-            None => waiting(branch, from, &missing, Some(forecast)),
+            Some(g) => waiting_in_group(branch, from, &missing, g, Some(forecast), queue()),
+            None => waiting(branch, from, &missing, Some(forecast), queue()),
         }
         .into())
     }
@@ -2213,38 +2238,110 @@ fn next_submit(branch: &str, from: &str) -> String {
     )
 }
 
-/// What a waiting pull request into `branch` shows: `from` is the branch
-/// a submit's pull request is submitted from.
-fn waiting(
+/// D1: where the block that carries a request's queue opens in sluice's
+/// check's summary, an HTML comment GitHub's Markdown hides.
+const QUEUE_BLOCK: &str = "<!-- sluice:queue ";
+
+/// D1: a pull request's queue on `host`, as sluice's check on its head
+/// carries it: `at` is the submission of the request at that head that
+/// `host`'s records hold, if any, and `subs` the branch's submissions,
+/// those ahead of it while it is in the queue. It waits for nothing until
+/// a waiting check names what.
+fn queue_at(host: &str, at: Option<&Submission>, subs: &[Submission]) -> Queue {
+    let ahead = match at {
+        Some(e) if !e.state.is_out() => subs
+            .iter()
+            .filter(|x| x.id < e.id && !x.state.is_out())
+            .map(|x| Ahead {
+                submission: x.id,
+                pull_request: number(&x.from.worktree),
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    Queue {
+        host: host.to_string(),
+        taken_in: at.is_some(),
+        submission: at.map(|e| e.id),
+        state: at.map(|e| e.state.word().to_string()),
+        ahead,
+        waits_for: Vec::new(),
+    }
+}
+
+/// D1: the queue a check's summary carries in its last block; `None`
+/// where it carries none, as an older sluice posted it, or where that
+/// block does not read.
+pub fn queue_of(summary: &str) -> Option<Queue> {
+    let rest = &summary[summary.rfind(QUEUE_BLOCK)? + QUEUE_BLOCK.len()..];
+    serde_json::from_str(&rest[..rest.find(" -->")?]).ok()
+}
+
+/// D1: a check's summary as a person reads it, its block left out.
+fn words(summary: &str) -> String {
+    summary
+        .lines()
+        .filter(|l| !l.trim_start().starts_with(QUEUE_BLOCK))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim_end()
+        .to_string()
+}
+
+/// D1: a check's summary: a first line naming the request's submission
+/// on the posting host, or that it waits to be taken in there; `words`;
+/// and the block that carries `queue`, its `>` escaped so that no field
+/// ends the comment.
+fn summed(queue: &Queue, words: &str) -> String {
+    let first = match queue.submission.filter(|_| queue.taken_in) {
+        Some(n) => format!("Submission {n} on {}.", queue.host),
+        None => format!("Waiting to be taken in on {}.", queue.host),
+    };
+    let fields = serde_json::to_string(queue)
+        .unwrap_or_default()
+        .replace('>', "\\u003e");
+    format!("{first}\n\n{words}\n\n{QUEUE_BLOCK}{fields} -->")
+}
+
+/// What a waiting pull request into `branch` is titled, the words of its
+/// summary before any forecast, and what it waits for in its title's
+/// words: `from` is the branch a submit's pull request is submitted from.
+fn waiting_words(
     branch: &str,
     from: Option<&str>,
     missing: &[String],
-    forecast: Option<String>,
-) -> Shown {
+) -> (String, Vec<String>, Vec<String>) {
     let held = missing.iter().any(|m| m == NEXT_SUBMIT);
     let rests = missing.iter().find_map(|m| m.strip_prefix(WITHDRAWN_BY));
-    let title = if held {
-        format!("waiting: {NEXT_SUBMIT}")
+    let draft = missing.iter().any(|m| m == "a draft");
+    let (title, waits_for) = if held {
+        (
+            format!("waiting: {NEXT_SUBMIT}"),
+            vec![NEXT_SUBMIT.to_string()],
+        )
     } else if let Some(who) = rests {
-        format!("waiting: {WITHDRAWN_BY}{who}")
-    } else if missing.iter().any(|m| m == "a draft") {
-        "waiting: a draft".to_string()
+        let w = format!("{WITHDRAWN_BY}{who}");
+        (format!("waiting: {w}"), vec![w])
+    } else if draft {
+        ("waiting: a draft".to_string(), vec!["a draft".to_string()])
     } else {
-        format!("waiting: needs {}", missing.join(", "))
+        (
+            format!("waiting: needs {}", missing.join(", ")),
+            missing.to_vec(),
+        )
     };
-    let mut summary = Vec::new();
-    if held {
-        summary.push(format!(
+    let words = if held {
+        format!(
             "Its submission left the queue, and sluice marked it a draft. {}",
             next_submit(branch, from.unwrap_or("its branch"))
-        ));
+        )
     } else if let Some(who) = rests {
-        summary.push(format!(
+        format!(
             "Withdrawn from {branch}'s queue by {who}. New commits, or marking it a draft and \
              then ready for review, submit it again."
-        ));
-    } else if missing.iter().any(|m| m == "a draft") {
-        summary.push("A draft: sluice takes it once it is marked ready for review.".to_string());
+        )
+    } else if draft {
+        "A draft: sluice takes it once it is marked ready for review.".to_string()
     } else {
         let named: Vec<String> = missing
             .iter()
@@ -2256,22 +2353,37 @@ fn waiting(
                 }
             })
             .collect();
-        summary.push(format!(
+        format!(
             "Needs {} on this commit before sluice takes it.",
             named.join(", ")
-        ));
-    }
+        )
+    };
+    (title, vec![words], waits_for)
+}
+
+/// What a waiting pull request into `branch` shows: `from` is the branch
+/// a submit's pull request is submitted from, and `queue` its queue on
+/// the host that posts it (D1).
+fn waiting(
+    branch: &str,
+    from: Option<&str>,
+    missing: &[String],
+    forecast: Option<String>,
+    mut queue: Queue,
+) -> Shown {
+    let (title, mut summary, waits_for) = waiting_words(branch, from, missing);
     let mut lines = Vec::new();
     if let Some(f) = forecast {
         summary.push(f.replacen("forecast:", "Forecast:", 1));
         lines.push(f);
     }
+    queue.waits_for = waits_for;
     Shown {
         posting: Posting {
             text: None,
             status: Status::Queued,
             title,
-            summary: summary.join("\n\n"),
+            summary: summed(&queue, &summary.join("\n\n")),
         },
         lines,
     }
@@ -2279,46 +2391,53 @@ fn waiting(
 
 /// 125: one of a group intake has not taken, which waits for what it
 /// lacks itself, or else for the rest of its group: `from` is the branch
-/// it is submitted from.
+/// it is submitted from, and `queue` its queue on the host that posts it
+/// (D1).
 fn waiting_in_group(
     branch: &str,
     from: Option<&str>,
     missing: &[String],
     g: &Bound,
     forecast: Option<String>,
+    mut queue: Queue,
 ) -> Shown {
     let together = format!(
         "One of a group of {} submitted together, which sluice takes only all together, once \
          each is ready.",
         g.n
     );
-    let mut shown = if missing.is_empty() {
+    let (title, mut summary, waits_for) = if missing.is_empty() {
         let on = g.on.join(", ");
-        Shown {
-            posting: Posting {
-                text: None,
-                status: Status::Queued,
-                title: format!("waiting for its group: {on}"),
-                summary: format!("{together} It waits for {on}."),
-            },
-            lines: Vec::new(),
-        }
+        (
+            format!("waiting for its group: {on}"),
+            vec![format!("{together} It waits for {on}.")],
+            vec![format!("its group: {on}")],
+        )
     } else {
-        let mut w = waiting(branch, from, missing, None);
-        w.posting.summary = format!("{}\n\n{together}", w.posting.summary);
-        w
+        let (title, mut summary, waits_for) = waiting_words(branch, from, missing);
+        summary.push(together);
+        (title, summary, waits_for)
     };
+    let mut lines = Vec::new();
     if let Some(f) = forecast {
-        shown
-            .posting
-            .summary
-            .push_str(&format!("\n\n{}", f.replacen("forecast:", "Forecast:", 1)));
-        shown.lines.push(f);
+        summary.push(f.replacen("forecast:", "Forecast:", 1));
+        lines.push(f);
     }
-    shown
+    queue.waits_for = waits_for;
+    Shown {
+        posting: Posting {
+            text: None,
+            status: Status::Queued,
+            title,
+            summary: summed(&queue, &summary.join("\n\n")),
+        },
+        lines,
+    }
 }
 
-fn queued(branch: &str, ahead: &[String]) -> Shown {
+/// A pull request queued on `branch` behind `ahead`, as each is named on
+/// a pull request: `queue` is its queue on the host that posts it (D1).
+fn queued(branch: &str, ahead: &[String], queue: Queue) -> Shown {
     let title = if ahead.is_empty() {
         format!("queued: next on {branch}")
     } else {
@@ -2328,19 +2447,24 @@ fn queued(branch: &str, ahead: &[String]) -> Shown {
         posting: Posting {
             text: None,
             status: Status::Queued,
-            summary: format!("In {branch}'s queue; it lands once its combination passes."),
+            summary: summed(
+                &queue,
+                &format!("In {branch}'s queue; it lands once its combination passes."),
+            ),
             title,
         },
         lines: Vec::new(),
     }
 }
 
-/// A submitted pull request's state in the queue.
+/// A submitted pull request's state in the queue: `queue` is its queue on
+/// the host that posts it (D1).
 fn queue_shown(
     branch: &str,
     e: &Submission,
     subs: &[Submission],
     names: &BTreeMap<u64, String>,
+    queue: Queue,
 ) -> Shown {
     match (&e.tested, e.state) {
         (Some(t), State::Testing | State::Passed | State::Landing) => {
@@ -2349,9 +2473,12 @@ fn queue_shown(
                 posting: Posting {
                     text: None,
                     status: Status::InProgress,
-                    summary: format!(
-                        "sluice is testing `{}`, {branch} with what is ahead of it.",
-                        t.combination.short()
+                    summary: summed(
+                        &queue,
+                        &format!(
+                            "sluice is testing `{}`, {branch} with what is ahead of it.",
+                            t.combination.short()
+                        ),
                     ),
                     title,
                 },
@@ -2364,7 +2491,7 @@ fn queue_shown(
                 .filter(|x| x.id < e.id && !x.state.is_out())
                 .map(|x| name(x.id, names))
                 .collect();
-            queued(branch, &ahead)
+            queued(branch, &ahead, queue)
         }
     }
 }
@@ -2462,9 +2589,20 @@ impl Outcome {
             },
         }
     }
+
+    /// The state the submission's record names for it.
+    fn state(&self) -> State {
+        match self {
+            Outcome::Landed { .. } => State::Landed,
+            Outcome::Failed { .. } => State::Failed,
+            Outcome::Conflict { .. } => State::Conflict,
+        }
+    }
 }
 
-fn outcome_shown(branch: &str, o: &Outcome, names: &BTreeMap<u64, String>) -> Shown {
+/// What became of a submission, on its pull request: `queue` is its
+/// queue on the host that posts it (D1).
+fn outcome_shown(branch: &str, o: &Outcome, names: &BTreeMap<u64, String>, queue: Queue) -> Shown {
     let (status, title, summary) = match o {
         Outcome::Landed {
             landed_as,
@@ -2538,7 +2676,7 @@ fn outcome_shown(branch: &str, o: &Outcome, names: &BTreeMap<u64, String>) -> Sh
             text: None,
             status,
             title,
-            summary,
+            summary: summed(&queue, &summary),
         },
         lines: Vec::new(),
     }
@@ -3021,7 +3159,7 @@ impl Pulls {
                 return Ok(Followed::SentBack {
                     conflict: posting.title.starts_with("conflict"),
                     title: posting.title.clone(),
-                    summary: posting.summary.clone(),
+                    summary: words(&posting.summary),
                 });
             }
         }
@@ -3031,8 +3169,7 @@ impl Pulls {
         let (title, lines) = match posting {
             Some(posting) => (
                 posting.title,
-                posting
-                    .summary
+                words(&posting.summary)
                     .lines()
                     .filter(|l| !l.trim().is_empty())
                     .map(str::to_string)
@@ -3310,7 +3447,16 @@ impl Pulls {
             .map(|(id, e)| (*id, format!("#{}", e.number)))
             .collect();
         let outcome = Outcome::decided(&n.decided);
-        let shown = outcome_shown(&n.branch, &outcome, &names);
+        // D1: decided, so out of the queue, with nothing ahead of it.
+        let queue = Queue {
+            host: self.peer.name.clone(),
+            taken_in: true,
+            submission: Some(n.submission),
+            state: Some(outcome.state().word().to_string()),
+            ahead: Vec::new(),
+            waits_for: Vec::new(),
+        };
+        let shown = outcome_shown(&n.branch, &outcome, &names, queue);
         // ADR 0044: a pull request that landed is closed, so no intake
         // reads it again: its report is posted with the outcome. What the
         // host keeps of the request says what is posted already (136).
@@ -3422,7 +3568,7 @@ mod tests {
             pending: vec![("cli:build".into(), Some("macos-arm64".into()))],
         };
         let names = BTreeMap::from([(12, "#12".to_string())]);
-        let shown = queued("main", &[]);
+        let shown = queued("main", &[], queue_at("b", None, &[]));
         let mut post = |v: &VerdictView| {
             pulls
                 .show_report(
@@ -3528,6 +3674,7 @@ mod tests {
                 timed_out: false,
             },
             &names,
+            queue_at("b", None, &[]),
         );
         pulls
             .show_report(
@@ -3579,6 +3726,7 @@ mod tests {
                 covered_by,
             },
             &names,
+            queue_at("b", None, &[]),
         );
         pulls
             .show_report(
@@ -3862,6 +4010,20 @@ mod tests {
         }
     }
 
+    /// A submission into `main` from `worktree`, in `state`.
+    fn submitted(id: u64, worktree: &str, state: &str) -> Submission {
+        serde_json::from_value(serde_json::json!({
+            "schema": sluice_core::records::SUBMISSION_SCHEMA, "id": id, "branch": "main",
+            "head": format!("h{id}"), "from": { "agent": "person", "worktree": worktree },
+            "submitted": "2026-11-06T10:00:00Z", "after": [], "priority": 0, "attempt": 1,
+            "state": state,
+        }))
+        .unwrap()
+    }
+
+    /// pull-request-status, waiting for a review: the check names the
+    /// host that posts it and that the request waits to be taken in there,
+    /// and its block what it waits for, in its title's words (D1).
     #[test]
     fn what_a_waiting_pull_request_shows() {
         let w = waiting(
@@ -3869,25 +4031,203 @@ mod tests {
             None,
             &["1 review".into(), "qa/approved".into()],
             Some("forecast: merges onto main without conflict".into()),
+            queue_at("b", None, &[]),
         );
         assert_eq!(w.posting.title, "waiting: needs 1 review, qa/approved");
+        let s = &w.posting.summary;
+        assert!(s.starts_with("Waiting to be taken in on b.\n\n"), "{s}");
+        assert!(s.contains("1 review") && s.contains("`qa/approved`"), "{s}");
         assert!(
-            w.posting.summary.contains("1 review") && w.posting.summary.contains("`qa/approved`")
+            s.ends_with(
+                "<!-- sluice:queue {\"host\":\"b\",\"taken_in\":false,\"submission\":null,\
+                 \"state\":null,\"ahead\":[],\"waits_for\":[\"1 review\",\"qa/approved\"]} -->"
+            ),
+            "{s}"
         );
         assert_eq!(w.lines, ["forecast: merges onto main without conflict"]);
-        assert_eq!(
-            waiting("main", None, &["a draft".into()], None)
-                .posting
-                .title,
-            "waiting: a draft"
+        let draft = waiting(
+            "main",
+            None,
+            &["a draft".into(), "1 review".into()],
+            None,
+            queue_at("b", None, &[]),
         );
+        assert_eq!(draft.posting.title, "waiting: a draft");
+        assert_eq!(
+            queue_of(&draft.posting.summary).unwrap().waits_for,
+            ["a draft"]
+        );
+        let held = waiting(
+            "main",
+            Some("unit/review"),
+            &[NEXT_SUBMIT.into()],
+            None,
+            queue_at("b", Some(&submitted(9, "pull/13", "failed")), &[]),
+        );
+        let s = &held.posting.summary;
+        assert!(s.starts_with("Submission 9 on b.\n\n"), "{s}");
+        let q = queue_of(s).unwrap();
+        assert_eq!(
+            (q.taken_in, q.state.as_deref(), q.waits_for.as_slice()),
+            (true, Some("failed"), [NEXT_SUBMIT.to_string()].as_slice())
+        );
+        let bound = Bound {
+            n: 2,
+            on: vec!["#14".into()],
+            missing: Vec::new(),
+        };
+        let grouped = waiting_in_group(
+            "main",
+            None,
+            &[],
+            &bound,
+            Some("forecast: merges onto main without conflict".into()),
+            queue_at("b", None, &[]),
+        );
+        assert_eq!(grouped.posting.title, "waiting for its group: #14");
+        let s = &grouped.posting.summary;
+        assert!(s.starts_with("Waiting to be taken in on b.\n\n"), "{s}");
+        assert!(s.contains("Forecast: merges onto main"), "{s}");
+        assert_eq!(queue_of(s).unwrap().waits_for, ["its group: #14"]);
+    }
+
+    /// pull-request-status, queued behind another: the check names its
+    /// submission on the host that posts it, and its block the
+    /// submissions ahead of it there with their pull requests; testing and
+    /// sent back name the same submission, with nothing ahead once it is
+    /// out of the queue (D1).
+    #[test]
+    fn what_a_queued_pull_request_carries_its_queue() {
+        let subs = vec![
+            submitted(1404, "pull/9", "landed"),
+            submitted(1405, "pull/10", "queued"),
+            submitted(1406, "pull/12", "queued"),
+        ];
+        let names = names(&subs);
+        let shown = queue_shown(
+            "main",
+            &subs[2],
+            &subs,
+            &names,
+            queue_at("b", Some(&subs[2]), &subs),
+        );
+        assert_eq!(shown.posting.title, "queued behind #10");
+        let s = &shown.posting.summary;
+        assert!(s.starts_with("Submission 1406 on b.\n\n"), "{s}");
+        assert!(
+            s.ends_with(
+                "<!-- sluice:queue {\"host\":\"b\",\"taken_in\":true,\"submission\":1406,\
+                 \"state\":\"queued\",\"ahead\":[{\"submission\":1405,\"pull_request\":10}],\
+                 \"waits_for\":[]} -->"
+            ),
+            "{s}"
+        );
+
+        let landed = [subs[0].clone(), subs[2].clone()];
+        let next = queue_shown(
+            "main",
+            &landed[1],
+            &landed,
+            &names,
+            queue_at("b", Some(&landed[1]), &landed),
+        );
+        assert_eq!(next.posting.title, "queued: next on main");
+        assert!(queue_of(&next.posting.summary).unwrap().ahead.is_empty());
+
+        let mut testing = subs[2].clone();
+        testing.state = State::Testing;
+        testing.tested = Some(sluice_core::records::Tested {
+            combination: Rev::new("c1c1c1c1"),
+            on: Rev::new("m0"),
+            submissions: vec![1405, 1406],
+        });
+        let tested = queue_shown(
+            "main",
+            &testing,
+            &subs,
+            &names,
+            queue_at("b", Some(&testing), &subs),
+        );
+        assert_eq!(tested.posting.title, "testing main + #10 + #12");
+        let q = queue_of(&tested.posting.summary).unwrap();
+        assert_eq!(q.state.as_deref(), Some("testing"));
+        assert_eq!(q.ahead.len(), 1);
+
+        let mut failed = subs[2].clone();
+        failed.state = State::Failed;
+        let sent_back = outcome_shown(
+            "main",
+            &Outcome::Failed {
+                tasks: vec!["cli:test".into()],
+                logs: Vec::new(),
+                combination: Rev::new("c1c1c1c1"),
+                ids: vec![1405, 1406],
+                timed_out: false,
+            },
+            &names,
+            queue_at("b", Some(&failed), &subs),
+        );
+        let s = &sent_back.posting.summary;
+        assert!(s.starts_with("Submission 1406 on b.\n\n"), "{s}");
+        let q = queue_of(s).unwrap();
+        assert_eq!(q.state.as_deref(), Some("failed"));
+        assert!(q.ahead.is_empty() && q.waits_for.is_empty());
+
+        let worktrees = vec![
+            submitted(7, "/work/a", "queued"),
+            submitted(8, "pull/12", "queued"),
+        ];
+        let q = queue_at("b", Some(&worktrees[1]), &worktrees);
+        assert_eq!(
+            q.ahead,
+            [Ahead {
+                submission: 7,
+                pull_request: None,
+            }]
+        );
+    }
+
+    /// D1: a reader takes the last block of a check's summary, and reads
+    /// none in a check an older sluice posted, or in one whose block does
+    /// not read; a `>` in a field never ends the comment; and the words a
+    /// wait prints leave the block out.
+    #[test]
+    fn a_queue_block_reads_back_and_an_older_check_has_none() {
+        let mut q = queue_at("b", None, &[]);
+        q.waits_for = vec!["ci/a->b".into()];
+        let summary = summed(&q, "Needs `ci/a->b` on this commit before sluice takes it.");
+        assert!(!summary[summary.rfind(QUEUE_BLOCK).unwrap()..]
+            .trim_end_matches(" -->")
+            .contains('>'));
+        assert_eq!(queue_of(&summary), Some(q.clone()));
+        assert_eq!(
+            words(&summary),
+            "Waiting to be taken in on b.\n\nNeeds `ci/a->b` on this commit before sluice takes it."
+        );
+
+        let older = "In main's queue; it lands once its combination passes.";
+        assert_eq!(queue_of(older), None);
+        assert_eq!(words(older), older);
+        assert_eq!(queue_of("<!-- sluice:queue {\"host\": -->"), None);
+        assert_eq!(queue_of("<!-- sluice:queue {\"host\":\"b\"}"), None);
+
+        let mut later = q.clone();
+        later.host = "c".into();
+        let twice = format!("{summary}\n\n{}", summed(&later, "Again."));
+        assert_eq!(queue_of(&twice), Some(later));
     }
 
     /// pull-request-status, a draft with no head: shown as a draft, with
     /// no forecast (128).
     #[test]
     fn a_draft_with_no_head_shows_no_forecast() {
-        let w = waiting("main", None, &["a draft".into()], None);
+        let w = waiting(
+            "main",
+            None,
+            &["a draft".into()],
+            None,
+            queue_at("b", None, &[]),
+        );
         assert_eq!(w.posting.title, "waiting: a draft");
         assert!(
             !w.posting.summary.contains("Forecast:"),
@@ -3907,6 +4247,7 @@ mod tests {
             Some("unit/review"),
             &[NEXT_SUBMIT.into()],
             Some("forecast: merges onto main without conflict".into()),
+            queue_at("b", None, &[]),
         );
         assert_eq!(w.posting.status, Status::Queued);
         assert_eq!(w.posting.title, "waiting: the next submit");
@@ -3931,6 +4272,7 @@ mod tests {
             None,
             &[format!("{WITHDRAWN_BY}{}", withdrawer("operator"))],
             Some("forecast: merges onto main without conflict".into()),
+            queue_at("b", None, &[]),
         );
         assert_eq!(w.posting.status, Status::Queued);
         assert_eq!(w.posting.title, "waiting: withdrawn by the operator");
@@ -4016,6 +4358,7 @@ mod tests {
     /// with none says what it said before.
     #[test]
     fn a_landing_beside_the_queue_says_no_check_ran() {
+        let on_b = || queue_at("b", Some(&submitted(12, "pull/12", "landed")), &[]);
         let covered = outcome_shown(
             "main",
             &Outcome::Landed {
@@ -4029,12 +4372,13 @@ mod tests {
                 }),
             },
             &BTreeMap::new(),
+            on_b(),
         );
         assert_eq!(covered.posting.status, Status::Success);
         assert_eq!(covered.posting.title, "landed as 0cef58d beside the queue");
         assert_eq!(
-            covered.posting.summary,
-            "Landed on main as `0cef58d` beside the queue, with no check run: no required \
+            words(&covered.posting.summary),
+            "Submission 12 on b.\n\nLanded on main as `0cef58d` beside the queue, with no check run: no required \
              check reads its changes. Covered by the result at `e25fea4`, passed (141 run, 0 \
              replayed)."
         );
@@ -4047,11 +4391,12 @@ mod tests {
                 covered_by: None,
             },
             &BTreeMap::new(),
+            on_b(),
         );
         assert_eq!(shown.posting.title, "landed as l1abcde beside the queue");
         assert_eq!(
-            shown.posting.summary,
-            "Landed on main as `l1abcde` beside the queue, with no check run: no required \
+            words(&shown.posting.summary),
+            "Submission 12 on b.\n\nLanded on main as `l1abcde` beside the queue, with no check run: no required \
              check reads its changes."
         );
     }

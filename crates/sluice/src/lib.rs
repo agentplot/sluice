@@ -581,6 +581,32 @@ pub enum GroupRefused {
     },
 }
 
+/// 137, C.5: a pull request's queue on the host that posts sluice's check
+/// on its head, as that check carries it for any host to read: the
+/// posting host; whether its records hold a submission of the request at
+/// that head, that submission's number and state as its record names it,
+/// `None` while not taken in; the submissions ahead of it there and not
+/// out of the queue, in queue order; and what a waiting request waits
+/// for, in the words its check's title gives.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Queue {
+    pub host: String,
+    pub taken_in: bool,
+    pub submission: Option<u64>,
+    pub state: Option<String>,
+    pub ahead: Vec<Ahead>,
+    pub waits_for: Vec<String>,
+}
+
+/// One submission ahead of a pull request's in its queue: its number on
+/// the posting host, and its pull request's number, `None` for a
+/// worktree's.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Ahead {
+    pub submission: u64,
+    pub pull_request: Option<u64>,
+}
+
 /// Where a pull request stands, for a submit that follows it.
 pub enum Followed {
     /// Not decided yet: its state, and lines beneath it.
