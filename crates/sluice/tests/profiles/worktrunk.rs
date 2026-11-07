@@ -2056,6 +2056,30 @@ mod by_name {
         assert!(s.logged("delivered").is_empty());
         assert!(s.herdr.calls().is_empty(), "{:?}", s.herdr.calls());
     }
+
+    /// 26, core.43: a submit by name with `--subject`, run in the git
+    /// directory, lands `bolt/w` with the subject as its landing commit's
+    /// first line, as any submit's subject names its landing, never the
+    /// branch's own commit message; the record keeps the subject.
+    #[test]
+    fn a_subject_names_the_landing_by_name() {
+        let s = Scratch::new("wt-by-name-subject");
+        s.repo.branch("bolt/w", "bolt/x", &[("w.txt", Some("w\n"))]);
+        let made = s.repo.git(&["log", "-1", "--format=%s", "bolt/w"]);
+        let out = submit(&s, &s.repo.dir().join(".git"), &["--subject", "The w work"])
+            .output()
+            .unwrap();
+        let said = text(&out);
+        assert_eq!(out.status.code(), Some(0), "{said}");
+        let record = s.status(1);
+        assert_eq!(record["state"], "landed", "{record}");
+        assert_eq!(record["subject"], "The w work", "{record}");
+        let landed = record["landed_as"].as_str().unwrap();
+        assert_eq!(s.tip(), landed);
+        let first = s.repo.git(&["log", "-1", "--format=%s", landed]);
+        assert_eq!(first, "chore(land): #1 The w work");
+        assert!(!first.contains(made.trim()), "{first}");
+    }
 }
 
 /// 124, D10: the way on of a branch submitted by name that failed or
