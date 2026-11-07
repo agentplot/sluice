@@ -447,6 +447,16 @@ review or checks has no submission at all: its state is read from GitHub
 each round, and shown there as the `sluice` check. Submission ids
 are numbered in order, and that order is the queue's order.
 
+A withdrawn submission has `"withdrawn": { "by": "operator", "at":
+"2026-10-11T09:30:02Z" }`: who withdrew it, and when. A host that found
+another host taking its branch's pull requests in withdrew its own
+submissions of them. Such a submission's `withdrawn` also has
+`"handed_over_to": "build-2"`, that host. It holds no pull request:
+whichever host takes the pull requests in submits it again, and its log
+line names the host the same way. A submission an older sluice withdrew
+so has no `handed_over_to`, and its `by` reads `build-2 takes main's
+pull requests in`.
+
 ## The log
 
 One event per line. A test is logged when it runs, a failure exactly

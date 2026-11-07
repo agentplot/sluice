@@ -2694,15 +2694,19 @@ fn carried(
     // A head that is this one's, or holds it.
     let carries =
         |head: &Rev| *head == sub.head || branch.contains(head, &sub.head).unwrap_or(false);
-    let by = sub
-        .withdrawn
-        .as_ref()
-        .map_or("its submitter", |w| w.by.as_str());
+    // 137: a hand-over's withdrawal says the host it handed over to.
+    let left = match sub.withdrawn.as_ref() {
+        Some(w) => match &w.handed_over_to {
+            Some(host) => format!("handed over to {host}"),
+            None => format!("withdrawn by {}", w.by),
+        },
+        None => "withdrawn by its submitter".to_string(),
+    };
     let follows = |what: String, out: &mut dyn Write| -> Result<()> {
         if !waiting.json {
             writeln!(
                 out,
-                "#{} withdrawn by {by}: {what} carries its work, so this wait follows it",
+                "#{} {left}: {what} carries its work, so this wait follows it",
                 sub.id
             )?;
         }
@@ -4419,6 +4423,14 @@ fn detail_of_state(
             })
             .unwrap_or_default(),
         State::Waiting => format!("after {}", hashes(&s.after, names, said)),
+        // 120, 137: withdrawn at a hand-over of intake, which holds no
+        // request: the host it went to.
+        State::Withdrawn => s
+            .withdrawn
+            .as_ref()
+            .and_then(|w| w.handed_over_to.as_deref())
+            .map(|host| format!("handed over to {host}"))
+            .unwrap_or_default(),
         _ => String::new(),
     }
 }

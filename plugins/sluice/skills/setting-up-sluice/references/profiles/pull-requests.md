@@ -45,6 +45,11 @@ log_lines = 40               # optional: post the end of a failed test's output
   back, or withdrawn by the operator or a planner, it is taken again on new
   commits, or once marked a draft and then ready for review. Withdrawn, its
   check names who withdrew it: `waiting: withdrawn by the operator`.
+- Where several hosts reach the branch, one takes its pull requests in.
+  A host that finds another taking them in withdraws its own submissions
+  of them, and `sluice status` shows each `handed over to` that host.
+  That withdrawal holds nothing and marks no draft: whichever host takes
+  the pull requests in submits each again at its latest commit.
 - sluice posts one check named `sluice` with the state (`waiting: …`,
   `queued behind …`, `testing …`, `failed: …`, `conflict: …`, `landed as …`)
   and comments when it sends one back.
