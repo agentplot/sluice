@@ -1380,26 +1380,39 @@ impl Pulls {
                             head: p.head.clone(),
                         },
                     );
-                    let ahead: Vec<String> = a.ahead.iter().map(|i| name(*i, names)).collect();
+                    // Ahead of it, each with its pull request: one this
+                    // pass took in is in no status read before it, and is
+                    // found among the entries it registered.
+                    let pull_of = |i: u64| {
+                        subs.iter()
+                            .find(|x| x.id == i)
+                            .map(|x| number(&x.from.worktree))
+                            .unwrap_or_else(|| self.entries.borrow().get(&i).map(|e| e.number))
+                    };
+                    let ahead: Vec<Ahead> = a
+                        .ahead
+                        .iter()
+                        .map(|i| Ahead {
+                            submission: *i,
+                            pull_request: pull_of(*i),
+                        })
+                        .collect();
+                    let named: Vec<String> = ahead
+                        .iter()
+                        .map(|x| match (names.get(&x.submission), x.pull_request) {
+                            (None, Some(n)) => format!("#{n}"),
+                            _ => name(x.submission, names),
+                        })
+                        .collect();
                     let queue = Queue {
                         host: self.peer.name.clone(),
                         taken_in: true,
                         submission: Some(a.id),
                         state: Some(State::Queued.word().to_string()),
-                        ahead: a
-                            .ahead
-                            .iter()
-                            .map(|i| Ahead {
-                                submission: *i,
-                                pull_request: subs
-                                    .iter()
-                                    .find(|x| x.id == *i)
-                                    .and_then(|x| number(&x.from.worktree)),
-                            })
-                            .collect(),
+                        ahead,
                         waits_for: Vec::new(),
                     };
-                    queued(branch, &ahead, queue)
+                    queued(branch, &named, queue)
                 }
                 Err(refused) => waiting(
                     branch,

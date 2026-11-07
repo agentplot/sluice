@@ -1427,6 +1427,127 @@ fn a_landed_requests_outcome_is_delivered_to_it() {
     assert_eq!(s["delivered_to"], format!("pull/{n}").as_str(), "{s}");
 }
 
+/// D1: the queue a check's summary carries in its block, as a program
+/// reads it.
+fn block(summary: &str) -> Value {
+    let q = sluice::profiles::github::pulls::queue_of(summary)
+        .unwrap_or_else(|| panic!("no queue block: {summary}"));
+    serde_json::to_value(q).unwrap()
+}
+
+/// A submission's number on this host.
+fn id_of(subs: &[Value]) -> u64 {
+    subs.first()
+        .and_then(|s| s["id"].as_u64())
+        .unwrap_or_else(|| panic!("not taken in: {subs:?}"))
+}
+
+impl OnGitHub {
+    /// How many times sluice's check on `head` was posted.
+    fn posts_on(&self, head: &str) -> usize {
+        let held = self.gh.forge.held().unwrap();
+        held.posts
+            .iter()
+            .filter(|(at, name, _)| at == head && name == "sluice")
+            .count()
+    }
+}
+
+/// pull-request-status, "Queued behind another", "A queued submission's
+/// block", "Waiting for a review" and "Nothing in it changed": host `b`
+/// takes main's pull requests in, one at a time. The check on the second
+/// request's head names `b`, its submission there and the one ahead of it
+/// with its pull request, in its words and its block; the check of one
+/// needing a review says it waits to be taken in on `b`, and for what.
+/// Once the second round has posted the first as under test and the
+/// forecast behind both, a round where neither moved posts nothing on
+/// either; the first's check takes five seconds, so nothing lands
+/// between them (D1; rule core.32).
+#[test]
+fn the_check_names_its_host_and_queue() {
+    let g = OnGitHub::checked("pr-host-queue", "reviews = 1", "1m", "parallel = 1\n");
+    g.named("b", "");
+    let (a, a_head) = g.by_hand("unit/ahead", &[("slow", Some("s\n"))], false);
+    let (b, b_head) = g.by_hand("unit/behind", &[("b.txt", Some("b\n"))], false);
+    let (_, c_head) = g.by_hand("unit/unreviewed", &[("c.txt", Some("c\n"))], false);
+    for (n, head) in [(a, &a_head), (b, &b_head)] {
+        g.gh.forge.review(n, "reviewer", "APPROVED", head).unwrap();
+    }
+    g.step();
+    let (ahead, behind) = (id_of(&g.of(a)), id_of(&g.of(b)));
+
+    let (status, title, summary) = g.posted(&b_head).unwrap();
+    assert_eq!(status, Status::Queued);
+    assert_eq!(title, format!("queued behind #{a}"));
+    assert!(
+        summary.starts_with(&format!("Submission {behind} on b.\n\n")),
+        "{summary}"
+    );
+    assert_eq!(
+        block(&summary),
+        serde_json::json!({
+            "host": "b", "taken_in": true, "submission": behind, "state": "queued",
+            "ahead": [{ "submission": ahead, "pull_request": a }], "waits_for": [],
+        })
+    );
+
+    let (_, title, summary) = g.posted(&c_head).unwrap();
+    assert_eq!(title, "waiting: needs 1 review");
+    assert!(
+        summary.starts_with("Waiting to be taken in on b.\n\n"),
+        "{summary}"
+    );
+    assert_eq!(
+        block(&summary),
+        serde_json::json!({
+            "host": "b", "taken_in": false, "submission": null, "state": null,
+            "ahead": [], "waits_for": ["1 review"],
+        })
+    );
+
+    g.step();
+    let (on_b, on_c) = (g.posts_on(&b_head), g.posts_on(&c_head));
+    g.step();
+    assert_eq!(g.posts_on(&b_head), on_b, "{:?}", g.posted(&b_head));
+    assert_eq!(g.posts_on(&c_head), on_c, "{:?}", g.posted(&c_head));
+}
+
+/// pull-request-status, "The queue ahead moves": once the submission ahead
+/// lands, host `b` posts the check of the one behind it again, the same
+/// submission with nothing ahead of it. Its own check takes five seconds,
+/// so the round after the landing posts it before it could land (D1).
+#[test]
+fn the_queue_block_moves_with_the_queue_ahead() {
+    let g = OnGitHub::checked("pr-host-queue-moves", "", "1m", "parallel = 1\n");
+    g.named("b", "");
+    let (a, _) = g.by_hand("unit/first", &[("f.txt", Some("f\n"))], false);
+    let (b, b_head) = g.by_hand("unit/second", &[("slow", Some("s\n"))], false);
+    g.step();
+    let (ahead, behind) = (id_of(&g.of(a)), id_of(&g.of(b)));
+    let before = block(&g.posted(&b_head).unwrap().2);
+    assert_eq!(
+        before["ahead"],
+        serde_json::json!([{ "submission": ahead, "pull_request": a }])
+    );
+
+    g.step_until("the first landed", |g| {
+        g.of(a).first().is_some_and(|s| s["state"] == "landed")
+    });
+    g.step();
+    let (_, title, summary) = g.posted(&b_head).unwrap();
+    assert!(
+        title == "queued: next on main" || title == format!("testing main + #{b}"),
+        "{title}"
+    );
+    assert!(
+        summary.starts_with(&format!("Submission {behind} on b.\n\n")),
+        "{summary}"
+    );
+    let after = block(&summary);
+    assert_eq!(after["submission"], behind, "{after}");
+    assert_eq!(after["ahead"], serde_json::json!([]), "{after}");
+}
+
 /// Two rounds with nothing changed between them post nothing the second
 /// time.
 #[test]

@@ -357,7 +357,26 @@ check reads:
 
 While a pull request waits or is queued, the check shows as pending on
 GitHub; while it is tested, in progress; failed and conflict fail it,
-and landed passes it. sluice posts only when the state changes.
+and landed passes it.
+
+The check's summary opens by naming the host that posted it. Once that
+host has taken the pull request in at its latest commit, it reads
+"Submission 1406 on b.", 1406 being the submission's number on host
+`b`. Before then it reads "Waiting to be taken in on b.". The summary
+ends with a block GitHub doesn't show, which carries the same for a
+program to read:
+
+```html
+<!-- sluice:queue {"host":"b","taken_in":true,"submission":1406,"state":"queued","ahead":[{"submission":1405,"pull_request":38}],"waits_for":[]} -->
+```
+
+`state` is the submission's state on that host, and `ahead` lists the
+submissions ahead of it there, each with its pull request's number, or
+`null` for work submitted from a worktree. Before the host takes the
+pull request in, `taken_in` is `false`, `submission` and `state` are
+`null`, and `waits_for` lists what the check's title says it waits for,
+such as `["1 review", "qa/approved"]`. sluice posts only when the state
+or a field of the block changes.
 
 The forecast runs no tests. It only checks whether the pull request
 would merge on top of `main` and the queue as they are now, so a
