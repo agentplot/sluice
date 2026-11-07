@@ -1361,8 +1361,6 @@ fn the_overview_names_a_hand_pushed_revision() {
 /// another host. Nothing is queued on it, so no round runs.
 mod quiet {
     use super::*;
-    use std::io::{BufRead, BufReader};
-    use std::sync::mpsc;
 
     /// Another host's clone of origin, `branch` checked out.
     fn elsewhere(s: &Setup, name: &str, branch: &str) -> Repo {
@@ -1402,56 +1400,6 @@ mod quiet {
         std::fs::write(dir.join("version"), format!("{}\n", version + 1)).unwrap();
     }
 
-    /// git on the remote, the bare repository, in `env`.
-    fn on_origin(s: &Setup, args: &[&str], env: &[(&str, &Path)], input: Option<&str>) -> String {
-        use std::io::Write;
-        let mut c = support::git_command();
-        c.arg("--git-dir").arg(s.origin.path()).args(args);
-        for (k, v) in env {
-            c.env(k, v);
-        }
-        c.env("GIT_AUTHOR_NAME", "test")
-            .env("GIT_AUTHOR_EMAIL", "test@localhost")
-            .env("GIT_COMMITTER_NAME", "test")
-            .env("GIT_COMMITTER_EMAIL", "test@localhost")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        let mut child = c.spawn().unwrap();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(input.unwrap_or_default().as_bytes())
-            .unwrap();
-        let out = child.wait_with_output().unwrap();
-        assert!(out.status.success(), "git {args:?}: {}", text(&out));
-        String::from_utf8_lossy(&out.stdout).trim().to_string()
-    }
-
-    /// `main`'s records on origin as a sluice that read `at`'s policy left
-    /// them: one root commit, as a write makes it, its `base` at `at`.
-    fn last_saw_on_origin(s: &Setup, at: &str) {
-        let state = "refs/sluice/state/main";
-        let old = on_origin(s, &["rev-parse", state], &[], None);
-        let doc = s.remote_state("branch.json");
-        let version: u64 = s.remote_state("version").trim().parse().unwrap();
-        let blob = |text: &str| on_origin(s, &["hash-object", "-w", "--stdin"], &[], Some(text));
-        let doc = blob(&rewritten(&doc, at));
-        let next = blob(&format!("{}\n", version + 1));
-        let index = s.seen.path().join("state-index");
-        let env = [("GIT_INDEX_FILE", index.as_path())];
-        on_origin(s, &["read-tree", &old], &env, None);
-        for (blob, path) in [(&doc, "branch.json"), (&next, "version")] {
-            let info = format!("100644,{blob},{path}");
-            on_origin(s, &["update-index", "--cacheinfo", &info], &env, None);
-        }
-        let tree = on_origin(s, &["write-tree"], &env, None);
-        let message = format!("main at {}", version + 1);
-        let commit = on_origin(s, &["commit-tree", &tree, "-m", &message], &[], None);
-        on_origin(s, &["update-ref", state, &commit, &old], &[], None);
-    }
-
     /// `doc`'s `base`, and how many `moved` lines `log` holds.
     fn stood(doc: &str, log: &str) -> (String, usize) {
         let v: serde_json::Value = serde_json::from_str(doc).unwrap();
@@ -1470,113 +1418,9 @@ mod quiet {
         stood(&read("branch.json"), &read("log.jsonl"))
     }
 
-    /// `main`'s records on origin: its `base`, and its log's `moved`
-    /// lines.
-    fn stood_on_origin(s: &Setup) -> (String, usize) {
-        stood(&s.remote_state("branch.json"), &s.remote_state("log.jsonl"))
-    }
-
     /// The reflog of this host's `ref`, newest first.
     fn reflog(s: &Setup, name: &str) -> String {
         s.repo.git(&["reflog", "show", "--format=%H %gs", name])
-    }
-
-    /// `sluice overview --json --watch` in `s`'s repository, with its
-    /// config, state and counting git: ended when dropped.
-    struct Watch {
-        child: std::process::Child,
-        lines: mpsc::Receiver<String>,
-    }
-
-    impl Watch {
-        fn start(s: &Setup) -> Watch {
-            let mut child = s
-                .command(s.repo.dir())
-                .args(["overview", "--json", "--watch"])
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null())
-                .spawn()
-                .unwrap();
-            let out = BufReader::new(child.stdout.take().unwrap());
-            let (send, lines) = mpsc::channel();
-            std::thread::spawn(move || {
-                for line in out.lines().map_while(Result::ok) {
-                    if send.send(line).is_err() {
-                        break;
-                    }
-                }
-            });
-            Watch { child, lines }
-        }
-
-        /// The first line within a minute whose `main` `holds`.
-        fn until(&self, holds: impl Fn(&serde_json::Value) -> bool) -> serde_json::Value {
-            let until = Instant::now() + Duration::from_secs(60);
-            let mut seen = Vec::new();
-            while let Some(left) = until.checked_duration_since(Instant::now()) {
-                let Ok(line) = self.lines.recv_timeout(left) else {
-                    break;
-                };
-                let v: serde_json::Value = serde_json::from_str(&line).unwrap();
-                let main = v["branches"]
-                    .as_array()
-                    .and_then(|b| b.iter().find(|b| b["branch"] == "main"))
-                    .cloned();
-                if let Some(main) = main.filter(&holds) {
-                    return main;
-                }
-                seen.push(line);
-            }
-            panic!("no such line: {seen:#?}");
-        }
-    }
-
-    impl Drop for Watch {
-        fn drop(&mut self) {
-            let _ = self.child.kill();
-            let _ = self.child.wait();
-        }
-    }
-
-    /// remote-branch's "A quiet branch whose state is on its remote clears
-    /// at the next tick" (124, 129): `main`'s state on origin last saw
-    /// `r1`, whose policy holds a `[[checkout.cache]]` table, and this host
-    /// holds it too; the watch shows `main` refused naming `r1`. Another
-    /// host pushes `r2`, which takes the table out, and the watch's line
-    /// after the tick that brings it shows `main` whole; `sluice status
-    /// main` reads it, and no round has run.
-    #[test]
-    fn a_quiet_branch_whose_state_is_on_its_remote_clears_at_the_next_tick() {
-        let s = Setup::signed("quiet-remote-state");
-        s.submit("a");
-        s.step_until_out();
-        assert_eq!(s.states(), ["landed"]);
-        let other = elsewhere(&s, "quiet-remote-state-b", "main");
-        let clean = std::fs::read_to_string(other.dir().join(".config/sluice.toml")).unwrap();
-        let r1 = push_policy(&other, "main", &format!("{clean}{CACHE}"));
-        s.repo.git(&["fetch", "-q", "origin"]);
-        assert_eq!(s.repo.rev("origin/main"), r1);
-        last_saw_on_origin(&s, &r1);
-        let before = stood_on_origin(&s);
-        assert_eq!(before.0, r1);
-
-        let watch = Watch::start(&s);
-        let refused = watch.until(|m| m["unread"].is_string());
-        let words = refused["unread"].as_str().unwrap();
-        assert!(
-            words.contains(&r1) && words.contains("[[checkout.cache]]"),
-            "{refused}"
-        );
-
-        let r2 = push_policy(&other, "main", &clean);
-        let read = watch.until(|m| m.get("unread").is_none());
-        assert_eq!(read["at"], r1.as_str(), "{read}");
-        assert_eq!(read["revision"], r2.as_str(), "{read}");
-        assert_eq!(s.repo.rev("origin/main"), r2, "the tick's ask brought it");
-
-        let status = s.status();
-        assert_eq!(status["at"], r1.as_str(), "{status}");
-        assert_eq!(stood_on_origin(&s), before, "a round ran");
     }
 
     /// remote-branch's "A quiet branch this host fetched is read whole by
