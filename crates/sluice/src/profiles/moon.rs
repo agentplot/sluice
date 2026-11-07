@@ -787,14 +787,16 @@ impl<'a> Action<'a> {
 
 /// What a run report says of `targets`, and of the run (119). Only
 /// `RunTask(…)` actions are checks: a `wait` dependency's
-/// `RunPersistentTask(…)` is a helper. A target with no result of its
-/// own, and not one that failed with an exit `not_run` names, is read
-/// through its dependencies in `deps`, both kinds of action alike (149;
-/// design D2): failed by those that ran and failed, each that is no target
-/// giving its result to `dependencies` once; otherwise not run, naming
-/// the first that could not run; otherwise left without a result (15).
-/// An empty `deps`, as a run an older sluice started has, reads nothing
-/// through a dependency.
+/// `RunPersistentTask(…)` is a helper. A target moon skipped, with no
+/// result of its own and not one that failed with an exit `not_run`
+/// names, is read through its dependencies in `deps`, both kinds of
+/// action alike (149; design D2): failed by those that ran and failed,
+/// each that is no target giving its result to `dependencies` once;
+/// otherwise not run, naming the first that could not run; otherwise left
+/// without a result (15). A target the report does not name as skipped,
+/// one moon keeps out of its CI mode among them (ADR 0044), was skipped
+/// for nothing it depends on, and an empty `deps`, as a run an older
+/// sluice started has, reads nothing through a dependency.
 fn read_report(
     report: &Value,
     targets: &[String],
@@ -840,7 +842,11 @@ fn read_report(
     for target in targets {
         let judged = read.tasks.iter().any(|t| &t.task == target)
             || read.not_run.iter().any(|n| &n.task == target);
-        let Some(of) = deps.get(target).filter(|_| !judged) else {
+        let skipped = actions
+            .iter()
+            .rfind(|a| !a.persistent && a.target == target)
+            .is_some_and(|a| a.status == Some("skipped"));
+        let Some(of) = deps.get(target).filter(|_| skipped && !judged) else {
             continue;
         };
         let theirs: Vec<&Action> = of
@@ -2135,6 +2141,29 @@ mod tests {
                 .starts_with("its dependency api:integration could not run: exited 77"),
             "{}",
             r.not_run[0].reason
+        );
+    }
+
+    /// 15, 149; ADR 0044: a target the report does not name, as one moon
+    /// keeps out of its CI mode is not, was skipped for nothing it depends
+    /// on, though a task it depends on failed another target, and is left
+    /// without a result.
+    #[test]
+    fn a_target_moon_never_skipped_is_read_through_nothing() {
+        let report = run_report(vec![failed("alpha:test", "a1"), skipped("beta:test")]);
+        let r = read(
+            &report,
+            &["app:serve", "beta:test"],
+            &[
+                ("app:serve", &["alpha:test"]),
+                ("beta:test", &["alpha:test"]),
+            ],
+            &[],
+        );
+        assert_eq!(by(&r), [("beta:test", vec!["alpha:test"])]);
+        assert_eq!(
+            named(&r.dependencies),
+            [("alpha:test", "a1", Outcome::Fail)]
         );
     }
 
