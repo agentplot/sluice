@@ -1,102 +1,96 @@
 # Verify
 
 The work on `change/a-host-without-the-intake-mark-shows-where-each-request-stands`
-at 5d6bbe5f, cut from `bolt/requests-show-where-they-stand-from-any-host`
+at 5392c23e, cut from `bolt/requests-show-where-they-stand-from-any-host`
 at 2f0b5c98, checked on 2026-11-07 against this change's proposal,
 design, its four delta specs (`pull-request-status`,
 `request-intake-host`, `submission-wait`, `overview`) and its tasks.
 
-**The work falls short on one point, and nothing is archived.** The
-`ahead` field of sluice's check is not the queue ahead of the request.
-It lists every submission of the branch with a lower number that is
-still in the queue. The queue's order is different: priority first,
-then the order submitted, each submission placed only once its `after`
-is landed or ahead of it, with combinations under test kept as they
-are. `pull-request-status`'s "each submission ahead of it" is therefore
-not met, and neither is "in queue order" in D1 and record 0095, wherever
-a priority or an `after` is set. Every other requirement and scenario is
-met by the code and by the test that tasks.md names for it, and each of
-those tests passed in the gate. All 11 tasks are ticked. The gate passes
-on 5d6bbe5f, and the change is valid. Archived in a scratch copy, every
-spec passes `root:specs`.
+**The work holds, and the change is archived.** Every requirement and
+every scenario of the four delta specs is met by the code. Each is
+covered by the test tasks.md names for it, and each of those tests
+passed in the gate. All 12 tasks are ticked. The gate passes 14 tasks
+on 5392c23e. The change is valid. Archived, its specs pass
+`root:specs`, 65 of 65.
 
-## What fails
+## The check's `ahead` in the queue's order
 
-### The check's `ahead` is not the queue ahead of the request
+Task 2.3 makes the block's `ahead` and the title's `queued behind #…`
+follow the order the taking host's rounds take its queue (6, 7; D1),
+where before they followed the order of submission:
 
-`queue_at` (`crates/sluice/src/profiles/github/pulls.rs:2326`) builds
-the block's `ahead` from
-`subs.iter().filter(|x| x.id < e.id && !x.state.is_out())`. `consider`
-calls it for every posting (`pulls.rs:1325`). The branch's chain is
-ordered by `sluice_core::order::order`, which follows clauses 6 and 7:
-pinned combinations first, then `(Reverse(priority), id)`, each
-submission only once its `after` is landed or in the chain. The step's
-rounds and status's forecast (`sluice-core/src/ops.rs:847`) both read
-the queue in that order. `sluice submit --priority`, `sluice submit
---after` and `sluice amend <id> --priority|--after` (a planner's way to
-reorder) all produce a queue where the two orders differ. When they do,
-the block names a submission that is behind the request as ahead of it,
-and leaves out one that is ahead.
+- `order::chain` (`crates/sluice-core/src/order.rs`) orders a branch's
+  live submissions by `order::order`. It keeps what is landing only when
+  asked to, and pins a combination only while all of its submissions are
+  in the queue.
+- `Line::order` pins the combinations on the branch's revision. The
+  step's `arrange` now calls it in place of its own copy. That copy
+  dropped landing entries and filtered the pinned combinations the same
+  way, so a round's order is unchanged (core.14).
+- `Status::chain` is `Line::order(at, true)`, where `at` is the records'
+  `base`, the revision the step orders on. `Status::ahead_of` gives the
+  chain before a submission. A submission waiting on an `after` not yet
+  in the chain gets the whole chain, then what it waits on (64).
+- `queue_at` and `queue_shown` (`pulls.rs`) take both `ahead` and the
+  title from `ahead_in`, which reads `Status::ahead_of`. The profile
+  orders nothing itself (core.2).
+- `admit`'s `Accepted.ahead` reads the same order.
 
-A temporary unit test in `pulls.rs`'s tests, reverted after the run,
-shows it. Submissions 1405 (a worktree's, priority -1), 1406 (`pull/12`,
-priority 0) and 1407 (a worktree's, priority 5) are queued, and the
-queue is `queue_at("b", Some(&1406), …)`:
+The spec's scenario "A queue reordered by priority and after" is
+`the_queue_block_follows_the_queues_order`. With the first request under
+test, `sluice amend --priority 5` on the third gives the second
+`queued behind #a, #c` and `ahead` `[first, third]`. `--after <second>`
+then gives the second `queued behind #a` and the third
+`queued behind #a, #b`, block and title both. D1, record 0095, the
+delta spec, the pull requests guide and the `using-sluice` skill all say
+the same. They also say that `waits_for` names what a request lacks
+before it is taken in, or before it is taken in again, as a held
+request's `["the next submit"]` does, and that is how the code reads it.
 
-```
-assertion `left == right` failed: the block's ahead [1405], the queue's chain [1407, 1406, 1405]
-```
+## Notes for later, not failures
 
-The block should name `[1407]`. crew reads `ahead` as a field (C.5's
-"the entries ahead of it, each a field a program reads"). With this
-bug, a program on another host is told the wrong work stands between
-the request and its landing.
+None of these is in this change's specs.
 
-What the code stage needs to do: take `ahead` from the queue's order,
-the order `order::order` gives the step, with the request's own
-combination pinned where it is under test. Take the title's `queued
-behind #…` (`queue_shown`, `pulls.rs:2609`) from the same order, since
-the summary's words "say the same". That title used the same reading at
-2f0b5c98, and the block copied it. Add a test where a priority and an
-`after` put the order of submission and the queue's order apart, for
-the block and for the title.
-
-### A note for the code stage, not a failure
-
-D1 says `waits_for` lists what a request lacks while it is not taken
-in, and is empty otherwise. A request whose submission failed and that
-is held for its submitter's next submit posts `"taken_in":true,
-"state":"failed","waits_for":["the next submit"]`
-(`what_a_waiting_pull_request_shows`, its `held` case). The spec only
-says what `waits_for` holds while the request is not taken in, so it
-does not rule this out. The design's text and the code differ, though.
-Either empty `waits_for` once the request is taken in, or say in D1 and
-record 0095 that a held request names what it waits for.
+- **Two other reads of what is ahead still use the order of
+  submission.** Both date from before 2f0b5c98.
+  - `verdict_of` (`crates/sluice-core/src/verdict_view.rs:43`) feeds the
+    report's head line, `queued on main behind …` (`render::head`). A
+    check's text shows it only for a queued submission that has rows,
+    one put back in the queue after a blame.
+  - A `--no-wait` submit of a pull request this host takes in prints
+    `ahead` from `x.id < sub.id` (`crates/sluice/src/lib.rs:4093`). A
+    worktree's submit now prints `Accepted.ahead` in the queue's order.
+  - Both could read `Status::ahead_of`, so every `ahead` sluice prints
+    gives one order. A waiting check's forecast, `merges without
+    conflict behind …` (`pulls.rs:1489`), lists the queue in the order
+    of submission too.
+- **A misplaced doc comment.** In `pulls.rs`'s tests, line 4441,
+  `submitted`'s doc line, "A submission into `main` from `worktree`, in
+  `state`.", now sits above `status_of`, and `submitted` has none.
 
 ## Checks
 
 | Check | Result |
 |---|---|
-| `sluice exec main` on 5d6bbe5f, against main at 36eb1497 | 11 of 11 tasks passed in 10m 10s, recorded under their keys for 5d6bbe5: cli:test (205 unit tests and the rest, none failed), cli:tools (the `pull_requests` suite's 149 among them, none failed), root:format, root:lint, root:adrs, root:changes, root:screenshots-scene, site:prose, site:rules and plugin-sluice:validate. Every test tasks.md names passed among them |
+| `sluice exec main` on 5392c23e, against main at 36eb1497 | passed, 14 tasks in 10m 27s: cli:test, cli:tools, cli:e2e, core:test, fakes:test, conformance:test, root:format, root:lint, root:adrs, root:changes, root:screenshots-scene, site:prose, site:rules and plugin-sluice:validate, none failed. `pull_requests` passed 150 of 150, core 134, and sluice's unit tests 206 |
+| Each test tasks.md names, found in the gate's output | every one `ok`: core:test's `order::tests::*` and `ahead_is_the_queues_order`; cli:test's `the_check_names_whats_ahead_in_queue_order`, `what_a_queued_pull_request_carries_its_queue`, `what_a_waiting_pull_request_shows`, `a_queue_block_reads_back_and_an_older_check_has_none`, `a_followed_request_is_kept_and_leaves`, `the_fields_decide_over_the_words`; cli:tools' every scenario test named under the requirements below |
 | `openspec validate a-host-without-the-intake-mark-shows-where-each-request-stands --strict`, openspec 1.16.0 | valid |
-| `openspec archive … --yes`, then `openspec validate --specs --strict --no-interactive` (`root:specs`), in a scratch copy of `openspec/` at 5d6bbe5f | 8 requirements added: 1 to `overview`, 2 to `pull-request-status`, 4 to `request-intake-host`, 1 to `submission-wait`; 65 of 65 specs pass. Requirement text runs from 287 to 468 characters, all under openspec's 500 |
-| The temporary `ahead` unit test above, `sluice exec main -- cargo test -p sluice --lib -- verify_the_blocks_ahead_is_the_queues_order` | failed as quoted; reverted |
-| `two_waits_and_a_status_read_at_one_pace`, with its six statuses ten seconds apart (once more, reverted) | passed in 58s. The committed test runs them back to back, but the scenario's spacing holds too |
-| `git ls-tree origin/main docs/adr/` | main's highest record is 0094, so 0095 is free |
+| `openspec archive … --yes`, then `openspec validate --specs --strict --no-interactive` (`root:specs`), in a scratch copy of `openspec/` at 5392c23e | 8 requirements added: 1 to `overview`, 2 to `pull-request-status`, 4 to `request-intake-host`, 1 to `submission-wait`. 65 of 65 specs pass |
+| `git ls-remote origin main`, `git ls-tree origin/main docs/adr/` | main at 36eb1497, whose highest record is 0094, so 0095 is free |
 
 `sluice exec main` warned that the branch would conflict with main at
 36eb1497 in `crates/sluice/src/overview.rs`,
 `crates/sluice/src/profiles/github/pulls.rs`, `docs/architecture/core.md`
 and `site/src/content/docs/reference/commands.md`. This change lands
 into the bolt, which holds 2f0b5c98 and which the branch extends with no
-merge. The conflicts belong to the bolt's own landing onto main. That
-main also holds record 0093 accepted and #396
-(`a-hand-overs-withdrawal-holds-no-request`), which record 0095's
-Consequences already name.
+merge. The conflicts belong to the bolt's own landing onto main. Record
+0095's Consequences name what that main holds: record 0093 accepted, and
+#396 (`a-hand-overs-withdrawal-holds-no-request`).
 
-moon warned 25 times, about outputs it could not archive under its
-cache and similar. Every task still passed. None of the warnings comes
-from this change.
+moon warned 31 times. The warnings are about outputs it could not
+archive and blobs it could not store under its caches, and about no
+internet for the toolchain's install. Every task still passed, and none
+of the warnings comes from this change.
 
 ## Requirements and scenarios
 
@@ -106,7 +100,8 @@ from this change.
 |---|---|---|
 | The check names its host and the request's submission there: Queued behind another | `queued`, `queue_shown`, `first_line` | `the_check_names_its_host_and_queue`, `what_a_queued_pull_request_carries_its_queue` |
 | Waiting for a review | `waiting`, `waiting_in_group` | `the_check_names_its_host_and_queue`, `what_a_waiting_pull_request_shows` |
-| The check carries the queue as fields: A queued submission's block | `summed`, `queue_at` | the same two. **`ahead` is wrong when priority or `after` reorders the queue (above)** |
+| The check carries the queue as fields: A queued submission's block | `summed`, `queue_at` through `Status::ahead_of` | the same two |
+| A queue reordered by priority and after | `Status::chain` from `Line::order`, read by `queue_at` and `queue_shown` | `the_queue_block_follows_the_queues_order`, `the_check_names_whats_ahead_in_queue_order` |
 | A waiting pull request's block (`1 review`, `qa/approved`) | `waiting_words` into `waits_for` | `what_a_waiting_pull_request_shows`, `the_check_names_its_host_and_queue` |
 | The queue ahead moves | the posting compared whole in `post_check` | `the_queue_block_moves_with_the_queue_ahead` |
 | Nothing in it changed | the same | `the_check_names_its_host_and_queue`, `no_repeated_posts` |
@@ -118,7 +113,7 @@ from this change.
 | A host keeps the requests it follows: Submitted here, taken in there | `opening`'s `follow_known` where `taker_elsewhere` names another host; `Kept::follows` and `Kept::change_follows` | `submitted_here_taken_in_there`, `a_followed_request_is_kept_and_leaves` |
 | Handed over | `hand_over`'s `follow_known` | `handed_over_is_followed` |
 | Merged | `follow_across` and `across` `unfollow` once said; `keep_readings` drops one this host takes in at its head | `a_merged_request_leaves_the_follows`, `a_status_says_a_merged_request_landed_once` |
-| Read once in a quarter of the interval: Two waits and a status | `read_followed`: a fresh kept read is used, a due one claimed under the follows' lock and given back on failure | `two_waits_and_a_status_read_at_one_pace`, `a_wait_across_hosts_reads_at_its_pace`, and the spaced run above |
+| Read once in a quarter of the interval: Two waits and a status | `read_followed`: a fresh kept read is used, a due one claimed under the follows' lock and given back on failure | `two_waits_and_a_status_read_at_one_pace`, `a_wait_across_hosts_reads_at_its_pace` |
 | Shown as the taking host's: Queued on the other host | `across`, `across_rows`, `taken_in_by` from the mark with no fetch | `queued_on_the_other_host` |
 | Waiting for a review there | the same | `waiting_for_a_review_there` |
 | No check on its head yet | `queue: null`, state `waiting` | `no_check_on_its_head_yet` |
@@ -140,17 +135,17 @@ from this change.
 | Scenario | Met by | Test |
 |---|---|---|
 | A one-shot overview | `overview::document` through `across` | `a_one_shot_overview_lists_requests_taken_in_elsewhere` |
-| A watch reads none of them itself | `kept_across`: the kept file again only once its modified time or the mark's commit moved, and no forge | `a_watch_reads_no_followed_request_itself` |
+| A watch reads none of them itself | `kept_across`: the kept file is read again only once its modified time or the mark's commit moved, and the forge is not asked | `a_watch_reads_no_followed_request_itself` |
 
 ## Tasks
 
-All 11 are ticked. Each condition holds, as tested in the gate above:
-1.1 (record 0095, core.33's details, the rules page by `site:rules`),
-2.1 to 2.2, 3.1 to 3.3, 4.1, 5.1, 6.1, 7.1 and 8.1. One exception is
-2.1: its block carries `ahead` as the order of submission gives it,
-where D1 asks for queue order.
+All 12 are ticked, and each one's condition holds as the gate tested
+it: 1.1 (record 0095, core.33's details, the rules page by
+`site:rules`), 2.1 to 2.3, 3.1 to 3.3, 4.1, 5.1, 6.1, 7.1 and 8.1.
 
-The "Workflow follow-up" goes to the orchestrator once the change is
-archived. flume's read-submission can find its place's request under
-`pull_requests` by `from`. crew can read a wait's `taken_in_by` and
-`queue`.
+The "Workflow follow-up" goes to the orchestrator now that the change is
+archived:
+
+- flume's read-submission can find its place's request under
+  `pull_requests` by `from`.
+- crew can read a wait's `taken_in_by` and `queue`.
