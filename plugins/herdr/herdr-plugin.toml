@@ -5,8 +5,9 @@ min_herdr_version = "0.9.3"
 description = "sluice's merge queue beside your agents: a status popup, toasts when a submission lands or is blamed, a line on each agent's row, and the queue in the tab bar."
 platforms = ["linux", "macos"]
 
-# One watcher for every view: it renews a lease, so starting it again is
-# cheap and does nothing while it runs.
+# One watcher for all of the user's herdr servers on a host: each server's
+# startup and events register that server with it and wake it, and start
+# it only where none runs.
 [[startup]]
 command = ["sh", "bin/watch.sh", "--ensure"]
 

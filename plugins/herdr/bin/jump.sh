@@ -1,8 +1,9 @@
 #!/bin/sh
 # shellcheck disable=SC1091,SC2154,SC2016 # jq programs; common.sh, sourced, sets root, lib, state and config.
 # Focus the pane whose worktree made the submission most recently blamed or
-# found in conflict, in any repository the watcher holds; a toast says so
-# when no pane is open for it.
+# found in conflict, in any repository the watcher holds, in the herdr
+# server that runs it, the one it can focus; a toast says so when no pane
+# of that server is open for it (D13).
 set -u
 . "$(dirname "$0")/../lib/common.sh"
 . "$lib/panes.sh"
@@ -26,7 +27,7 @@ if [ -z "$path" ] && [ -f "$state/docs/$k.dir" ]; then
   path=$(cd "$(cat "$state/docs/$k.dir")" && sluice status "$id" --json 2>/dev/null | jq -r '.from.path // empty')
 fi
 pane=
-[ -n "$path" ] && pane=$(panes_json | jq -r --arg p "$path" '[.[] | select(.top == $p)] | first // empty | [.pane_id, .tab_id, .workspace_id] | @tsv')
+[ -n "$path" ] && pane=$(panes_json "$server" | jq -r --arg p "$path" '[.[] | select(.top == $p)] | first // empty | [.pane_id, .tab_id, .workspace_id] | @tsv')
 if [ -z "$pane" ]; then
   hd notification show "sluice: no pane for #$id" \
     --body "No open pane is in the worktree #$id came from${path:+ ($path)}." >/dev/null 2>&1
