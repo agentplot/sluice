@@ -3,8 +3,9 @@
 # A row's link, from herdr's Ctrl-click (HERDR_PLUGIN_CLICKED_URL) or the
 # popup's number key ($1): sluice-herdr:focus?path=<worktree> focuses that
 # worktree's pane; sluice-herdr:log?path=<log>&task=<test> opens the log in
-# a split. Any pane can print a link, so a link is acted on only when the
-# documents the watcher holds name its path; anything else is logged.
+# a split, each in the herdr server that runs it (D13). Any pane can print a
+# link, so a link is acted on only when the documents the watcher holds
+# name its path; anything else is logged.
 set -u
 . "$(dirname "$0")/../lib/common.sh"
 . "$lib/panes.sh"
@@ -49,7 +50,7 @@ focus)
     say "a link to a worktree no submission came from, left alone: $path"
     exit 0
   fi
-  pane=$(panes_json | jq -r --arg p "$path" '[.[] | select(.top == $p)] | first // empty | [.pane_id, .tab_id, .workspace_id] | @tsv')
+  pane=$(panes_json "$server" | jq -r --arg p "$path" '[.[] | select(.top == $p)] | first // empty | [.pane_id, .tab_id, .workspace_id] | @tsv')
   if [ -z "$pane" ]; then
     hd notification show "sluice: no pane for $path" --body "No open pane is in that worktree." >/dev/null 2>&1
     exit 0

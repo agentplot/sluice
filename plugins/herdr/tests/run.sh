@@ -295,8 +295,19 @@ feed() {
   done
 }
 
-tokens() { sh "$plugin/bin/tokens.sh" "$@"; }
-forecast() { sh "$plugin/bin/forecast.sh"; }
+# Keep the panes of the server in the environment in its folder, as the
+# watcher does at that server's ensure (D6).
+kept() {
+  sh -c '. "$1/lib/common.sh"; . "$lib/panes.sh"; mkdir -p "$server"; keep_panes "$server"' _ "$plugin"
+}
+
+# The server's tokens, its panes read first, as at the minute's pass.
+tokens() { sh "$plugin/bin/tokens.sh" --read "$@"; }
+# The forecasts from every server's kept panes, the environment's read first.
+forecast() {
+  kept
+  sh "$plugin/bin/forecast.sh"
+}
 
 testing95=$(doc ".branches[0].depth = 1 | .branches[0].submissions = [$(sub 95 '$work' testing)]
   | .branches[0].candidates = [{id: \"c1\", submissions: [95], revision: \"x\", state: \"testing\",
@@ -1862,6 +1873,69 @@ feed "$(doc ".branches[0].depth = 1 | .branches[0].submissions = [$(sub 94 '"/el
 hasnt 'notification show'
 pass
 
+fresh 'toasts: three servers'
+status_of 87 "$work" withdrawn '["tests:t-cards"]'
+hold_lease
+# Servers a and b have panes in the repository, c has none; each
+# registered and its panes kept, as the watcher keeps them at its ensure.
+for s in a b c; do
+  serve "$s"
+  if [ "$s" = c ]; then panes_at p3 "$scratch/home"; else panes front-none; fi
+  sh "$plugin/bin/watch.sh" --ensure
+  kept
+done
+feed "$(doc)" "$(doc "$blamed87")"
+for s in a b; do
+  [ "$(grep -c "^$s.sock: notification show sluice: #87 blamed on main --body tests:t-cards failed." "$FAKE/herdr-calls")" = 1 ] ||
+    fail "not one toast in $s: $(calls)"
+done
+grep -q '^c.sock: notification show' "$FAKE/herdr-calls" && fail "a toast in c, which has no pane in the repository: $(calls)"
+# A watcher restarted after them reads the same document: nothing is told
+# again, in any server.
+: >"$FAKE/herdr-calls"
+feed "$(doc "$blamed87")"
+hasnt 'notification show'
+pass
+
+fresh 'toasts: a repository no pane is in'
+hold_lease
+for s in one two; do
+  serve "$s"
+  panes_at p3 "$scratch/home"
+  sh "$plugin/bin/watch.sh" --ensure
+  kept
+done
+# A source of the user's prints a repository no pane of either server is
+# in, then a blame in it.
+app='.host = "build" | .repository = "/srv/app.git"'
+for d in "$(doc "$app")" "$(doc "$app | $blamed87")"; do
+  printf '%s\n' "$d" | sh "$plugin/bin/document.sh" "build machine" ""
+done
+for s in one two; do
+  [ "$(grep -c "^$s.sock: notification show sluice: #87 blamed on main" "$FAKE/herdr-calls")" = 1 ] ||
+    fail "not one toast in $s: $(calls)"
+done
+pass
+
+fresh 'toasts: landed in two servers'
+hold_lease
+# #94's worktree has a pane in front in server a, and a pane in another tab
+# in server b.
+serve a
+panes p1
+sh "$plugin/bin/watch.sh" --ensure
+kept
+serve b
+panes p2
+sh "$plugin/bin/watch.sh" --ensure
+kept
+feed "$(doc ".branches[0].depth = 1 | .branches[0].submissions = [$(sub 94 '$work' testing)]")" "$(doc "$landed94")"
+[ "$(grep -c '^b.sock: notification show sluice: #94 landed on main --body as 46cc429' "$FAKE/herdr-calls")" = 1 ] ||
+  fail "not one toast in b: $(calls)"
+grep -q '^a.sock: notification show' "$FAKE/herdr-calls" && fail "a toast in a, where its pane is in front: $(calls)"
+grep -q '^a.sock: tab list' "$FAKE/herdr-calls" || fail "what is in front was not read in a: $(calls)"
+pass
+
 fresh 'jump: jump'
 status_of 87 "$other" withdrawn '["tests:t-cards"]'
 feed "$(doc)" "$(doc "$blamed87")"
@@ -2130,6 +2204,46 @@ has '--token sluice=3 ahead · clean'
 has '--token sluice=release · nothing queued'
 pass
 
+fresh 'sidebar: two servers forecast once'
+doc >"$FAKE/overview-work.json"
+doc >"$FAKE/watch-work.jsonl"
+touch "$FAKE/hold"
+# Each server has a pane in the worktree work, 3 commits ahead of main.
+for s in one two; do
+  serve "$s"
+  panes front-none
+  SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ensure
+done
+within 20 'grep -q "^one.sock: pane report-metadata p1 .*--token sluice=3 ahead · clean" "$FAKE/herdr-calls" &&
+  grep -q "^two.sock: pane report-metadata p1 .*--token sluice=3 ahead · clean" "$FAKE/herdr-calls"' ||
+  fail "not both servers' panes say 3 ahead · clean: $(calls)"
+settled
+[ "$(grep -c '^work: submit main --check --json' "$FAKE/sluice-calls")" = 1 ] || fail "not one forecast: $(cat "$FAKE/sluice-calls")"
+rm -f "$FAKE/hold"
+pass
+
+fresh 'sidebar: named in one server, not in another'
+feed "$(doc)"
+# The worktree work, 3 commits ahead of main: its pane in server one has
+# release named, its pane in server two none.
+serve one
+panes front-none
+named p1 release
+kept
+serve two
+panes front-none
+kept
+sh "$plugin/bin/forecast.sh"
+sh "$plugin/bin/forecast.sh"
+[ "$(grep -c '^work: submit main --check --json' "$FAKE/sluice-calls")" = 1 ] || fail "not one forecast: $(cat "$FAKE/sluice-calls")"
+tokens
+grep -q '^two.sock: pane report-metadata p1 .*--token sluice=3 ahead · clean' "$FAKE/herdr-calls" || fail "server two's pane: $(calls)"
+serve one
+tokens
+grep -q '^one.sock: pane report-metadata p1 .*--token sluice=release · no records' "$FAKE/herdr-calls" || fail "server one's pane: $(calls)"
+grep -q '^one.sock: .*ahead' "$FAKE/herdr-calls" && fail "server one's named pane says ahead: $(calls)"
+pass
+
 fresh 'sidebar: queued'
 release='.branches[0].depth = 3 | .branches += [.branches[0] | .branch = "release" | .depth = 1]'
 feed "$(doc "$release")"
@@ -2210,6 +2324,93 @@ rm -f "$FAKE/hold"
 kill "$w" 2>/dev/null
 wait "$w" 2>/dev/null
 git -C "$work" reset -q --hard HEAD~1
+pass
+
+fresh 'sidebar: two servers, one worktree'
+doc >"$FAKE/overview-work.json"
+printf '%s\n' "$testing95" >"$FAKE/watch-work.jsonl"
+touch "$FAKE/hold"
+# Each server has a pane in the worktree that made #95.
+for s in one two; do
+  serve "$s"
+  panes front-none
+  SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ensure
+done
+within 20 'grep -q "^one.sock: pane report-metadata p1 .*--token sluice=#95 testing 3m/15m" "$FAKE/herdr-calls" &&
+  grep -q "^two.sock: pane report-metadata p1 .*--token sluice=#95 testing 3m/15m" "$FAKE/herdr-calls"' ||
+  fail "not both servers' panes say #95 testing 3m/15m: $(calls)"
+[ "$(grep -c 'overview --watch --json' "$FAKE/sluice-calls")" = 1 ] || fail "watch ran other than once: $(cat "$FAKE/sluice-calls")"
+# What each server was set is its own.
+for s in one two; do
+  [ "$(jq -r .panes.p1 "$(folder_of "$s")/tokens.json" 2>/dev/null)" = '#95 testing 3m/15m' ] ||
+    fail "server $s keeps: $(cat "$(folder_of "$s")/tokens.json")"
+done
+rm -f "$FAKE/hold"
+pass
+
+fresh 'sidebar: a server stops'
+doc >"$FAKE/overview-work.json"
+printf '%s\n' "$testing95" >"$FAKE/watch-work.jsonl"
+touch "$FAKE/hold"
+for s in one two; do
+  serve "$s"
+  panes front-none
+  SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ensure
+done
+within 20 'grep -q "^one.sock: pane report-metadata p1 .*--token sluice=#95 testing" "$FAKE/herdr-calls" &&
+  grep -q "^two.sock: pane report-metadata p1 .*--token sluice=#95 testing" "$FAKE/herdr-calls"' ||
+  fail "not both servers' panes say #95 testing: $(calls)"
+# Server one stops, as its panes show #95 testing.
+rm -f "$t/one.sock"
+within 10 '[ ! -e "$(folder_of one)/socket" ]' || fail "the stopped server is still served"
+: >"$FAKE/herdr-calls"
+# The queue moves: server two's pane follows it, and the minute's pass
+# sets it again; server one is called for neither.
+printf '%s\n' "$testing95" | jq -c '.branches[0].candidates[0].tasks = [{target: "a:test", state: "passed"}, {target: "b:test", state: "running"}]' >"$FAKE/next-work.tmp" &&
+  mv "$FAKE/next-work.tmp" "$FAKE/next-work.jsonl"
+within 10 'grep -q "^two.sock: pane report-metadata p1 .*--token sluice=#95 testing 1/2" "$FAKE/herdr-calls"' ||
+  fail "server two's pane did not follow the queue: $(calls)"
+within 10 'grep -q "^two.sock: pane list$" "$FAKE/herdr-calls"' || fail "server two had no minute's pass: $(calls)"
+grep -q '^one.sock:' "$FAKE/herdr-calls" && fail "the stopped server was called: $(calls)"
+rm -f "$FAKE/hold"
+pass
+
+fresh 'sidebar: named just after it opens'
+doc "$release_idle" >"$FAKE/overview-work.json"
+doc "$release_idle" >"$FAKE/watch-work.jsonl"
+touch "$FAKE/hold"
+# At first the server's one pane is outside git.
+panes_at p3 "$scratch/home"
+SLUICE_HERDR_TICK=2 sh "$plugin/bin/watch.sh" --ensure
+within 10 'grep -q "^herdr.sock: pane list$" "$FAKE/herdr-calls"' || fail "the server's panes were not read"
+settled
+# A pane opens in the repository, and its branch is named a second after
+# the event, with none following.
+panes_at p3 "$scratch/home" p1 "$work"
+sh "$plugin/bin/watch.sh" --ensure
+sleep 1
+named p1 release
+within 5 'grep -q "pane report-metadata p1 .*--token sluice=release · nothing queued" "$FAKE/herdr-calls"' ||
+  fail "the pane's named branch was not read within a tick: $(calls)"
+rm -f "$FAKE/hold"
+pass
+
+fresh 'sidebar: named later'
+doc "$release_idle" >"$FAKE/overview-work.json"
+doc "$release_idle" >"$FAKE/watch-work.jsonl"
+touch "$FAKE/hold"
+named p1 release
+SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ensure
+within 15 'grep -q "pane report-metadata p1 .*--token sluice=release · nothing queued" "$FAKE/herdr-calls"' ||
+  fail "no token for the named branch: $(calls)"
+# Past the ticks that read the panes again after the ensure.
+sleep 3
+# Another branch is named for the pane, and no herdr event follows: the
+# minute's pass, four ticks here, reads it.
+named p1 main
+within 8 'grep -q "pane report-metadata p1 .*--token sluice=main" "$FAKE/herdr-calls"' ||
+  fail "the pane's new branch was not read within a minute and a tick: $(calls)"
+rm -f "$FAKE/hold"
 pass
 
 fresh 'sidebar: tokens fade without the watcher'

@@ -5,6 +5,8 @@
 # edits nothing; on a terminal it waits for q or Escape.
 set -u
 . "$(dirname "$0")/../lib/common.sh"
+# Its server served by the host's watcher, where one has the lease (D2).
+enlist
 
 # The segment's command as a TOML string. herdr runs it through
 # `/bin/sh -lc`, which fills in each host's $HOME, so a state directory

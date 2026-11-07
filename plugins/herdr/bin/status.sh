@@ -135,10 +135,15 @@ draw() {
   top=$(cat "$top_file" 2>/dev/null || echo 0)
 }
 
-# A repository the watcher has not read yet: ask it to.
+# A repository the watcher has not read yet: asked for, and the watcher,
+# woken or started, looks for it at once (D13). Else, where a watcher has
+# the lease and does not serve this popup's server, that server is
+# registered with it (D2).
 if [ -n "$repo" ] && [ "$(all_docs | jq --arg r "$repo" 'any(.repository == $r)')" = false ]; then
   printf '%s\n' "$dir" >"$state/want/$(sum "$repo")"
   sh "$root/bin/watch.sh" --ensure
+else
+  enlist
 fi
 
 if [ "$once" = true ]; then

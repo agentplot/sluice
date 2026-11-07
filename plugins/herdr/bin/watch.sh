@@ -260,7 +260,7 @@ stop() {
     [ -e "$f" ] || continue
     for p in $(own_listed "$f"); do kill "$p" 2>/dev/null; done
   done
-  rm -rf "$runs"
+  rm -rf "$runs" "$state/dirty.$$"
   if take_lock; then
     read_lease && [ "$lpid" = $$ ] && rm -f "$lease"
     drop_lock
@@ -268,30 +268,6 @@ stop() {
 }
 trap 'stop; exit 0' INT TERM
 trap stop EXIT
-
-# Run a command as the server registered in folder $1 runs one: with that
-# server's socket and herdr in its environment (D2).
-as() {
-  as_d=$1
-  shift
-  as_s=
-  as_b=
-  read -r as_s 2>/dev/null <"$as_d/socket"
-  read -r as_b 2>/dev/null <"$as_d/herdr"
-  (
-    if [ -n "$as_s" ]; then export HERDR_SOCKET_PATH="$as_s"; else unset HERDR_SOCKET_PATH; fi
-    if [ -n "$as_b" ]; then export HERDR_BIN_PATH="$as_b"; else unset HERDR_BIN_PATH; fi
-    "$@"
-  )
-}
-
-# Run a command once as each server served.
-each() {
-  for each_d in "$state"/servers/*; do
-    [ -f "$each_d/socket" ] && as "$each_d" "$@"
-  done
-  return 0
-}
 
 # Whether a server's socket is gone, or is a file other than its link's.
 gone() {
@@ -309,10 +285,10 @@ unregister() {
   eval "missed_${1##*/}=0"
 }
 
-# What a call made through `as` to the server in folder $1 said of it, by
-# its status $2: 3, no answer (tokens.sh's when herdr does not list the
-# server's panes), else an answer. One that has not answered twice in a row
-# is dropped, under the lock where it can be had, and 1 returned (D2).
+# What a reading of the panes of the server in folder $1, made through
+# `as`, said of it, by its status $2: 3, no answer (herdr did not list
+# them), else an answer. One that has not answered twice in a row is
+# dropped, under the lock where it can be had, and 1 returned (D2).
 answered() {
   an_k=${1##*/}
   if [ "$2" -ne 3 ]; then
@@ -362,13 +338,15 @@ enough() {
   exit 0
 }
 
-# Set one server's tokens by tokens.sh with its flags: the pane list it
-# makes is the call that tells whether the server answers.
+# Set the tokens of the server in folder $1 by tokens.sh with its flags,
+# from its panes as kept (D9). With --read it reads them first, and that
+# pane list is the call that tells whether the server answers.
 tokens_of() {
   tk_d=$1
   shift
   as "$tk_d" sh "$root/bin/tokens.sh" "$@"
-  answered "$tk_d" $?
+  tk_st=$?
+  case " $* " in *" --read "*) answered "$tk_d" "$tk_st" ;; esac
 }
 
 # Every server's tokens.
@@ -376,6 +354,20 @@ each_tokens() {
   for et_d in "$state"/servers/*; do
     [ -f "$et_d/socket" ] && tokens_of "$et_d" "$@"
   done
+  return 0
+}
+
+# Read the panes of the server in folder $1 and keep them there (D6),
+# counting a list herdr did not give.
+read_of() {
+  if as "$1" keep_panes "$1"; then answered "$1" 0; else answered "$1" 3; fi
+}
+
+# The one line of the panes kept for the server in folder $1, in $line_v,
+# read by the shell: "" where none are kept.
+line_of() {
+  line_v=
+  if [ -f "$1/panes.json" ]; then { IFS= read -r line_v <"$1/panes.json"; } 2>/dev/null; fi
   return 0
 }
 
@@ -388,13 +380,41 @@ shows() {
   return 1
 }
 
-# The minute's pass (D5): each server that shows a token has its panes
-# listed once and every token shown set again, so none lapses within its
-# two minutes and the clocks in them move; a server showing none has none.
-minute() {
-  for mp_d in "$state"/servers/*; do
-    [ -f "$mp_d/socket" ] && shows "$mp_d" && tokens_of "$mp_d" --refresh
+# Whether the server in folder $1 keeps a pane in one of the repositories
+# in $dirty_repos, by the shell on its one line of panes: a repository
+# whose path JSON would escape, or none named, is taken as one it has a
+# pane in (D9).
+in_repos() {
+  line_of "$1"
+  [ -n "$line_v" ] || return 1
+  ir=1
+  ir_ifs=$IFS
+  IFS=$nl
+  set -f
+  for ir_r in $dirty_repos; do
+    case $ir_r in
+    - | *[\"\\]* | *[[:cntrl:]]*) ir=0 ;;
+    *) case $line_v in *"\"repo\":\"$ir_r\""*) ir=0 ;; *) ir=1 ;; esac ;;
+    esac
+    [ "$ir" = 0 ] && break
   done
+  set +f
+  IFS=$ir_ifs
+  return "$ir"
+}
+
+# The repositories of the documents kept since the last taking, a line
+# each in $dirty_repos, as their readers wrote them to `dirty`; 1 where
+# none was kept. Taken by one mv, so a reader's line written as it is read
+# is left for the next.
+take_dirty() {
+  dirty_repos=
+  [ -e "$state/dirty" ] || return 1
+  mv -f "$state/dirty" "$state/dirty.$$" 2>/dev/null || return 1
+  while IFS= read -r td_l || [ -n "$td_l" ]; do
+    dirty_repos="$dirty_repos${td_l:--}$nl"
+  done <"$state/dirty.$$"
+  [ -n "$dirty_repos" ] || dirty_repos=-$nl
   return 0
 }
 
@@ -524,9 +544,9 @@ leave() {
   say "no pane is in $lv_r; its watch stopped"
 }
 
-# Sources and repositories, and the worktrees whose heads the ticks test:
-# at a server's ensure and its next tick, the popup's asking, and a tick
-# after a source ended.
+# Sources and repositories, and the worktrees whose heads the ticks test,
+# from every server's panes as kept (D6, D7): when a server's panes read
+# changed, at the popup's asking, and at a tick after a source ended.
 look() {
   cfg=$(read_sources)
   # The sources whose readers marked them ended, those marks taken up.
@@ -539,21 +559,24 @@ look() {
     ended="$ended${f%.ended} "
   done
   [ $# -gt 0 ] && rm -f "$@"
-  # Repositories every server's panes are in, each with a worktree to run
-  # in, and those the popup asked for; each worktree's git folder kept.
-  # Whether every server listed its panes, since only then is a repository
-  # known to have no pane.
-  lk_n=0
-  lk_failed=false
-  listed=
+  # Repositories every server's kept panes are in, each with a worktree to
+  # run in, and those the popup asked for; each worktree's git folder kept.
+  # Whether every server served has its panes kept and read whole, since
+  # only then is a repository known to have no pane: a server whose list
+  # failed keeps the panes it had.
+  lk_all=true
+  set --
   for lk_d in "$state"/servers/*; do
     [ -f "$lk_d/socket" ] || continue
-    lk_n=$((lk_n + 1))
-    lk_p=$(as "$lk_d" panes_json) || lk_failed=true
-    listed="$listed$lk_p$nl"
+    if [ -f "$lk_d/panes.json" ]; then set -- "$@" "$lk_d/panes.json"; else lk_all=false; fi
   done
-  listed=$(printf '%s' "$listed" | jq -s -r 'add // [] | [.[] | select(.repo)]
-    | (unique_by(.repo)[] | ["r", .repo, .top]), (unique_by(.top)[] | ["h", .top]) | @tsv')
+  lk_n=$#
+  listed=
+  if [ "$lk_n" -gt 0 ]; then
+    listed=$(jq -s -r 'map(arrays[]) | [.[] | objects | select(.repo)]
+      | (unique_by(.repo)[] | ["r", .repo, .top]), (unique_by(.top)[] | ["h", .top]) | @tsv' "$@" 2>/dev/null) ||
+      lk_all=false
+  fi
   found=
   heads=
   old_ifs=$IFS
@@ -573,7 +596,7 @@ look() {
     rm -f "$w"
     r=$(repo_of "$d") && t=$(top_of "$d") && found="$found$r	$t$nl"
   done
-  [ "$lk_n" -gt 0 ] && [ "$lk_failed" = false ] && gone_by
+  [ "$lk_n" -gt 0 ] && [ "$lk_all" = true ] && gone_by
   n=$(printf '%s' "$cfg" | jq '.sources | length')
   i=0
   while [ "$i" -lt "$n" ]; do
@@ -626,20 +649,70 @@ look() {
   done
 }
 
-# Forecast what moved and set each server's tokens: with --refresh, every
-# token shown again, so its time to live starts over. The forecast is
-# followed by the tokens here, so it marks nothing dirty itself.
-changed() {
-  rm -f "$state/dirty"
-  each sh "$root/bin/forecast.sh"
-  each_tokens "$@"
+# Whether the server folder $1 is among the lines of $2.
+among() {
+  case "$nl$2" in *"$nl$1$nl"*) return 0 ;; esac
+  return 1
 }
 
-# Look for repositories in every server's panes, then forecast and set the
-# tokens.
-pass() {
-  look
-  changed "$@"
+# Do what the reads, the markers and the heads ask (D4, D5, D6, D9, D10).
+# The panes of each server in $rd are read and kept; each server in
+# $shown, the minute's pass, has its panes read and every token it shows
+# set again, in one tokens.sh. A look follows where a server's panes
+# changed or $ac_look asks; a forecast, once for every server, where its
+# panes changed, a head in $moved moved or a document was kept; then the
+# tokens of every server where panes changed or a head moved, else of each
+# with a pane in a repository whose document was kept. $ac_all has it do
+# all of these as if every server's panes had changed.
+act() {
+  ac_panes=$ac_all
+  ac_ifs=$IFS
+  IFS=$nl
+  set -f
+  # shellcheck disable=SC2086 # the folders, a line each
+  set -- $rd
+  set +f
+  IFS=$ac_ifs
+  ac_done=
+  for ac_d in "$@"; do
+    [ -f "$ac_d/socket" ] || continue
+    among "$ac_d" "$ac_done$shown" && continue
+    ac_done="$ac_done$ac_d$nl"
+    line_of "$ac_d"
+    ac_b=$line_v
+    read_of "$ac_d"
+    line_of "$ac_d"
+    [ "$line_v" = "$ac_b" ] || ac_panes=true
+  done
+  IFS=$nl
+  set -f
+  # shellcheck disable=SC2086 # the folders, a line each
+  set -- $shown
+  set +f
+  IFS=$ac_ifs
+  for ac_d in "$@"; do
+    [ -f "$ac_d/socket" ] || continue
+    line_of "$ac_d"
+    ac_b=$line_v
+    tokens_of "$ac_d" --read --refresh
+    line_of "$ac_d"
+    [ "$line_v" = "$ac_b" ] || ac_panes=true
+  done
+  enough
+  if [ "$ac_panes" = true ] || [ "$ac_look" = true ]; then look; fi
+  ac_dirty=false
+  take_dirty && ac_dirty=true
+  if [ "$ac_panes" = true ] || [ -n "$moved" ] || [ "$ac_dirty" = true ]; then
+    sh "$root/bin/forecast.sh"
+  fi
+  if [ "$ac_panes" = true ] || [ -n "$moved" ]; then
+    each_tokens
+  elif [ "$ac_dirty" = true ]; then
+    for ac_d in "$state"/servers/*; do
+      [ -f "$ac_d/socket" ] && in_repos "$ac_d" && tokens_of "$ac_d"
+    done
+  fi
+  return 0
 }
 
 # Whether the lease names this watcher still: one that reads another pid
@@ -651,35 +724,54 @@ mine() {
   exit 0
 }
 
-# Whether an ensure or the popup asked for a look since the last, their
-# markers taken up: an ensure's `due` in its server's folder, the popup's
-# `want/<sum>`, which the look reads (D4).
+# Whether an ensure or the popup asked for a reading since the last, their
+# markers taken up: the folders of the servers whose ensure left `due`, a
+# line each in $due, and whether the popup left a `want/<sum>`, in
+# $ak_want, which the look reads (D4).
 asked() {
-  ak=false
-  for ak_f in "$state"/servers/*/due "$state"/want/*; do
-    [ -e "$ak_f" ] && ak=true && break
+  due=
+  ak_want=false
+  set --
+  for ak_f in "$state"/servers/*/due; do
+    [ -e "$ak_f" ] || continue
+    set -- "$@" "$ak_f"
+    due="$due${ak_f%/due}$nl"
   done
-  [ "$ak" = true ] || return 1
-  rm -f "$state"/servers/*/due
+  for ak_f in "$state"/want/*; do
+    [ -e "$ak_f" ] && ak_want=true && break
+  done
+  [ $# -gt 0 ] && rm -f "$@"
+  [ -n "$due" ] || [ "$ak_want" = true ]
 }
 
-# A wake (D4): an ensure's server, or the popup's repository, is read now,
-# an ensure's again at the next tick; a document kept has the tokens set
-# and what moved forecast. A source's end waits for the tick.
+# A wake (D4). The servers whose ensure asked are read now, and again at
+# each of the next two ticks, so that what herdr is told of a pane just
+# after it opens is read a whole tick after the ensure however soon the
+# next tick comes (D6); the popup's repository is looked for now; a
+# document kept has the tokens of the servers with a pane in its
+# repository set, and what moved forecast. A source's end waits for the
+# tick.
 wake() {
   mine
+  rd=
+  shown=
+  moved=
+  ac_look=false
+  ac_all=false
   if asked; then
-    again=true
-    pass
-  elif [ -e "$state/dirty" ]; then
-    changed
+    rd=$due
+    next1="$next1$due"
+    next2="$next2$due"
+    ac_look=$ak_want
   fi
+  if [ -n "$rd" ] || [ "$ac_look" = true ] || [ -e "$state/dirty" ]; then act; fi
 }
 
 # A tick (D5). The shell's own tests read its folder's manifest, the
 # lease, each server's socket, the sources' ends, each worktree's head and
-# the markers; it forks for what they found changed and, every fourth
-# tick, for the minute's pass.
+# the markers; it forks for what they found changed, for the servers whose
+# ensure asked to be read again at this tick, and, every fourth tick, for
+# the minute's pass of each server that shows a token.
 tock() {
   # Its folder's manifest gone or newer than its lease: the plugin was
   # reinstalled there, or a former version put back. The next server's
@@ -692,41 +784,52 @@ tock() {
   if [ "$former" = true ] && { formers_ended || [ "$ticked" -ge 2 ]; }; then clear_formers; fi
   check_servers
   enough
-  tk_read=$again
-  again=false
+  # A server read at a tick is read again at the next; one read at a wake,
+  # at the next two (D6).
+  rd=$next1
+  next1=$next2
+  next2=
+  # The first tick, at its start, takes nothing as kept: it looks, forecasts
+  # and sets every server's tokens whatever its reads find.
+  ac_look=false
+  ac_all=false
+  if [ "$ticked" -eq 0 ]; then
+    ac_look=true
+    ac_all=true
+  fi
   if asked; then
-    tk_read=true
-    again=true
+    rd="$rd$due"
+    next1="$next1$due"
+    ac_look=$ak_want
   fi
   # A moved head's stamp is renewed before its forecast reads it, so a
   # commit after the forecast's read is no older than the stamp.
   if heads_moved; then
     for k in $moved; do : >"$state/checks/$k.stamp"; done
   fi
-  tk_all=
-  [ "$ticked" -gt 0 ] && [ $((ticked % 4)) -eq 0 ] && tk_all=--refresh
-  if [ "$tk_read" = true ]; then
-    pass $tk_all
-    return
+  shown=
+  if [ "$ticked" -gt 0 ] && [ $((ticked % 4)) -eq 0 ]; then
+    for tk_d in "$state"/servers/*; do
+      [ -f "$tk_d/socket" ] && shows "$tk_d" && shown="$shown$tk_d$nl"
+    done
   fi
-  tk_ended=false
   for f in "$runs"/*.ended; do
-    [ -e "$f" ] && tk_ended=true && break
+    [ -e "$f" ] && ac_look=true && break
   done
-  [ "$tk_ended" = true ] && look
-  if [ -n "$moved" ] || [ -e "$state/dirty" ]; then
-    changed $tk_all
-  elif [ -n "$tk_all" ]; then
-    minute
-  fi
+  if [ -n "$rd$shown$moved" ] || [ "$ac_look" = true ] || [ -e "$state/dirty" ]; then act; fi
 }
 
 ticked=0
-# The first tick, at its start, reads every server registered, and the
-# next reads them again.
-again=true
+# The first tick, at its start, reads every server registered, as their
+# ensures would have it, and the next reads them again.
+for d in "$state"/servers/*; do
+  [ -f "$d/socket" ] && : >"$d/due"
+done
+next1=
+next2=
 timer=
 heads=
+moved=
 while :; do
   tock
   enough

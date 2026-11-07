@@ -1,21 +1,35 @@
 #!/bin/sh
 # shellcheck disable=SC1091,SC2154,SC2016 # jq programs; common.sh, sourced, sets root, lib, state, server and config.
-# The sidebar: the `sluice` token on every pane of the herdr server in the
-# environment whose worktree has something to say, `sluice_q` on every
-# workspace with a queue, from the host's documents. Reports only what
-# changed, unless --refresh, which reports every token again so its time
-# to live starts over.
+# The sidebar of the herdr server in the environment (D9): the `sluice`
+# token on each of its panes whose worktree has something to say,
+# `sluice_q` on each of its workspaces with a queue, from its panes as kept
+# (D6) and the host's documents. Reports only what changed, unless
+# --refresh, which reports every token again so its time to live starts
+# over. --read reads the server's panes and keeps them first, as the
+# minute's pass does.
 set -u
 . "$(dirname "$0")/../lib/common.sh"
 . "$lib/panes.sh"
 
 refresh=false
-[ "${1:-}" = --refresh ] && refresh=true
+read=false
+for a in "$@"; do
+  case $a in
+  --refresh) refresh=true ;;
+  --read) read=true ;;
+  esac
+done
 ttl=${SLUICE_HERDR_TTL_MS:-120000}
 t=$(now)
+# What was last set in this server, its sequence and its panes are its own
+# (D3).
+mkdir -p "$server"
 # A server that does not list its panes is set nothing, and what was set in
 # it stays as kept; 3 tells the watcher it did not answer (D2).
-panes=$(panes_json) || exit 3
+if [ "$read" = true ]; then keep_panes "$server" || exit 3; fi
+panes=
+if [ -f "$server/panes.json" ]; then { IFS= read -r panes <"$server/panes.json"; } 2>/dev/null; fi
+[ -n "$panes" ] || panes='[]'
 docs=$(all_docs)
 
 # Each document's learned submissions and blamed tests, by repository.
@@ -52,8 +66,6 @@ want=$(jqw -n -c --argjson panes "$panes" --argjson docs "$docs" --argjson extra
       | (map(.repo) | unique) as $repos
       | {id: $w, v: ($docs | map(select(.repository as $r | $repos | index($r))) | queue_token)} ] }')
 
-# What was last set in this server, and its sequence, are its own (D3).
-mkdir -p "$server"
 last=$server/tokens.json
 [ -f "$last" ] || echo '{"panes":{},"spaces":{}}' >"$last"
 seq_file=$server/seq

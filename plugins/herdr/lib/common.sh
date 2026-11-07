@@ -35,6 +35,23 @@ hd() {
   "${HERDR_BIN_PATH:-herdr}" "$@"
 }
 
+# Run a command as the server registered in folder $1 runs one: with that
+# server's socket and herdr in its environment (D2). The socket read is
+# left in as_s, for what the caller says of the server.
+as() {
+  as_d=$1
+  shift
+  as_s=
+  as_b=
+  read -r as_s 2>/dev/null <"$as_d/socket"
+  read -r as_b 2>/dev/null <"$as_d/herdr"
+  (
+    if [ -n "$as_s" ]; then export HERDR_SOCKET_PATH="$as_s"; else unset HERDR_SOCKET_PATH; fi
+    if [ -n "$as_b" ]; then export HERDR_BIN_PATH="$as_b"; else unset HERDR_BIN_PATH; fi
+    "$@"
+  )
+}
+
 # jq with the plugin's words and rules loaded.
 jqw() {
   jq -L "$lib" "$@"
@@ -97,6 +114,18 @@ set_problem() {
     printf '%s\n' "$1" >"$state/problem"
     say "$1"
   fi
+}
+
+# Have the host's watcher serve the herdr server in the environment, where
+# a lease stands and that server is not served, or is served at a socket
+# another server has since taken: the popup's or the setup action's server
+# the watcher dropped, or never heard from (D2).
+enlist() {
+  [ -n "${HERDR_SOCKET_PATH:-}" ] && [ -f "$state/watch.lease" ] || return 0
+  if [ -f "$server/socket" ] && { [ ! -e "$server/link" ] || [ "$HERDR_SOCKET_PATH" -ef "$server/link" ]; }; then
+    return 0
+  fi
+  sh "$root/bin/watch.sh" --ensure
 }
 
 # Every document the watcher holds, as one array.

@@ -6,8 +6,9 @@
 # its repository's told list, learned worktrees and blamed tests: it is
 # kept as its repository's latest document, its submissions' worktrees are
 # learned, and a toast is raised for each landing, blame or conflict not yet
-# told (D8). The rest it forks is the files it replaces, `sluice status`
-# for a blame or a conflict it knows too little of, and herdr to tell.
+# told (D8), in each herdr server it is told in (D9). The rest it forks is
+# the files it replaces, `sluice status` for a blame or a conflict it knows
+# too little of, and herdr to tell.
 # Run by the watcher as a source's reader, with the source's run file $3
 # and the watcher's pid $4: it wakes the watcher for each document kept,
 # and marks its source ended at its input's end (D4, D7).
@@ -211,26 +212,95 @@ keep() {
     landed) landings="$landings$f2$tab$f3$tab$f4$tab$f5$nl" ;;
     esac
   done
-  set +f
-  IFS=$old_ifs
-  : >"$state/dirty"
+  # IFS stays a newline and globbing off until the toasts are told.
+  # The repository, a line in `dirty`, so the watcher sets the tokens of the
+  # servers with a pane in it (D9).
+  { printf '%s\n' "${hr#*"$tab"}" >>"$state/dirty"; } 2>/dev/null
   rouse
-  # A landing is told only where its pane is open and not the one in front.
-  if [ -n "$landings" ]; then
-    front=$(panes_json --front)
-    toasts="$toasts$(jq -n -r --argjson p "$front" --arg l "$landings" '
+  [ -n "$toasts$landings" ] || {
+    set +f
+    IFS=$old_ifs
+    return 0
+  }
+  servers
+  # A blame or a conflict is told in each server with a pane in the
+  # repository, or in every server where none has one (D9).
+  if [ -n "$toasts" ]; then
+    to=
+    for d in $sv; do
+      keeps "$d" repo "${hr#*"$tab"}" && to="$to$d$nl"
+    done
+    tell "${to:-$sv}" "$toasts"
+  fi
+  # A landing is told in each server where its pane is open and is not the
+  # one in front, read in that server alone; asked only of a server that
+  # keeps a pane in a landed worktree, or keeps no panes.
+  for d in $sv; do
+    [ -n "$landings" ] || break
+    near=false
+    for l in $landings; do
+      fields "$l"
+      keeps "$d" top "$f3"
+      [ $? = 1 ] || {
+        near=true
+        break
+      }
+    done
+    [ "$near" = true ] || continue
+    if [ "$d" = - ]; then f=$server; else f=$d; fi
+    front=$(on "$d" panes_json --front "$f")
+    told_here=$(jq -n -r --argjson p "$front" --arg l "$landings" '
       $l | splits("\n") | select(length > 0) | split("\t") | . as [$id, $b, $path, $to]
       | select([$p[] | select(.top == $path)] | length > 0 and (any(.front) | not))
-      | "sluice: #\($id) landed on \($b)\tas \($to)"' 2>/dev/null)$nl"
-  fi
-  old_ifs=$IFS
-  IFS=$nl
-  set -f
-  for e in $toasts; do
-    hd notification show "${e%%"$tab"*}" --body "${e#*"$tab"}" >/dev/null 2>&1
+      | "sluice: #\($id) landed on \($b)\tas \($to)"' 2>/dev/null)
+    [ -n "$told_here" ] && tell "$d" "$told_here"
   done
   set +f
   IFS=$old_ifs
+}
+
+# The folders of the herdr servers the watcher serves, a line each in $sv;
+# where it serves none, `-`, the server in the environment, as a reader
+# run by hand tells in (D9). Called with globbing off, which it turns on
+# for its own glob alone.
+servers() {
+  sv=
+  set +f
+  for sv_d in "$state"/servers/*; do
+    [ -f "$sv_d/socket" ] && sv="$sv$sv_d$nl"
+  done
+  set -f
+  [ -n "$sv" ] || sv=-$nl
+}
+
+# Whether the server of folder $1 keeps a pane whose field $2 is $3, read by
+# the shell from its one line of panes (D6): 0 it does, 1 it does not, 2 it
+# keeps none. A value JSON would escape is taken as one it keeps.
+keeps() {
+  [ "$1" != - ] || return 2
+  slurp "$1/panes.json"
+  [ -n "$sl_v" ] || return 2
+  case $3 in *[\"\\]* | *[[:cntrl:]]*) return 0 ;; esac
+  case $sl_v in *"\"$2\":\"$3\""*) return 0 ;; esac
+  return 1
+}
+
+# Run a command as the server of folder $1 runs one, `-` the environment's.
+on() {
+  on_d=$1
+  shift
+  if [ "$on_d" = - ]; then "$@"; else as "$on_d" "$@"; fi
+}
+
+# Raise each toast of $2, a line each, its title and body tab-separated, in
+# each server of $1, a folder a line. Called with IFS a newline and
+# globbing off.
+tell() {
+  for tl_d in $1; do
+    for tl_e in $2; do
+      on "$tl_d" hd notification show "${tl_e%%"$tab"*}" --body "${tl_e#*"$tab"}" >/dev/null 2>&1
+    done
+  done
 }
 
 hr=
