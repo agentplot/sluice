@@ -60,7 +60,7 @@ On deneb, agentplot/flywheel-next's `main` takes pull requests, keeps its record
 
 ### Decision outcome
 
-Option 1, for `sluice status`, a branch's view, the overview's order and so every reader and intake. It is a read of what the host already holds, so it fetches nothing and starts no process, as this record wanted. A clean policy ends the refusal at the first read after the host holds it, with no round run. Where the branch's records are on its remote, that is the next tick, whose one ask brings every branch there (129). Where the branch takes pull requests, it is intake's fetch at the next discovery (136). Otherwise it is the next submit's read of the branch, a round, or any fetch.
+Option 1, for `sluice status`, a branch's view and the overview's order, and so for every reader. It is a read of what the host already holds, so it fetches nothing and starts no process, as this record wanted. A clean policy pushed to a branch's remote ends sluice's refusal of that branch the next time a sluice command reads the branch once this host holds the clean revision, so submit and status take work again without anyone running a round. Where the branch's records are on its remote, the host holds it after the next tick, whose one ask brings every branch there (129). Otherwise it holds it after the next submit's read of the branch, which fetches it (124), a round, or any other fetch. Intake is no way to it: its own reads of the policy at the revision this host holds refuse before it fetches, and they stay as they are, since record 0093 removes intake from the host.
 
 The option not taken is a tick fetching a refused branch on its own at the discovery interval. Clause 129 fetches no branch on its own until a round forms on it or its intake is due. The one read such a fetch would serve is a submit's, which already reads the branch fetched (124).
 
@@ -68,4 +68,4 @@ The option not taken is a tick fetching a refused branch on its own at the disco
 
 - A quiet branch's refusal ends with no round, wherever the host has the clean revision.
 - A status read's `parallel` and warnings, and the view's executor and required checks, are those of the revision the next round forms on, which can be ahead of `at` until that round. The overview names both revisions (64).
-- A quiet branch whose records are on the host, which takes no pull requests and which nothing has fetched since the push, still shows the refusal at the revision it last fetched. Its next submit takes the work.
+- A quiet branch whose records are on the host and which nothing has fetched since the push still shows the refusal at the revision it last fetched, and takes no pull request in. Its next submit takes the work.
