@@ -439,12 +439,19 @@ impl Sluice<'_> {
     /// no fetch, and, where that ask was refused, its words; and the
     /// branch's revision as the host holds it, none where that ask was
     /// refused, so a forecast can form from what a reader wrote (64).
+    ///
+    /// 56, 124, 129: its policy at the branch's revision as this host holds
+    /// it, whether or not that ask was refused, and at the revision its
+    /// records last saw only where the host holds none, so a policy mended
+    /// outside sluice ends the branch's refusal with no round run (ADR 0046
+    /// as amended 2026-11-06; rule core.15).
     pub fn branch_view_of(&self, branch: &str) -> Result<BranchView> {
         let snapshot = self.seams.state.read_held(branch)?;
         let base = Line::load(branch, snapshot.clone())?.doc.base;
-        let policy = match &base {
+        let held = self.seams.branch.held(branch)?;
+        let policy = match held.clone().or(base) {
             Some(rev) => self
-                .policy_at(rev)
+                .policy_at(&rev)
                 .with_context(|| format!("{branch}'s policy at {rev}"))?,
             None => None,
         };
@@ -462,7 +469,7 @@ impl Sluice<'_> {
         let stale = self.seams.state.stale(branch);
         view.revision = match &stale {
             Some(_) => None,
-            None => self.seams.branch.held(branch)?,
+            None => held,
         };
         view.stale = stale.map(|r| r.to_string());
         view.refused_writes = crate::refused_writes::standing(&view.refused_writes, || self.now());

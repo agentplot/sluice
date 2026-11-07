@@ -1246,6 +1246,13 @@ impl Sluice<'_> {
     /// last saw, as the overview reads it (ADR 0046): a remote branch is
     /// not fetched for a read. Only a branch whose records have seen no
     /// revision yet is read from the branch itself.
+    ///
+    /// 56, 124, 129: its policy at the branch's revision as this host holds
+    /// it, so a policy mended outside sluice is read whole with no round
+    /// run, and one refused there names that revision; at the revision its
+    /// records last saw only where the host holds none (ADR 0046 as
+    /// amended 2026-11-06; rule core.15). Nothing is fetched for it and
+    /// nothing written.
     pub fn status(&self, branch: &str) -> Result<Status> {
         let snapshot = self.seams.state.read(branch)?;
         let kept_out = kept_out(&Line::read_log(&snapshot)?);
@@ -1254,8 +1261,8 @@ impl Sluice<'_> {
             Some(base) => Some(base.clone()),
             None => self.seams.branch.read(branch)?,
         };
-        let policy = match &at {
-            Some(rev) => self.policy_at(rev)?,
+        let policy = match self.seams.branch.held(branch)?.or_else(|| at.clone()) {
+            Some(rev) => self.policy_at(&rev)?,
             None => None,
         };
         let parallel = match &policy {
