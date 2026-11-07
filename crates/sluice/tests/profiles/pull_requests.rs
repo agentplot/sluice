@@ -5083,6 +5083,174 @@ fn blamed_on_another_host() {
     assert!(text(&out).contains(&said), "{}", text(&out));
 }
 
+/// Host B takes main's pull requests in and has blamed the pull request a
+/// `wt submit` on host A opened from a session's worktree with `changes`,
+/// a `broken` among them, and marked it a draft, its check saying
+/// `waiting: the next submit` while the double keeps that check completed
+/// and failed, as GitHub kept switchboard-kit #268's (record 0093); then a
+/// `sluice submit main --no-wait --json` on A has marked it ready for
+/// review at the same head. Host B, the worktree, the pull request as it
+/// was opened, and the submit's document.
+fn held_on_b_then_marked_ready<'g>(
+    g: &'g OnGitHub,
+    name: &str,
+    changes: &[(&str, &str)],
+) -> (
+    Other<'g>,
+    PathBuf,
+    sluice::profiles::github::forge::Pull,
+    Value,
+) {
+    g.named("a", "");
+    let b = g.other("b", "", "");
+    b.run("1");
+    let w = g.session(name, changes);
+    let out = g.wt_submit(&w, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let pull = g.pull_from(&format!("unit/{name}"));
+    let until = Instant::now() + Duration::from_secs(60);
+    let held = || {
+        g.pull_from(&format!("unit/{name}")).draft
+            && g.posted(&pull.head)
+                .is_some_and(|p| p.1 == "waiting: the next submit")
+    };
+    // A pass at a time: one run of a round moves no clock on, so B records
+    // the submission's leaving at the time the double stamps marks by.
+    while !held() {
+        assert!(
+            Instant::now() < until,
+            "B never held it: {:?}, {:?}",
+            b.of(pull.number),
+            g.posted(&pull.head)
+        );
+        b.discovery_passes();
+        b.run("1");
+    }
+    assert_eq!(b.of(pull.number)[0]["state"], "failed");
+    assert_eq!(
+        g.posted(&pull.head).unwrap().0,
+        Status::Failure,
+        "the double keeps the check failed"
+    );
+    // The ready mark later than the leaving, to the second GitHub and the
+    // records keep, as B reads a ready mark since (120).
+    std::thread::sleep(Duration::from_millis(1100));
+    let out = g
+        .command(env!("CARGO_BIN_EXE_sluice"), &w)
+        .args(["submit", "main", "--no-wait", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let doc: Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
+    let ready = g.pull_from(&format!("unit/{name}"));
+    assert!(!ready.draft && ready.head == pull.head, "{ready:?}");
+    (b, w, pull, doc)
+}
+
+/// request-intake-host, "Held, then marked ready": B blamed `#n` and
+/// marked it a draft, its check saying `waiting: the next submit`, and a
+/// submit on A marked it ready at the same head; before B's next pass, a
+/// wait on A reads it waiting to be taken in by B, not sent back, though
+/// GitHub keeps the check failed (120, 137, C.5; record 0093).
+#[test]
+fn held_then_marked_ready_waits_to_be_taken_in() {
+    let g = OnGitHub::new("intake-held-ready", "");
+    let (b, w, pull, doc) = held_on_b_then_marked_ready(&g, "held", &[("broken", "b\n")]);
+    assert_eq!(doc["pull_request"], pull.number, "{doc}");
+    assert_eq!(doc["state"], "waiting to be taken in by b", "{doc}");
+    let out = g.skipping(&w, &["wait", "main", "--timeout", "5s", "--json"]);
+    assert_eq!(out.status.code(), Some(sluice::WAITING), "{}", text(&out));
+    let doc: Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
+    assert_eq!(doc["pull_request"], pull.number, "{doc}");
+    assert_eq!(doc["state"], "waiting to be taken in by b", "{doc}");
+    assert_eq!(b.of(pull.number).len(), 1, "B has not taken it in again");
+    assert!(g.of(pull.number).is_empty(), "A took nothing in");
+}
+
+/// request-intake-host, "Taken in again while GitHub keeps the check
+/// failed": after a submit on A marked `#n` ready, main's check is mended,
+/// and B takes `#n` in again at the same head and lands it, its check
+/// saying `queued: …`, then `testing …`, while the double keeps that check
+/// completed and failed; a wait on A says each as it changes and exits 0
+/// at the landing (137; record 0093).
+#[test]
+fn taken_in_again_while_github_keeps_the_check_failed() {
+    let g = OnGitHub::new("intake-taken-again", "");
+    g.discovery("10s");
+    let (b, w, pull, _) = held_on_b_then_marked_ready(&g, "again", &[("broken", "b\n")]);
+    let n = pull.number;
+    // main's check mended: `broken` no longer fails it, and it takes five
+    // seconds, so A's wait reads it under test.
+    let mended = g
+        .repo
+        .branch("mended", "main", &[("check.sh", Some("sleep 5\n"))]);
+    g.repo
+        .git(&["push", "-q", "origin", &format!("{mended}:refs/heads/main")]);
+    let said = g.repo.dir().with_extension("wait.out");
+    let mut wait = g
+        .command(env!("CARGO_BIN_EXE_sluice"), &w)
+        .args(["wait", "main", "--timeout", "2m"])
+        .stdout(std::fs::File::create(&said).unwrap())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let words = || std::fs::read_to_string(&said).unwrap_or_default();
+    let until = Instant::now() + Duration::from_secs(90);
+    // B passes again once A's wait has said what B's check says now, or
+    // where B's last pass changed nothing, so the wait reads each state B
+    // posts; the check held for the next submit, A says waiting for B.
+    let shown = |title: &str| match title {
+        "waiting: the next submit" => "waiting to be taken in by b".to_string(),
+        t => t.to_string(),
+    };
+    let mut last = String::new();
+    while wait.try_wait().unwrap().is_none() {
+        if Instant::now() >= until {
+            let _ = wait.kill();
+            panic!("A's wait never ended: {}", words());
+        }
+        let (status, now, _) = g.posted(&pull.head).unwrap();
+        if !now.starts_with("landed") {
+            assert_eq!(status, Status::Failure, "the double keeps the check failed");
+        }
+        if now == last || words().contains(&shown(&now)) {
+            b.discovery_passes();
+            b.run("1");
+            last = now;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let out = wait.wait_with_output().unwrap();
+    let said = words();
+    assert_eq!(
+        out.status.code(),
+        Some(sluice::LANDED),
+        "{said}{}",
+        text(&out)
+    );
+    let at = |what: &str| {
+        said.find(what)
+            .unwrap_or_else(|| panic!("never said {what:?}: {said}"))
+    };
+    assert!(
+        at("waiting to be taken in by b") < at("queued: next on main"),
+        "{said}"
+    );
+    assert!(
+        at("queued: next on main") < at("testing main + #"),
+        "{said}"
+    );
+    assert!(at("testing main + #") < at("passed · landed"), "{said}");
+    assert!(!said.contains("failed: "), "{said}");
+    let subs = b.of(n);
+    assert_eq!(subs.len(), 2, "{subs:?}");
+    assert_eq!(subs[1]["head"], pull.head.as_str());
+    assert_eq!(subs[1]["state"], "landed", "{subs:?}");
+    assert!(g.of(n).is_empty(), "A took nothing in");
+}
+
 /// request-intake-host, "A wait lets go", stopped by Ctrl-C: a wait on
 /// host B, where no `sluice run` lives, holds main's mark, and once Ctrl-C
 /// stops it the mark is gone from the remote.
