@@ -2118,7 +2118,7 @@ mod by_name_way_on {
 
     impl Scratch {
         /// Every submission `bolt/x` has had of `bolt/w` by name.
-        fn subs_by_name(&self) -> Vec<serde_json::Value> {
+        pub(super) fn subs_by_name(&self) -> Vec<serde_json::Value> {
             let out = self.sluice(&["status", "bolt/x", "--json", "--all"]);
             assert!(out.status.success(), "{}", text(&out));
             let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
@@ -2130,5 +2130,83 @@ mod by_name_way_on {
                 .filter(|x| x["from"]["head"] == "bolt/w" && x["from"]["worktree"] == "bolt/w")
                 .collect()
         }
+    }
+}
+
+/// 51, 124, D8: a status gives each decided submission the words `sluice
+/// inbox` gives it, beside its record as it is; a submission by name,
+/// which no inbox takes, is read so.
+mod status_gives_the_inbox_words {
+    use super::*;
+
+    /// `bolt/w` by name, blamed for `sh check.sh`: queued, it has no
+    /// notice; decided, `sluice status bolt/x --all --json` and `sluice
+    /// status <n> --json` give it the inbox's notice, its `failed` and the
+    /// revision of `bolt/x` it was tested on.
+    #[test]
+    fn a_failure_by_name() {
+        let s = Scratch::new("wt-status-words-fails");
+        s.repo
+            .branch("bolt/w", "bolt/x", &[("broken", Some("broken\n"))]);
+        let tip = s.tip();
+        let out = by_name::submit(&s, s.repo.dir(), &["--no-wait", "--json"])
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+        let n = id(&out);
+        let queued = s.status(n);
+        assert_eq!(queued["state"], "queued", "{queued}");
+        assert!(queued.get("notice").is_none(), "{queued}");
+        s.decide(n);
+        let notice =
+            format!("[sluice] #{n} failed on bolt/x: sh check.sh. sluice wait {n} shows why.");
+        let e = s.subs_by_name().into_iter().find(|x| x["id"] == n).unwrap();
+        assert_eq!(e["state"], "failed", "{e}");
+        assert_eq!(e["from"]["head"], "bolt/w", "{e}");
+        assert_eq!(e["notice"], notice.as_str(), "{e}");
+        assert_eq!(e["failed"][0]["task"], "sh check.sh", "{e}");
+        assert_eq!(e["tested"]["on"], tip.as_str(), "{e}");
+        let one = s.status(n);
+        assert_eq!(one["notice"], notice.as_str(), "{one}");
+        assert_eq!(one["tested"]["on"], tip.as_str(), "{one}");
+    }
+
+    /// `bolt/w` by name, conflicting in `same.txt` with a session's landing:
+    /// `sluice status <n> --json` gives it the inbox's notice and its
+    /// `conflict.paths`; the session's landing has the inbox's notice too.
+    #[test]
+    fn a_conflict_by_name() {
+        let s = Scratch::new("wt-status-words-conflicts");
+        s.repo
+            .branch("bolt/w", "bolt/x", &[("same.txt", Some("w\n"))]);
+        let a = s.session("a", &[("same.txt", "a\n")]);
+        let out = s.wt_submit(&a, &["--no-remove"]);
+        assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+        let out = by_name::submit(&s, s.repo.dir(), &[]).output().unwrap();
+        assert_eq!(out.status.code(), Some(2), "{}", text(&out));
+        let n = s.subs_by_name()[0]["id"].as_u64().unwrap();
+        let e = s.status(n);
+        assert_eq!(e["state"], "conflict", "{e}");
+        assert_eq!(
+            e["conflict"]["paths"],
+            serde_json::json!(["same.txt"]),
+            "{e}"
+        );
+        let notice = e["notice"]
+            .as_str()
+            .unwrap_or_else(|| panic!("no notice: {e}"));
+        assert!(
+            notice.starts_with(&format!("[sluice] #{n} conflicts on bolt/x")),
+            "{e}"
+        );
+        assert!(notice.contains("in same.txt"), "{e}");
+        let landed = &s.subs_from("a")[0];
+        let words = format!("[sluice] #{} landed on bolt/x as ", landed["id"]);
+        assert!(
+            landed["notice"]
+                .as_str()
+                .is_some_and(|w| w.starts_with(&words)),
+            "{landed}"
+        );
     }
 }

@@ -42,7 +42,7 @@ use sluice_core::{
     Pending, Requester, Seams, Serves, Sluice, Status, Step, SubmitHead, SubmitRefusal,
     SubmitRequest, Unread, WithdrawRefusal, Withdrew,
 };
-use sluice_seams::{Outcome, Rev, SessionPlace, Submitter};
+use sluice_seams::{Decided, Outcome, Rev, SessionPlace, Submitter};
 use told::Kind;
 
 /// Exits of a waiting submit and `sluice wait` (walkthrough section 5;
@@ -1481,7 +1481,7 @@ pub fn run(
                 }
                 Lookup::Unfound(unread) => unfound(id, &unread, json, out),
                 Lookup::Found(sub) if json => {
-                    let doc = with_waiting(&s, &sub, serde_json::to_value(&sub)?);
+                    let doc = with_waiting(&s, &sub, decided_document(&sub, None)?);
                     writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
                     Ok(0)
                 }
@@ -1550,7 +1550,7 @@ pub fn run(
                     in_queue(&status.submissions).cloned().collect()
                 };
                 if json {
-                    let mut doc = status_json(&status, &shown);
+                    let mut doc = status_json(&status, &shown)?;
                     // 84, record 0074: what each combination waits for.
                     doc["waiting"] = progress::waiting_json(&s.branch_view_of(&target)?);
                     writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
@@ -2690,6 +2690,23 @@ fn await_submission(
     Ok(code)
 }
 
+/// 51, D8: a submission's document, its record as it is, with, for one
+/// landed, failed or conflicting, its `notice`: the words the round pushes
+/// into its session and `sluice inbox` gives it, from `decided` where the
+/// round's outbox item names its outcome, else from the record's own. A
+/// withdrawn, queued or testing one has none. The one document `sluice
+/// inbox --json`, `sluice status <branch> [--all] --json` and `sluice
+/// status <n> --json` give a submission: a contract a caller reads, which
+/// only gains fields.
+fn decided_document(sub: &Submission, decided: Option<&Decided>) -> Result<serde_json::Value> {
+    let mut doc = serde_json::to_value(sub)?;
+    let own = sub.decided();
+    if let Some(d) = decided.or(own.as_ref()) {
+        doc["notice"] = words::notice(sub.id, &sub.branch, d).into();
+    }
+    Ok(doc)
+}
+
 /// 84, record 0074: `doc`, `sub`'s record, with what its combination under
 /// test waits for, the hosts that turned its run down each with why, where
 /// any did. It decides nothing, so a read that fails adds nothing.
@@ -3560,18 +3577,13 @@ fn inbox(s: &Sluice<'_>, worktree: &str, json: bool, out: &mut dyn Write) -> Res
         ));
     }
     if json {
-        // Each element is the record `sluice wait <id> --json` prints, as
-        // this run marks it, with the notice the round pushes for it: a
-        // contract a caller reads, which only gains fields.
+        // Each element is the record as this run marks it, with the notice
+        // the round pushes for it (D8).
         let outcomes = pending
             .outcomes
             .iter()
             .zip(&marked)
-            .map(|(o, sub)| {
-                let mut v = serde_json::to_value(sub)?;
-                v["notice"] = words::notice(sub.id, &o.branch, &o.decided).into();
-                Ok(v)
-            })
+            .map(|(o, sub)| decided_document(sub, Some(&o.decided)))
             .collect::<Result<Vec<_>>>()?;
         let mut doc = serde_json::json!({ "outcomes": outcomes });
         if !pending.unread.is_empty() {
@@ -4775,7 +4787,11 @@ fn write_failed_releases(
     Ok(())
 }
 
-fn status_json(status: &Status, submissions: &[Submission]) -> serde_json::Value {
+fn status_json(status: &Status, submissions: &[Submission]) -> Result<serde_json::Value> {
+    let submissions = submissions
+        .iter()
+        .map(|sub| decided_document(sub, None))
+        .collect::<Result<Vec<_>>>()?;
     let held_checkouts: Vec<serde_json::Value> = status
         .failed_releases
         .iter()
@@ -4808,7 +4824,7 @@ fn status_json(status: &Status, submissions: &[Submission]) -> serde_json::Value
     if let Some(refused) = &status.refused {
         json["refused"] = serde_json::json!(refused);
     }
-    json
+    Ok(json)
 }
 
 /// The names of a combination's checkout begin so: `sluice/try/<branch>/<n>`.
