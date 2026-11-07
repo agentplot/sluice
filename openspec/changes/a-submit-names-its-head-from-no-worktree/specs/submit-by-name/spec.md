@@ -27,9 +27,8 @@ answer as any submit that does not wait, `{"id", "branch", "ahead"}`.
 #### Scenario: A waiting submit by name
 
 - **WHEN** `sluice submit main --head bolt/x` runs with no `--no-wait`
-  on a host where no `sluice run` lives
-- **THEN** it runs `main`'s rounds while it waits, reports the outcome,
-  and exits as a waiting submit does for it
+- **THEN** it moves `main`'s queue while it waits as any waiting submit
+  does, reports the outcome, and exits as a waiting submit does for it
 
 ### Requirement: A submission by name is of its branch as the policy holds it
 

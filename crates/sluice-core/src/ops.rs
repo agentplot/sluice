@@ -184,9 +184,13 @@ pub enum Requester {
     Planner,
     Operator,
     /// A host's intake handing its own pull requests' submissions over to
-    /// the host that takes the branch's pull requests in, in these words
-    /// (137).
-    Intake(String),
+    /// `to`, the host that takes the branch's pull requests in, in
+    /// `words` (137). Its withdrawal's record names `to`, which is what
+    /// tells it a hand-over (120; record 0088 as amended).
+    HandOver {
+        to: String,
+        words: String,
+    },
 }
 
 impl Requester {
@@ -195,14 +199,23 @@ impl Requester {
             Requester::Session(a) => a.clone(),
             Requester::Planner => "planner".into(),
             Requester::Operator => "operator".into(),
-            Requester::Intake(words) => words.clone(),
+            Requester::HandOver { words, .. } => words.clone(),
+        }
+    }
+
+    /// 120, 137: the host a hand-over's withdrawal names; `None` for any
+    /// other withdrawal.
+    fn handed_over_to(&self) -> Option<String> {
+        match self {
+            Requester::HandOver { to, .. } => Some(to.clone()),
+            _ => None,
         }
     }
 
     fn may_change(&self, sub: &Submission) -> bool {
         match self {
             Requester::Session(a) => *a == sub.from.agent,
-            Requester::Planner | Requester::Operator | Requester::Intake(_) => true,
+            Requester::Planner | Requester::Operator | Requester::HandOver { .. } => true,
         }
     }
 }
@@ -384,6 +397,14 @@ impl Queue {
 pub struct Status {
     pub branch: String,
     pub at: Option<Rev>,
+    /// 105: the branch itself is gone: the host holds no revision of it,
+    /// read with no fetch where the records have seen one. Its records
+    /// stay, and are read as any branch's.
+    pub gone: bool,
+    /// 26, 105: the branch has records: its read found some, or, where it
+    /// found none of a branch the host holds no revision of, the records
+    /// list it, as the overview does.
+    pub recorded: bool,
     pub testing: usize,
     pub window: usize,
     pub parallel: Option<usize>,
@@ -441,9 +462,11 @@ impl Status {
         crate::overview::in_queue(&self.submissions).count()
     }
 
-    /// No such branch, and no records of one: nothing sluice lands on.
+    /// No such branch, and no records of one: nothing sluice lands on
+    /// and nothing a status reads (105). A branch gone whose records stay
+    /// is known by them.
     pub fn is_unknown(&self) -> bool {
-        self.at.is_none() && self.submissions.is_empty() && self.finished == 0
+        self.at.is_none() && !self.recorded
     }
 }
 
@@ -1101,8 +1124,16 @@ impl Sluice<'_> {
             s.withdrawn = Some(Withdrawal {
                 by: by.word(),
                 at: now.clone(),
+                handed_over_to: by.handed_over_to(),
             });
-            l.log(&now, Event::Withdrawn { id, by: by.word() });
+            l.log(
+                &now,
+                Event::Withdrawn {
+                    id,
+                    by: by.word(),
+                    handed_over_to: by.handed_over_to(),
+                },
+            );
             Ok(Ok(Withdrew::Now))
         })
     }
@@ -1342,14 +1373,27 @@ impl Sluice<'_> {
     /// last saw, as the overview reads it (ADR 0046): a remote branch is
     /// not fetched for a read. Only a branch whose records have seen no
     /// revision yet is read from the branch itself.
+    ///
+    /// 105: a branch removed is read from its records as any other, and
+    /// said to be gone: by that read where it was made, and otherwise by
+    /// the revision the host holds of it, with no fetch (record 0091).
     pub fn status(&self, branch: &str) -> Result<Status> {
         let snapshot = self.seams.state.read(branch)?;
+        let found = snapshot.version > 0 || !snapshot.files.is_empty();
         let kept_out = kept_out(&Line::read_log(&snapshot)?);
         let line = Line::load(branch, snapshot)?;
-        let at = match &line.doc.base {
-            Some(base) => Some(base.clone()),
-            None => self.seams.branch.read(branch)?,
+        let (at, gone) = match &line.doc.base {
+            Some(base) => (
+                Some(base.clone()),
+                self.seams.branch.held(branch)?.is_none(),
+            ),
+            None => {
+                let read = self.seams.branch.read(branch)?;
+                let gone = read.is_none();
+                (read, gone)
+            }
         };
+        let recorded = found || (gone && self.seams.state.branches()?.iter().any(|b| b == branch));
         let policy = match &at {
             Some(rev) => self.policy_at(rev)?,
             None => None,
@@ -1380,6 +1424,8 @@ impl Sluice<'_> {
         Ok(Status {
             branch: branch.into(),
             at,
+            gone,
+            recorded,
             testing: line
                 .doc
                 .candidates
@@ -1716,6 +1762,7 @@ fn admit(
             s.withdrawn = Some(Withdrawal {
                 by: "resubmission".into(),
                 at: now.into(),
+                handed_over_to: None,
             });
             withdrew.push(old);
         }
@@ -1726,6 +1773,7 @@ fn admit(
             Event::Withdrawn {
                 id: old,
                 by: "resubmission".into(),
+                handed_over_to: None,
             },
         );
     }
@@ -2389,6 +2437,7 @@ mod tests {
         blamed.withdrawn = Some(crate::records::Withdrawal {
             by: "resubmission".into(),
             at: "2026-10-29T02:40:56Z".into(),
+            handed_over_to: None,
         });
         keep(&h, &blamed);
         let mut doc = crate::records::BranchDoc::new(BRANCH);

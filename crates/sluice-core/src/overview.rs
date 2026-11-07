@@ -63,6 +63,12 @@ pub struct BranchView {
     /// before it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revision: Option<Rev>,
+    /// 105: the branch itself is gone: the host holds no revision of it,
+    /// and the read of its records was not refused. Its records stay, and
+    /// are read as any branch's; left out while the branch is there, and
+    /// in a document from before it (record 0091).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub gone: bool,
     /// The records' version: it moves on every write, so a reader redraws
     /// only when it does.
     pub version: u64,
@@ -136,6 +142,7 @@ impl BranchView {
             branch: branch.to_string(),
             at: None,
             revision: None,
+            gone: false,
             version: 0,
             window: 0,
             parallel: None,
@@ -298,6 +305,7 @@ pub fn branch_view(read: BranchRead) -> Result<BranchView> {
         branch,
         at: line.doc.base.clone(),
         revision: None,
+        gone: false,
         version: line.version,
         window: line.doc.window,
         parallel: rules.as_ref().map(|r| r.parallel),
@@ -465,6 +473,9 @@ impl Sluice<'_> {
             Some(_) => None,
             None => self.seams.branch.held(branch)?,
         };
+        // 105: a branch the host holds no revision of, read with no
+        // refusal, is gone; its records are shown all the same.
+        view.gone = stale.is_none() && view.revision.is_none();
         view.stale = stale.map(|r| r.to_string());
         view.refused_writes = crate::refused_writes::standing(&view.refused_writes, || self.now());
         Ok(view)
@@ -805,6 +816,7 @@ mod tests {
             branch: branch.into(),
             at: None,
             revision: None,
+            gone: false,
             version: 0,
             window: 0,
             parallel: None,

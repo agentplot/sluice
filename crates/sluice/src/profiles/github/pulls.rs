@@ -650,7 +650,10 @@ impl Pulls {
     /// made obsolete end in this pass, and their checkouts are released,
     /// whether or not a round follows (design D5).
     fn hand_over(&self, s: &Sluice<'_>, branch: &str, host: &str, tip: &Rev) -> Result<()> {
-        let by = Requester::Intake(handed_over_to(host, branch));
+        let by = Requester::HandOver {
+            to: host.to_string(),
+            words: handed_over_to(host, branch),
+        };
         let mut withdrew = false;
         for sub in s.status(branch)?.submissions {
             if number(&sub.from.worktree).is_none()
@@ -715,7 +718,7 @@ impl Pulls {
         open: &[String],
     ) -> Result<BTreeMap<String, Submission>> {
         let mut latest = s.latest_of(branch, open)?;
-        latest.retain(|_, e| !handed_over(e, branch));
+        latest.retain(|_, e| !handed_over(e));
         Ok(latest)
     }
 
@@ -2034,11 +2037,27 @@ fn handed_over_to(host: &str, branch: &str) -> String {
     format!("{host} takes {branch}'s pull requests in")
 }
 
-/// 137: whether `e` was withdrawn by its host's hand-over of `branch`'s
-/// pull requests to another host.
-fn handed_over(e: &Submission, branch: &str) -> bool {
-    let tail = format!(" takes {branch}'s pull requests in");
-    e.state == State::Withdrawn && e.withdrawn.as_ref().is_some_and(|w| w.by.ends_with(&tail))
+/// 120, 137: whether `e` was withdrawn by its host's hand-over of its
+/// branch's pull requests to another host, which holds no request: its
+/// withdrawal's record names the host it handed over to (record 0088 as
+/// amended, design D1).
+fn handed_over(e: &Submission) -> bool {
+    let Some(w) = e.withdrawn.as_ref().filter(|_| e.state == State::Withdrawn) else {
+        return false;
+    };
+    w.handed_over_to.is_some() || named_no_host(w, &e.branch)
+}
+
+/// A hand-over's withdrawal as a sluice that named no host in its record
+/// wrote it, 0.60.0 to 0.70.2: in the words it gave every hand-over and
+/// no other withdrawal, `<host> takes <branch>'s pull requests in`, or
+/// `another host takes ...` before 0.70.1, which are all such a record
+/// says of it. It is read as that sluice read it, holding no request,
+/// as 120 has every hand-over's withdrawal (design D2).
+fn named_no_host(w: &sluice_core::records::Withdrawal, branch: &str) -> bool {
+    w.handed_over_to.is_none()
+        && w.by
+            .ends_with(&format!(" takes {branch}'s pull requests in"))
 }
 
 /// Who a resubmission's withdrawal names: the core withdraws the earlier
@@ -2062,10 +2081,12 @@ const WITHDRAWN_BY: &str = "withdrawn by ";
 
 /// Who withdrew `e`, when it was not its own agent: the operator, a
 /// planner or another agent, never intake, which withdraws a pull
-/// request's submission as its agent.
+/// request's submission as its agent, and never a hand-over, which holds
+/// no request (120).
 fn withdrawn_by_another(e: &Submission) -> Option<&str> {
     e.withdrawn
         .as_ref()
+        .filter(|_| !handed_over(e))
         .map(|w| w.by.as_str())
         .filter(|by| *by != e.from.agent)
 }
@@ -2078,9 +2099,12 @@ fn withdrawer(by: &str) -> String {
     }
 }
 
-/// Out of the queue without landing: withdrawn, blamed or conflicting.
+/// Out of the queue without landing: withdrawn, blamed or conflicting;
+/// never withdrawn for a hand-over of intake, which is none of these and
+/// holds no request: whichever host holds the mark takes it in again as
+/// its conditions hold, the host that withdrew it included (120, 137).
 fn left_unlanded(e: &Submission) -> bool {
-    matches!(e.state, State::Withdrawn | State::Failed | State::Conflict)
+    matches!(e.state, State::Withdrawn | State::Failed | State::Conflict) && !handed_over(e)
 }
 
 /// Whether a submit's pull request `p` waits for its submitter's act: its
@@ -2700,7 +2724,7 @@ impl crate::PullRequests for Pulls {
     }
 
     fn handed_over(&self, sub: &Submission) -> bool {
-        handed_over(sub, &sub.branch)
+        handed_over(sub)
     }
 
     fn branches(&self, seams: Seams<'_>) -> Result<Vec<String>> {
@@ -4164,6 +4188,7 @@ mod tests {
                 Event::Withdrawn {
                     id: 2,
                     by: "unit/a".into(),
+                    handed_over_to: None,
                 },
             ),
         ];
@@ -4194,6 +4219,103 @@ mod tests {
             acts_from(&log, &sub(3, "2026-10-23T10:01:00Z")),
             at("2026-10-23T10:01:01Z")
         );
+    }
+
+    /// A submission from pull request 4 into main, withdrawn as `withdrawn`
+    /// says, its record as JSON.
+    fn withdrawn(withdrawn: serde_json::Value) -> Submission {
+        serde_json::from_value(serde_json::json!({
+            "schema": sluice_core::records::SUBMISSION_SCHEMA, "id": 7, "branch": "main",
+            "head": "h", "from": { "agent": "unit/a", "worktree": "pull/4" },
+            "submitted": "2026-11-06T21:00:00Z", "after": [], "priority": 0, "attempt": 1,
+            "state": "withdrawn", "withdrawn": withdrawn,
+        }))
+        .unwrap()
+    }
+
+    /// 120, 137: a withdrawal for a hand-over of intake is told by the host
+    /// its record names, whatever its words, and holds no request: it is
+    /// no leaving, no one else's withdrawal, and a submit's pull request
+    /// whose latest submission it is waits for no act and reads no timeline
+    /// (record 0088 as amended, design D1).
+    #[test]
+    fn a_hand_overs_withdrawal_holds_no_request() {
+        let e = withdrawn(serde_json::json!({
+            "by": "anything at all", "at": "2026-11-06T21:17:42Z", "handed_over_to": "b",
+        }));
+        assert!(handed_over(&e));
+        assert!(!left_unlanded(&e));
+        assert_eq!(withdrawn_by_another(&e), None);
+        let body = description(&[], "unit/a", None, "");
+        let p = Pull {
+            number: 4,
+            node_id: "PR_4".into(),
+            title: "unit/a".into(),
+            body,
+            author: "sluice".into(),
+            draft: false,
+            open: true,
+            head: "h".into(),
+            head_ref: "unit/a".into(),
+            head_repo: "o/r".into(),
+            base: "main".into(),
+            updated_at: None,
+            merged: false,
+        };
+        assert!(submits(&p).is_some());
+        let held = is_held(&p, Some(&e), &[], || panic!("no timeline is read")).unwrap();
+        assert!(!held);
+        // A draft a person made after it is no hold of sluice's either.
+        let draft = Pull {
+            draft: true,
+            ..p.clone()
+        };
+        assert!(!is_held(&draft, Some(&e), &[], || panic!("no timeline is read")).unwrap());
+        // Any other withdrawal holds it as before: the operator's, its
+        // agent's at a close, a resubmission's that a ready mark preceded.
+        for by in ["operator", "planner", "unit/a"] {
+            let e = withdrawn(serde_json::json!({ "by": by, "at": "2026-11-06T21:17:42Z" }));
+            assert!(!handed_over(&e), "{by}");
+            assert!(left_unlanded(&e), "{by}");
+            assert!(
+                is_held(&p, Some(&e), &[], || Ok(Vec::new())).unwrap(),
+                "{by}"
+            );
+        }
+    }
+
+    /// 120, 137: a hand-over's withdrawal written by a sluice that named no
+    /// host in its record, 0.60.0 to 0.70.2, is read as that sluice read it,
+    /// by the words it gave every hand-over, and holds no request; any
+    /// other record with no host named reads as it was (design D2).
+    #[test]
+    fn an_older_hand_overs_withdrawal_reads_as_it_was() {
+        for by in [
+            "b takes main's pull requests in",
+            "another host takes main's pull requests in",
+        ] {
+            let e = withdrawn(serde_json::json!({ "by": by, "at": "2026-10-30T16:18:13Z" }));
+            assert_eq!(e.withdrawn.as_ref().unwrap().handed_over_to, None);
+            assert!(handed_over(&e), "{by}");
+            assert!(!left_unlanded(&e), "{by}");
+            assert_eq!(withdrawn_by_another(&e), None, "{by}");
+        }
+        // Another branch's words are no hand-over of this one's.
+        let e = withdrawn(serde_json::json!({
+            "by": "b takes bolt/x's pull requests in", "at": "2026-10-30T16:18:13Z",
+        }));
+        assert!(!handed_over(&e));
+        // The operator's, written then, holds as it did.
+        let e = withdrawn(serde_json::json!({ "by": "operator", "at": "2026-10-30T16:18:13Z" }));
+        assert!(!handed_over(&e));
+        assert!(left_unlanded(&e));
+        assert_eq!(withdrawn_by_another(&e), Some("operator"));
+        // A submission blamed is no hand-over whatever it says.
+        let mut blamed =
+            withdrawn(serde_json::json!({ "by": "x", "at": "t", "handed_over_to": "b" }));
+        blamed.state = State::Failed;
+        assert!(!handed_over(&blamed));
+        assert!(left_unlanded(&blamed));
     }
 
     /// 120, S56, on GitHub's fake: blamed, then submitted again by a submit
@@ -4238,6 +4360,7 @@ mod tests {
             Event::Withdrawn {
                 id: 1,
                 by: RESUBMISSION.into(),
+                handed_over_to: None,
             },
         ));
         let p = f.pull(&repo, n).unwrap().unwrap();
@@ -4259,6 +4382,7 @@ mod tests {
             Event::Withdrawn {
                 id: 2,
                 by: RESUBMISSION.into(),
+                handed_over_to: None,
             },
         )];
         assert_eq!(removal(&queued, 2), Some(now));

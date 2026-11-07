@@ -319,8 +319,8 @@ withdrawn or undecided submission has no `notice`.
 
 ### D9. A submit by name that waits
 
-Without `--no-wait` it waits as any submit (135): it runs rounds while
-it waits unless `sluice run` lives on the host (core.4, core.25),
+Without `--no-wait` it waits as any submit (135): it moves the queue
+while it waits as any waiting submit does (core.4, core.25, core.31),
 follows a pull request where the target takes them, reports the outcome
 and exits by it. It delivers nothing (D5). Its text line is `submission
 <n> to <target> from <branch> · <ahead>`.
