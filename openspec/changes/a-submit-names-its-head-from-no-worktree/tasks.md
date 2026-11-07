@@ -47,7 +47,7 @@ clauses by number and rules by id.
 
 ## 8. The site and the skill
 
-- [ ] 8.1 `site/src/content/docs/reference/commands.md` gives `--head` without `--check` in the submit row and a section beside "Forecasting a conflict", and the status documents' `notice`; `reference/state.md` gives the record of a submission by name, `from.worktree` and `from.head` its branch with no path and no session, delivered by nothing; `plugins/sluice/skills/using-sluice/SKILL.md` gives the submit by name beside the forecast, in the project's own branch names (core.26). True when `sluice exec main -- moon run site:prose` clears every warning and `sluice exec main -- cargo test -p sluice --test plugin_docs` passes.
+- [x] 8.1 `site/src/content/docs/reference/commands.md` gives `--head` without `--check` in the submit row and a section beside "Forecasting a conflict", and the status documents' `notice`; `reference/state.md` gives the record of a submission by name, `from.worktree` and `from.head` its branch with no path and no session, delivered by nothing; `plugins/sluice/skills/using-sluice/SKILL.md` gives the submit by name beside the forecast, in the project's own branch names (core.26). True when `sluice exec main -- moon run site:prose` clears every warning and `sluice exec main -- cargo test -p sluice --test plugin_docs` passes.
 
 ## 9. Main merged, and the gate
 
