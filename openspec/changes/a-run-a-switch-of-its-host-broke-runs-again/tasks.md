@@ -26,7 +26,7 @@ record 0097 and rules by id.
 
 ## 3. The fakes keep a host's system
 
-- [ ] 3.1 In `crates/sluice-fakes/src/lib.rs`, give each host of the world a Nix system, `None` by default so every test before reads a host Nix doesn't manage: `World::nix_system(Option<&str>)` sets this world's host's, a fake run notes its host's at its start, and `FakeTests::switched` answers as the profile's words do where the run noted one and the host's differs now. Add `World::system_looks()`, each ask of `switched` by the host that asked, in order, as `engine_looks` is, and `World::live_at_each_start()`, each start's place with the places live as it started (design D8). True when `cargo clippy -p sluice-fakes --all-targets -- -D warnings` is clean.
+- [x] 3.1 In `crates/sluice-fakes/src/lib.rs`, give each host of the world a Nix system, `None` by default so every test before reads a host Nix doesn't manage: `World::nix_system(Option<&str>)` sets this world's host's, a fake run notes its host's at its start, and `FakeTests::switched` answers as the profile's words do where the run noted one and the host's differs now. Add `World::system_looks()`, each ask of `switched` by the host that asked, in order, as `engine_looks` is, and `World::live_at_each_start()`, each start's place with the places live as it started (design D8). True when `cargo clippy -p sluice-fakes --all-targets -- -D warnings` is clean.
 
 ## 4. The core reads a switch after a run
 
