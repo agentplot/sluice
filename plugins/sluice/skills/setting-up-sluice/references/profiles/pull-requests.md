@@ -76,7 +76,9 @@ lands by pull request today gets it as part of setup:
    is kept on its remote. Each host needs its `[signing]` key first.
 2. Run `sluice init actions`. It writes `.github/workflows/sluice.yml` and
    adds `[signers.forge]` and `[pools.forge]` to the policy; it refuses a
-   policy with no `[signers]`.
+   policy with no `[signers]`. The workflow runs `sluice job round`, which
+   takes the branch's pull requests in and runs its rounds; nobody runs it
+   on a host.
 3. Print what it says to set on GitHub for the user: the `sluice`
    environment admitting the default branch alone, its `SLUICE_APP_ID`
    variable and `SLUICE_APP_KEY` secret, and the app's Actions write
