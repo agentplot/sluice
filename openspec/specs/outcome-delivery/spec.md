@@ -215,3 +215,16 @@ nor say an outcome stays pending, because no files are checked out (2,
   with no files checked out whose `HEAD` names a branch with no commit
 - **THEN** it reports 12 landed and exits 0, says nothing of what it
   could not read, and marks nothing
+
+### Requirement: A repository with no files checked out is read with no git status
+
+The worktrunk driver SHALL read a repository with no files checked out,
+a bare repository or a checkout's git directory, with no `git status`,
+as holding nothing beyond its commits and naming no path (2).
+
+#### Scenario: A bare clone
+
+- **WHEN** the driver reads the session of a bare clone, or of a
+  checkout's git directory while the checkout holds an untracked file
+- **THEN** it runs no `git status`, and reads nothing held beyond the
+  commits and no path
