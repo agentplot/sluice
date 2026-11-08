@@ -226,9 +226,10 @@ command that started the host process (135).
 A command of a newer sluice that reaches an older host process SHALL
 have it hand its repositories over and end, and SHALL then start its
 own. The older process SHALL finish the round each task is in, start no
-other, and let its locks go as it ends. A command of an older sluice
-that reaches a newer host process SHALL use it. Versions SHALL be
-compared as release numbers.
+other, and let its locks go as it ends, and the newer command SHALL wait
+for it to end for as long as it gives its tasks to finish their rounds.
+A command of an older sluice that reaches a newer host process SHALL use
+it. Versions SHALL be compared as release numbers.
 
 #### Scenario: The host's sluice is upgraded
 
@@ -236,6 +237,13 @@ compared as release numbers.
   0.72.0 runs on the host
 - **THEN** the 0.71.0 process ends, a 0.72.0 host process runs, and the
   submission lands
+
+#### Scenario: A round that outlasts a start's wait
+
+- **WHEN** a 0.72.0 command asks a 0.71.0 host process to hand over, and
+  one of its tasks takes twelve seconds to finish its round
+- **THEN** the command waits for the 0.71.0 process to end, and then
+  reaches a 0.72.0 host process of its own start
 
 ### Requirement: An older sluice run keeps the repository it drives
 

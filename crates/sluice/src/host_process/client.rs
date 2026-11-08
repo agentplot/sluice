@@ -29,9 +29,15 @@ use super::protocol::{
 use super::{environment, Paths};
 use crate::reader::older;
 
-/// How long a command waits for a process it started to answer, and for
-/// one handing over to go (design D2, D8).
+/// How long a command waits for a process it started to answer (design
+/// D2).
 pub const START_WAIT: Duration = Duration::from_secs(10);
+
+/// How long a newer command waits for an older host process it asked to
+/// hand over to end: the time that process gives its tasks to finish the
+/// rounds they are in, and a start's wait after (design D8).
+pub const HAND_OVER_WAIT: Duration =
+    Duration::from_secs(super::tasks::FINISH_FOR.as_secs() + START_WAIT.as_secs());
 
 /// A command's way to the host process of one state folder.
 #[derive(Clone, Debug)]
@@ -51,6 +57,18 @@ pub struct Connection {
     writer: UnixStream,
     /// The process that answered.
     pub named: Named,
+}
+
+/// Whether the process `pid` still runs: one of the user's own, a signal
+/// it could be sent, or one it may not be sent.
+fn alive(pid: u32) -> bool {
+    let Ok(pid) = i32::try_from(pid) else {
+        return false;
+    };
+    !matches!(
+        nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None),
+        Err(nix::errno::Errno::ESRCH)
+    )
 }
 
 impl Client {
@@ -136,12 +154,24 @@ impl Client {
         self.start()
     }
 
-    /// Have the older process `c` hand over, and wait for its socket to go.
+    /// Have the older process `c` hand over, and wait for it to end, which
+    /// lets its lock go for the process this command starts: as long as it
+    /// gives its tasks to finish their rounds, and a start's wait after
+    /// ([`HAND_OVER_WAIT`]).
     fn hand_over(&self, mut c: Connection) -> Result<()> {
         send(&mut c.writer, &Request::HandOver)?;
         let _ = receive::<Answer>(&mut c.reader);
-        let until = Instant::now() + START_WAIT;
-        while self.paths.socket.exists() && Instant::now() < until {
+        let until = Instant::now() + HAND_OVER_WAIT;
+        while alive(c.named.pid) {
+            if Instant::now() >= until {
+                bail!(
+                    "sluice's host process {} (pid {}) was asked to hand over and has not ended within {} seconds; see {}",
+                    c.named.version,
+                    c.named.pid,
+                    HAND_OVER_WAIT.as_secs(),
+                    self.paths.log().display()
+                );
+            }
             std::thread::sleep(Duration::from_millis(20));
         }
         Ok(())

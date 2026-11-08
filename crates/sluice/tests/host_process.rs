@@ -402,6 +402,66 @@ fn a_newer_client_has_an_older_host_process_hand_over() {
     assert!(follow.next(Some(Duration::from_secs(5))).is_err());
 }
 
+/// 135 (design D8): an older host process whose tasks take longer than a
+/// start's ten seconds to finish their rounds is waited out, its lock
+/// held until it ends, and the newer command's own process then answers.
+#[test]
+fn a_hand_over_longer_than_a_start_is_waited_out() {
+    let d = OnDisk::new("host-slow-hand-over", POLICY);
+    let client = d.client(d.repo.dir());
+    let paths = client.paths().clone();
+    // The older process: `sleep` stands for it, and the test holds its lock
+    // and answers at its socket as sluice 0.71.0.
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(paths.lock())
+        .unwrap();
+    lock.lock().unwrap();
+    let mut older = std::process::Command::new("sleep")
+        .arg("600")
+        .spawn()
+        .unwrap();
+    let pid = older.id();
+    let _ = std::fs::remove_file(&paths.socket);
+    let listener = std::os::unix::net::UnixListener::bind(&paths.socket).unwrap();
+    let socket = paths.socket.clone();
+    let standing = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut writer = stream;
+        let mut hello = String::new();
+        reader.read_line(&mut hello).unwrap();
+        writeln!(
+            writer,
+            r#"{{"version":"0.71.0","pid":{pid},"since":"2026-11-07T00:00:00Z"}}"#
+        )
+        .unwrap();
+        let mut request = String::new();
+        reader.read_line(&mut request).unwrap();
+        writeln!(writer, r#""ok""#).unwrap();
+        // It accepts no more, and finishes its tasks' rounds for twelve
+        // seconds before its socket and its lock go as it ends.
+        drop(listener);
+        std::thread::sleep(Duration::from_secs(12));
+        let _ = std::fs::remove_file(&socket);
+        drop(lock);
+        let _ = older.kill();
+        let _ = older.wait();
+        request
+    });
+    let began = Instant::now();
+    let reached = client
+        .with_version("0.72.0")
+        .reach()
+        .expect("the newer command's own, once the older ended");
+    assert!(began.elapsed() >= Duration::from_secs(12));
+    assert_ne!(reached.named.pid, pid);
+    let request = standing.join().unwrap();
+    assert!(request.contains("hand-over"), "{request}");
+}
+
 /// 135 (design D8): a command of an older sluice uses a newer host
 /// process as it is, and a request the process does not know is answered
 /// with an error naming both versions.

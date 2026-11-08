@@ -260,9 +260,12 @@ newer, compared as release numbers (`reader::older`), sends
 `hand-over`. The process then stops its ticks. Each task finishes the
 round it is in, lets its locks go and ends. The process ends as in D6,
 without waiting for idleness. Connections held for room or a follow
-close, and their commands reach the new process. The newer command
-polls until the socket is gone, for up to the ten seconds of D2, then
-starts its own. An older command meeting a newer process uses it as it
+close, and their commands reach the new process. A task is given a
+minute to finish its round (`tasks::FINISH_FOR`). The newer command
+waits until the older process has ended, which lets its lock go, for
+up to that minute and the ten seconds of D2 after
+(`client::HAND_OVER_WAIT`), then starts its own; an older process
+still running then is an error naming `host/log`. An older command meeting a newer process uses it as it
 is. A request the process does not know is answered with an error
 naming both versions, and the command says it cannot use this host
 process. A build from a checkout is 0.0.0, older than any release, so
