@@ -70,6 +70,15 @@ check on the head pushed, `queue` `null` where no check stands there
 - **WHEN** the round job has pull request `<n>` queued, its `sluice` check saying `queued: next on main`, and the agent runs `sluice submit main --no-wait` on host `a` with nothing committed since
 - **THEN** `<n>` is never marked a draft, and its submission stays queued
 
+### Requirement: A pull request taken again waits to be taken in
+
+A pull request a submit on a host took again at the head it stood at SHALL read as waiting to be taken in, to that submit, a wait and `--status` on the host, while sluice's check on that head still says what sent it back or held it; once the check says anything else, it SHALL read as the check says (120, C.5; record 0096).
+
+#### Scenario: Taken again, its check still failed
+
+- **WHEN** a round job blamed pull request `<n>`, which a person opened from `unit/review`, and an agent's `sluice submit main --no-wait` on host `a` takes it again at that head, its check still saying `failed: …`
+- **THEN** the submit prints `#<n> waits to be taken in` and exits 0, `sluice submit main --status --json` gives `state` `waiting to be taken in`, and `wt submit main --no-wait` run again marks nothing
+
 ## REMOVED Requirements
 
 ### Requirement: A pull request's status on another host names sluice's check
@@ -79,12 +88,3 @@ check on the head pushed, `queue` `null` where no check stands there
 ### Requirement: A submit takes again a pull request another host sent back
 **Reason**: The round job, not another host, sends a request back (137; record 0093).
 **Migration**: "A submit takes again a pull request the round job sent back".
-
-### Requirement: A pull request taken again waits to be taken in
-
-A pull request a submit on a host took again at the head it stood at SHALL read as waiting to be taken in, to that submit, a wait and `--status` on the host, while sluice's check on that head still says what sent it back or held it; once the check says anything else, it SHALL read as the check says (120, C.5; record 0096).
-
-#### Scenario: Taken again, its check still failed
-
-- **WHEN** a round job blamed pull request `<n>`, which a person opened from `unit/review`, and an agent's `sluice submit main --no-wait` on host `a` takes it again at that head, its check still saying `failed: …`
-- **THEN** the submit prints `#<n> waits to be taken in` and exits 0, `sluice submit main --status --json` gives `state` `waiting to be taken in`, and `wt submit main --no-wait` run again marks nothing
