@@ -1182,7 +1182,11 @@ deliver it again. Under `--json`, the record it prints carries the
 submission marks nothing, and nor does one that ends out of time or
 stopped. A submission by name came from no worktree, and nor did a pull
 request from a branch sluice lands on, so a wait on either marks
-nothing, wherever it runs. An outcome already delivered is reported as it stands. When the
+nothing, wherever it runs. In a bare repository or a git directory,
+which has no files checked out, a wait marks only what one in a
+worktree on the branch its `HEAD` names would. Where it runs in no herdr
+pane, `delivered_to` there names the agent, `SLUICE_AGENT`, else the
+branch. An outcome already delivered is reported as it stands. When the
 wait can't make its mark, it says so on stderr, and the outcome stays
 pending for `sluice inbox`.
 
@@ -1200,6 +1204,11 @@ name](#submitting-a-branch-by-name): no `sluice inbox` collects either.
 A withdrawn submission, and one still queued or under test, is not
 collected. `--worktree <path>` collects for another worktree.
 
+In a bare repository or a git directory, which has no files checked
+out, `sluice inbox` collects only what a worktree on the branch its
+`HEAD` names would, even where that branch has no commit yet. Where its
+`HEAD` names no branch, it collects nothing.
+
 An outcome is delivered once, by whichever comes first: the notice a
 round types into the session's herdr pane when it decides the outcome,
 a `sluice wait` or waiting submit in the worktree that reports it, or
@@ -1207,8 +1216,9 @@ a `sluice wait` or waiting submit in the worktree that reports it, or
 delivered on its submission, with when and to whom: `delivered` and
 `delivered_to` in [the submission's
 record](/sluice/reference/state/#a-submission). `delivered_to` names
-the herdr pane where the command runs in one, else the worktree's path.
-Run again, it prints nothing.
+the herdr pane where the command runs in one, else the worktree's path,
+else, in a bare repository or a git directory, the agent:
+`SLUICE_AGENT`, else the branch. Run again, it prints nothing.
 
 A session that starts again, after a restart or on another host, runs
 `sluice inbox` once, in place of keeping a `sluice wait` for each

@@ -11,6 +11,8 @@ decision-makers:
 
 Status: accepted, a decision of the code stage of `fix/a-landed-bolt-is-never-reported-withdrawn` under the statement as written (2, 5, 6, 22, 51, 67, 122, 137, C.5), which no clause of it changes, and cheap to change later. How a second copy of a repository on one host reads the intake mark is not decided here: it is the user's, with the design of one copy per repository per host (Boomdrive rule core.14).
 
+Amended in part by record 0099, accepted on 2026-11-07: a delivery read where no files are checked out takes as its own what a worktree on the branch its `HEAD` names would, reading neither the folder's files nor its `HEAD`'s commit, and says nothing of an outcome staying pending because no files are checked out.
+
 Deciders: the code stage of `fix/a-landed-bolt-is-never-reported-withdrawn`.
 Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 2, 5, 6, 10, 22, 24, 50, 51, 67, 122, 137 and C.5's pull request row, at c188bf3; rules core.6, core.14, core.31, core.32, core.33; the signal `afterthought/crew-state:swancloud/main signals/2026-11-06-swancloud-ops-41b81e17/01-sluice-reports-a-landed-bolt-withdrawn`; deneb's records of swancloud's `main` in the runner's copy, `~/.local/share/flywheel/repositories/afterthought/swancloud/swancloud.git/sluice/main/`, and the person's, `~/Code/github_afterthought/swancloud/swancloud.git/sluice/main/`, for 2026-11-06; `crates/sluice-core/src/step.rs` (the round after `Moved`), `crates/sluice/src/profiles/github/pulls.rs` (intake's pass) and `crates/sluice/src/profiles/worktrunk/mod.rs` (`session`) as main held them at 6d18567b; afterthought/crew 0.41.0's `plugin/lib/plan.py` `SUBMIT` and `WAIT`.
 
