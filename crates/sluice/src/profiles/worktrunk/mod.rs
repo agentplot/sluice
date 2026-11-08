@@ -145,6 +145,46 @@ impl Driver for Worktrunk {
         })
     }
 
+    /// 51: who collects outcomes in `folder`: the branch its `HEAD` names,
+    /// read with `symbolic-ref`, so a branch with no commit yet is read all
+    /// the same; the top level as its path only where files are checked
+    /// out; the agent the session's harness names, else the branch; this
+    /// host; the herdr pane it runs in. No `HEAD` commit and no `git status`
+    /// are read, so a bare repository or a git directory is the worktree on
+    /// its branch with no path (2, 3; record 0099; rule core.48). `None`
+    /// where `HEAD` names no branch.
+    fn recipient(&self, folder: &str) -> Result<Option<Submitter>> {
+        let dir = Path::new(folder);
+        let read = self.git(dir, &["symbolic-ref", "-q", "--short", "HEAD"])?;
+        // `-q` answers 1, saying nothing, for a `HEAD` on no branch; any
+        // other failure is a folder git cannot read as a repository.
+        if !read.status.success() && read.status.code() != Some(1) {
+            bail!(
+                "{folder} is no git repository: {}",
+                String::from_utf8_lossy(&read.stderr).trim()
+            );
+        }
+        let branch = String::from_utf8_lossy(&read.stdout).trim().to_string();
+        if branch.is_empty() {
+            return Ok(None);
+        }
+        let path = if self.checked_out(dir)? {
+            let top = self.git(dir, &["rev-parse", "--show-toplevel"])?;
+            let path = String::from_utf8_lossy(&top.stdout).trim().to_string();
+            (top.status.success() && !path.is_empty()).then_some(path)
+        } else {
+            None
+        };
+        Ok(Some(Submitter {
+            agent: agent_or(&branch),
+            worktree: branch,
+            path,
+            head: None,
+            host: Some(self.host.clone()),
+            session: herdr::session_here(),
+        }))
+    }
+
     /// 124: a branch submitted by name, from anywhere in the repository:
     /// the agent the session's harness names, else the branch; the branch
     /// as its work and its head; this host. No path, no pane, and nothing

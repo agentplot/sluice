@@ -1516,15 +1516,18 @@ fn a_wait_follows_the_resubmission_that_carries_its_work() {
     assert_eq!(s.status(first)["state"], "withdrawn");
 }
 
-/// 2: a repository with no work tree, a bare clone or a checkout's git
-/// directory, holds no uncommitted work: the driver reads its session with
-/// no git status, which refuses to run there, and finds it bare, with no
-/// path and nothing held beyond its commits.
+/// 2, 3, 51: a folder with no files checked out, a bare clone or a
+/// checkout's git directory, is read by the driver's `recipient` as the
+/// worktree on the branch its `HEAD` names, with no path, and by its
+/// `session` with nothing held beyond its commits, neither running git
+/// status, which refuses to run there; `recipient` reads no `HEAD` commit,
+/// so a branch with none yet is read all the same, and a `HEAD` on no
+/// branch is no one's (record 0099; rule core.48).
 #[test]
-fn a_repository_with_no_work_tree_is_read_with_no_status() {
-    use sluice_seams::Driver as _;
-    let s = Scratch::new("wt-bare-session");
+fn a_folder_with_no_files_checked_out_is_read_with_no_status_and_no_commit() {
+    let s = Scratch::new("wt-bare-recipient");
     let bare = s.repo.dir().with_extension("bare");
+    let _ = std::fs::remove_dir_all(&bare);
     s.repo.git(&[
         "clone",
         "-q",
@@ -1533,15 +1536,49 @@ fn a_repository_with_no_work_tree_is_read_with_no_status() {
         bare.to_str().unwrap(),
     ]);
     s.repo.write("untracked.txt", "u\n");
-    let driver = sluice::profiles::worktrunk::Worktrunk::new("h");
-    for dir in [bare, s.repo.dir().join(".git")] {
+    let driver = Worktrunk::new("h");
+    let agent = |branch: &str| {
+        std::env::var("SLUICE_AGENT")
+            .ok()
+            .filter(|a| !a.is_empty())
+            .unwrap_or_else(|| branch.to_string())
+    };
+    for dir in [bare.clone(), s.repo.dir().join(".git")] {
+        let me = driver.recipient(dir.to_str().unwrap()).unwrap();
+        let me = me.unwrap_or_else(|| panic!("{} read as no one's", dir.display()));
+        assert_eq!(me.worktree, "main", "{}", dir.display());
+        assert_eq!(me.path, None, "{}", dir.display());
+        assert_eq!(me.head, None);
+        assert_eq!(me.agent, agent("main"));
+        assert_eq!(me.host.as_deref(), Some("h"));
         let session = driver.session(dir.to_str().unwrap()).unwrap();
-        assert!(session.bare, "{}", dir.display());
         assert!(session.dirty.is_empty(), "{:?}", session.dirty);
         assert_eq!(session.from.path, None);
     }
+
+    let b = bare.to_str().unwrap();
+    s.repo
+        .git(&["--git-dir", b, "symbolic-ref", "HEAD", "refs/heads/nothing"]);
+    let me = driver
+        .recipient(b)
+        .unwrap()
+        .expect("a branch with no commit");
+    assert_eq!(me.worktree, "nothing");
+    assert_eq!(me.path, None);
+
+    let tip = s.repo.rev("main");
+    s.repo
+        .git(&["--git-dir", b, "update-ref", "--no-deref", "HEAD", &tip]);
+    assert_eq!(driver.recipient(b).unwrap(), None);
+
+    let checkout = std::fs::canonicalize(s.repo.dir()).unwrap();
+    let me = driver
+        .recipient(s.repo.dir().to_str().unwrap())
+        .unwrap()
+        .expect("the checkout's");
+    assert_eq!(me.worktree, "main");
+    assert_eq!(me.path.as_deref(), checkout.to_str());
     let session = driver.session(s.repo.dir().to_str().unwrap()).unwrap();
-    assert!(!session.bare);
     assert_eq!(session.dirty, vec!["?? untracked.txt".to_string()]);
 }
 
