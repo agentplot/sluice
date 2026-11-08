@@ -604,7 +604,9 @@ A file already there that is no link moves once, to
 `config.toml.before-nix`. The module puts sluice in the system profile:
 set `services.sluice.package` to install your own build, or to `null`
 to install none. It writes nothing else and installs no service, since
-sluice needs none.
+sluice needs none. A configuration may import the module twice, itself
+and through another flake's module that imports it: it declares
+`services.sluice` once.
 
 **Several hosts as peers.** Hosts that submit to one branch on a remote,
 or run its checks, each have a file of their own, set up on each host in

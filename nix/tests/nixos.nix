@@ -1,7 +1,8 @@
 # The host-settings-module spec on NixOS (record 0098): the module
 # evaluated in a system of x86_64-linux whose normal users are alice, who
 # runs sluice, and bob, its user activation's link, and the system
-# profile, against the same system with the module not enabled.
+# profile, against the same system with the module not enabled; and the
+# module imported twice.
 t:
 let
   inherit (t) lib;
@@ -19,6 +20,9 @@ let
   none = t.nixosSystem { services.sluice.package = null; };
   off = t.nixosSystem { services.sluice.enable = lib.mkForce false; };
   noUser = t.nixosSystem { services.sluice.user = lib.mkForce "carol"; };
+  # Imported again under another module, as another flake's module that
+  # imports it does.
+  twice = t.nixosSystem { imports = [ { imports = [ t.outputs.nixosModules.sluice ]; } ]; };
 
   # Compared as text: a regular expression may not hold a store path.
   plain = builtins.unsafeDiscardStringContext;
@@ -115,4 +119,23 @@ in
     ++
       t.expect (activationNamesOf base == lib.sort lib.lessThan (activationNamesOf off ++ [ "sluice" ]))
         "the user activations are ${toString (activationNamesOf base)} with the module, and ${toString (activationNamesOf off)} without";
+
+  "The module imported twice on NixOS" =
+    let
+      evaluates = (builtins.tryEval twice.config.system.build.toplevel.drvPath).success;
+      declared = builtins.length twice.options.services.sluice.enable.declarations;
+      key = "github:agentplot/sluice#nixosModules.sluice";
+      keyOf = module: module.key or null;
+    in
+    t.expect (
+      keyOf t.outputs.nixosModules.sluice == key
+    ) "nixosModules.sluice's key is ${toString (keyOf t.outputs.nixosModules.sluice)}, not ${key}"
+    ++ t.expect (
+      keyOf t.outputs.nixosModules.default == key
+    ) "nixosModules.default's key is ${toString (keyOf t.outputs.nixosModules.default)}, not ${key}"
+    ++ t.expect evaluates "a system importing the module twice does not evaluate"
+    ++ lib.optionals evaluates (
+      t.expect (declared == 1) "services.sluice.enable is declared ${toString declared} times"
+      ++ links twice (linkOf twice (builtins.readFile ./files/empty.toml))
+    );
 }
