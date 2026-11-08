@@ -410,6 +410,82 @@ mod tests {
         assert!(third.is_some());
     }
 
+    /// 71 (record 0087; design D12): the host process's room counts an
+    /// older sluice's admission through the registry, and its own parts
+    /// are counted by an older sluice's.
+    #[test]
+    fn a_room_counts_an_older_sluices_admission() {
+        use crate::host_process::room::{Asked, Asker, Room};
+        let s = Scratch::new("older");
+        let older = s.run_dir("older");
+        let repository = s.0.join("repo");
+        let now = std::time::Instant::now();
+        let mut room = Room::over(s.count(), 1, 0);
+        let admitted = s
+            .count()
+            .admit(&entry(Kind::Session, &older), 1)
+            .unwrap()
+            .expect("the older sluice's exec is admitted");
+        let asker = Asker::Queue(repository.clone());
+        assert!(matches!(
+            room.ask(&asker, &repository, now).unwrap(),
+            Asked::Refused(_)
+        ));
+        drop(admitted);
+        let Asked::Held(id) = room.ask(&asker, &repository, now).unwrap() else {
+            panic!("the room is free once the older run's start failed");
+        };
+        assert!(
+            s.count()
+                .admit(&entry(Kind::Session, &older), 1)
+                .unwrap()
+                .is_none(),
+            "the room's part counts for the older sluice"
+        );
+        room.give_back(id);
+        assert!(s
+            .count()
+            .admit(&entry(Kind::Session, &older), 1)
+            .unwrap()
+            .is_some());
+    }
+
+    /// 71, 135 (design D6, D12): a room made afresh, as a host process
+    /// that starts after another stopped, counts the runs whose supervisors
+    /// still hold them, and a run begun from a part names its directory.
+    #[test]
+    fn a_new_room_counts_the_runs_still_supervised() {
+        use crate::host_process::room::{Asked, Asker, Room};
+        let s = Scratch::new("afresh");
+        let dir = s.run_dir("outlived");
+        let repository = s.0.join("repo");
+        let asker = Asker::Queue(repository.clone());
+        let now = std::time::Instant::now();
+        let supervisor = {
+            let mut room = Room::over(s.count(), 1, 0);
+            let Asked::Held(id) = room.ask(&asker, &repository, now).unwrap() else {
+                panic!("an empty host has room");
+            };
+            room.begin(id, "sluice/try/main/1", &dir).unwrap();
+            assert_eq!(named(&s.count()), [dir.clone()]);
+            let supervisor = supervise(&dir);
+            room.started(id);
+            supervisor
+            // The process that held the room stops.
+        };
+        let mut room = Room::over(s.count(), 1, 0);
+        assert_eq!(room.running().unwrap().queue, 1);
+        assert!(matches!(
+            room.ask(&asker, &repository, now).unwrap(),
+            Asked::Refused(_)
+        ));
+        drop(supervisor);
+        assert!(matches!(
+            room.ask(&asker, &repository, now).unwrap(),
+            Asked::Held(_)
+        ));
+    }
+
     /// The spec's "A killed run frees its part of the bound": an entry
     /// whose hold and run directory nobody holds counts nothing, and the
     /// next admission removes it.

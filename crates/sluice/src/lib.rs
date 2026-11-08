@@ -10,6 +10,7 @@ pub mod equip;
 pub mod exec;
 pub mod home;
 pub mod host_count;
+pub mod host_process;
 pub mod identity;
 pub mod instance;
 pub mod overview;
