@@ -175,6 +175,10 @@ struct RecordedChecks {
 }
 
 impl Tests for RecordedChecks {
+    fn hold(&self, kind: sluice_seams::RunKind) -> Result<Option<sluice_seams::Part>> {
+        self.inner.hold(kind)
+    }
+
     fn start(&self, request: &RunRequest, part: sluice_seams::Part) -> Result<RunHandle> {
         self.requests.borrow_mut().push(request.clone());
         let run = self.inner.start(request, part)?;

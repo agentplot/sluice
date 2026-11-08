@@ -2788,7 +2788,8 @@ fn no_wait_in_one_document() {
 /// submit exits 1 with the failure.
 /// ADR 0041: `sluice wait <branch>` follows this worktree's pull request,
 /// out of time with the document `--status` prints; `sluice wait <n>`
-/// takes the pull requests in before each round, and lands it.
+/// follows the submission the round job took it in as to its landing,
+/// which the host process's passes may have recorded already (135, 137).
 #[test]
 fn wait_follows_a_pull_request() {
     let g = OnGitHub::new("pr-wait-cmd", "reviews = 1");
@@ -2817,7 +2818,8 @@ fn wait_follows_a_pull_request() {
     g.step();
     let status: serde_json::Value =
         serde_json::from_slice(&g.sluice(&["status", "main", "--json"]).stdout).unwrap();
-    let id = status["submissions"][0]["id"]
+    // The submission sluice's check on the request names, queued or landed.
+    let id = status["pull_requests"][0]["queue"]["submission"]
         .as_u64()
         .unwrap_or_else(|| panic!("{status}"));
     let mut by_id = g.command(env!("CARGO_BIN_EXE_sluice"), &w);
@@ -6841,4 +6843,35 @@ fn a_branch_nothing_would_take_in_is_refused_alone() {
     let before = g.bolt_on_github();
     let after = g.land_on_bolt("beside", &[("b.txt", "b\n")]);
     assert_ne!(after, before, "bolt/x lands as before");
+}
+
+/// git's packing pass under a fetch of sluice's own, as `git fetch` runs
+/// `pack-refs` in its maintenance before it detaches: on a branch whose
+/// records are on its remote, the protection lets through the prune of a
+/// branch git has just packed reading no records, so it waits on no fetch
+/// lock the fetch that packs holds (124; rule core.29; ADR 0086).
+#[test]
+fn packing_under_sluices_own_fetch_waits_on_nothing() {
+    let g = OnGitHub::new("pr-pack-fetching", "");
+    // A round, so this host reads `main`'s records from its remote.
+    g.step();
+    let git = g.repo.dir().join(".git");
+    assert!(git.join("refs/heads/main").exists());
+    let tip = g.repo.rev("main");
+    // Held as sluice's fetch holds it while git runs.
+    let lock = std::fs::File::create(git.join("sluice-fetch.lock")).unwrap();
+    lock.lock().unwrap();
+    let mut packing = g.command("git", g.repo.dir());
+    packing.args(["pack-refs", "--all", "--prune"]);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let packs = std::thread::spawn(move || tx.send(packing.output().unwrap()).unwrap());
+    let out = rx.recv_timeout(Duration::from_secs(30));
+    drop(lock);
+    let out = out.unwrap_or_else(|_| {
+        packs.join().unwrap();
+        panic!("pack-refs waited on sluice's fetch lock")
+    });
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(!git.join("refs/heads/main").exists());
+    assert_eq!(g.repo.rev("main"), tip);
 }
