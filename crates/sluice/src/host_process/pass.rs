@@ -168,10 +168,12 @@ pub fn pass(
         }
     }
     // What is left in play once the pass ended keeps its repository held
-    // (135; design D6): a branch that cannot be read counts as in play.
+    // (135; design D6): a branch that cannot be read counts as in play, and
+    // so does a preview to drop.
     report.in_play = branches
         .iter()
-        .any(|b| report.failed.contains_key(b) || s.in_play(b).unwrap_or(true));
+        .any(|b| report.failed.contains_key(b) || s.in_play(b).unwrap_or(true))
+        || s.previews_in_play().unwrap_or(true);
     report.lines = lines_of(&out);
     report.freed = lines_of(&freed);
     Ok(report)
@@ -185,13 +187,18 @@ fn lines_of(said: &[u8]) -> Vec<String> {
         .collect()
 }
 
-/// Whether any branch of the repository has work in play, read from the
-/// records alone (129): a branch whose records cannot be read counts.
+/// Whether the repository has work in play (135): a submission queued or
+/// under test or a checkout to release on any branch, read from the
+/// records alone, or a preview to drop, read from the previews' places
+/// and runs, so an idle tick reads it with no process started (129). A
+/// branch whose records cannot be read counts, as do previews that cannot
+/// be listed.
 pub fn in_play(s: &Sluice<'_>) -> bool {
-    match s.seams().state.branches() {
+    let branches = match s.seams().state.branches() {
         Ok(branches) => branches.iter().any(|b| s.in_play(b).unwrap_or(true)),
         Err(_) => true,
-    }
+    };
+    branches || s.previews_in_play().unwrap_or(true)
 }
 
 /// `sluice step`'s round of `branch`, as the host process runs it between
