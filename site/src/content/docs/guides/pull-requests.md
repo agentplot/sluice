@@ -13,9 +13,10 @@ Here, every piece of work also gets a pull request: a page where people
 review it, where other systems post their checks, and where sluice shows
 what it is doing with it.
 
-None of this needs GitHub Actions. sluice still runs the tests on your
-machine. Your repository's own CI can keep running on pull requests as
-it does now.
+A small GitHub Actions job, sluice's round job, takes the pull requests
+in and lands them, so a pull request moves with every machine off.
+sluice still runs the tests on your machines. Your repository's own CI
+can keep running on pull requests as it does now.
 
 ## Keeping your team's pull requests
 
@@ -42,7 +43,7 @@ itself, in the combination it tested.
 
 The rest of this page holds the detail: [how a pull request waits, then
 joins the queue](#two-stages-waiting-then-the-queue), [the
-policy](#the-policy), [keeping sluice running](#keep-sluice-running),
+policy](#the-policy), [the round job](#the-round-job-takes-them-in),
 [what sluice posts](#what-sluice-posts) and [GitHub's
 settings](#github-settings).
 
@@ -105,72 +106,51 @@ With no `[branches.main.pull_requests]` table, there are no pull
 requests and work goes straight into the queue, as in the previous
 guide.
 
-## Keep sluice running
+## The round job takes them in
 
-An agent's waiting `wt submit` runs sluice's rounds, but a pull request
-opened by hand has nobody waiting on it. Something has to notice it, so
-keep a `sluice run` going while you work:
+sluice's round job, a GitHub Actions workflow in your repository, takes
+`main`'s pull requests in and runs `main`'s rounds: it posts each pull
+request's state, forms the combinations and lands them. It runs when a
+submit opens or updates a pull request, when a machine records a test's
+result, and every five minutes, which is how it finds a pull request a
+person opened. It ends once nothing is left for it to do, so an idle
+`main` costs a short job every five minutes. Your machines run the
+tests: a `sluice run`, `sluice step main` or `sluice exec` on a machine
+whose results `main` trusts claims each combination's tests, and the
+next round job lands what passed.
 
-```sh
-sluice run
-```
+No machine takes `main`'s pull requests in. A submit opens or updates
+its pull request, marks it ready for review, wakes the round job, and
+follows the pull request by what GitHub and sluice's check on it say.
 
-Each round fetches `main` and moves the queue. Once a minute it also asks
-GitHub for the open pull requests into `main` and posts their states.
-It asks at once when a submit on the host opened or updated a pull
-request, or when the queue changed. A pull request opened by hand, a review, or another
-system's check is seen within that minute of happening; an agent's
-submit sees its own pull request at once. `[forge] discovery` in the
-[host's config](/sluice/reference/configuration/#forge) sets the minute.
-sluice starts no service of its own, so how `sluice run` stays up (a
-terminal, a login item, a service manager) is your choice.
+`main` needs three things for the round job:
 
-### One host takes the pull requests in
+- **Its queue on GitHub.** Name a signer for the machines that run its
+  tests, with `trust` naming it, so `main`'s queue and results are kept
+  on `origin` where the round job reads them. [Executors and
+  systems](/sluice/guides/executors-and-systems/#signers) shows how.
+- **The workflow.** `sluice init actions` writes
+  `.github/workflows/sluice.yml` at your sluice's version, and adds
+  `[signers.forge]` and `[pools.forge]` to the policy. Land both on
+  `main`.
+- **An environment named `sluice`.** Give it a deployment branch rule
+  admitting `main` alone, the variable `SLUICE_APP_ID` and the secret
+  `SLUICE_APP_KEY`, your app's id and private key, and give the app
+  Actions read and write. Only the round job uses the environment, so no
+  pull request's workflow sees the key. `sluice init actions` prints
+  these, and `sluice forge check main` says whether each is set.
 
-When several hosts reach `main`, one at a time takes its pull requests
-in, so no pull request is tested on two hosts. Where `main`'s records
-are on its remote, that is the host that keeps `main`. Where each host
-keeps its own records, it is the host that holds `main`'s intake mark,
-the ref `refs/sluice/intake/main` on the remote:
+A policy whose branch takes pull requests with no signer, or with no
+pool for the round job, refuses that branch alone, saying what to add:
+no pull request opens for it, and every other branch works as before.
 
-- `sluice run` pushes the mark when it starts, and pushes it again
-  every third of `[peers] lease`, never each round. A second host's
-  `sluice run` finds it and takes nothing in.
-- A `sluice wait` or waiting submit on a host where `sluice run` isn't
-  running pushes the mark where none stands. The host's waits hold it
-  together: the last of them to end removes it. A `sluice run` takes the
-  mark from a wait at once.
-- Any host takes the mark once it has stood unchanged for `[peers]
-  lease` as that host has watched it, as when the host that held it
-  stopped.
-- A `sluice step` pushes no mark. A repository one host reaches with
-  waits and steps alone keeps none between them.
-
-A host that doesn't hold the mark asks GitHub nothing about `main`'s
-pull requests. Once it finds another host's mark, it withdraws its own
-queued submissions of them, naming that host, and that host takes each
-in again. Such a withdrawal marks no pull request a draft and waits for
-no one's submit or ready mark. Whichever host holds the mark takes each
-in again at its latest commit, this host too once the mark comes back
-to it. `sluice status` shows the submission `handed over to` that
-host. A host withdraws nothing where its push of the mark was
-refused and the mark names no other host. A submission that is landing
-finishes, one whose work `main` already holds is recorded landed, and
-work submitted from the host's own worktrees stays in its queue. A wait on that host follows its pull
-request on GitHub, as [`sluice wait`](/sluice/reference/commands/#sluice-wait)
-says. `sluice status main` and
-[`sluice overview`](/sluice/reference/commands/#sluice-overview) there
-list each pull request the host submitted, handed over or waited on,
-with the host that holds the mark and where the request stands in that
-host's queue.
-
-The mark is safe to remove, as after moving to another host:
+An older sluice took a branch's pull requests in on one machine at a
+time, by a mark it kept on GitHub. Nothing reads that mark now; delete
+it once every machine runs this release:
 
 ```sh
 git push origin :refs/sluice/intake/main
 ```
-
-The next host to pass `main` takes the pull requests in.
 
 ## An agent submits
 
@@ -241,22 +221,20 @@ revision.
 A waiting `wt submit` reports each state as it changes and returns when
 the pull request lands or is sent back. Waiting can take a day when
 people review, so an agent that shouldn't wait submits with
-`--no-wait`, and `wt submit --status` reads it later. When the pull
-request's conditions already hold, sluice queues it then, and the
-submit answers with that submission:
+`--no-wait`, and `wt submit --status` reads it later. The submit
+answers with the pull request and where sluice's check says it stands,
+or that it waits to be taken in where the round job has posted nothing
+on its latest commit yet:
 
 ```console
 $ wt submit main --no-wait --json
-{"id":12,"branch":"main","ahead":[],"pull_request":41}
+{"pull_request":41,"branch":"main","state":"waiting to be taken in","queue":null}
 ```
 
-When they don't, the submit answers with the pull request and what it
-waits for, `{"pull_request":41,"branch":"main","state":"waiting: needs
-1 review"}`. An agent waiting in steps hands an `id` to `sluice wait 12
---timeout 9m --json`. With only `pull_request`, it runs `sluice wait
-main --timeout 9m --json` in its worktree, which follows the pull
-request and, once sluice queues it, its submission. Each exits `5`
-while there is no outcome yet; run it again.
+`queue` is the block of sluice's check described [below](#what-sluice-posts).
+An agent waiting in steps runs `sluice wait main --timeout 9m --json`
+in its worktree, which follows the pull request until it lands or is
+sent back. It exits `5` while there is no outcome yet; run it again.
 
 ## Several pull requests as one act
 
@@ -280,20 +258,20 @@ once each meets its conditions, the same submit takes them all: sluice submit ma
 ```
 
 Reviewers review the drafts. Once each meets its conditions, run the
-same submit again. sluice marks every pull request ready for review and
-queues all of them at once, in the order given, each with its
-submission:
+same submit again. sluice marks every pull request ready for review as
+one group and wakes the round job, which takes all of them in at once,
+in the order given:
 
 ```console
 $ sluice submit main --worktree ../feature-a --worktree ../feature-b --no-wait
 pushed feature/a · updated #51: Runner credentials · marked ready for review
-submission 61 to main from #51 · nothing queued ahead
 pushed feature/b · updated #52: Runner cache · marked ready for review
-submission 62 to main from #52 · 1 queued ahead (#51)
+#51 waits to be taken in
+#52 waits to be taken in
 ```
 
-Under `--json` each item of `submissions` holds its `id`, `worktree`,
-`ahead` and `pull_request`. When sluice refuses one of the worktrees,
+Under `--json` each item of `pull_requests` holds its `pull_request`,
+`worktree`, `state` and `queue`. When sluice refuses one of the worktrees,
 one holding changes beyond its commits, it refuses the act before
 anything is pushed. A pull request from a fork is never one of the act:
 sluice opens or updates only the repository's own.
@@ -330,8 +308,8 @@ request's description without the group's mark.
 ## A person opens one by hand
 
 Open a pull request into `main` from any branch of the repository, as
-you always have. sluice finds it the next time it asks GitHub, within
-`[forge] discovery` of your opening it, and posts its state. A draft
+you always have. The round job finds it the next time it runs, within
+five minutes of your opening it, and posts its state. A draft
 waits; mark it ready for review when it is. Pull requests from forks
 are never taken.
 
@@ -367,19 +345,20 @@ While a pull request waits or is queued, the check shows as pending on
 GitHub; while it is tested, in progress; failed and conflict fail it,
 and landed passes it.
 
-The check's summary opens by naming the host that posted it. Once that
-host has taken the pull request in at its latest commit, it reads
-"Submission 1406 on b.", 1406 being the submission's number on host
-`b`. Before then it reads "Waiting to be taken in on b.". The summary
-ends with a block GitHub doesn't show, which carries the same for a
-program to read:
+The check's summary opens by naming the round job that posted it,
+`pool/forge/round`. Once the round job has taken the pull request in at
+its latest commit, it reads "Submission 1406 on pool/forge/round.",
+1406 being the submission's number in `main`'s queue. Before then it
+reads "Waiting to be taken in on pool/forge/round.". The summary ends
+with a block GitHub doesn't show, which carries the same for a program
+to read:
 
 ```html
-<!-- sluice:queue {"host":"b","taken_in":true,"submission":1406,"state":"queued","ahead":[{"submission":1405,"pull_request":38}],"waits_for":[]} -->
+<!-- sluice:queue {"host":"pool/forge/round","taken_in":true,"submission":1406,"state":"queued","ahead":[{"submission":1405,"pull_request":38}],"waits_for":[]} -->
 ```
 
-`state` is the submission's state on that host, and `ahead` lists the
-submissions ahead of it there, in the order that host will land them,
+`state` is the submission's state in the queue, and `ahead` lists the
+submissions ahead of it there, in the order they will land,
 priorities and `--after` included, each with its pull request's number,
 or `null` for work submitted from a worktree. Before the host takes the
 pull request in, `taken_in` is `false`, `submission` and `state` are
@@ -390,7 +369,7 @@ waiting for its submitter's next submit keeps its `submission`, its
 submit"]`. sluice posts only when the state or a field of the block
 changes.
 
-sluice on another host reads where the pull request stands from this
+sluice on every machine reads where the pull request stands from this
 block, not from the check's title or whether GitHub shows the run
 failed. Taken in and `failed` or `conflict` is sent back, `landed` is
 landed, and anything else is still open. A check an older sluice
@@ -448,7 +427,7 @@ combination is formed again. Only the blamed pull request is told.
 ```mermaid
 sequenceDiagram
     participant A as agent
-    participant S as sluice run
+    participant S as round job
     participant G as GitHub
     participant Q as QA and a reviewer
     A->>G: wt submit: push the branch, open PR 41
@@ -483,8 +462,7 @@ sequenceDiagram
   a draft and then ready to retry the same commits. An agent's is
   marked a draft, and waits for the agent's next `sluice submit`, with a
   fix or the same commits, or for a person to mark it ready for review.
-  That submit marks it ready from any host, whichever host takes
-  `main`'s pull requests in. A submit from the branch of one sent back
+  That submit marks it ready from any machine. A submit from the branch of one sent back
   that is no draft, such as one a person opened, marks it a draft and
   then ready for review. sluice then takes it again.
 - **Withdrawn with `sluice withdraw`.** An agent's pull request is
@@ -527,7 +505,7 @@ top of it:
 
 ## GitHub Actions as sluice's executor
 
-This guide runs sluice's tests on your machine. Running them, and
-sluice's rounds, as GitHub Actions jobs is [designed, not
+The round job runs `main`'s rounds on GitHub Actions; your machines run
+the tests. Running the tests as GitHub Actions jobs too is [designed, not
 built](/sluice/roadmap/). It will use pull requests exactly as this
-guide does, and change only where the work runs.
+guide does, and change only where the tests run.

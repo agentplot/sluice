@@ -4,7 +4,8 @@
 today, so it keeps them, or when work should get a pull request on GitHub
 before it lands: for review, for other systems' checks (QA, CI, a
 deployment), or so each landing has a page. Needs
-[remote-branches](remote-branches.md) and the [github-app](github-app.md).
+[remote-branches](remote-branches.md), [peers](peers.md) for the branch's
+signers and the [github-app](github-app.md).
 
 ## Keys
 
@@ -24,6 +25,10 @@ log_lines = 40               # optional: post the end of a failed test's output
 - They are read from the branch itself, so a pull request cannot loosen its
   own.
 - The table needs `remote`; sluice refuses it without one.
+- It also needs the branch's queue on its remote and the forge's round job:
+  `[signers]` for the hosts that run its tests, with `trust` naming them,
+  and `[pools.forge]`. Without them sluice refuses that branch alone,
+  saying what to add, and opens no pull request for it.
 - `log_lines` posts that many last lines of a failed test's output in the
   pull request's report, scrubbed of what looks like a secret. Leave it out
   unless the tests' output is safe for every reader of the repository: the
@@ -45,11 +50,10 @@ log_lines = 40               # optional: post the end of a failed test's output
   back, or withdrawn by the operator or a planner, it is taken again on new
   commits, or once marked a draft and then ready for review. Withdrawn, its
   check names who withdrew it: `waiting: withdrawn by the operator`.
-- Where several hosts reach the branch, one takes its pull requests in.
-  A host that finds another taking them in withdraws its own submissions
-  of them, and `sluice status` shows each `handed over to` that host.
-  That withdrawal holds nothing and marks no draft: whichever host takes
-  the pull requests in submits each again at its latest commit.
+- No host takes the pull requests in: the forge's round job does, and runs
+  the branch's rounds, with every host off. A submit opens or updates the
+  pull request, marks it ready, wakes the round job and follows it by
+  sluice's check; hosts whose results the branch trusts run its tests.
 - sluice posts one check named `sluice` with the state (`waiting: …`,
   `queued behind …`, `testing …`, `failed: …`, `conflict: …`, `landed as …`)
   and comments when it sends one back.
@@ -62,11 +66,28 @@ log_lines = 40               # optional: post the end of a failed test's output
   check` says so.
 - Pull requests from forks are never taken.
 
-## Keep `sluice run` going
+## Set up the round job
 
-A pull request opened by hand has nobody waiting on it. Keep `sluice run`
-running (a terminal, a login item, a service manager) so each round reads
-open pull requests and moves the queue. sluice starts no service itself.
+The round job is a GitHub Actions workflow in the repository. A team that
+lands by pull request today gets it as part of setup:
+
+1. Write `[signers]` for the hosts that run the branch's tests, as
+   [peers](peers.md) says, with `trust` naming them, so the branch's queue
+   is kept on its remote. Each host needs its `[signing]` key first.
+2. Run `sluice init actions`. It writes `.github/workflows/sluice.yml` and
+   adds `[signers.forge]` and `[pools.forge]` to the policy; it refuses a
+   policy with no `[signers]`.
+3. Print what it says to set on GitHub for the user: the `sluice`
+   environment admitting the default branch alone, its `SLUICE_APP_ID`
+   variable and `SLUICE_APP_KEY` secret, and the app's Actions write
+   permission. These are the user's to set.
+4. Land the workflow and the policy, then `sluice forge check <branch>`
+   says whether each is set.
+
+The round job runs on each submit, on each recorded result and every five
+minutes, which finds a pull request a person opened. An intake mark an
+older sluice left on the remote is read by nothing; `git push origin
+:refs/sluice/intake/<branch>` removes it.
 
 ## GitHub settings
 

@@ -272,6 +272,33 @@ remove a key's line to stop trusting it. Any key on the list signs as
 the signer. A host prints its own line with
 `echo "$(hostname -s) $(cat ~/.config/sluice/signing.pub)"`.
 
+A signer may also be the forge's own jobs: `github = { workflow =
+".github/workflows/sluice.yml", ref = "refs/heads/main" }` in place of
+`ssh` names the workflow at that branch. `sluice init actions` adds
+`[signers.forge]` so.
+
+## `[pools."<name>"]`: jobs on the forge
+
+A pool is a job service on the forge, GitHub Actions, that runs
+sluice's jobs. The first pool's round job keeps each branch with a
+`remote` that takes pull requests: it takes the branch's pull requests
+in and runs its rounds ([Pull
+requests](/sluice/guides/pull-requests/#the-round-job-takes-them-in)).
+
+```toml
+[pools.forge]
+github = { workflow = ".github/workflows/sluice.yml" }
+signer = "forge"
+```
+
+| key | meaning |
+|---|---|
+| `github` | The workflow that runs the pool's jobs. |
+| `signer` | The signer, of `[signers]`, the pool's jobs sign as. It signs by the same kind, `github`. |
+| `runners` | Optional: the runner for each system the pool runs tests on, `{ linux-x64 = "ubuntu-24.04" }`. With none, the pool runs rounds and no test, and a test no machine has room for waits for one. |
+
+`sluice init actions` adds `[pools.forge]` with no runners.
+
 ## `[branches."<pattern>"]`: rules per target branch
 
 One table per pattern of branch names. Every branch that matches one is
@@ -479,7 +506,13 @@ The conditions are read from the branch itself, so a pull request that
 changes `.config/sluice.toml` can't loosen its own. They decide when
 sluice takes a pull request, never what it tests: that is `required`.
 The table needs `remote`, and sluice refuses a policy that has it
-without one. Without the table, `sluice submit` puts work straight into
+without one. Only the forge's round job takes pull requests in, so the
+table also needs the branch's state on its remote, the policy naming
+[`[signers]`](#signersname-who-may-sign-results), and a
+[pool](#poolsname-jobs-on-the-forge) for the round job. Without either,
+sluice refuses that branch alone, naming what to add: `sluice submit`
+to it exits `2` and opens nothing, and every other branch works as
+before. Without the table, `sluice submit` puts work straight into
 the queue. The guide [Pull requests](/sluice/guides/pull-requests/) sets
 it up.
 

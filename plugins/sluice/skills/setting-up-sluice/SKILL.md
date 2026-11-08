@@ -265,6 +265,16 @@ reviews = 1
 checks = ["ci/test"]
 ```
 
+The forge's round job takes the branch's pull requests in, so the branch
+also needs its queue on its remote and the round job, as
+[pull-requests](references/profiles/pull-requests.md) sets them up: write
+`[signers]` for the hosts that run its tests, with `trust` naming them;
+run `sluice init actions`, which writes `.github/workflows/sluice.yml` and
+adds `[signers.forge]` and `[pools.forge]`; and print for the user what it
+says to set on GitHub, the `sluice` environment, its variable and secret,
+and the app's Actions permission. Without them sluice refuses the branch
+and opens no pull request for it.
+
 Before the policy is committed, tell the user what keeping their pull
 requests means on that branch:
 
@@ -277,9 +287,10 @@ requests means on that branch:
 - Nobody presses merge, uses GitHub's merge queue or merges by hand on
   that branch. Only who lands a pull request changes, from the merge
   button to sluice's push.
-- Keep `sluice run` going (a terminal, a login item, a service manager):
-  a pull request opened by hand has no submit waiting on it, and sluice
-  starts no service itself.
+- The round job, a GitHub Actions workflow, takes each pull request in and
+  lands it, with every host off; a pull request opened by hand is found
+  within five minutes. The hosts whose results the branch trusts run its
+  tests.
 
 sluice has no mode in which GitHub's button lands and sluice only tests.
 Whenever the user asks for one (keep the merge button, have sluice only
