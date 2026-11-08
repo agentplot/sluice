@@ -79,6 +79,21 @@ process's log with the repository named.
 - **THEN** B's submission lands, and the overview of A shows the refusal
   in its words
 
+### Requirement: The host process's look at an idle repository holds no command
+
+The host process's look at a repository it holds no task for SHALL hold
+neither a command's connection nor another repository's look while that
+repository's remote is slow to answer, and SHALL pass a spent allowance
+by rather than wait it out (129, 134; rule core.29).
+
+#### Scenario: An idle repository's remote does not answer
+
+- **WHEN** the host process looks at idle repository A, whose records
+  are on a remote that does not answer, and a command in repository B
+  reaches the host process
+- **THEN** B's command is answered at once, and A is given a task only
+  once its look ends and finds work in play
+
 ### Requirement: A pass reads a branch while a combination is under test
 
 At each of its passes of a repository, the host process SHALL run a

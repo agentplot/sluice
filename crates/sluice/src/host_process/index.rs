@@ -126,7 +126,9 @@ pub fn has_sluice(repository: &Path) -> Result<bool> {
 /// wrote there is found, then its branches' records and its previews, with
 /// no other process started. Records in the host's own files cost no
 /// process at all, and a remote that refuses leaves its branches read as
-/// last fetched. A repository whose directory is gone has none.
+/// last fetched. A repository whose directory is gone has none. The ask is
+/// a round's, which passes a spent allowance by rather than waiting it out
+/// (rule core.29).
 pub fn in_play(repository: &Path) -> Result<bool> {
     if !repository.is_dir() {
         return Ok(false);
@@ -135,7 +137,7 @@ pub fn in_play(repository: &Path) -> Result<bool> {
         repository,
         std::env::current_exe()?,
         crate::instance::Instance::from_file(None, 1)?,
-        Rc::new(crate::retry::Policy::command()),
+        Rc::new(crate::retry::Policy::round()),
     )?;
     // A refusal leaves the branches as last fetched, as a pass's ask does.
     let _ = sluice_seams::State::refresh(&bound.state);

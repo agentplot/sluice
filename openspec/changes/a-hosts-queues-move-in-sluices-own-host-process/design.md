@@ -176,10 +176,15 @@ names a repository it does not hold. At its start it looks at each
 listed repository as an idle tick does (129), with no process started,
 and runs a task for each with work in play. While it runs, its tick
 looks at each listed repository the same way, so work another host
-wrote to a remote's records is found while the process lives. A
-listed repository whose directory is gone, or which has no sluice (no
-records and no policy at any revision the host holds), is taken out of
-the index by the host process.
+wrote to a remote's records is found while the process lives. Each
+look at a repository runs on a thread of its own under the round's
+retry policy (134), so a remote slow to answer holds neither the
+thread that accepts commands' connections nor another repository's
+look, and a spent allowance is passed by, never waited out (rule
+core.29). A look under way keeps the process from ending, as a task
+does. A listed repository whose directory is gone, or which has no
+sluice (no records and no policy at any revision the host holds), is
+taken out of the index by the host process.
 
 ### D5. A task for each repository
 

@@ -31,6 +31,10 @@ use crate::profiles::Bound;
 use crate::reader::{Driver, Drives, Reader};
 use crate::{Pause, Skipped};
 
+/// How long a host process that ends gives its tasks to finish the round
+/// each is in, and its looks to end (D8).
+pub const FINISH_FOR: Duration = Duration::from_secs(60);
+
 /// What a task is asked.
 pub enum Job {
     /// A pass now, answered once it ends.
@@ -69,6 +73,9 @@ struct Inner {
     /// once: the host process's look passes them by until a command asks
     /// for them again.
     refused: Mutex<BTreeMap<PathBuf, String>>,
+    /// Repositories the host process's look is reading now, each on a
+    /// thread of its own.
+    looking: Mutex<BTreeSet<PathBuf>>,
     body: Body,
     in_play: InPlay,
     stopping: AtomicBool,
@@ -89,6 +96,7 @@ impl Tasks {
             running: Mutex::new(BTreeMap::new()),
             panicked: Mutex::new(BTreeSet::new()),
             refused: Mutex::new(BTreeMap::new()),
+            looking: Mutex::new(BTreeSet::new()),
             body,
             in_play,
             stopping: AtomicBool::new(false),
@@ -148,17 +156,42 @@ impl Tasks {
     }
 
     /// Start `repository`'s task where none runs and work is in play there,
-    /// read as an idle tick reads it (129, 135; design D4): the host process's look at its index at its start and
-    /// every few seconds after, so an idle repository costs it that read
-    /// alone. A repository whose task could not start is passed by until a
-    /// command asks for it again.
-    pub fn hold_if_in_play(&self, repository: &Path) {
-        if self.holds(repository) || locked(&self.0.refused).contains_key(repository) {
+    /// read as an idle tick reads it (129, 135; design D4): the host
+    /// process's look at its index at its start and every few seconds
+    /// after, so an idle repository costs it that read alone. The read is
+    /// made on a thread of its own, one for each repository, and this
+    /// returns at once: a remote that is slow to answer, or a pause the
+    /// read waits out, holds neither the thread that accepts commands'
+    /// connections nor another repository's look (rule core.29). A
+    /// repository still being read, or whose task could not start, is
+    /// passed by, the latter until a command asks for it again.
+    pub fn look(&self, repository: &Path) {
+        if self.0.stopping.load(Ordering::SeqCst)
+            || self.holds(repository)
+            || locked(&self.0.refused).contains_key(repository)
+            || !locked(&self.0.looking).insert(repository.to_path_buf())
+        {
             return;
         }
-        if (self.0.in_play)(repository) {
-            self.handle(repository);
-        }
+        let tasks = self.clone();
+        let repository = repository.to_path_buf();
+        std::thread::spawn(move || {
+            let in_play = tasks.0.in_play.clone();
+            let busy =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| in_play(&repository)))
+                    .unwrap_or(true);
+            // Started before the look is let go, so the process never reads
+            // itself idle between the two.
+            if busy && !tasks.0.stopping.load(Ordering::SeqCst) {
+                tasks.handle(&repository);
+            }
+            locked(&tasks.0.looking).remove(&repository);
+        });
+    }
+
+    /// Whether the look is reading `repository` now.
+    pub fn looking(&self, repository: &Path) -> bool {
+        locked(&self.0.looking).contains(repository)
     }
 
     /// Whether a task runs for `repository`.
@@ -174,18 +207,24 @@ impl Tasks {
         }
     }
 
-    /// Whether any task runs, or one that panicked waits to start again.
+    /// Whether any task runs, one that panicked waits to start again, or
+    /// the look is reading a repository.
     pub fn any(&self) -> bool {
-        !locked(&self.0.running).is_empty() || !locked(&self.0.panicked).is_empty()
+        !locked(&self.0.running).is_empty()
+            || !locked(&self.0.panicked).is_empty()
+            || !locked(&self.0.looking).is_empty()
     }
 
-    /// Every task finishes the round it is in and ends: a newer sluice's
-    /// hand-over, or a state folder gone (D8). It waits a minute at most.
+    /// Every task finishes the round it is in and ends, and every look
+    /// under way ends, starting nothing: a newer sluice's hand-over, or a
+    /// state folder gone (D8). It waits [`FINISH_FOR`] at most.
     pub fn stop_all(&self) {
         self.0.stopping.store(true, Ordering::SeqCst);
         locked(&self.0.panicked).clear();
-        let until = Instant::now() + Duration::from_secs(60);
-        while !locked(&self.0.running).is_empty() && Instant::now() < until {
+        let until = Instant::now() + FINISH_FOR;
+        while (!locked(&self.0.running).is_empty() || !locked(&self.0.looking).is_empty())
+            && Instant::now() < until
+        {
             std::thread::sleep(Duration::from_millis(20));
         }
     }
@@ -605,7 +644,7 @@ mod tests {
         );
         let other = Tasks::clone(&tasks);
         let repo = PathBuf::from("/host/a.git");
-        tasks.hold_if_in_play(&repo);
+        tasks.look(&repo);
         let until = Instant::now() + Duration::from_secs(10);
         while starts.load(Ordering::SeqCst) == 0 || locked(&tasks.0.running).contains_key(&repo) {
             assert!(Instant::now() < until, "the task never panicked");
@@ -678,17 +717,18 @@ mod tests {
         );
         let started = |r: &PathBuf| locked(&starts).iter().filter(|s| *s == r).count();
 
-        tasks.hold_if_in_play(&idle);
+        tasks.look(&idle);
+        soon("the idle repository's look ends", || !tasks.looking(&idle));
         assert!(!tasks.holds(&idle), "no task for an idle repository");
 
-        tasks.hold_if_in_play(&busy);
+        tasks.look(&busy);
         soon("the busy repository's task starts", || started(&busy) == 1);
 
-        tasks.hold_if_in_play(&refused);
+        tasks.look(&refused);
         soon("the refused task ends", || {
             started(&refused) == 1 && !tasks.holds(&refused)
         });
-        tasks.hold_if_in_play(&refused);
+        tasks.look(&refused);
         std::thread::sleep(Duration::from_millis(100));
         assert_eq!(started(&refused), 1, "the look passes it by");
         assert_eq!(
@@ -700,5 +740,54 @@ mod tests {
         tasks.handle(&refused);
         soon("a command's ask starts it", || started(&refused) == 2);
         assert_eq!(started(&idle), 0);
+    }
+
+    /// host-process, "Each repository's queues are moved apart" (135;
+    /// rule core.29): a look whose read of one repository waits on its
+    /// remote returns at once, holds no other repository's look or task,
+    /// and counts as the process busy until it ends, when it starts that
+    /// repository's task where work is in play.
+    #[test]
+    fn a_slow_look_holds_no_command_and_no_other_look() {
+        let (slow, quick, other) = (
+            PathBuf::from("/host/slow.git"),
+            PathBuf::from("/host/quick.git"),
+            PathBuf::from("/host/other.git"),
+        );
+        let answer = Arc::new(AtomicBool::new(false));
+        let reads = Arc::new(AtomicUsize::new(0));
+        let (waiting, counted) = (answer.clone(), reads.clone());
+        let tasks = Tasks::new(
+            Arc::new(|inbox: Inbox| answer_until_idle(&inbox)),
+            Arc::new(move |r: &Path| {
+                if r == Path::new("/host/slow.git") {
+                    counted.fetch_add(1, Ordering::SeqCst);
+                    // A remote that does not answer, as long as it takes.
+                    while !waiting.load(Ordering::SeqCst) {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                }
+                true
+            }),
+        );
+        let began = Instant::now();
+        tasks.look(&slow);
+        tasks.look(&quick);
+        assert!(
+            began.elapsed() < Duration::from_secs(1),
+            "the look returns at once"
+        );
+        soon("the quick repository's task starts", || tasks.holds(&quick));
+        // A command's ask is answered meanwhile.
+        assert_eq!(tasks.handle(&other).pass(), Ok(Report::default()));
+        // A second look while the first still reads reads nothing again.
+        tasks.look(&slow);
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(reads.load(Ordering::SeqCst), 1);
+        assert!(tasks.looking(&slow) && !tasks.holds(&slow));
+        assert!(tasks.any(), "a look under way keeps the process");
+        answer.store(true, Ordering::SeqCst);
+        soon("the slow repository's task starts", || tasks.holds(&slow));
+        soon("its look ends", || !tasks.looking(&slow));
     }
 }
