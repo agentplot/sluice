@@ -237,10 +237,15 @@ let
 
   # OpenSpec, which root:specs validates openspec/specs with: the release
   # the specs are written with, built as nixpkgs builds its older one. Bump
-  # the version, then each hash from the mismatch the build reports.
+  # the version, then each hash from the mismatch the build reports, then
+  # write OpenSpec's Claude Code skills and commands under .claude/ again
+  # with it, `sh check-openspec-claude.sh --write` in the shell, since the
+  # tree tracks them as this release writes them and root:openspec-claude
+  # holds them to it (record 0101).
+  openspecVersion = "1.14.3";
   openspec = pkgs.openspec.overrideAttrs (
     finalAttrs: _: {
-      version = "1.14.3";
+      version = openspecVersion;
       src = pkgs.fetchFromGitHub {
         owner = "Fission-AI";
         repo = "OpenSpec";
@@ -255,6 +260,13 @@ let
       };
     }
   );
+
+  # devenv's own script that makes the files it declares, Claude Code's
+  # among them, run from the repository's root.
+  writeFiles = ''
+    cd ${lib.escapeShellArg config.devenv.root} || exit
+    ${config.tasks."devenv:files".exec}
+  '';
 
 in
 {
@@ -317,6 +329,37 @@ in
 
   env.PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers-chromium}";
 
+  # Claude Code's project files (boomdrive's record 0022; record 0101):
+  # .mcp.json from the servers below and .claude/settings.json from the
+  # rest, each a link devenv makes into the store and git ignores. The
+  # repository's one server is devenv's hosted one, which searches packages
+  # and devenv's options and starts no process on the host; it is named
+  # here because a list of the repository's own replaces devenv's default.
+  # Every server named is approved by name in the settings, so a session in
+  # a trusted folder, a place among them, starts them and asks nothing.
+  claude.code = {
+    enable = true;
+    mcpServers."mcp.devenv.sh" = {
+      type = "http";
+      url = "https://mcp.devenv.sh";
+    };
+    # Vale on the prose a session writes, in the turn that wrote it
+    # (.claude/hooks/vale.sh).
+    hooks.vale = {
+      name = "Vale on the site's and the docs' prose";
+      hookType = "PostToolUse";
+      matcher = "Write|Edit";
+      command = ''"$CLAUDE_PROJECT_DIR"/.claude/hooks/vale.sh'';
+    };
+    # devenv's own hook, on wherever git-hooks are, runs prek after every
+    # edit: treefmt, and clippy over the workspace once a Rust file is
+    # staged, in each turn. The pre-commit hook runs them on what a commit
+    # holds, and the gate on what lands.
+    hooks.git-hooks-run.enable = false;
+  };
+  files.${config.claude.code.settingsPath}.json.enabledMcpjsonServers =
+    lib.attrNames config.claude.code.mcpServers;
+
   # moon's task archives (.moon/cache/outputs) are a link into the git common
   # dir, so every worktree of sluice shares them: a crate's tests that passed
   # in one worktree replay in another. Where the sandbox or the file system
@@ -329,6 +372,15 @@ in
   # evaluation: a printed toolchain is the same from any directory, so sluice
   # can keep one per hash of its inputs.
   enterShell = ''
+    # devenv's files, Claude Code's above, made here as well as by devenv's
+    # own task: a place's readiness is sluice's equip, which sources this
+    # script from `devenv print-dev-env` and runs no task, and the agent
+    # started after it reads them as it starts (record 0101). Its words go
+    # to no output a caller reads the environment from, and a working copy
+    # where they cannot be written still gets its shell.
+    if ! (${writeFiles}) >/dev/null; then
+      echo "devenv.nix: Claude Code's files were not written in ${config.devenv.root}" >&2
+    fi
     if _moon_root="$(git rev-parse --show-toplevel 2>/dev/null)" &&
       _moon_common="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"; then
       _moon_cache="$_moon_root/.moon/cache"
