@@ -52,6 +52,13 @@ impl Worktrunk {
             .output()
             .context("running git")
     }
+
+    /// 2: whether `dir` has files checked out: false for a bare repository
+    /// or a git directory, where git status refuses to run.
+    fn checked_out(&self, dir: &Path) -> Result<bool> {
+        let inside = self.git(dir, &["rev-parse", "--is-inside-work-tree"])?;
+        Ok(String::from_utf8_lossy(&inside.stdout).trim() == "true")
+    }
 }
 
 /// `git status --porcelain=v1 -z --untracked-files=all`, one entry per
@@ -97,12 +104,11 @@ impl Driver for Worktrunk {
         let head = String::from_utf8_lossy(&head.stdout).trim().to_string();
         let branch = self.git(dir, &["symbolic-ref", "-q", "--short", "HEAD"])?;
         let branch = String::from_utf8_lossy(&branch.stdout).trim().to_string();
-        // 2: a repository with no work tree, a bare one or a git directory,
-        // holds no uncommitted work, and git status refuses to run there;
-        // nor has it a top level to find a session by.
-        let inside = self.git(dir, &["rev-parse", "--is-inside-work-tree"])?;
-        let bare = String::from_utf8_lossy(&inside.stdout).trim() != "true";
-        let (path, dirty) = if bare {
+        // 2: a repository with no files checked out, a bare one or a git
+        // directory, holds no uncommitted work, and git status refuses to
+        // run there; nor has it a top level to find a session by (record
+        // 0085).
+        let (path, dirty) = if !self.checked_out(dir)? {
             (None, Vec::new())
         } else {
             // Where it was submitted from, for a reader to find the session
@@ -136,7 +142,6 @@ impl Driver for Worktrunk {
             },
             dirty,
             detached: branch.is_empty(),
-            bare,
         })
     }
 
