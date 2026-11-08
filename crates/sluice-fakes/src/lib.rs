@@ -1624,7 +1624,6 @@ impl World {
                 },
                 dirty: Vec::new(),
                 detached: false,
-                bare: false,
             },
         );
     }

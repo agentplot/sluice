@@ -4020,17 +4020,11 @@ fn ways_on(s: &Sluice<'_>, sub: &Submission, branch: &str) -> Result<Vec<String>
 /// delivered again; each branch it collects from is locked meanwhile, so
 /// no round pushes the same outcome.
 fn inbox(s: &Sluice<'_>, worktree: &str, json: bool, out: &mut dyn Write) -> Result<i32> {
-    let (me, to) = match recipient(s, worktree)? {
-        Recipient::To(me, to) => (me, to),
-        none => {
-            if let Recipient::Bare = none {
-                telemetry::warn(&format!("sluice: {}", no_work_tree(worktree)));
-            }
-            if json {
-                writeln!(out, "{}", serde_json::json!({ "outcomes": [] }))?;
-            }
-            return Ok(0);
+    let Some((me, to)) = recipient(s, worktree)? else {
+        if json {
+            writeln!(out, "{}", serde_json::json!({ "outcomes": [] }))?;
         }
+        return Ok(0);
     };
     let pending = s.pending(&me)?;
     let marked = pending.marked(&to);
@@ -4075,69 +4069,38 @@ fn inbox(s: &Sluice<'_>, worktree: &str, json: bool, out: &mut dyn Write) -> Res
     Ok(if unread { INTERNAL } else { 0 })
 }
 
-/// 51: whom an outcome read in a worktree is delivered to.
-enum Recipient {
-    /// Who works there, and the name an outcome is delivered to there.
-    To(Submitter, String),
-    /// A worktree on no branch, which names no work and submitted nothing
-    /// (3).
-    Detached,
-    /// A repository with no work tree, which no session works in (2).
-    Bare,
-}
-
 /// 51: who works in `worktree`, and the name an outcome is delivered to
-/// there: the session as its driver names it, else the worktree's path.
-fn recipient(s: &Sluice<'_>, worktree: &str) -> Result<Recipient> {
-    let session = s.seams().driver.session(worktree)?;
-    if session.bare {
-        return Ok(Recipient::Bare);
-    }
-    if session.detached {
-        return Ok(Recipient::Detached);
-    }
-    let me = session.from;
+/// there: the session as its driver names it, else the worktree's path,
+/// else, where no files are checked out, the agent (record 0099's D3).
+/// None where its `HEAD` names no branch, a place that submitted nothing
+/// (3). A folder with no files checked out is the worktree on the branch
+/// its `HEAD` names, read with neither its files nor its `HEAD`'s commit
+/// (2; rule core.48).
+fn recipient(s: &Sluice<'_>, worktree: &str) -> Result<Option<(Submitter, String)>> {
+    let Some(me) = s.seams().driver.recipient(worktree)? else {
+        return Ok(None);
+    };
     let to = me
         .session
         .clone()
         .or_else(|| me.path.clone())
-        .unwrap_or_else(|| me.worktree.clone());
-    Ok(Recipient::To(me, to))
-}
-
-/// 2, 51: what a delivery read in `worktree`, a repository with no files
-/// checked out, could not read.
-fn no_work_tree(worktree: &str) -> String {
-    format!(
-        "{worktree} is a repository with no files checked out, so no session works in it and no \
-         outcome is delivered there"
-    )
+        .unwrap_or_else(|| me.agent.clone());
+    Ok(Some((me, to)))
 }
 
 /// 51: `sub`, decided, locked and ready to mark delivered with the name to
-/// mark, when it is `worktree`'s own and pending; None otherwise, and
-/// when what it needs could not be read, which is said and leaves it
-/// pending for the next carrier. A submission by name is pending nowhere,
-/// so nothing is said of it staying pending (124; design D5; record 0085;
-/// rule core.50).
+/// mark, when it is `worktree`'s own and pending; None otherwise, saying
+/// nothing, as for another worktree's, wherever it is read, and when what
+/// it needs could not be read, which is said and leaves it pending for the
+/// next carrier (record 0099; rule core.48).
 fn delivering<'s, 'a>(
     s: &'s Sluice<'a>,
     worktree: &str,
     sub: &Submission,
 ) -> Option<(Pending<'s, 'a>, String)> {
-    let found = recipient(s, worktree).and_then(|r| match r {
-        Recipient::To(me, to) => Ok(Some((s.pending_one(&sub.branch, sub.id, &me)?, to))),
-        Recipient::Bare => {
-            if sub.delivered.is_none() && !sub.from.by_name() {
-                telemetry::warn(&format!(
-                    "sluice: #{} stays pending for its session's sluice inbox: {}",
-                    sub.id,
-                    no_work_tree(worktree)
-                ));
-            }
-            Ok(None)
-        }
-        Recipient::Detached => Ok(None),
+    let found = recipient(s, worktree).and_then(|r| {
+        r.map(|(me, to)| Ok((s.pending_one(&sub.branch, sub.id, &me)?, to)))
+            .transpose()
     });
     match found {
         Ok(Some((pending, to))) if !pending.outcomes.is_empty() => Some((pending, to)),

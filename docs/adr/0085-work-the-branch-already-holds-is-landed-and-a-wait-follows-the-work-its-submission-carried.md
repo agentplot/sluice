@@ -11,6 +11,8 @@ decision-makers:
 
 Status: accepted, a decision of the code stage of `fix/a-landed-bolt-is-never-reported-withdrawn` under the statement as written (2, 5, 6, 22, 51, 67, 122, 137, C.5), which no clause of it changes, and cheap to change later. How a second copy of a repository on one host reads the intake mark is not decided here: it is the user's, with the design of one copy per repository per host (Boomdrive rule core.14).
 
+Amended in part by record 0099, accepted on 2026-11-07: a delivery read where no files are checked out takes as its own what a worktree on the branch its `HEAD` names would, reading neither the folder's files nor its `HEAD`'s commit, and says nothing of an outcome staying pending because no files are checked out.
+
 Amended in part by record 0100, accepted on 2026-11-07: a wait that follows a later submission or a pull request carrying its submission's work reports its own submission's end, landed once the branch holds its head and withdrawn once the carrier stops short, never the carrier's record or exit; and a closed request is read against the branch as a round reads it.
 
 Deciders: the code stage of `fix/a-landed-bolt-is-never-reported-withdrawn`.

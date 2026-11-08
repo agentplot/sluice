@@ -52,6 +52,13 @@ impl Worktrunk {
             .output()
             .context("running git")
     }
+
+    /// 2: whether `dir` has files checked out: false for a bare repository
+    /// or a git directory, where git status refuses to run.
+    fn checked_out(&self, dir: &Path) -> Result<bool> {
+        let inside = self.git(dir, &["rev-parse", "--is-inside-work-tree"])?;
+        Ok(String::from_utf8_lossy(&inside.stdout).trim() == "true")
+    }
 }
 
 /// `git status --porcelain=v1 -z --untracked-files=all`, one entry per
@@ -97,12 +104,11 @@ impl Driver for Worktrunk {
         let head = String::from_utf8_lossy(&head.stdout).trim().to_string();
         let branch = self.git(dir, &["symbolic-ref", "-q", "--short", "HEAD"])?;
         let branch = String::from_utf8_lossy(&branch.stdout).trim().to_string();
-        // 2: a repository with no work tree, a bare one or a git directory,
-        // holds no uncommitted work, and git status refuses to run there;
-        // nor has it a top level to find a session by.
-        let inside = self.git(dir, &["rev-parse", "--is-inside-work-tree"])?;
-        let bare = String::from_utf8_lossy(&inside.stdout).trim() != "true";
-        let (path, dirty) = if bare {
+        // 2: a repository with no files checked out, a bare one or a git
+        // directory, holds no uncommitted work, and git status refuses to
+        // run there; nor has it a top level to find a session by (record
+        // 0085).
+        let (path, dirty) = if !self.checked_out(dir)? {
             (None, Vec::new())
         } else {
             // Where it was submitted from, for a reader to find the session
@@ -136,8 +142,47 @@ impl Driver for Worktrunk {
             },
             dirty,
             detached: branch.is_empty(),
-            bare,
         })
+    }
+
+    /// 51: who collects outcomes in `folder`: the branch its `HEAD` names,
+    /// read with `symbolic-ref`, so a branch with no commit yet is read all
+    /// the same; the top level as its path only where files are checked
+    /// out; the agent the session's harness names, else the branch; this
+    /// host; the herdr pane it runs in. No `HEAD` commit and no `git status`
+    /// are read, so a bare repository or a git directory is the worktree on
+    /// its branch with no path (2, 3; record 0099; rule core.48). `None`
+    /// where `HEAD` names no branch.
+    fn recipient(&self, folder: &str) -> Result<Option<Submitter>> {
+        let dir = Path::new(folder);
+        let read = self.git(dir, &["symbolic-ref", "-q", "--short", "HEAD"])?;
+        // `-q` answers 1, saying nothing, for a `HEAD` on no branch; any
+        // other failure is a folder git cannot read as a repository.
+        if !read.status.success() && read.status.code() != Some(1) {
+            bail!(
+                "{folder} is no git repository: {}",
+                String::from_utf8_lossy(&read.stderr).trim()
+            );
+        }
+        let branch = String::from_utf8_lossy(&read.stdout).trim().to_string();
+        if branch.is_empty() {
+            return Ok(None);
+        }
+        let path = if self.checked_out(dir)? {
+            let top = self.git(dir, &["rev-parse", "--show-toplevel"])?;
+            let path = String::from_utf8_lossy(&top.stdout).trim().to_string();
+            (top.status.success() && !path.is_empty()).then_some(path)
+        } else {
+            None
+        };
+        Ok(Some(Submitter {
+            agent: agent_or(&branch),
+            worktree: branch,
+            path,
+            head: None,
+            host: Some(self.host.clone()),
+            session: herdr::session_here(),
+        }))
     }
 
     /// 124: a branch submitted by name, from anywhere in the repository:
