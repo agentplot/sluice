@@ -111,6 +111,15 @@ nobody. After three runs in a row in which its tests could not run, its
 newest submission is blamed, and each test is named with why. A command
 given to `sluice exec` after `--` is not held to `not_run`.
 
+On a host whose system Nix manages, NixOS or nix-darwin, sluice notes
+the system `/run/current-system` links to as a run begins. A test that
+did not pass in a run during which the host's system was switched has no
+result and blames nobody, whatever the branch asks of the host. Its
+combination is tested again in a new checkout, once the old one's
+release has run, and the run counts as one whose tests could not run.
+`sluice exec` lists such a test as could not run, naming the system
+before and after. On any other host, nothing of its system is read.
+
 ## `[checkout]`: where a combination is tested
 
 sluice tests each combination in a clean checkout of its own, apart from
@@ -565,6 +574,37 @@ hand with mode `0600`, and let the managed file name its path. The
 caches' `env` reaches every run exactly as written, and the agents'
 shells need the same values: set both from the same managed
 configuration, so they agree.
+
+On nix-darwin and NixOS, sluice's own flake gives a module that writes
+the file, `darwinModules.sluice` or `nixosModules.sluice`:
+
+```nix
+imports = [ inputs.sluice.darwinModules.sluice ]; # nixosModules.sluice on NixOS
+services.sluice = {
+  enable = true;
+  # user = "alice";  # on NixOS: the user who runs sluice
+  settings = {
+    runs = { max = 3; cores = 12; };
+    forge = { app_id = 123456; key = "~/.config/sluice/app.pem"; };
+    caches = [ { dir = "~/.cache/sccache"; } ];
+  };
+};
+```
+
+`services.sluice.settings` holds the tables below, each key named as the
+file names it. A key you leave out stays out of the file, so sluice's
+default holds. A key the module does not know goes into the file as you
+wrote it, and sluice refuses it if sluice does not know it either. Name
+each key file by its path on the host, from `/` or under `~/`.
+Evaluation fails on a key under the Nix store, on a key's text, and on
+a Nix path such as `./app.pem`, which would copy the key into the store.
+The module links `~/.config/sluice/config.toml` to the file it writes,
+for nix-darwin's primary user, or on NixOS for `services.sluice.user`.
+A file already there that is no link moves once, to
+`config.toml.before-nix`. The module puts sluice in the system profile:
+set `services.sluice.package` to install your own build, or to `null`
+to install none. It writes nothing else and installs no service, since
+sluice needs none.
 
 **Several hosts as peers.** Hosts that submit to one branch on a remote,
 or run its checks, each have a file of their own, set up on each host in

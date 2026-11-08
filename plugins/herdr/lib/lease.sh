@@ -1,9 +1,10 @@
 # shellcheck shell=sh disable=SC2154 # common.sh sets state.
-# The lock every change to the watcher's lease is made under: a directory
-# holding its owner's pid and when it took it. A lock is held for a moment
-# only, so one whose owner is gone, that has had no owner for three
-# seconds, or that is ten seconds old, is broken. A subshell that takes it
-# sets lock_owner to its own pid first, so its death frees the lock. Sourced.
+# The lock that taking and releasing the watcher's lease, and registering
+# and dropping a server, are done under: a directory holding its owner's
+# pid and when it took it. A lock is held for a moment only, so one whose
+# owner is gone, that has had no owner for three seconds, or that is ten
+# seconds old, is broken. Sourced; `lock` may be pointed at another lock
+# of the same kind, a former version's, for a moment.
 
 lock=$state/lease.lock
 
@@ -14,7 +15,7 @@ break_lock() {
   aside=$lock.broken.$$
   mv "$lock" "$aside" 2>/dev/null || return 0
   was=
-  read -r was _ <"$aside/pid" 2>/dev/null
+  read -r was _ 2>/dev/null <"$aside/pid"
   if [ "$was" = "$1" ]; then
     rm -rf "$aside"
   elif [ ! -e "$lock" ]; then
@@ -26,7 +27,6 @@ break_lock() {
 
 # Take the lock; 1 when it cannot be had.
 take_lock() {
-  me=${lock_owner:-$$}
   tries=0
   rounds=0
   while ! mkdir "$lock" 2>/dev/null; do
@@ -36,7 +36,7 @@ take_lock() {
     [ "$rounds" -le 15 ] || return 1
     owner=
     since=
-    read -r owner since <"$lock/pid" 2>/dev/null
+    read -r owner since 2>/dev/null <"$lock/pid"
     if [ -n "$owner" ]; then
       if ! kill -0 "$owner" 2>/dev/null || [ $(($(date +%s) - ${since:-0})) -ge 10 ]; then
         break_lock "$owner"
@@ -53,14 +53,12 @@ take_lock() {
     fi
     sleep 1
   done
-  echo "$me $(date +%s)" >"$lock/pid"
-}
-
-holds_lock() {
-  [ "$(cut -d' ' -f1 "$lock/pid" 2>/dev/null)" = "${lock_owner:-$$}" ]
+  echo "$$ $(date +%s)" >"$lock/pid"
 }
 
 drop_lock() {
-  [ "$(cut -d' ' -f1 "$lock/pid" 2>/dev/null)" = "${lock_owner:-$$}" ] && rm -rf "$lock"
+  owner=
+  read -r owner _ 2>/dev/null <"$lock/pid"
+  [ "$owner" = $$ ] && rm -rf "$lock"
   return 0
 }

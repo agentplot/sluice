@@ -52,6 +52,13 @@ impl Worktrunk {
             .output()
             .context("running git")
     }
+
+    /// 2: whether `dir` has files checked out: false for a bare repository
+    /// or a git directory, where git status refuses to run.
+    fn checked_out(&self, dir: &Path) -> Result<bool> {
+        let inside = self.git(dir, &["rev-parse", "--is-inside-work-tree"])?;
+        Ok(String::from_utf8_lossy(&inside.stdout).trim() == "true")
+    }
 }
 
 /// `git status --porcelain=v1 -z --untracked-files=all`, one entry per
@@ -97,12 +104,11 @@ impl Driver for Worktrunk {
         let head = String::from_utf8_lossy(&head.stdout).trim().to_string();
         let branch = self.git(dir, &["symbolic-ref", "-q", "--short", "HEAD"])?;
         let branch = String::from_utf8_lossy(&branch.stdout).trim().to_string();
-        // 2: a repository with no work tree, a bare one or a git directory,
-        // holds no uncommitted work, and git status refuses to run there;
-        // nor has it a top level to find a session by.
-        let inside = self.git(dir, &["rev-parse", "--is-inside-work-tree"])?;
-        let bare = String::from_utf8_lossy(&inside.stdout).trim() != "true";
-        let (path, dirty) = if bare {
+        // 2: a repository with no files checked out, a bare one or a git
+        // directory, holds no uncommitted work, and git status refuses to
+        // run there; nor has it a top level to find a session by (record
+        // 0085).
+        let (path, dirty) = if !self.checked_out(dir)? {
             (None, Vec::new())
         } else {
             // Where it was submitted from, for a reader to find the session
@@ -136,8 +142,47 @@ impl Driver for Worktrunk {
             },
             dirty,
             detached: branch.is_empty(),
-            bare,
         })
+    }
+
+    /// 51: who collects outcomes in `folder`: the branch its `HEAD` names,
+    /// read with `symbolic-ref`, so a branch with no commit yet is read all
+    /// the same; the top level as its path only where files are checked
+    /// out; the agent the session's harness names, else the branch; this
+    /// host; the herdr pane it runs in. No `HEAD` commit and no `git status`
+    /// are read, so a bare repository or a git directory is the worktree on
+    /// its branch with no path (2, 3; record 0099; rule core.48). `None`
+    /// where `HEAD` names no branch.
+    fn recipient(&self, folder: &str) -> Result<Option<Submitter>> {
+        let dir = Path::new(folder);
+        let read = self.git(dir, &["symbolic-ref", "-q", "--short", "HEAD"])?;
+        // `-q` answers 1, saying nothing, for a `HEAD` on no branch; any
+        // other failure is a folder git cannot read as a repository.
+        if !read.status.success() && read.status.code() != Some(1) {
+            bail!(
+                "{folder} is no git repository: {}",
+                String::from_utf8_lossy(&read.stderr).trim()
+            );
+        }
+        let branch = String::from_utf8_lossy(&read.stdout).trim().to_string();
+        if branch.is_empty() {
+            return Ok(None);
+        }
+        let path = if self.checked_out(dir)? {
+            let top = self.git(dir, &["rev-parse", "--show-toplevel"])?;
+            let path = String::from_utf8_lossy(&top.stdout).trim().to_string();
+            (top.status.success() && !path.is_empty()).then_some(path)
+        } else {
+            None
+        };
+        Ok(Some(Submitter {
+            agent: agent_or(&branch),
+            worktree: branch,
+            path,
+            head: None,
+            host: Some(self.host.clone()),
+            session: herdr::session_here(),
+        }))
     }
 
     /// 124: a branch submitted by name, from anywhere in the repository:
@@ -347,11 +392,13 @@ impl Submit {
 pub enum Standing {
     /// A submission of that revision, undecided or landed.
     Submission { id: u64, landed: bool },
-    /// The worktree's pull request, open and ready at that revision, not
-    /// yet decided.
-    PullRequest(u64),
+    /// The worktree's pull request at that revision: open and ready, not
+    /// yet decided, or `landed` there, on whichever host takes the
+    /// branch's pull requests in (137; record 0096).
+    PullRequest { number: u64, landed: bool },
     /// None: never submitted, or of another revision, or blamed,
-    /// conflicting, withdrawn or closed.
+    /// conflicting, withdrawn or closed, a pull request sent back on any
+    /// host among them (67, 120; record 0096).
     Nothing,
 }
 
@@ -404,6 +451,12 @@ pub fn standing(
     let Some(sends) = doc["sends"].as_str() else {
         return Err(words());
     };
+    // Sent back, failed or in conflict, on whichever host took it in,
+    // it stands at no revision, as a failed submission does, and the
+    // worktree submits it again (67, 120; record 0096).
+    if pull.is_some() && matches!(state, "failed" | "conflict") {
+        return Ok(Standing::Nothing);
+    }
     let at = doc["head"] == sends;
     if let Some(id) = doc["id"].as_u64() {
         return Ok(if at && STANDS.contains(&state) {
@@ -415,10 +468,13 @@ pub fn standing(
             Standing::Nothing
         });
     }
-    if let Some(n) = pull {
+    if let Some(number) = pull {
+        // Landed on another host, it stands where it landed, draft or not
+        // (137; record 0096).
+        let landed = state == "landed";
         let ready = doc["draft"] == false;
-        return Ok(if at && ready {
-            Standing::PullRequest(n)
+        return Ok(if at && (landed || ready) {
+            Standing::PullRequest { number, landed }
         } else {
             Standing::Nothing
         });
@@ -440,13 +496,14 @@ pub fn standing_in(branch: &str, worktree: &Path) -> std::result::Result<Standin
 }
 
 /// Whether sluice records `worktree`'s submission to `branch` as landed:
-/// its last submission from the worktree has landed, and is of the
-/// revision a submit from the worktree would send now. A worktree is
-/// removed on this, never on an exit alone.
+/// its last submission from the worktree, or its pull request another
+/// host took in (137; record 0096), has landed, and is of the revision a
+/// submit from the worktree would send now. A worktree is removed on
+/// this, never on an exit alone.
 pub fn landed(branch: &str, worktree: &Path) -> bool {
     matches!(
         standing_in(branch, worktree),
-        Ok(Standing::Submission { landed: true, .. })
+        Ok(Standing::Submission { landed: true, .. } | Standing::PullRequest { landed: true, .. })
     )
 }
 
@@ -765,7 +822,10 @@ mod tests {
         };
         assert_eq!(
             read(0, pull("waiting: needs 1 review", Some(SENDS), false)),
-            Ok(Standing::PullRequest(12))
+            Ok(Standing::PullRequest {
+                number: 12,
+                landed: false
+            })
         );
         assert_eq!(
             read(0, pull("waiting: a draft", Some(SENDS), true)),
@@ -783,6 +843,36 @@ mod tests {
             ),
             Ok(Standing::Nothing)
         );
+        // Record 0096, 137: sent back on another host, failed or in
+        // conflict, draft or not, it stands nowhere; landed there, it
+        // stands at the revision it landed.
+        for state in ["failed", "conflict"] {
+            for draft in [true, false] {
+                assert_eq!(
+                    read(0, pull(state, Some(SENDS), draft)),
+                    Ok(Standing::Nothing),
+                    "{state}, draft {draft}"
+                );
+            }
+        }
+        assert_eq!(
+            read(0, pull("landed", Some(SENDS), false)),
+            Ok(Standing::PullRequest {
+                number: 12,
+                landed: true
+            })
+        );
+        assert_eq!(
+            read(0, pull("landed", Some(OTHER), false)),
+            Ok(Standing::Nothing)
+        );
+        // A document that names no such revision is no answer, sent back
+        // or not.
+        let unsent = serde_json::json!({
+            "pull_request": 12, "branch": "main", "state": "failed",
+            "head": SENDS, "draft": true,
+        });
+        assert!(read(0, unsent).is_err());
 
         // Never submitted from this worktree.
         let none = serde_json::json!({ "error": {

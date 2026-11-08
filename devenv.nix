@@ -227,6 +227,14 @@ let
     '';
   };
 
+  # The flake's checks' tools (record 0098): the nix nix:typecheck and
+  # nix:test evaluate with, and the statix nix:lint runs. nixpkgs' builds,
+  # pinned by devenv.lock and asserted to be these versions, so every host
+  # that runs the gate runs the same (core.24). treefmt.nix's nixfmt and
+  # deadnix are from the same nixpkgs.
+  nixVersion = "2.34.8";
+  statixVersion = "0.5.8-unstable-2026-07-17";
+
   # OpenSpec, which root:specs validates openspec/specs with: the release
   # the specs are written with, built as nixpkgs builds its older one. Bump
   # the version, then each hash from the mismatch the build reports, then
@@ -302,7 +310,22 @@ in
     # The plugins' screenshots, optimized losslessly as they are taken
     # (plugins/screenshots-capture.sh).
     pkgs.oxipng
+    (
+      assert pkgs.nix.version == nixVersion;
+      pkgs.nix
+    )
+    (
+      assert pkgs.statix.version == statixVersion;
+      pkgs.statix
+    )
   ];
+
+  # The flake's inputs as flake.lock locks them (nix/inputs.nix), fetched
+  # by this shell outside the gate's sandbox and given to nix:typecheck and
+  # nix:test by their store paths, which they read with no network and no
+  # nix daemon, so every host evaluates the flake against the inputs the
+  # lock pins (core.24, record 0098).
+  env.SLUICE_FLAKE_INPUTS = builtins.toJSON (import ./nix/inputs.nix { }).paths;
 
   env.PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers-chromium}";
 

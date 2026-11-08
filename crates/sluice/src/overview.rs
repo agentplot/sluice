@@ -21,18 +21,36 @@ use crate::exec::Host;
 use crate::preview::preview_json;
 use crate::reader::{no_sluice, untimed, Drives, Reader};
 use crate::told::{self, Kind};
-use crate::{hashes, held_line, progress, sessions_json, Names, Pause, INTERRUPTED, STOPPED};
+use crate::{
+    hashes, held_line, progress, sessions_json, telemetry, Across, Names, Pause, PullRequests,
+    INTERRUPTED, STOPPED,
+};
+
+/// 137, design D5: how the overview reads the pull requests into each
+/// branch this host follows and another host takes in.
+#[derive(Clone, Copy)]
+pub enum Follows<'a> {
+    /// As `sluice status` reads them, each one due asked of GitHub at the
+    /// host's one bound: a one-shot overview's.
+    Asked(&'a dyn PullRequests),
+    /// As the host last kept them, GitHub asked nothing: a reader's
+    /// document's, read again only once what the host keeps of them moved
+    /// (129; rules core.25, core.31).
+    Kept(&'a dyn PullRequests),
+}
 
 /// Every branch's part, and the whole document as `--json` prints it:
 /// each remote that keeps branches' records asked once, first, and every
-/// branch read as the host holds it since (129).
+/// branch read as the host holds it since (129), with the pull requests
+/// into it the host follows, read as `follows` says (137).
 pub fn document(
     s: &Sluice<'_>,
     host: &dyn Host,
     clock: &dyn Clock,
+    follows: Follows<'_>,
 ) -> Result<(Vec<BranchView>, serde_json::Value)> {
     s.seams().state.refresh()?;
-    document_held(s, host, clock)
+    document_held(s, host, clock, follows)
 }
 
 /// As [`document`], asking no remote: every branch read as the host holds
@@ -41,8 +59,29 @@ fn document_held(
     s: &Sluice<'_>,
     host: &dyn Host,
     clock: &dyn Clock,
+    follows: Follows<'_>,
 ) -> Result<(Vec<BranchView>, serde_json::Value)> {
     let branches = s.overview(host.default_branch()?.as_ref())?;
+    let mut views = serde_json::to_value(&branches)?;
+    // 137, design D5: each branch with pull requests the host follows and
+    // another host takes in carries them, as `sluice status` gives them; one
+    // this host has no records of is listed with its empty queue, as status
+    // shows it, after the others.
+    for (branch, a) in followed(s, clock, follows, &branches) {
+        let views = views.as_array_mut().expect("the branches are a list");
+        let at = match views.iter().position(|v| v["branch"] == branch.as_str()) {
+            Some(at) => at,
+            None => {
+                let view = s
+                    .branch_view_of(&branch)
+                    .unwrap_or_else(|e| BranchView::unread(&branch, &e));
+                views.push(serde_json::to_value(&view)?);
+                views.len() - 1
+            }
+        };
+        views[at]["taken_in_by"] = serde_json::to_value(&a.taken_in_by)?;
+        views[at]["pull_requests"] = serde_json::to_value(&a.pull_requests)?;
+    }
     let mut sessions = sessions_json(&s.session_places()?, &s.held()?);
     // ADR 0035: each worktree's session run going, from the host's state;
     // a run in another repository counts only in `room`.
@@ -66,13 +105,54 @@ fn document_held(
         "host": host.name(),
         "repository": host.repository()?,
         "at": clock.now().to_rfc3339_opts(SecondsFormat::Secs, true),
-        "branches": branches,
+        "branches": views,
         "sessions": sessions,
         "previews": previews,
         "hosts": hosts,
         "room": s.room(host.reserved())?,
     });
     Ok((branches, doc))
+}
+
+/// 137, design D5: each branch's pull requests the host follows and
+/// another host takes in, by branch, read as `follows` says: the overview's
+/// branches and every branch the default branch's policy takes pull
+/// requests on. A one-shot read that fails is warned of, as `sluice status`
+/// warns of it, and its branch shown without them; a reader's tick shows
+/// it without them and says nothing, since the next one-shot read says it.
+fn followed(
+    s: &Sluice<'_>,
+    clock: &dyn Clock,
+    follows: Follows<'_>,
+    views: &[BranchView],
+) -> Vec<(String, Across)> {
+    let (pulls, asked) = match follows {
+        Follows::Asked(pulls) => (pulls, true),
+        Follows::Kept(pulls) => (pulls, false),
+    };
+    let warn = |e: anyhow::Error| {
+        if asked {
+            telemetry::warn(&format!("sluice: warning: {e:#}"));
+        }
+    };
+    let mut branches: BTreeSet<String> = views.iter().map(|b| b.branch.clone()).collect();
+    match pulls.branches(s.seams()) {
+        Ok(b) => branches.extend(b),
+        Err(e) => warn(e),
+    }
+    let mut out = Vec::new();
+    for branch in branches {
+        let read = match follows {
+            Follows::Asked(_) => pulls.across(s.seams(), clock, &branch),
+            Follows::Kept(_) => pulls.kept_across(s.seams(), clock, &branch),
+        };
+        match read {
+            Ok(Some(a)) => out.push((branch, a)),
+            Ok(None) => {}
+            Err(e) => warn(e),
+        }
+    }
+    out
 }
 
 /// `tick` is how long `pause` pauses, which a watch that reads names in
@@ -82,6 +162,7 @@ pub fn run(
     s: &Sluice<'_>,
     host: &dyn Host,
     clock: &dyn Clock,
+    pulls: &dyn PullRequests,
     json: bool,
     watch: bool,
     pause: &dyn Pause,
@@ -89,7 +170,7 @@ pub fn run(
     out: &mut dyn Write,
 ) -> Result<i32> {
     if !watch {
-        let (branches, doc) = document(s, host, clock)?;
+        let (branches, doc) = document(s, host, clock, Follows::Asked(pulls))?;
         if json {
             writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
         } else {
@@ -127,7 +208,7 @@ pub fn run(
                 // A read whose start it could not mark leaves a forecast
                 // reading past this reader, which decides nothing (64).
                 let _ = lead.begin();
-                let doc = match read(s, host, clock, &mut asked) {
+                let doc = match read(s, host, clock, Follows::Kept(pulls), &mut asked) {
                     // Ctrl-C reaches the git a read runs in the foreground:
                     // a branch's read it ended is no refusal of the branch's
                     // (26).
@@ -195,10 +276,11 @@ fn read(
     s: &Sluice<'_>,
     host: &dyn Host,
     clock: &dyn Clock,
+    follows: Follows<'_>,
     asked: &mut Option<Asked>,
 ) -> Result<serde_json::Value> {
     s.seams().state.refresh()?;
-    read_held(s, host, clock, asked)
+    read_held(s, host, clock, follows, asked)
 }
 
 /// As [`read`], asking no remote: every branch read as the host holds it
@@ -208,9 +290,10 @@ pub(crate) fn read_held(
     s: &Sluice<'_>,
     host: &dyn Host,
     clock: &dyn Clock,
+    follows: Follows<'_>,
     asked: &mut Option<Asked>,
 ) -> Result<serde_json::Value> {
-    let (branches, mut doc) = document_held(s, host, clock)?;
+    let (branches, mut doc) = document_held(s, host, clock, follows)?;
     if !branches.is_empty() {
         *asked = None;
         return Ok(doc);
@@ -254,6 +337,7 @@ fn write_overview(
                 why.replace('\n', "\n  ")
             )?;
             write_held_places(&held_places(&b.branch, Some(b), doc), out)?;
+            write_across(doc, &b.branch, out)?;
             continue;
         }
         let places = held_places(&b.branch, Some(b), doc);
@@ -302,15 +386,18 @@ fn write_overview(
         for r in b.recent.iter().rev().take(3) {
             writeln!(out, "  {}", recent_line(r, &names))?;
         }
+        write_across(doc, &b.branch, out)?;
     }
     if !gone.is_empty() {
         writeln!(out, "gone, nothing queued or recent: {}", gone.join(", "))?;
     }
     // 123: a worktree's or a preview's held place whose branch has no
-    // records is named all the same.
+    // records is named all the same; 137: so are the pull requests into it
+    // the host follows.
     for branch in unlisted_branches(branches, doc) {
         writeln!(out, "{branch} · no records")?;
         write_held_places(&held_places(&branch, None, doc), out)?;
+        write_across(doc, &branch, out)?;
     }
     // 77, 107: the hosts serving a remote, by their last sign of life.
     for h in doc["hosts"].as_array().map_or(&[][..], Vec::as_slice) {
@@ -381,6 +468,32 @@ fn write_overview(
                 "warning: {} has {b} checked out: sluice moves {b} under it",
                 w["worktree"].as_str().unwrap_or("")
             )?;
+        }
+    }
+    Ok(())
+}
+
+/// 137, design D5: the pull requests into `branch` the host follows and
+/// another host takes in, as the document carries them; `None` where it
+/// carries none.
+fn across_in(doc: &serde_json::Value, branch: &str) -> Option<Across> {
+    let view = doc["branches"]
+        .as_array()?
+        .iter()
+        .find(|v| v["branch"] == branch)?;
+    Some(Across {
+        taken_in_by: serde_json::from_value(view["taken_in_by"].clone()).ok()?,
+        pull_requests: serde_json::from_value(view.get("pull_requests")?.clone()).ok()?,
+    })
+}
+
+/// 137, design D5: under `branch`, the pull requests the host follows and
+/// another host takes in, as `sluice status <branch>` words them.
+fn write_across(doc: &serde_json::Value, branch: &str, out: &mut dyn Write) -> Result<()> {
+    if let Some(a) = across_in(doc, branch) {
+        writeln!(out, "  {}", a.heading(branch))?;
+        for row in &a.pull_requests {
+            writeln!(out, "    {}", a.line(row))?;
         }
     }
     Ok(())
@@ -474,13 +587,18 @@ fn held_places(branch: &str, b: Option<&BranchView>, doc: &serde_json::Value) ->
     checkouts.chain(worktrees).chain(previews).collect()
 }
 
-/// The branches of held worktrees and previews that have no records, in
-/// name order.
+/// The branches that have no records of held worktrees and previews, and
+/// of the pull requests the host follows, in name order.
 fn unlisted_branches(branches: &[BranchView], doc: &serde_json::Value) -> BTreeSet<String> {
-    ["sessions", "previews"]
+    let of = |key: &str| doc[key].as_array().map_or(&[][..], Vec::as_slice);
+    let held = ["sessions", "previews"]
         .iter()
-        .flat_map(|key| doc[*key].as_array().map_or(&[][..], Vec::as_slice))
-        .filter(|v| v["release_failed"]["stopped"].as_bool() == Some(true))
+        .flat_map(|key| of(key))
+        .filter(|v| v["release_failed"]["stopped"].as_bool() == Some(true));
+    let followed = of("branches")
+        .iter()
+        .filter(|v| v.get("pull_requests").is_some());
+    held.chain(followed)
         .filter_map(|v| v["branch"].as_str())
         .filter(|b| !branches.iter().any(|v| v.branch == *b))
         .map(str::to_string)

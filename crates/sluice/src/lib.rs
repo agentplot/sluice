@@ -34,6 +34,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use overview::Follows;
 use reader::{Driver, Drives, Reader};
 use sluice_core::overview::{in_queue, BranchView, Held};
 use sluice_core::records::{Beside, BranchHold, CopyBehind, Event, FailedTask, State, Submission};
@@ -583,12 +584,161 @@ pub enum GroupRefused {
     },
 }
 
+/// 137, C.5: a pull request's queue on the host that posts sluice's check
+/// on its head, as that check carries it for any host to read: the
+/// posting host; whether its records hold a submission of the request at
+/// that head, that submission's number and state as its record names it,
+/// `None` while not taken in; the submissions ahead of it there and not
+/// out of the queue, in queue order; and what a waiting request waits
+/// for, in the words its check's title gives.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Queue {
+    pub host: String,
+    pub taken_in: bool,
+    pub submission: Option<u64>,
+    pub state: Option<String>,
+    pub ahead: Vec<Ahead>,
+    pub waits_for: Vec<String>,
+}
+
+/// One submission ahead of a pull request's in its queue: its number on
+/// the posting host, and its pull request's number, `None` for a
+/// worktree's.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Ahead {
+    pub submission: u64,
+    pub pull_request: Option<u64>,
+}
+
+/// 137: which process of its host holds a branch's intake mark.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Holder {
+    /// The host's `sluice run`, the holder of its driver's lock.
+    Driver,
+    /// A `sluice wait` or a waiting submit.
+    Wait,
+}
+
+/// 137, design D2: the host a branch's intake mark names, as this host's
+/// last fetch brought it, and whether that host's `sluice run` or a wait
+/// holds it.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TakenInBy {
+    pub host: String,
+    pub holder: Holder,
+}
+
+impl TakenInBy {
+    /// Its holder in words: `b's sluice run`, or `a wait on b`.
+    pub fn said(&self) -> String {
+        match self.holder {
+            Holder::Driver => format!("{}'s sluice run", self.host),
+            Holder::Wait => format!("a wait on {}", self.host),
+        }
+    }
+}
+
+/// 137, design D5: the pull requests into a branch this host follows and
+/// its queue does not hold at their heads, each as the host that takes
+/// them in shows it, for `sluice status <branch>`.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Across {
+    /// The host the branch's intake mark names and its holder, as this
+    /// host's last fetch brought it; `None` where no mark stands.
+    pub taken_in_by: Option<TakenInBy>,
+    pub pull_requests: Vec<AcrossRow>,
+}
+
+/// 137, design D5: one pull request a host follows, as last read.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct AcrossRow {
+    pub pull_request: u64,
+    /// Its title, which a person knows it by (26).
+    pub title: String,
+    /// The branch it is opened from.
+    pub from: String,
+    pub head: String,
+    pub draft: bool,
+    /// Where it stands, as a wait across hosts prints it: sluice's check's
+    /// title on its head, `waiting` where none stands; `landed` or `closed
+    /// without landing` once a read found it so, said once.
+    pub state: String,
+    /// The queue sluice's check on its head carries; `None` where the
+    /// check carries none, or none stands.
+    pub queue: Option<Queue>,
+    /// When a process of the host last read it from GitHub; `None` where
+    /// none has.
+    pub read_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// The state of an [`AcrossRow`] found merged.
+pub const ACROSS_LANDED: &str = "landed";
+/// The state of an [`AcrossRow`] found closed and not merged.
+pub const ACROSS_CLOSED: &str = "closed without landing";
+
+impl Across {
+    /// Design D5: the heading of the rows in words: the host that takes
+    /// `branch`'s pull requests in and its holder, or that no host holds
+    /// the mark.
+    pub fn heading(&self, branch: &str) -> String {
+        match &self.taken_in_by {
+            Some(by) if by.holder == Holder::Driver => {
+                format!("pull requests {} takes in, by its sluice run:", by.host)
+            }
+            Some(by) => format!("pull requests {} takes in, by {}:", by.host, by.said()),
+            None => {
+                format!("pull requests this host follows; no host holds {branch}'s intake mark:")
+            }
+        }
+    }
+
+    /// Design D2, D5: one row in words: its number and title (26), then
+    /// the submission the check names on the host that posted it and
+    /// where it stands there, or that it waits to be taken in by the mark's
+    /// host and on what.
+    pub fn line(&self, row: &AcrossRow) -> String {
+        let mark = self.taken_in_by.as_ref().map(|by| by.host.as_str());
+        let held = row
+            .queue
+            .as_ref()
+            .filter(|q| q.taken_in)
+            .and_then(|q| Some((q.submission?, q.host.as_str())));
+        let at = match held {
+            _ if row.state == ACROSS_LANDED || row.state == ACROSS_CLOSED => row.state.clone(),
+            Some((id, host)) if Some(host) == mark => {
+                format!("submission {id} there · {}", row.state)
+            }
+            Some((id, host)) => format!("submission {id} on {host} · {}", row.state),
+            None => {
+                let by = mark.map_or(String::new(), |h| format!(" by {h}"));
+                match row.state.strip_prefix("waiting: ") {
+                    Some(on) => format!("waiting to be taken in{by}: {on}"),
+                    None => format!("waiting to be taken in{by}"),
+                }
+            }
+        };
+        let draft = if row.draft { " (a draft)" } else { "" };
+        format!("#{} {}{draft} · {at}", row.pull_request, row.title)
+    }
+}
+
 /// Where a pull request stands, for a submit that follows it.
 pub enum Followed {
     /// Not decided yet: its state, and lines beneath it.
     Open {
         title: String,
         lines: Vec<String>,
+        /// 137, design D2: where another host takes its branch's pull
+        /// requests in, the host the intake mark names and its holder, as
+        /// this host's last fetch brought it; `None` where no mark stands,
+        /// and on the host that takes them in.
+        taken_in_by: Option<TakenInBy>,
+        /// 137, design D2: where another host takes its branch's pull
+        /// requests in, the queue sluice's check on its current head
+        /// carries; `None` where the check carries none, and on the host
+        /// that takes them in.
+        queue: Option<Queue>,
         /// The submission intake took for it on its current head,
         /// undecided; `None` while it waits to be taken in (C.5 pull
         /// request, 120).
@@ -606,15 +756,25 @@ pub enum Followed {
     /// each submission is called on a pull request.
     Done(Submission, BTreeMap<u64, String>),
     /// 137: merged, while another host takes its branch's pull requests
-    /// in: sluice's check's title on its head, where it says it landed.
-    Landed { title: String },
+    /// in: sluice's check's title and summary on its head, where it says
+    /// it landed, and the head and draft mark the forge held for it, which
+    /// `--status` answers with (124; record 0096).
+    Landed {
+        title: String,
+        summary: String,
+        head: String,
+        draft: bool,
+    },
     /// 137: sent back on its head, while another host takes its branch's
     /// pull requests in: failed, or in conflict, as sluice's check there
-    /// names it.
+    /// names it, and the head and draft mark the forge holds for it, which
+    /// `--status` answers with (124; record 0096).
     SentBack {
         conflict: bool,
         title: String,
         summary: String,
+        head: String,
+        draft: bool,
     },
     /// Closed without landing.
     Closed,
@@ -728,6 +888,35 @@ pub trait PullRequests {
         branch: &str,
         number: u64,
     ) -> Result<Followed>;
+
+    /// 137, design D5: the pull requests into `branch` this host follows
+    /// whose submissions its queue does not hold at their heads, each read
+    /// as the host's one bound allows (design D4), with the host the
+    /// branch's intake mark names; one read merged or closed is given once
+    /// and followed no longer (design D3). `None` where it follows none, or
+    /// the branch's records are on its remote (26, 80).
+    fn across(
+        &self,
+        _seams: Seams<'_>,
+        _clock: &dyn Clock,
+        _branch: &str,
+    ) -> Result<Option<Across>> {
+        Ok(None)
+    }
+
+    /// 137, design D5: as [`PullRequests::across`], as the host last kept
+    /// them, reading GitHub for none of them and following none no longer:
+    /// for a reader's document, which reads them again only once what the
+    /// host keeps of them, or the intake mark, moved (129; rules core.25,
+    /// core.31).
+    fn kept_across(
+        &self,
+        _seams: Seams<'_>,
+        _clock: &dyn Clock,
+        _branch: &str,
+    ) -> Result<Option<Across>> {
+        Ok(None)
+    }
 
     /// The pull request a submission's place names, where it names one.
     fn request_of(&self, _place: &str) -> Option<u64> {
@@ -1120,7 +1309,7 @@ pub fn run(
                     );
                 }
                 return submit_group(
-                    &s, host, pushers, clock, req, no_wait, json, pause, tick, out,
+                    &s, host, pushers, pulls, clock, req, no_wait, json, pause, tick, out,
                 );
             }
             let worktree = worktree.into_iter().next().unwrap_or_else(|| ".".into());
@@ -1148,13 +1337,14 @@ pub fn run(
                     };
                     let named = SubmitHead::Branch(named);
                     return submit_pull(
-                        &s, host, pulls, clock, &named, &branch, mode, json, pause, out,
+                        &s, host, pulls, clock, &named, &branch, mode, json, pause, tick, out,
                     );
                 }
                 return submit(
                     &s,
                     host,
                     pushers,
+                    pulls,
                     clock,
                     SubmitRequest {
                         head: SubmitHead::Branch(named),
@@ -1181,7 +1371,7 @@ pub fn run(
                 };
                 let worktree = SubmitHead::Worktree(worktree);
                 return submit_pull(
-                    &s, host, pulls, clock, &worktree, &branch, mode, json, pause, out,
+                    &s, host, pulls, clock, &worktree, &branch, mode, json, pause, tick, out,
                 );
             }
             if status {
@@ -1191,6 +1381,7 @@ pub fn run(
                 &s,
                 host,
                 pushers,
+                pulls,
                 clock,
                 SubmitRequest {
                     head: SubmitHead::Worktree(worktree),
@@ -1230,7 +1421,7 @@ pub fn run(
                     let mode = PullMode::Wait { deadline };
                     let worktree = SubmitHead::Worktree(worktree);
                     return submit_pull(
-                        &s, host, pulls, clock, &worktree, &target, mode, json, pause, out,
+                        &s, host, pulls, clock, &worktree, &target, mode, json, pause, tick, out,
                     );
                 }
                 Err(_) => match last_submitted(&s, &worktree, &target)? {
@@ -1248,6 +1439,7 @@ pub fn run(
                 host,
                 clock,
                 pulls: intake,
+                follows: pulls,
                 deadline,
                 json,
                 pause,
@@ -1412,9 +1604,10 @@ pub fn run(
                     // queues'.
                     if let Some(Reader::Lead(lead)) = &mut reader {
                         let doc =
-                            overview::read_held(&s, host, clock, &mut asked).unwrap_or_else(|e| {
-                                told::document(Kind::Internal, &format!("{e:#}"), &[])
-                            });
+                            overview::read_held(&s, host, clock, Follows::Kept(pulls), &mut asked)
+                                .unwrap_or_else(|e| {
+                                    told::document(Kind::Internal, &format!("{e:#}"), &[])
+                                });
                         let doc = overview::ticked(doc, tick);
                         if !INTERRUPTED.load(Ordering::SeqCst) {
                             // The last document stands for a write that failed
@@ -1549,10 +1742,21 @@ pub fn run(
                 } else {
                     in_queue(&status.submissions).cloned().collect()
                 };
+                // 137, design D5: the pull requests this host follows that
+                // another host takes in, as that host shows them; one that
+                // cannot be read is warned of, and the queue still shown.
+                let across = pulls.across(s.seams(), clock, &target).unwrap_or_else(|e| {
+                    telemetry::warn(&format!("sluice: warning: {e:#}"));
+                    None
+                });
                 if json {
                     let mut doc = status_json(&status, &shown)?;
                     // 84, record 0074: what each combination waits for.
                     doc["waiting"] = progress::waiting_json(&s.branch_view_of(&target)?);
+                    if let Some(a) = &across {
+                        doc["taken_in_by"] = serde_json::to_value(&a.taken_in_by)?;
+                        doc["pull_requests"] = serde_json::to_value(&a.pull_requests)?;
+                    }
                     writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
                 } else {
                     let pusher = pushers.pusher(&target)?;
@@ -1579,12 +1783,18 @@ pub fn run(
                             "{earlier} no longer in the queue: sluice status {target} --all"
                         )?;
                     }
+                    if let Some(a) = &across {
+                        writeln!(out, "{}", a.heading(&target))?;
+                        for row in &a.pull_requests {
+                            writeln!(out, "  {}", a.line(row))?;
+                        }
+                    }
                 }
                 Ok(0)
             }
         },
         Command::Overview { json, watch } => {
-            overview::run(&s, host, clock, json, watch, pause, tick, out)
+            overview::run(&s, host, clock, pulls, json, watch, pause, tick, out)
         }
         Command::Amend {
             id,
@@ -2233,6 +2443,7 @@ fn submit(
     s: &Sluice<'_>,
     host: &dyn exec::Host,
     pushers: &dyn Pushers,
+    pulls: &dyn PullRequests,
     clock: &dyn Clock,
     req: SubmitRequest,
     no_wait: bool,
@@ -2287,6 +2498,7 @@ fn submit(
         host,
         clock,
         pulls: None,
+        follows: pulls,
         deadline: None,
         json,
         pause,
@@ -2324,6 +2536,7 @@ fn submit_group(
     s: &Sluice<'_>,
     host: &dyn exec::Host,
     pushers: &dyn Pushers,
+    pulls: &dyn PullRequests,
     clock: &dyn Clock,
     req: GroupRequest,
     no_wait: bool,
@@ -2378,6 +2591,7 @@ fn submit_group(
         host,
         clock,
         pulls: None,
+        follows: pulls,
         deadline: None,
         json,
         pause,
@@ -2387,6 +2601,9 @@ fn submit_group(
     };
     // Each in turn; once stopped, the rest as they stand.
     let mut subs = Vec::new();
+    // Record 0100 D3: what carried each one's work, where its wait
+    // followed one.
+    let mut carriers = Vec::new();
     let mut stopped = None;
     // 122: what failed after a landing, said once the outcomes are.
     let mut after = Vec::new();
@@ -2394,18 +2611,24 @@ fn submit_group(
         let sub = s.state(a.id)?.expect("a submission just made");
         if stopped.is_some() {
             subs.push(sub);
+            carriers.push(None);
             continue;
         }
         match wait_on(s, &waiting, sub, Some(State::Queued), out)? {
-            Waited::Decided(sub, e) => {
+            Waited::Decided(sub, by, e) => {
                 after.extend(e);
                 subs.push(sub);
+                carriers.push(by);
             }
             // A group of worktrees follows no pull request.
-            Waited::Request(sub, _) => subs.push(sub),
-            Waited::Undecided(sub, code, _) => {
+            Waited::Request(sub, _) => {
+                subs.push(sub);
+                carriers.push(None);
+            }
+            Waited::Undecided(sub, by, code, _) => {
                 stopped = Some(code);
                 subs.push(sub);
+                carriers.push(by);
             }
             Waited::Unread(sub, e) => {
                 // Said on stderr; the act's answer holds it as it stands.
@@ -2413,23 +2636,33 @@ fn submit_group(
                 let code = could_not_read(&e, &what, &again, false, &mut std::io::sink())?;
                 stopped = Some(code);
                 subs.push(sub);
+                carriers.push(None);
             }
         }
     }
     if json {
         let mut submissions = Vec::new();
-        for ((w, a), sub) in items.iter().zip(&subs) {
-            let mut record = serde_json::to_value(sub)?;
+        for (((w, a), sub), by) in items.iter().zip(&subs).zip(&carriers) {
+            let mut record = with_carried(serde_json::to_value(sub)?, by.as_ref());
             record["worktree"] = serde_json::json!(w);
             submissions.push(with_copy(record, a.copy.as_ref())?);
         }
         let doc = serde_json::json!({ "branch": branch, "submissions": submissions });
         writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
     } else {
-        for ((w, _), sub) in items.iter().zip(&subs) {
+        for (((w, _), sub), by) in items.iter().zip(&subs).zip(&carriers) {
             writeln!(out, "submission {} from {w}:", sub.id)?;
             if sub.state.is_out() {
-                report(s, sub, branch, &BTreeMap::new(), None, false, out)?;
+                report(
+                    s,
+                    sub,
+                    branch,
+                    &BTreeMap::new(),
+                    by.as_ref(),
+                    None,
+                    false,
+                    out,
+                )?;
             } else {
                 writeln!(out, "still waiting: sluice wait {}", sub.id)?;
             }
@@ -2597,6 +2830,9 @@ struct Waiting<'a> {
     /// On a branch that takes pull requests: taken in before each round,
     /// as a waiting pull-request submit does.
     pulls: Option<&'a dyn PullRequests>,
+    /// 137, design D5: the pull requests the host follows, which the
+    /// reader's document the wait writes carries as the host kept them.
+    follows: &'a dyn PullRequests,
     /// When `sluice wait --timeout` runs out.
     deadline: Option<chrono::DateTime<chrono::Utc>>,
     json: bool,
@@ -2615,10 +2851,11 @@ struct Waiting<'a> {
 /// ADR 0041: wait on `sub` to its outcome, or as `waiting` bounds it, and
 /// say it: the loop under a waiting submit and `sluice wait`. `said` is
 /// the state its caller has said already. Under `--json`, one document
-/// however it ends: the submission's record, with the copy's `copy`.
-/// 51: an outcome the waiting worktree's own and pending is marked
-/// delivered to it once the report is written, and the record reported
-/// carries that mark; an undecided end marks nothing.
+/// however it ends: the submission's record, with the copy's `copy` and,
+/// where the wait followed what carried its work, `carried_by` (record
+/// 0100 D3). 51: an outcome the waiting worktree's own and pending is
+/// marked delivered to it once the report is written, and the record
+/// reported carries that mark; an undecided end marks nothing.
 fn await_submission(
     s: &Sluice<'_>,
     waiting: &Waiting<'_>,
@@ -2626,8 +2863,8 @@ fn await_submission(
     said: Option<State>,
     out: &mut dyn Write,
 ) -> Result<i32> {
-    let (sub, code, waits) = match wait_on(s, waiting, sub, said, out)? {
-        Waited::Decided(sub, after) => {
+    let (sub, by, code, waits) = match wait_on(s, waiting, sub, said, out)? {
+        Waited::Decided(sub, by, after) => {
             let branch = sub.branch.clone();
             let names = BTreeMap::new();
             let code = report_delivering(
@@ -2636,6 +2873,7 @@ fn await_submission(
                 sub,
                 &branch,
                 &names,
+                by.as_ref(),
                 waiting.copy,
                 waiting.json,
                 out,
@@ -2658,6 +2896,7 @@ fn await_submission(
             };
             let mode = PullMode::Follow {
                 number,
+                own: &sub,
                 deadline: waiting.deadline,
             };
             let worktree = SubmitHead::Worktree(waiting.worktree.unwrap_or(".").to_string());
@@ -2671,13 +2910,15 @@ fn await_submission(
                 mode,
                 waiting.json,
                 waiting.pause,
+                waiting.tick,
                 out,
             );
         }
-        Waited::Undecided(sub, code, waits) => (sub, code, waits),
+        Waited::Undecided(sub, by, code, waits) => (sub, by, code, waits),
     };
     if waiting.json {
-        let mut doc = with_copy(serde_json::to_value(&sub)?, waiting.copy)?;
+        let doc = with_copy(serde_json::to_value(&sub)?, waiting.copy)?;
+        let mut doc = with_carried(doc, by.as_ref());
         // 84, record 0074: what its combination waits for, as the view
         // the wait followed has it (rule core.25).
         if !waits.is_empty() {
@@ -2724,7 +2965,9 @@ fn with_waiting(s: &Sluice<'_>, sub: &Submission, mut doc: serde_json::Value) ->
 /// `worktree`'s own and pending, the record reported carries the mark,
 /// and it is marked delivered once the report is written and flushed. A
 /// mark that fails is said and leaves the outcome pending for `sluice
-/// inbox`.
+/// inbox`. Only `sub` is marked, the submission the wait reports as its
+/// own, never `by`, what carried its work, whose outcome stays pending
+/// for its own delivery (record 0100 D3).
 #[allow(clippy::too_many_arguments)]
 fn report_delivering(
     s: &Sluice<'_>,
@@ -2732,6 +2975,7 @@ fn report_delivering(
     sub: Submission,
     branch: &str,
     names: &BTreeMap<u64, String>,
+    by: Option<&CarriedBy>,
     copy: Option<&CopyDiffers>,
     json: bool,
     out: &mut dyn Write,
@@ -2741,7 +2985,7 @@ fn report_delivering(
         .as_ref()
         .and_then(|(pending, to)| pending.marked(to).pop())
         .unwrap_or(sub);
-    let code = report(s, &shown, branch, names, copy, json, out)?;
+    let code = report(s, &shown, branch, names, by, copy, json, out)?;
     out.flush()?;
     if let Some((pending, to)) = delivering {
         if let Err(e) = pending.mark(&to) {
@@ -2754,15 +2998,17 @@ fn report_delivering(
     Ok(code)
 }
 
-/// How a wait ended.
+/// How a wait ended: always with the submission it waits on, its own,
+/// and, where it followed what carried its work in its stead, that, as
+/// it stands (record 0100 D1, D2).
 enum Waited {
     /// Landed, failed, conflict or withdrawn; when it landed in a round
     /// that then failed, what failed after the landing (122).
-    Decided(Submission, Option<anyhow::Error>),
+    Decided(Submission, Option<CarriedBy>, Option<anyhow::Error>),
     /// As it stands when the wait's time ran out ([`WAITING`]) or it was
-    /// stopped ([`STOPPED`]), with what its combination waits for as last
-    /// read (84, record 0074).
-    Undecided(Submission, i32, BTreeMap<String, String>),
+    /// stopped ([`STOPPED`]), with what its combination, or that of what
+    /// it follows, waits for as last read (84, record 0074).
+    Undecided(Submission, Option<CarriedBy>, i32, BTreeMap<String, String>),
     /// As last read, when a round failed as the forge could not answer
     /// for the retry policy's time.
     Unread(Submission, anyhow::Error),
@@ -2772,20 +3018,77 @@ enum Waited {
     Request(Submission, u64),
 }
 
+/// What a wait does next with the submission it read decided, its own or
+/// what it follows.
+enum Next {
+    /// End, as this says.
+    End(Waited),
+    /// Follow this submission, which carries its work, in its stead.
+    Follow(Submission),
+}
+
+/// Record 0100 D2: what a wait on `own` does with `read`, decided: `own`
+/// itself, or the submission it follows. What carries `read`'s work on is
+/// followed; otherwise the wait ends with `own`, as decided where `read`
+/// is `own`, and as [`own_end`] has it where `read` carried its work.
+fn decided(
+    s: &Sluice<'_>,
+    waiting: &Waiting<'_>,
+    own: &Submission,
+    read: Submission,
+    out: &mut dyn Write,
+) -> Result<Next> {
+    Ok(match carried(s, waiting, read, out)? {
+        Carried::Entry(e) => Next::Follow(e),
+        Carried::Request(n) => Next::End(Waited::Request(own.clone(), n)),
+        // Landed by what carried its work: named, where `read` is its own,
+        // and its own's end where `read` is what it followed.
+        Carried::Landed(o, e) => {
+            let by = CarriedBy::Entry(e);
+            let end = match o.id == own.id {
+                true => o,
+                false => own_end(s, own.clone(), Some(&by))?,
+            };
+            Next::End(Waited::Decided(end, Some(by), None))
+        }
+        Carried::Outcome(o, _) if o.id == own.id => Next::End(Waited::Decided(o, None, None)),
+        // What carried its work ended as its request closed: the request.
+        Carried::Outcome(_, Some(n)) => {
+            let by = CarriedBy::Request(n, RequestEnd::Closed);
+            let end = own_end(s, own.clone(), Some(&by))?;
+            Next::End(Waited::Decided(end, Some(by), None))
+        }
+        Carried::Outcome(o, None) => {
+            let by = CarriedBy::Entry(o);
+            let end = own_end(s, own.clone(), Some(&by))?;
+            Next::End(Waited::Decided(end, Some(by), None))
+        }
+    })
+}
+
 /// What a wait does with a submission it read decided.
 enum Carried {
-    /// Its outcome, to report.
-    Outcome(Submission),
+    /// Its outcome, to report, with the number of its pull request where
+    /// that was read closed, which ended its work (record 0100 D2).
+    Outcome(Submission, Option<u64>),
+    /// Landed by the landing of what carried its work, a later submission
+    /// from its place: its record as that landing landed it, and that
+    /// submission (record 0100 D2).
+    Landed(Submission, Submission),
     /// A later submission from its place that carries its work, to follow
     /// in its stead (67).
     Entry(Submission),
     /// Its pull request, to follow (137).
-    Request(Submission, u64),
+    Request(u64),
 }
 
 /// 122, 67, 137: a submission withdrawn whose work goes on is never
 /// reported withdrawn. Its branch holds its head: it landed, as the commit
-/// that landed it, whichever landing that was. A later submission from
+/// that landed it, whichever landing that was; where a later submission
+/// from its place that holds its head landed, by that one's landing,
+/// which names it, however long ago it landed (record 0100 D2, D3; a
+/// branch landing by fast-forward would otherwise give its own head as
+/// the commit that landed it). A later submission from
 /// its place holds its head: the wait follows that one. Its pull request
 /// is open, no draft, on a head that holds its head: the wait follows the
 /// request, taken in again here or on another host, or the submission it
@@ -2798,7 +3101,7 @@ fn carried(
     out: &mut dyn Write,
 ) -> Result<Carried> {
     if sub.state != State::Withdrawn {
-        return Ok(Carried::Outcome(sub));
+        return Ok(Carried::Outcome(sub, None));
     }
     let branch = s.seams().branch;
     // What cannot be read leaves the outcome as the records hold it, and
@@ -2809,32 +3112,36 @@ fn carried(
             sub.id
         ))
     };
+    // A head that is this one's, or holds it.
+    let carries =
+        |head: &Rev| *head == sub.head || branch.contains(head, &sub.head).unwrap_or(false);
     let landed = branch.read(&sub.branch).and_then(|tip| match tip {
         Some(tip) => branch.landed_by(&tip, &sub.head),
         None => Ok(None),
     });
     match landed {
         Ok(Some(to)) => {
-            let mut landed = sub;
-            landed.state = State::Landed;
-            landed.landed_as = Some(to);
-            landed.landed_elsewhere = true;
-            return Ok(Carried::Outcome(landed));
+            let by = landed_carrier(s, &sub, &carries).unwrap_or_else(|e| {
+                unread(&format!("{}'s records", sub.branch), e);
+                None
+            });
+            let to = by.as_ref().and_then(|e| e.landed_as.clone()).unwrap_or(to);
+            let landed = Submission {
+                state: State::Landed,
+                landed_as: Some(to),
+                landed_elsewhere: true,
+                ..sub
+            };
+            return Ok(match by {
+                Some(e) => Carried::Landed(landed, e),
+                None => Carried::Outcome(landed, None),
+            });
         }
         Ok(None) => {}
         Err(e) => unread(&sub.branch, e),
     }
-    // A head that is this one's, or holds it.
-    let carries =
-        |head: &Rev| *head == sub.head || branch.contains(head, &sub.head).unwrap_or(false);
     // 137: a hand-over's withdrawal says the host it handed over to.
-    let left = match sub.withdrawn.as_ref() {
-        Some(w) => match &w.handed_over_to {
-            Some(host) => format!("handed over to {host}"),
-            None => format!("withdrawn by {}", w.by),
-        },
-        None => "withdrawn by its submitter".to_string(),
-    };
+    let left = left(&sub);
     let follows = |what: String, out: &mut dyn Write| -> Result<()> {
         if !waiting.json {
             writeln!(
@@ -2858,15 +3165,16 @@ fn carried(
         waiting.pulls,
         waiting.pulls.and_then(|p| p.request_of(&sub.from.worktree)),
     ) else {
-        return Ok(Carried::Outcome(sub));
+        return Ok(Carried::Outcome(sub, None));
     };
     let followed = match pulls.follow(s.seams(), waiting.clock, &sub.branch, n) {
         Ok(f) => f,
         Err(e) => {
             unread(&format!("pull request #{n}"), e);
-            return Ok(Carried::Outcome(sub));
+            return Ok(Carried::Outcome(sub, None));
         }
     };
+    let closed = matches!(followed, Followed::Closed).then_some(n);
     // Its request open on the head it had carries on only where another
     // host takes it in: a withdrawal by its submitter, its planner or the
     // operator rests it there (120).
@@ -2895,10 +3203,35 @@ fn carried(
         }
         Some(None) => {
             follows(format!("its pull request #{n}"), out)?;
-            Carried::Request(sub, n)
+            Carried::Request(n)
         }
-        None => Carried::Outcome(sub),
+        None => Carried::Outcome(sub, closed),
     })
+}
+
+/// Record 0100 D2: the later submission from `sub`'s place, a worktree's or
+/// a pull request's, that `carries` its head and landed, whose landing is
+/// the one that took `sub`'s work: the first such in the branch's live
+/// records, else its place's latest, which the finished index names once
+/// it has left them (rule core.41). `None` where none landed, as where
+/// another queue's landing took it (record 0085).
+fn landed_carrier(
+    s: &Sluice<'_>,
+    sub: &Submission,
+    carries: &dyn Fn(&Rev) -> bool,
+) -> Result<Option<Submission>> {
+    let place = &sub.from.worktree;
+    let landed_it = |e: &Submission| {
+        e.id > sub.id && e.from.worktree == *place && e.state == State::Landed && carries(&e.head)
+    };
+    let live = s.status(&sub.branch)?.submissions;
+    if let Some(e) = live.into_iter().find(|e| landed_it(e)) {
+        return Ok(Some(e));
+    }
+    let latest = s
+        .latest_of(&sub.branch, std::slice::from_ref(place))?
+        .remove(place);
+    Ok(latest.filter(|e| landed_it(e)))
 }
 
 /// Whether `e` is a spent allowance of GitHub's calls the retry policy
@@ -2958,57 +3291,68 @@ fn could_not_read(
 /// a round that still fails as the forge could not answer ends the wait as
 /// it could not read. Without `--json`, it says the
 /// submission's state, or its combination's progress, each time either
-/// moves (ADR 0042). It reads them as [`Reading`] does (129).
+/// moves (ADR 0042). It reads them as [`Reading`] does (129). It waits on
+/// `own` and ends with it, whatever it follows: where a later submission
+/// carries `own`'s work, it follows that one, its state and its
+/// combination's progress, and ends with `own` as [`decided`] has it
+/// (record 0100 D1, D2).
 fn wait_on(
     s: &Sluice<'_>,
     waiting: &Waiting<'_>,
-    mut sub: Submission,
+    mut own: Submission,
     said_before: Option<State>,
     out: &mut dyn Write,
 ) -> Result<Waited> {
-    let branch = sub.branch.clone();
+    let branch = own.branch.clone();
     type Moved = (State, Option<progress::Moved>);
     let mut said: Option<Moved> = said_before.map(|t| (t, None));
     // 121: the branch's hold as last said, so each is said once.
     let mut said_hold = None;
     let mut first = true;
+    // Record 0100 D1: what carries `own`'s work, followed in its stead.
+    let mut following: Option<Submission> = None;
     // Decided already: nothing read again, and no round run.
-    if sub.state.is_out() {
-        match carried(s, waiting, sub, out)? {
-            Carried::Outcome(sub) => return Ok(Waited::Decided(sub, None)),
-            Carried::Request(sub, n) => return Ok(Waited::Request(sub, n)),
-            Carried::Entry(e) => sub = e,
+    if own.state.is_out() {
+        match decided(s, waiting, &own, own.clone(), out)? {
+            Next::End(w) => return Ok(w),
+            Next::Follow(e) => following = Some(e),
         }
     }
     let mut reading = Reading::take(waiting.host)?;
     let _let_go = LetGo(waiting.pulls);
-    reading.read(s, waiting, &mut sub)?;
+    reading.read(s, waiting, following.as_mut().unwrap_or(&mut own))?;
     loop {
+        let sub = following.as_ref().unwrap_or(&own);
         if sub.state.is_out() {
-            match carried(s, waiting, sub, out)? {
-                Carried::Outcome(sub) => return Ok(Waited::Decided(sub, None)),
-                Carried::Request(sub, n) => return Ok(Waited::Request(sub, n)),
-                Carried::Entry(e) => {
-                    sub = e;
-                    reading.read(s, waiting, &mut sub)?;
+            match decided(s, waiting, &own, sub.clone(), out)? {
+                Next::End(w) => return Ok(w),
+                Next::Follow(e) => {
+                    let e = following.insert(e);
+                    reading.read(s, waiting, e)?;
                     continue;
                 }
             }
         }
+        // As it stands, with what it follows as it stands.
+        let undecided = |code: i32, reading: &Reading| {
+            let by = following.clone().map(CarriedBy::Entry);
+            let waits = reading.waits(following.as_ref().unwrap_or(&own).id);
+            Waited::Undecided(own.clone(), by, code, waits)
+        };
         let id = sub.id;
         if !waiting.json {
             // How far it has got decides nothing: a read that fails says
             // nothing this time.
             let view = reading.view.as_ref();
-            let own = view.and_then(|v| progress::own(v, id));
-            let now: Moved = (sub.state, own.map(progress::moved));
+            let combination = view.and_then(|v| progress::own(v, id));
+            let now: Moved = (sub.state, combination.map(progress::moved));
             if said.as_ref() != Some(&now) {
-                match own {
+                match combination {
                     Some(c) => {
                         let line = progress::testing_line(&branch, c, waiting.clock.now(), None);
                         writeln!(out, "{line}")?;
                     }
-                    None => match detail(&branch, &sub, None, &mut BTreeSet::new()) {
+                    None => match detail(&branch, sub, None, &mut BTreeSet::new()) {
                         d if d.is_empty() => writeln!(out, "#{id} {}", sub.state.word())?,
                         d => writeln!(out, "#{id} {} · {d}", sub.state.word())?,
                     },
@@ -3020,10 +3364,10 @@ fn wait_on(
             }
         }
         if waiting.deadline.is_some_and(|d| waiting.clock.now() >= d) {
-            return Ok(Waited::Undecided(sub, WAITING, reading.waits(id)));
+            return Ok(undecided(WAITING, &reading));
         }
         if !first && !waiting.pause.pause() {
-            return Ok(Waited::Undecided(sub, STOPPED, reading.waits(id)));
+            return Ok(undecided(STOPPED, &reading));
         }
         first = false;
         // 129: what the last read kept by revision and this one does not
@@ -3049,7 +3393,7 @@ fn wait_on(
                         true => STOPPED,
                         false => WAITING,
                     };
-                    return Ok(Waited::Undecided(sub, code, reading.waits(id)));
+                    return Ok(undecided(code, &reading));
                 }
             }
             // 137: another host takes the branch's pull requests in; this
@@ -3068,12 +3412,18 @@ fn wait_on(
                 Some(Err(e)) => {
                     // Ctrl-C reaches the tools a round runs in the foreground.
                     if INTERRUPTED.load(Ordering::SeqCst) {
-                        return Ok(Waited::Undecided(sub, STOPPED, reading.waits(id)));
+                        return Ok(undecided(STOPPED, &reading));
                     }
-                    if let Some(sub) = landed(s, id) {
-                        return Ok(Waited::Decided(sub, Some(e)));
+                    // Record 0100 D2: what it follows landed, its own end.
+                    if let Some(landed) = landed(s, id) {
+                        if landed.id == own.id {
+                            return Ok(Waited::Decided(landed, None, Some(e)));
+                        }
+                        let by = CarriedBy::Entry(landed);
+                        let end = own_end(s, own.clone(), Some(&by))?;
+                        return Ok(Waited::Decided(end, Some(by), Some(e)));
                     }
-                    return Ok(Waited::Unread(sub, unread(e)?));
+                    return Ok(Waited::Unread(own.clone(), unread(e)?));
                 }
             }
         }
@@ -3086,7 +3436,7 @@ fn wait_on(
             Drives::Nobody
         };
         reading.reader.step(false, drives)?;
-        reading.read(s, waiting, &mut sub)?;
+        reading.read(s, waiting, following.as_mut().unwrap_or(&mut own))?;
     }
 }
 
@@ -3151,7 +3501,8 @@ impl Reading {
                 // A read whose start it could not mark leaves a forecast
                 // reading past this reader, which decides nothing (64).
                 let _ = lead.begin();
-                match overview::document(s, waiting.host, waiting.clock) {
+                let follows = Follows::Kept(waiting.follows);
+                match overview::document(s, waiting.host, waiting.clock, follows) {
                     Ok((branches, doc)) => {
                         // Ctrl-C reaching the git a branch's read runs is no
                         // refusal of that branch's (26).
@@ -3275,12 +3626,16 @@ fn after_landing(e: &anyhow::Error) {
     telemetry::error(&format!("sluice: after the landing: {e:#}"));
 }
 
-/// A submission's outcome, as a waiting submit ends with it.
+/// A submission's outcome, as a waiting submit ends with it; `by`, what
+/// carried its work, where the wait followed one in its stead (record 0100
+/// D3).
+#[allow(clippy::too_many_arguments)]
 fn report(
     s: &Sluice<'_>,
     sub: &Submission,
     branch: &str,
     names: &BTreeMap<u64, String>,
+    by: Option<&CarriedBy>,
     copy: Option<&CopyDiffers>,
     json: bool,
     out: &mut dyn Write,
@@ -3295,7 +3650,8 @@ fn report(
         s
     };
     if json {
-        writeln!(out, "{}", record_json(sub, copy)?)?;
+        let doc = with_carried(with_copy(serde_json::to_value(sub)?, copy)?, by);
+        writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
         return Ok(exit_for(sub));
     }
     let log = sluice_core::line::Line::read_log(&sluice_seams::State::read(s_state(s), branch)?)?;
@@ -3325,6 +3681,11 @@ fn report(
         State::Landed => {
             let to = sub.landed_as.clone().expect("a landed submission");
             match sub.beside {
+                // Record 0100 D3: by the landing of what carried its work.
+                _ if sub.landed_elsewhere && by.is_some_and(CarriedBy::landed) => {
+                    let by = by.expect("what carried its work").name();
+                    writeln!(out, "{}", words::landed_carried(branch, &to, &by))?
+                }
                 // 122: no verdict of its own landed it.
                 _ if sub.landed_elsewhere => {
                     writeln!(out, "{}", words::landed_elsewhere(branch, &to))?
@@ -3454,9 +3815,154 @@ fn report(
                 writeln!(out, "{w}")?;
             }
         }
+        // Record 0100 D3: what carried its work stopped short, said as
+        // what carried it, with where to read it.
+        State::Withdrawn if by.is_some() => {
+            let by = by.expect("what carried its work");
+            writeln!(
+                out,
+                "{}",
+                words::carrier_stopped(id, &left(sub), &by.name(), &by.how())
+            )?;
+            if let CarriedBy::Entry(e) = by {
+                writeln!(out, "sluice status {}", e.id)?;
+            }
+        }
         _ => writeln!(out, "{}", sub.state.word())?,
     }
     Ok(exit_for(sub))
+}
+
+/// Record 0100 D1, D3: what a wait followed in its own submission's stead,
+/// a later submission of this host's or the pull request, and how it
+/// stands, which the wait's document names as `carried_by`.
+#[derive(Clone, Debug)]
+enum CarriedBy {
+    /// A later submission that carries its work (67).
+    Entry(Submission),
+    /// Its pull request, with no submission of it on this host that the
+    /// wait follows (137).
+    Request(u64, RequestEnd),
+}
+
+/// How a pull request a wait follows stands, in its `carried_by`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RequestEnd {
+    Open,
+    Landed,
+    Failed,
+    Conflict,
+    Closed,
+}
+
+impl CarriedBy {
+    /// Its `carried_by`: `{"id","state"}` for a submission, and
+    /// `{"pull_request","state"}` for a request.
+    fn json(&self) -> serde_json::Value {
+        match self {
+            CarriedBy::Entry(e) => serde_json::json!({ "id": e.id, "state": e.state }),
+            CarriedBy::Request(n, end) => {
+                let state = match end {
+                    RequestEnd::Open => "open",
+                    RequestEnd::Landed => "landed",
+                    RequestEnd::Failed => "failed",
+                    RequestEnd::Conflict => "conflict",
+                    RequestEnd::Closed => "closed",
+                };
+                serde_json::json!({ "pull_request": n, "state": state })
+            }
+        }
+    }
+
+    /// What it is called: `#<b>`, or `pull request #<n>`.
+    fn name(&self) -> String {
+        match self {
+            CarriedBy::Entry(e) => format!("#{}", e.id),
+            CarriedBy::Request(n, _) => format!("pull request #{n}"),
+        }
+    }
+
+    /// Whether it landed.
+    fn landed(&self) -> bool {
+        match self {
+            CarriedBy::Entry(e) => e.state == State::Landed,
+            CarriedBy::Request(_, end) => *end == RequestEnd::Landed,
+        }
+    }
+
+    /// How it stopped short, in words.
+    fn how(&self) -> String {
+        match self {
+            CarriedBy::Entry(e) => match e.state {
+                State::Failed => "failed".into(),
+                State::Conflict => "is in conflict".into(),
+                State::Withdrawn => format!("was {}", left(e)),
+                state => format!("is {}", state.word()),
+            },
+            CarriedBy::Request(_, RequestEnd::Closed) => "was closed without landing".into(),
+            CarriedBy::Request(_, RequestEnd::Failed | RequestEnd::Conflict) => {
+                "was sent back".into()
+            }
+            CarriedBy::Request(_, RequestEnd::Landed) => "landed".into(),
+            CarriedBy::Request(_, RequestEnd::Open) => "is open".into(),
+        }
+    }
+}
+
+/// `doc`, a wait's document, with `carried_by` where it followed what
+/// carried its work (record 0100 D3).
+fn with_carried(mut doc: serde_json::Value, by: Option<&CarriedBy>) -> serde_json::Value {
+    if let Some(by) = by {
+        doc["carried_by"] = by.json();
+    }
+    doc
+}
+
+/// How `sub` left the queue, in a wait's words: `withdrawn by <who>`, or,
+/// for a hand-over's withdrawal, `handed over to <host>` (137).
+fn left(sub: &Submission) -> String {
+    match sub.withdrawn.as_ref() {
+        Some(w) => match &w.handed_over_to {
+            Some(host) => format!("handed over to {host}"),
+            None => format!("withdrawn by {}", w.by),
+        },
+        None => "withdrawn by its submitter".to_string(),
+    }
+}
+
+/// Record 0100 D2: the wait's own submission `own`'s end, once `by`, what
+/// carried its work, is decided: landed, as the commit that landed its
+/// head, where its branch, read as a round reads it, holds that head,
+/// whichever landing took it; otherwise as its record stands, withdrawn,
+/// even where what carried its work landed, never a landing the branch
+/// does not show. The commit that landed it is the landing of `by` where
+/// `by` is a submission that landed, as record 0100 has it, "by the
+/// carrier's landing", which a branch landing by fast-forward would
+/// otherwise give as `own`'s head itself; else the oldest of the branch's
+/// first-parent history holding its head (record 0085). Its record kept
+/// is never changed (5, 67, 122).
+fn own_end(s: &Sluice<'_>, own: Submission, by: Option<&CarriedBy>) -> Result<Submission> {
+    if own.state == State::Landed {
+        return Ok(own);
+    }
+    let branch = s.seams().branch;
+    let to = match branch.read(&own.branch)? {
+        Some(tip) => branch.landed_by(&tip, &own.head)?,
+        None => None,
+    };
+    let carrier = match by {
+        Some(CarriedBy::Entry(e)) if e.state == State::Landed => e.landed_as.clone(),
+        _ => None,
+    };
+    Ok(match to.map(|to| carrier.unwrap_or(to)) {
+        Some(to) => Submission {
+            state: State::Landed,
+            landed_as: Some(to),
+            landed_elsewhere: true,
+            ..own
+        },
+        None => own,
+    })
 }
 
 /// What a blamed submission's record says failed, as its report and its
@@ -3575,17 +4081,11 @@ fn ways_on(s: &Sluice<'_>, sub: &Submission, branch: &str) -> Result<Vec<String>
 /// delivered again; each branch it collects from is locked meanwhile, so
 /// no round pushes the same outcome.
 fn inbox(s: &Sluice<'_>, worktree: &str, json: bool, out: &mut dyn Write) -> Result<i32> {
-    let (me, to) = match recipient(s, worktree)? {
-        Recipient::To(me, to) => (me, to),
-        none => {
-            if let Recipient::Bare = none {
-                telemetry::warn(&format!("sluice: {}", no_work_tree(worktree)));
-            }
-            if json {
-                writeln!(out, "{}", serde_json::json!({ "outcomes": [] }))?;
-            }
-            return Ok(0);
+    let Some((me, to)) = recipient(s, worktree)? else {
+        if json {
+            writeln!(out, "{}", serde_json::json!({ "outcomes": [] }))?;
         }
+        return Ok(0);
     };
     let pending = s.pending(&me)?;
     let marked = pending.marked(&to);
@@ -3621,7 +4121,7 @@ fn inbox(s: &Sluice<'_>, worktree: &str, json: bool, out: &mut dyn Write) -> Res
                 writeln!(out)?;
             }
             writeln!(out, "{}", words::notice(sub.id, &o.branch, &o.decided))?;
-            report(s, sub, &o.branch, &names, None, false, out)?;
+            report(s, sub, &o.branch, &names, None, None, false, out)?;
         }
     }
     out.flush()?;
@@ -3630,69 +4130,38 @@ fn inbox(s: &Sluice<'_>, worktree: &str, json: bool, out: &mut dyn Write) -> Res
     Ok(if unread { INTERNAL } else { 0 })
 }
 
-/// 51: whom an outcome read in a worktree is delivered to.
-enum Recipient {
-    /// Who works there, and the name an outcome is delivered to there.
-    To(Submitter, String),
-    /// A worktree on no branch, which names no work and submitted nothing
-    /// (3).
-    Detached,
-    /// A repository with no work tree, which no session works in (2).
-    Bare,
-}
-
 /// 51: who works in `worktree`, and the name an outcome is delivered to
-/// there: the session as its driver names it, else the worktree's path.
-fn recipient(s: &Sluice<'_>, worktree: &str) -> Result<Recipient> {
-    let session = s.seams().driver.session(worktree)?;
-    if session.bare {
-        return Ok(Recipient::Bare);
-    }
-    if session.detached {
-        return Ok(Recipient::Detached);
-    }
-    let me = session.from;
+/// there: the session as its driver names it, else the worktree's path,
+/// else, where no files are checked out, the agent (record 0099's D3).
+/// None where its `HEAD` names no branch, a place that submitted nothing
+/// (3). A folder with no files checked out is the worktree on the branch
+/// its `HEAD` names, read with neither its files nor its `HEAD`'s commit
+/// (2; rule core.48).
+fn recipient(s: &Sluice<'_>, worktree: &str) -> Result<Option<(Submitter, String)>> {
+    let Some(me) = s.seams().driver.recipient(worktree)? else {
+        return Ok(None);
+    };
     let to = me
         .session
         .clone()
         .or_else(|| me.path.clone())
-        .unwrap_or_else(|| me.worktree.clone());
-    Ok(Recipient::To(me, to))
-}
-
-/// 2, 51: what a delivery read in `worktree`, a repository with no files
-/// checked out, could not read.
-fn no_work_tree(worktree: &str) -> String {
-    format!(
-        "{worktree} is a repository with no files checked out, so no session works in it and no \
-         outcome is delivered there"
-    )
+        .unwrap_or_else(|| me.agent.clone());
+    Ok(Some((me, to)))
 }
 
 /// 51: `sub`, decided, locked and ready to mark delivered with the name to
-/// mark, when it is `worktree`'s own and pending; None otherwise, and
-/// when what it needs could not be read, which is said and leaves it
-/// pending for the next carrier. A submission by name is pending nowhere,
-/// so nothing is said of it staying pending (124; design D5; record 0085;
-/// rule core.50).
+/// mark, when it is `worktree`'s own and pending; None otherwise, saying
+/// nothing, as for another worktree's, wherever it is read, and when what
+/// it needs could not be read, which is said and leaves it pending for the
+/// next carrier (record 0099; rule core.48).
 fn delivering<'s, 'a>(
     s: &'s Sluice<'a>,
     worktree: &str,
     sub: &Submission,
 ) -> Option<(Pending<'s, 'a>, String)> {
-    let found = recipient(s, worktree).and_then(|r| match r {
-        Recipient::To(me, to) => Ok(Some((s.pending_one(&sub.branch, sub.id, &me)?, to))),
-        Recipient::Bare => {
-            if sub.delivered.is_none() && !sub.from.by_name() {
-                telemetry::warn(&format!(
-                    "sluice: #{} stays pending for its session's sluice inbox: {}",
-                    sub.id,
-                    no_work_tree(worktree)
-                ));
-            }
-            Ok(None)
-        }
-        Recipient::Detached => Ok(None),
+    let found = recipient(s, worktree).and_then(|r| {
+        r.map(|(me, to)| Ok((s.pending_one(&sub.branch, sub.id, &me)?, to)))
+            .transpose()
     });
     match found {
         Ok(Some((pending, to))) if !pending.outcomes.is_empty() => Some((pending, to)),
@@ -3857,10 +4326,13 @@ enum PullMode<'a> {
         deadline: Option<chrono::DateTime<chrono::Utc>>,
     },
     /// Follow pull request `number` as [`PullMode::Wait`] follows the one
-    /// open: a wait whose submission was withdrawn while the request
-    /// carries its work on (67, 137).
+    /// open, for `own`: a wait whose submission was withdrawn while the
+    /// request carries its work on (67, 137). It ends with `own`, never
+    /// with a submission of the request, as [`own_end`] has it (record
+    /// 0100 D2, D4).
     Follow {
         number: u64,
+        own: &'a Submission,
         deadline: Option<chrono::DateTime<chrono::Utc>>,
     },
 }
@@ -3893,7 +4365,10 @@ impl PullMode<'_> {
 /// branch the request was opened from, as [`await_submission`] marks one (51).
 /// A branch named (124) opens the request from that branch, reading no
 /// worktree, and its outcome is marked delivered to none: the request
-/// carries it (C.5; record 0090).
+/// carries it (C.5; record 0090). A waiting submit and `sluice wait
+/// <branch>` take as their own the first submission of the request they
+/// read; once the request is taken in as another, they wait on their own
+/// as `sluice wait <id>` does, `tick` its reader's (record 0100 D4).
 #[allow(clippy::too_many_arguments)]
 fn submit_pull(
     s: &Sluice<'_>,
@@ -3905,6 +4380,7 @@ fn submit_pull(
     mode: PullMode<'_>,
     json: bool,
     pause: &dyn Pause,
+    tick: Duration,
     out: &mut dyn Write,
 ) -> Result<i32> {
     let seams = s.seams();
@@ -3918,7 +4394,37 @@ fn submit_pull(
     let status = matches!(mode, PullMode::Status);
     let no_wait = matches!(mode, PullMode::Open { no_wait: true, .. });
     let opens = matches!(mode, PullMode::Open { .. });
-    let again = format!("sluice wait {branch}");
+    // Record 0100 D4: the submission a wait follows the request for.
+    let follows_for = match mode {
+        PullMode::Follow { own, .. } => Some(own),
+        _ => None,
+    };
+    let again = match follows_for {
+        Some(own) => format!("sluice wait {}", own.id),
+        None => format!("sluice wait {branch}"),
+    };
+    // Record 0100 D4: a waiting submit's and `sluice wait <branch>`'s own
+    // submission, the first of the request it reads.
+    let mut own: Option<Submission> = None;
+    let takes_own = !status && !no_wait && follows_for.is_none();
+    // Waits on `own` as `sluice wait <id>` does, once the request is taken
+    // in as another submission.
+    let await_own = |own: &Submission, copy: Option<&CopyDiffers>, out: &mut dyn Write| {
+        let own = s.state(own.id)?.unwrap_or_else(|| own.clone());
+        let waiting = Waiting {
+            host,
+            clock,
+            pulls: Some(pulls),
+            follows: pulls,
+            deadline: mode.deadline(),
+            json,
+            pause,
+            tick,
+            copy,
+            worktree: delivered_to,
+        };
+        await_submission(s, &waiting, own, None, out)
+    };
     // 124: how the host's copy differed from what the submit opened.
     let mut copy = None;
     let number = if let PullMode::Follow { number, .. } = mode {
@@ -3973,6 +4479,10 @@ fn submit_pull(
         }
     };
     let mut last: Option<(String, Vec<String>)> = None;
+    // 137: where the pull request stands on the host that takes it in, as
+    // last read and as last said, where that is another host.
+    let mut there: Option<There> = None;
+    let mut said_there = None;
     // 121: the branch's hold as last said, so each is said once.
     let mut said_hold = None;
     let what = format!("#{number}");
@@ -4036,6 +4546,44 @@ fn submit_pull(
                     )?;
                     return Ok(0);
                 }
+                // Record 0100 D2, D4: a wait that follows the request for its
+                // own ends with its own, the submission decided what
+                // carried its work, or the request where it is its own.
+                if let Some(own) = follows_for {
+                    let (end, by) = match sub.id == own.id {
+                        true => {
+                            let end = match sub.state {
+                                State::Landed => RequestEnd::Landed,
+                                State::Conflict => RequestEnd::Conflict,
+                                _ => RequestEnd::Failed,
+                            };
+                            (sub, CarriedBy::Request(number, end))
+                        }
+                        false => {
+                            let by = CarriedBy::Entry(sub);
+                            (own_end(s, own.clone(), Some(&by))?, by)
+                        }
+                    };
+                    let names = &names;
+                    let by = Some(&by);
+                    return report_delivering(
+                        s,
+                        delivered_to,
+                        end,
+                        branch,
+                        names,
+                        by,
+                        copy.as_ref(),
+                        json,
+                        out,
+                    );
+                }
+                match &own {
+                    Some(own) if takes_own && own.id != sub.id => {
+                        return await_own(own, copy.as_ref(), out);
+                    }
+                    _ => {}
+                }
                 // 51: the request was opened from this worktree's branch,
                 // so the outcome a waiting submit reports is its own; a
                 // branch named's is no one's (124).
@@ -4045,6 +4593,40 @@ fn submit_pull(
                     sub,
                     branch,
                     &names,
+                    None,
+                    copy.as_ref(),
+                    json,
+                    out,
+                );
+            }
+            // 124, 137: `--status` says where it stands, and exits 0, as
+            // it does where this host takes the request in; a wait and a
+            // waiting submit report the outcome with its exit (record 0096).
+            Some(f @ (Followed::Landed { .. } | Followed::SentBack { .. })) if status => {
+                return across_status(s, worktree, number, branch, &f, copy.as_ref(), json, out);
+            }
+            // Record 0100 D2: a wait that follows the request for its own
+            // ends with its own, landed where the branch holds its head.
+            Some(f @ (Followed::Landed { .. } | Followed::SentBack { .. } | Followed::Closed))
+                if follows_for.is_some() =>
+            {
+                let own = follows_for.expect("the submission it follows for");
+                let end = match f {
+                    Followed::Landed { .. } => RequestEnd::Landed,
+                    Followed::SentBack { conflict: true, .. } => RequestEnd::Conflict,
+                    Followed::SentBack { .. } => RequestEnd::Failed,
+                    _ => RequestEnd::Closed,
+                };
+                let by = CarriedBy::Request(number, end);
+                let own = own_end(s, own.clone(), Some(&by))?;
+                let names = BTreeMap::new();
+                return report_delivering(
+                    s,
+                    delivered_to,
+                    own,
+                    branch,
+                    &names,
+                    Some(&by),
                     copy.as_ref(),
                     json,
                     out,
@@ -4067,11 +4649,26 @@ fn submit_pull(
             Some(Followed::Open {
                 title,
                 lines,
+                taken_in_by,
+                queue,
                 submission,
                 names,
                 head,
                 draft,
             }) => {
+                // 137, design D5: where another host takes it in, the host
+                // the mark names and the queue its check carries, said
+                // again only when it changes.
+                there = pulls
+                    .elsewhere(branch)
+                    .map(|_| There { taken_in_by, queue });
+                if let (false, Some(t)) = (json, &there) {
+                    let line = t.line(number, branch);
+                    if said_there.as_ref() != Some(&line) {
+                        writeln!(out, "{line}")?;
+                        said_there = Some(line);
+                    }
+                }
                 // Taken in on the head just pushed: the submission is the
                 // answer, as a no-wait submit's on any branch, with the
                 // pull request beside it.
@@ -4101,6 +4698,15 @@ fn submit_pull(
                     }
                     return Ok(0);
                 }
+                // Record 0100 D4: its own is the first submission of the
+                // request it reads; taken in as another, it waits on its own.
+                if let (true, Some(e)) = (takes_own, &submission) {
+                    match &own {
+                        None => own = Some(e.clone()),
+                        Some(own) if own.id != e.id => return await_own(own, copy.as_ref(), out),
+                        Some(_) => {}
+                    }
+                }
                 let now = (title, lines);
                 if last.as_ref() != Some(&now) {
                     if json && status {
@@ -4111,12 +4717,13 @@ fn submit_pull(
                             "pull_request": number, "branch": branch, "state": now.0,
                             "head": head, "draft": draft,
                         });
-                        let doc = with_sends(doc, s, worktree)?;
+                        let doc = with_sends(There::with(doc, there.as_ref())?, s, worktree)?;
                         writeln!(out, "{}", with_copy(doc, copy.as_ref())?)?;
                     } else if json && no_wait {
                         let doc = serde_json::json!({
                             "pull_request": number, "branch": branch, "state": now.0,
                         });
+                        let doc = There::with(doc, there.as_ref())?;
                         writeln!(out, "{}", with_copy(doc, copy.as_ref())?)?;
                     } else if !json {
                         writeln!(out, "{}", now.0)?;
@@ -4141,6 +4748,23 @@ fn submit_pull(
                 Some(id) => s.state(id)?,
                 None => None,
             };
+            // Record 0100 D2: a wait that follows the request for its own
+            // ends with its own record, and what carries its work as it
+            // stands.
+            if let Some(own) = follows_for {
+                let by = match sub {
+                    Some(e) => CarriedBy::Entry(e),
+                    None => CarriedBy::Request(number, RequestEnd::Open),
+                };
+                if json {
+                    let doc = with_copy(serde_json::to_value(own)?, copy.as_ref())?;
+                    let doc = with_carried(doc, Some(&by));
+                    writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
+                } else {
+                    writeln!(out, "still waiting: sluice wait {}", own.id)?;
+                }
+                return Ok(code);
+            }
             if let Some(sub) = sub {
                 if json {
                     writeln!(out, "{}", record_json(&sub, copy.as_ref())?)?;
@@ -4152,6 +4776,7 @@ fn submit_pull(
                 let doc = serde_json::json!({
                     "pull_request": number, "branch": branch, "state": state,
                 });
+                let doc = There::with(doc, there.as_ref())?;
                 writeln!(out, "{}", with_copy(doc, copy.as_ref())?)?;
             } else {
                 writeln!(out, "still open: #{number}; sluice wait {branch}")?;
@@ -4210,12 +4835,22 @@ fn submit_pull(
                         Ok(Followed::Done(_, names)) => names,
                         _ => BTreeMap::new(),
                     };
+                    // Record 0100 D2: another submission's landing is its
+                    // own's end, never its own.
+                    let (sub, by) = match follows_for.or(own.as_ref()) {
+                        Some(own) if own.id != sub.id => {
+                            let by = CarriedBy::Entry(sub);
+                            (own_end(s, own.clone(), Some(&by))?, Some(by))
+                        }
+                        _ => (sub, None),
+                    };
                     let code = report_delivering(
                         s,
                         delivered_to,
                         sub,
                         branch,
                         &names,
+                        by.as_ref(),
                         copy.as_ref(),
                         json,
                         out,
@@ -4299,6 +4934,10 @@ fn submit_pull_group(
     }
     let mut decided: Vec<Option<Followed>> = opened.iter().map(|_| None).collect();
     let mut last: Vec<Option<(String, Vec<String>)>> = vec![None; opened.len()];
+    // 137: where each stands on the host that takes it in, as last read
+    // and as last said, where that is another host.
+    let mut there: Vec<Option<There>> = vec![None; opened.len()];
+    let mut said_there: Vec<Option<String>> = vec![None; opened.len()];
     // 121: the branch's hold as last said, so each is said once.
     let mut said_hold = None;
     // As `submit_pull`: a read the forge could not answer for the retry
@@ -4346,7 +4985,24 @@ fn submit_pull_group(
                 }
             };
             match followed {
-                Followed::Open { title, lines, .. } => {
+                Followed::Open {
+                    title,
+                    lines,
+                    taken_in_by,
+                    queue,
+                    ..
+                } => {
+                    // 137, design D5: as `submit_pull`'s.
+                    there[i] = pulls
+                        .elsewhere(branch)
+                        .map(|_| There { taken_in_by, queue });
+                    if let (false, Some(t)) = (json, &there[i]) {
+                        let line = t.line(o.number, branch);
+                        if said_there[i].as_ref() != Some(&line) {
+                            writeln!(out, "{line}")?;
+                            said_there[i] = Some(line);
+                        }
+                    }
                     let now = (title, lines);
                     if last[i].as_ref() != Some(&now) {
                         if !json {
@@ -4431,7 +5087,7 @@ fn submit_pull_group(
                 Some(Followed::Done(sub, _)) => serde_json::to_value(sub)?,
                 Some(Followed::Closed) => serde_json::json!({ "state": "closed" }),
                 Some(f @ (Followed::Landed { .. } | Followed::SentBack { .. })) => across_json(f),
-                _ => serde_json::json!({ "state": state(i) }),
+                _ => There::with(serde_json::json!({ "state": state(i) }), there[i].as_ref())?,
             };
             item["worktree"] = serde_json::json!(w);
             item["pull_request"] = serde_json::json!(o.number);
@@ -4457,7 +5113,9 @@ fn submit_pull_group(
         }
         let this = match &decided[i] {
             Some(Followed::Done(sub, _)) if json => exit_for(sub),
-            Some(Followed::Done(sub, names)) => report(s, sub, branch, names, None, false, out)?,
+            Some(Followed::Done(sub, names)) => {
+                report(s, sub, branch, names, None, None, false, out)?
+            }
             Some(f @ (Followed::Landed { .. } | Followed::SentBack { .. })) if json => {
                 across_exit(f)
             }
@@ -4488,6 +5146,50 @@ fn submit_pull_group(
     Ok(stopped.unwrap_or(code))
 }
 
+/// 137, design D2: where a pull request another host takes in stands, as
+/// a wait last read it: the host its branch's intake mark names, as this
+/// host's last fetch brought it, and the queue sluice's check on its head
+/// carries.
+#[derive(Clone, Debug, PartialEq)]
+struct There {
+    taken_in_by: Option<TakenInBy>,
+    queue: Option<Queue>,
+}
+
+impl There {
+    /// Design D5: pull request `n` into `branch` in words: the submission
+    /// the check names on the host that posted it, taken in by the host the
+    /// mark names; or that it waits to be taken in by the mark's host.
+    fn line(&self, n: u64, branch: &str) -> String {
+        let held = self
+            .queue
+            .as_ref()
+            .filter(|q| q.taken_in)
+            .and_then(|q| Some((q.submission?, &q.host)));
+        let by = self.taken_in_by.as_ref().map(TakenInBy::said);
+        let none = format!("no host holds {branch}'s intake mark");
+        match (held, by) {
+            (Some((id, host)), Some(by)) => {
+                format!("#{n} is submission {id} on {host}, taken in by {by}")
+            }
+            (Some((id, host)), None) => format!("#{n} is submission {id} on {host}; {none}"),
+            (None, Some(by)) => format!("#{n} waits to be taken in by {by}"),
+            (None, None) => format!("#{n} waits to be taken in; {none}"),
+        }
+    }
+
+    /// Design D5: `doc` with `taken_in_by` and `queue`, `null` where
+    /// neither reads, for a pull request another host takes in; `doc` as
+    /// it is otherwise.
+    fn with(mut doc: serde_json::Value, there: Option<&There>) -> Result<serde_json::Value> {
+        if let Some(t) = there {
+            doc["taken_in_by"] = serde_json::to_value(&t.taken_in_by)?;
+            doc["queue"] = serde_json::to_value(&t.queue)?;
+        }
+        Ok(doc)
+    }
+}
+
 /// 137: the outcome GitHub shows of pull request `number`, which another
 /// host took in: said with the words a submission's report gives for the
 /// same outcome, as sluice's check on its head names it, and its exit.
@@ -4510,11 +5212,65 @@ fn across(
     Ok(across_exit(f))
 }
 
+/// 124, 137: `--status` of pull request `number`, which another host
+/// landed or sent back: under `json`, [`across_json`]'s document with the
+/// check's summary, the head and draft mark the forge holds, and `sends`,
+/// the revision a submit from `worktree` would send now, so a driver
+/// reads it as it reads a decided submission's record, landed standing at
+/// `sends` and sent back standing nowhere; otherwise the check's title and
+/// summary in words. It exits 0, as `--status` does wherever it finds the
+/// worktree's pull request (record 0096).
+#[allow(clippy::too_many_arguments)]
+fn across_status(
+    s: &Sluice<'_>,
+    worktree: &str,
+    number: u64,
+    branch: &str,
+    f: &Followed,
+    copy: Option<&CopyDiffers>,
+    json: bool,
+    out: &mut dyn Write,
+) -> Result<i32> {
+    let (summary, head, draft) = match f {
+        Followed::Landed {
+            summary,
+            head,
+            draft,
+            ..
+        }
+        | Followed::SentBack {
+            summary,
+            head,
+            draft,
+            ..
+        } => (summary, head, *draft),
+        _ => return Ok(0),
+    };
+    if json {
+        let mut doc = across_json(f);
+        doc["summary"] = serde_json::json!(summary);
+        doc["pull_request"] = serde_json::json!(number);
+        doc["branch"] = serde_json::json!(branch);
+        doc["head"] = serde_json::json!(head);
+        doc["draft"] = serde_json::json!(draft);
+        let doc = with_sends(doc, s, worktree)?;
+        writeln!(out, "{}", with_copy(doc, copy)?)?;
+        return Ok(0);
+    }
+    across_lines(f, out)?;
+    if let Followed::Landed { summary, .. } = f {
+        for l in summary.lines().filter(|l| !l.trim().is_empty()) {
+            writeln!(out, "  {l}")?;
+        }
+    }
+    Ok(0)
+}
+
 /// 137: [`across`]'s words: `passed · landed as …` for a landing, and
 /// sluice's check's title and summary for a pull request sent back.
 fn across_lines(f: &Followed, out: &mut dyn Write) -> Result<()> {
     match f {
-        Followed::Landed { title } => writeln!(out, "passed · {title}")?,
+        Followed::Landed { title, .. } => writeln!(out, "passed · {title}")?,
         Followed::SentBack { title, summary, .. } => {
             writeln!(out, "{title}")?;
             for l in summary.lines().filter(|l| !l.trim().is_empty()) {
@@ -4529,11 +5285,12 @@ fn across_lines(f: &Followed, out: &mut dyn Write) -> Result<()> {
 /// 137: [`across`]'s document: the state, and sluice's check's title.
 fn across_json(f: &Followed) -> serde_json::Value {
     match f {
-        Followed::Landed { title } => serde_json::json!({ "state": "landed", "title": title }),
+        Followed::Landed { title, .. } => serde_json::json!({ "state": "landed", "title": title }),
         Followed::SentBack {
             conflict,
             title,
             summary,
+            ..
         } => serde_json::json!({
             "state": if *conflict { "conflict" } else { "failed" },
             "title": title,

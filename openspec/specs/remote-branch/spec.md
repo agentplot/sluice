@@ -249,7 +249,8 @@ branch's revision on the remote, fetched, for its gate and every move of
 it, and SHALL NOT judge the rest of the policy at the host's own copy. A
 policy refused there SHALL refuse that branch's round, naming the branch,
 the remote's revision and the refusal. A policy pushed to the remote that
-sluice reads SHALL clear it at the next round, on every host (56, 124).
+sluice reads SHALL clear it on every host at the next sluice command
+that reads the branch, queued or not (56, 124).
 
 #### Scenario: The bolt's own round runs past a copy that lags
 - **WHEN** this host's own `bolt/x` holds a policy with a `[[checkout.cache]]` table, origin's `bolt/x` holds a clean policy, and a submission to `bolt/x` is waiting
@@ -276,3 +277,21 @@ sluice reads SHALL clear it at the next round, on every host (56, 124).
 
 - **WHEN** a worktree has checked out `bolt/x`, which sluice lands on and keeps on `origin`, this host's copy of `bolt/x` is behind origin's, and `sluice submit main --status --json --worktree <w>` runs after a submit from it
 - **THEN** it prints `sends` origin's revision of `bolt/x`, the `head` of that submission, not the worktree's head
+
+### Requirement: A submit reads the branch fetched, and a read outside a round as this host last fetched it
+A submit SHALL read a branch on its remote fetched and judge the
+submission there, so the next submit takes the work with no round run.
+Status, the overview, `sluice` with no command, and what a watch or a
+wait shows SHALL read its policy at the remote's revision as this host
+last fetched it, never where its state last saw it (see branch-refusal),
+and SHALL fetch nothing, so they read it whole once a fetch on this
+host, a submit's among them, has brought the pushed revision (56, 124,
+129).
+
+#### Scenario: A quiet branch this host fetched is read whole by status
+- **WHEN** `main` is on origin with its state on this host, nothing is queued, `main`'s state last saw `R1`, whose policy has a `[[checkout.cache]]` table, and this host's `origin/main` is at `R2`, which removes it
+- **THEN** `sluice status main` and `sluice overview` show `main` whole, nothing is fetched, nothing is written, and no round has run
+
+#### Scenario: A quiet branch this host never fetched takes a submit
+- **WHEN** `bolt/x` is on origin with its state on this host, nothing is queued, `bolt/x`'s state last saw `R1`, whose policy has a `[[checkout.cache]]` table, origin's `bolt/x` is at `R2`, which removes it, and this host's `origin/bolt/x` is still `R1`
+- **THEN** `sluice status bolt/x` refuses it naming `R1`; `sluice submit bolt/x --no-wait` from a worktree on a branch of its own takes the submission; and `sluice status bolt/x` after it shows the submission queued, with no round run

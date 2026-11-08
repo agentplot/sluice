@@ -1,23 +1,25 @@
 #!/bin/sh
 # shellcheck disable=SC1091,SC2154,SC2016 # jq programs; common.sh, sourced, sets root, lib, state and config.
-# The ahead tokens' forecasts: for each pane's worktree with commits ahead
-# of the branch it would land on and nothing else to show, how many, and,
-# when its head, the branch's revision or the submissions waiting on it
-# moved since the last forecast, `sluice submit <branch> --check --json`
-# run again. One at a time.
+# The ahead tokens' forecasts: for each worktree a pane of any herdr
+# server is in, by the panes each server's folder keeps (D6), with commits
+# ahead of the branch it would land on and nothing else to show, how many,
+# and, when its head, the branch's revision or the submissions waiting on
+# it moved since the last forecast, `sluice submit <branch> --check --json`
+# run again. One at a time, and each worktree once, whichever servers'
+# panes are in it (D10).
 set -u
 . "$(dirname "$0")/../lib/common.sh"
-. "$lib/panes.sh"
 . "$lib/sources.sh"
 
 check=$(read_sources | jq -r .ahead_check)
 t=$(now)
-panes=$(panes_json)
 docs=$(all_docs)
-# Each worktree once, and whether every pane in it has a branch named:
-# their tokens never say ahead.
-tops=$(printf '%s' "$panes" | jq -r '[.[] | select(.top)] | group_by(.top)[]
-  | [.[0].top, .[0].repo, (all(.named != null) | tostring)] | @tsv')
+# Each worktree once, and whether every pane in it, in every server, has a
+# branch named: their tokens never say ahead.
+set -- "$state"/servers/*/panes.json
+tops=
+[ -e "$1" ] && tops=$(jq -s -r 'map(arrays[]) | [.[] | objects | select(.top)] | group_by(.top)[]
+  | [.[0].top, .[0].repo, (all(.named != null) | tostring)] | @tsv' "$@" 2>/dev/null)
 
 old_ifs=$IFS
 IFS='
@@ -93,6 +95,5 @@ EOF
     --argjson count "$count" --arg result "$result" --argjson with "$with" --argjson paths "$conflicted" \
     --argjson checked "$check" \
     '{path: $path, head: $head, key: $key, branch: $branch, count: $count, result: $result, with: $with, paths: $paths, checked: $checked}' | put "$out"
-  touch "$state/dirty"
 done
 IFS=$old_ifs

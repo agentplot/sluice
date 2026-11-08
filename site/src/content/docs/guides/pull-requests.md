@@ -158,7 +158,11 @@ refused and the mark names no other host. A submission that is landing
 finishes, one whose work `main` already holds is recorded landed, and
 work submitted from the host's own worktrees stays in its queue. A wait on that host follows its pull
 request on GitHub, as [`sluice wait`](/sluice/reference/commands/#sluice-wait)
-says.
+says. `sluice status main` and
+[`sluice overview`](/sluice/reference/commands/#sluice-overview) there
+list each pull request the host submitted, handed over or waited on,
+with the host that holds the mark and where the request stands in that
+host's queue.
 
 The mark is safe to remove, as after moving to another host:
 
@@ -349,7 +353,7 @@ check reads:
 | the check reads | means |
 |---|---|
 | `waiting: a draft` | still a draft; sluice takes it once it is marked ready for review |
-| `waiting: the next submit` | an agent's pull request whose submission left the queue; sluice marked it a draft, and takes it again once the agent's next `sluice submit` from its branch, or a person, marks it ready for review |
+| `waiting: the next submit` | an agent's pull request whose submission left the queue; sluice marked it a draft. Once the agent's next `sluice submit` from its branch on any host, or a person, marks it ready for review, sluice takes it again |
 | `waiting: withdrawn by the operator` | a pull request a person opened, withdrawn with `sluice withdraw` (`by the planner` when a planner withdrew it); sluice takes it again on new commits, or once it is marked a draft and then ready for review |
 | `waiting: needs 1 review, qa/approved` | out of draft, and these are missing on its latest commit; the details add where it would land now: "merges without conflict behind #38, #40" or "conflicts with #40 in plan.py" |
 | `queued behind #38, #40` | in the queue, behind the pull requests it names |
@@ -361,7 +365,36 @@ check reads:
 
 While a pull request waits or is queued, the check shows as pending on
 GitHub; while it is tested, in progress; failed and conflict fail it,
-and landed passes it. sluice posts only when the state changes.
+and landed passes it.
+
+The check's summary opens by naming the host that posted it. Once that
+host has taken the pull request in at its latest commit, it reads
+"Submission 1406 on b.", 1406 being the submission's number on host
+`b`. Before then it reads "Waiting to be taken in on b.". The summary
+ends with a block GitHub doesn't show, which carries the same for a
+program to read:
+
+```html
+<!-- sluice:queue {"host":"b","taken_in":true,"submission":1406,"state":"queued","ahead":[{"submission":1405,"pull_request":38}],"waits_for":[]} -->
+```
+
+`state` is the submission's state on that host, and `ahead` lists the
+submissions ahead of it there, in the order that host will land them,
+priorities and `--after` included, each with its pull request's number,
+or `null` for work submitted from a worktree. Before the host takes the
+pull request in, `taken_in` is `false`, `submission` and `state` are
+`null`, and `waits_for` lists what the check's title says it waits for,
+such as `["1 review", "qa/approved"]`. A pull request sent back and
+waiting for its submitter's next submit keeps its `submission`, its
+`state` says how it was sent back, and `waits_for` is `["the next
+submit"]`. sluice posts only when the state or a field of the block
+changes.
+
+sluice on another host reads where the pull request stands from this
+block, not from the check's title or whether GitHub shows the run
+failed. Taken in and `failed` or `conflict` is sent back, `landed` is
+landed, and anything else is still open. A check an older sluice
+posted has no block, so sluice reads its title and whether it failed.
 
 The forecast runs no tests. It only checks whether the pull request
 would merge on top of `main` and the queue as they are now, so a
@@ -450,6 +483,10 @@ sequenceDiagram
   a draft and then ready to retry the same commits. An agent's is
   marked a draft, and waits for the agent's next `sluice submit`, with a
   fix or the same commits, or for a person to mark it ready for review.
+  That submit marks it ready from any host, whichever host takes
+  `main`'s pull requests in. A submit from the branch of one sent back
+  that is no draft, such as one a person opened, marks it a draft and
+  then ready for review. sluice then takes it again.
 - **Withdrawn with `sluice withdraw`.** An agent's pull request is
   marked a draft, and waits the same way. One a person opened stays out
   of the queue as a blamed one does, however long its conditions hold:

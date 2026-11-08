@@ -218,9 +218,10 @@ impl Sluice<'_> {
     /// finds the results (rule core.7's order). It decides nothing (rule
     /// core.18), so a failure to keep it is given back, never raised.
     ///
-    /// A run of the checks is read with what the host lacks after it, as a
-    /// combination's is (design D5); a command's exit is its own, and
-    /// never is (design D6).
+    /// A run of the checks is read with what became of the host during it,
+    /// a switch of its system or an engine gone, as a combination's is
+    /// (records 0074, design D5, and 0097, design D7); a command's exit is
+    /// its own, and never is (record 0074, design D6).
     pub fn finish_session(
         &self,
         plan: &SessionPlan,
@@ -231,7 +232,7 @@ impl Sluice<'_> {
     ) -> Result<Finished> {
         let report = &match command {
             true => report.clone(),
-            false => self.after_run(&plan.policy.limits, report.clone())?,
+            false => self.after_run(&started.run, &plan.policy.limits, report.clone())?,
         };
         let recorded = self.record_finished(plan, session, started, command, report)?;
         let outcome = if report.timed_out {

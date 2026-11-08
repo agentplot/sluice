@@ -2,6 +2,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::records::{State, Submission};
+
 /// A submission as ordering sees it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Entry {
@@ -51,6 +53,65 @@ pub fn order(entries: &[Entry], landed: &BTreeSet<u64>, pinned: &[Vec<u64>]) -> 
     Order {
         chain,
         waiting: rest.iter().map(|e| e.id).collect(),
+    }
+}
+
+/// The chain of a branch's live submissions `subs` (6 to 8): those still
+/// in its queue, ordered by [`order`] with `landed` and the combinations
+/// `pinned` on the branch's revision, each pinned only while every one of
+/// its submissions is in the queue. What is landing is left out where
+/// `landing` is false, as a round leaves it, its landing under way; a
+/// reader shown the queue keeps it, ahead of what is still to be tested.
+pub fn chain<'a>(
+    subs: impl IntoIterator<Item = &'a Submission>,
+    landed: &BTreeSet<u64>,
+    pinned: &[Vec<u64>],
+    landing: bool,
+) -> Order {
+    let entries: Vec<Entry> = subs
+        .into_iter()
+        .filter(|s| !s.state.is_out() && (landing || s.state != State::Landing))
+        .map(|s| Entry {
+            id: s.id,
+            priority: s.priority,
+            after: s.after.clone(),
+        })
+        .collect();
+    let ids: BTreeSet<u64> = entries.iter().map(|e| e.id).collect();
+    let pinned: Vec<Vec<u64>> = pinned
+        .iter()
+        .filter(|c| c.iter().all(|i| ids.contains(i)))
+        .cloned()
+        .collect();
+    order(&entries, landed, &pinned)
+}
+
+/// What is ahead of submission `id` in a branch's queue whose chain is
+/// `chain`, `sub` giving each live submission by its number (6, 7): the
+/// chain's submissions before it; for one waiting on an `after` (7), the
+/// whole chain and then each submission it waits on that is still in the
+/// queue, as a forecast reads it (64); and nothing for one out of the
+/// queue or not in it.
+pub fn ahead_of<'a>(
+    id: u64,
+    chain: &[u64],
+    sub: impl Fn(u64) -> Option<&'a Submission>,
+) -> Vec<u64> {
+    if let Some(n) = chain.iter().position(|i| *i == id) {
+        return chain[..n].to_vec();
+    }
+    let in_queue = |i: u64| sub(i).is_some_and(|s| !s.state.is_out());
+    match sub(id) {
+        Some(s) if in_queue(id) => {
+            let mut ahead = chain.to_vec();
+            for a in &s.after {
+                if !ahead.contains(a) && in_queue(*a) {
+                    ahead.push(*a);
+                }
+            }
+            ahead
+        }
+        _ => Vec::new(),
     }
 }
 
@@ -120,6 +181,57 @@ mod tests {
         let o = order(&[first, e(3), blocked], &BTreeSet::new(), &[]);
         assert_eq!(o.chain, vec![3, 2]);
         assert_eq!(o.waiting, BTreeSet::from([4]));
+    }
+
+    fn sub(id: u64, state: &str, priority: i64, after: &[u64]) -> Submission {
+        serde_json::from_value(serde_json::json!({
+            "schema": crate::records::SUBMISSION_SCHEMA, "id": id, "branch": "main",
+            "head": format!("h{id}"), "from": { "agent": "a", "worktree": format!("w{id}") },
+            "submitted": "2026-11-07T10:00:00Z", "after": after, "priority": priority,
+            "attempt": 1, "state": state,
+        }))
+        .unwrap()
+    }
+
+    /// 6 to 8: a round's chain leaves what is landing out, and a reader's
+    /// keeps it; what is out of the queue is in neither, and a combination
+    /// one of whose submissions left the queue pins nothing.
+    #[test]
+    fn a_chain_of_submissions_keeps_landing_only_where_asked() {
+        let subs = [
+            sub(1, "landing", 0, &[]),
+            sub(2, "failed", 0, &[]),
+            sub(3, "queued", 0, &[]),
+            sub(4, "queued", 1, &[]),
+        ];
+        let landed = BTreeSet::new();
+        let pinned = [vec![1], vec![2, 3]];
+        assert_eq!(chain(&subs, &landed, &pinned, false).chain, [4, 3]);
+        assert_eq!(chain(&subs, &landed, &pinned, true).chain, [1, 4, 3]);
+    }
+
+    /// 6, 7, 64: ahead of one in the chain is what precedes it there;
+    /// ahead of one waiting on an `after` is the whole chain and then what
+    /// it waits on that is in the queue; ahead of one out of the queue, or
+    /// unknown, is nothing.
+    #[test]
+    fn ahead_of_follows_the_chain() {
+        let subs = [
+            sub(1, "queued", 0, &[]),
+            sub(2, "queued", 5, &[]),
+            sub(3, "queued", 0, &[4]),
+            sub(4, "queued", 0, &[9]),
+            sub(5, "conflict", 0, &[]),
+        ];
+        let o = chain(&subs, &BTreeSet::new(), &[], true);
+        assert_eq!(o.chain, [2, 1]);
+        let get = |i: u64| subs.iter().find(|s| s.id == i);
+        assert_eq!(ahead_of(1, &o.chain, get), [2]);
+        assert!(ahead_of(2, &o.chain, get).is_empty());
+        assert_eq!(ahead_of(3, &o.chain, get), [2, 1, 4]);
+        assert_eq!(ahead_of(4, &o.chain, get), [2, 1]);
+        assert!(ahead_of(5, &o.chain, get).is_empty());
+        assert!(ahead_of(6, &o.chain, get).is_empty());
     }
 
     #[test]
