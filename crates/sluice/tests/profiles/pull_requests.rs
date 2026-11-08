@@ -756,6 +756,65 @@ fn a_withdrawn_submission_whose_work_landed_is_reported_landed() {
     assert!(!said.contains("closed without landing"), "{said}");
 }
 
+/// 122; record 0100 D5: beside a live driver, whose tick is the only fetch
+/// of `main`, `sluice wait main` follows a pull request this host took in;
+/// another queue then lands it, and GitHub reads it closed, with no fetch
+/// of `main` on this host since the wait began. The wait reads the closed
+/// request against `main` as a round reads it, from its remote: it says
+/// landed as the commit that landed it and exits 0, never closed without
+/// landing.
+#[test]
+fn a_wait_beside_a_driver_reads_a_request_another_queue_landed_from_the_branch() {
+    let g = OnGitHub::new("pr-closed-beside-driver", "");
+    // The wait reads the request again every quarter of it.
+    g.discovery("10s");
+    let w = g.session("beside", &[("slow", "x\n")]);
+    let out = g.wt_submit(&w, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let pull = g.pull_from("unit/beside");
+    assert_eq!(g.of(pull.number).len(), 1, "{:?}", g.subs());
+    let _driver = g.driver();
+    let mut child = g
+        .command(env!("CARGO_BIN_EXE_sluice"), &w)
+        .args(["wait", "main", "--timeout", "60s"])
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let heard = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let reader = {
+        let heard = heard.clone();
+        let mut stdout = child.stdout.take().unwrap();
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 4096];
+            while let Ok(n @ 1..) = stdout.read(&mut buf) {
+                heard
+                    .lock()
+                    .unwrap()
+                    .push_str(&String::from_utf8_lossy(&buf[..n]));
+            }
+        })
+    };
+    // Landed elsewhere once the wait has read the request open.
+    let until = Instant::now() + Duration::from_secs(60);
+    while heard.lock().unwrap().is_empty() {
+        assert!(
+            Instant::now() < until,
+            "the wait never said where it stands"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let landing = landed_elsewhere(&g, &pull.head);
+    let status = ended(child).status;
+    reader.join().unwrap();
+    let said = heard.lock().unwrap().clone();
+    assert_eq!(status.code(), Some(sluice::LANDED), "{said}");
+    assert!(
+        said.contains(&format!("landed as {}", &landing[..7])),
+        "{said}"
+    );
+    assert!(!said.contains("closed without landing"), "{said}");
+}
+
 /// 5, 120: the operator's withdrawal of a hand-opened pull request's
 /// submission rests it on its head, open and ready: no work of it goes
 /// on, so a wait on it exits 4 at once.
