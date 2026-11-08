@@ -53,7 +53,33 @@ check of sluice's SHALL run for it (136, 137).
 - **WHEN** a pull request's only approving review was given on a commit before its current head
 - **THEN** it does not meet `reviews = 1`
 
-### Requirement: A pull request a submit opened comes back only on its submitter's act
+### Requirement: A group's pull requests are taken together
+
+Intake SHALL take the pull requests a group's marks bind only all
+together, in one pass and one write, in the group's order, once every
+one of them is open, out of draft and meets its conditions on the head
+it was marked at. Until then each SHALL wait, its state naming the pull
+requests of its group it waits for. The group SHALL bind a pull request
+only until it is first submitted at that head.
+
+#### Scenario: Two of three are ready
+
+- **WHEN** a group submit of three was refused for want of reviews, leaving three drafts marked as one group, a reviewer approves the first two, and a person marks all three ready for review
+- **THEN** none is submitted, and each of the first two says it waits for the third; once the third is approved, the next round submits all three in the group's order and the first combination formed holds all three
+
+#### Scenario: A round between the opens
+
+- **WHEN** a round job runs for `main` while three pull requests marked as one group are opened by hand, their conditions all holding
+- **THEN** no round submits the first before the third is open, and the first combination formed holds all three
+
+#### Scenario: One of the group is closed
+
+- **WHEN** one pull request of a group is closed before the group is submitted, and a person has marked the others ready for review
+- **THEN** the others are not submitted and say they wait for it, until a new submit names them again
+
+## ADDED Requirements
+
+### Requirement: A pull request a submit opened returns only on its submitter's act
 A pull request a submit opened or updated is one whose description
 names its agent. When its submission is withdrawn, blamed, timed out or
 removed for a conflict, sluice SHALL mark it a draft. No round SHALL
@@ -85,26 +111,8 @@ the one sent back included (120).
 - **WHEN** a pull request `wt submit` opened is sent back and GitHub refuses to mark it a draft
 - **THEN** no round submits it, its `sluice` check says it waits for the next submit, and each later round tries the draft again
 
-### Requirement: A group's pull requests are taken together
+## REMOVED Requirements
 
-Intake SHALL take the pull requests a group's marks bind only all
-together, in one pass and one write, in the group's order, once every
-one of them is open, out of draft and meets its conditions on the head
-it was marked at. Until then each SHALL wait, its state naming the pull
-requests of its group it waits for. The group SHALL bind a pull request
-only until it is first submitted at that head.
-
-#### Scenario: Two of three are ready
-
-- **WHEN** a group submit of three was refused for want of reviews, leaving three drafts marked as one group, a reviewer approves the first two, and a person marks all three ready for review
-- **THEN** none is submitted, and each of the first two says it waits for the third; once the third is approved, the next round submits all three in the group's order and the first combination formed holds all three
-
-#### Scenario: A round between the opens
-
-- **WHEN** a round job runs for `main` while three pull requests marked as one group are opened by hand, their conditions all holding
-- **THEN** no round submits the first before the third is open, and the first combination formed holds all three
-
-#### Scenario: One of the group is closed
-
-- **WHEN** one pull request of a group is closed before the group is submitted, and a person has marked the others ready for review
-- **THEN** the others are not submitted and say they wait for it, until a new submit names them again
+### Requirement: A pull request a submit opened comes back only on its submitter's act
+**Reason**: Its scenario of a withdrawal for a hand-over goes, since no host hands a branch's requests over (120, 137; record 0093).
+**Migration**: "A pull request a submit opened returns only on its submitter's act", which keeps every other scenario as it stood.

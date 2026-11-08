@@ -106,7 +106,8 @@ names its agent. When its submission is withdrawn, blamed, timed out or
 removed for a conflict, sluice SHALL mark it a draft. No round SHALL
 submit it again until a submit marks it ready for review, or a person
 does on GitHub, after the submission left. That holds on any head,
-the one sent back included.
+the one sent back included. A withdrawal for a hand-over of intake
+holds none of this (120, 137).
 
 #### Scenario: Refused, then its branch moves
 - **WHEN** a pull request `wt submit` opened is removed for a conflict, and another submission lands a fix on its branch so its head moves
@@ -131,6 +132,10 @@ the one sent back included.
 #### Scenario: Held when it cannot be marked a draft
 - **WHEN** a pull request `wt submit` opened is sent back and GitHub refuses to mark it a draft
 - **THEN** no round submits it, its `sluice` check says it waits for the next submit, and each later round tries the draft again
+
+#### Scenario: Withdrawn for a hand-over
+- **WHEN** the submission of a pull request `wt submit` opened is withdrawn because another host takes the branch's pull requests in
+- **THEN** sluice marks it no draft, and the host that holds the mark takes it in again as its conditions hold
 
 ### Requirement: A pull request sluice cannot read holds no other
 When a round cannot fetch an open pull request's head, or cannot read

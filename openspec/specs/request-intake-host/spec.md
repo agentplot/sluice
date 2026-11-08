@@ -25,13 +25,13 @@ requests (58, 72, 137; rule core.33).
 - **THEN** B asks GitHub nothing about main's open pull requests
 
 ### Requirement: The intake mark is kept by a leased push
-The mark SHALL name the host and whether its holder is the host's
-`sluice run` or a wait, SHALL be renewed by a push leased on the value
-read whenever a third of the host's lease has passed since it was last
-renewed, never at each pass, and SHALL be read in the fetch the branch's
-round already makes.
-A push refused at its lease SHALL leave the mark to the host that moved
-it (45, 137).
+The mark SHALL name the host and whether a `sluice run` or a wait holds
+it, SHALL be renewed by a push leased on the value read once a third of
+the lease has passed, and SHALL be read in the round's own fetch. A push
+refused at its lease SHALL be decided again, once, on the mark that
+fetch brings: this host's is kept, none is pushed again, and another's
+leaves the requests to that host; a second refusal takes nothing in and
+hands nothing over (45, 137; rule core.33).
 
 #### Scenario: A live driver keeps it
 - **WHEN** `sluice run` on host A holds the mark and renews it, and `sluice run` on host B passes main
@@ -40,6 +40,14 @@ it (45, 137).
 #### Scenario: Two takers at once
 - **WHEN** waits on hosts A and B, where no `sluice run` lives, both push the mark leased on its absence
 - **THEN** one push is refused at its lease, and that host takes nothing in
+
+#### Scenario: A mark let go under a renewal
+- **WHEN** `sluice run` on host A holds main's mark and has `pull/12` under test, and another process of A lets the mark go between the pass's fetch and its renewal
+- **THEN** A's renewal is refused at its lease, A pushes the mark again leased on its absence and holds it, and A's `pull/12` submission is not withdrawn
+
+#### Scenario: A mark this host moved under a renewal
+- **WHEN** `sluice run` on host A holds main's mark and has `pull/12` under test, and another process of A pushes A's own mark between the pass's fetch and its renewal
+- **THEN** A holds the mark, and A's `pull/12` submission is not withdrawn
 
 ### Requirement: The intake mark is taken by rule
 A `sluice run` SHALL push the mark when it starts, leased on its
@@ -75,20 +83,29 @@ observation, never by comparing the hosts' clocks (73, 137).
 - **THEN** B takes the mark and takes main's pull requests in
 
 ### Requirement: A wait lets the intake mark go
-A wait that holds the mark SHALL remove it, by a push leased on its last
-value, when it ends (137).
+A wait that reads a branch's pull requests SHALL hold the branch's
+intake mark among its host's waits, from its first pass until it ends.
+A wait that ends SHALL remove the mark, by a push leased on its value as
+the repository last read or wrote it, where that value names the wait's
+host and a wait and no other wait of its host still holds it; a mark
+another wait of its host holds SHALL stay (137; record 0089).
 
 #### Scenario: A wait lets go
-- **WHEN** a wait that holds the mark ends, landed or stopped by Ctrl-C
+- **WHEN** a wait that holds the mark ends, landed or stopped by Ctrl-C, and no other wait of its host holds it
 - **THEN** the mark is gone from the remote
+
+#### Scenario: A host's waits hold its mark together
+- **WHEN** two waits on host B, where no `sluice run` lives, read main's pull requests, and the one that pushed the mark ends
+- **THEN** the mark stays B's, and once the other ends, though it never pushed the mark, the mark is gone from the remote
 
 ### Requirement: A pull request's submission is advanced only on the host that takes it in
 Where each host keeps its own records, a pass on a host that finds the
-mark another host's SHALL withdraw every submission of its own records taken
-from a pull request, none landing, saying in the branch's log which host
-takes the branch's pull requests in, and SHALL post and comment nothing
-on the pull request. Submissions from the host's own worktrees SHALL NOT
-be touched (122, 137; rule core.33).
+mark another host's SHALL withdraw each submission of its records taken
+from a pull request, none landing and none whose head the branch as
+fetched holds, which the round lands as the commit that landed it; it
+SHALL log which host takes the requests in and post nothing on the pull
+request. Its worktrees' submissions SHALL stay (122, 137; rules core.33,
+core.48).
 
 #### Scenario: Handed over
 - **WHEN** host A has `pull/12` queued in its records and host B's `sluice run` takes main's mark
@@ -101,6 +118,10 @@ be touched (122, 137; rule core.33).
 #### Scenario: A worktree's submission stays
 - **WHEN** host A, without the mark, has a submission to `bolt/x` from one of its worktrees
 - **THEN** A's rounds advance it as before
+
+#### Scenario: A request that landed elsewhere is not handed over
+- **WHEN** host A has `pull/12` under test, host B takes main's mark and `pull/12` in and lands it, and A's next pass finds B holding the mark
+- **THEN** A withdraws nothing, and its round records its `pull/12` submission landed as the commit that landed it
 
 ### Requirement: A wait whose pull request another host takes in runs nothing for it
 A `sluice wait` or waiting `sluice submit` whose pull request another
@@ -233,3 +254,42 @@ mark names, which the wait goes on following (120, 137, C.5).
 #### Scenario: Held, then marked ready
 - **WHEN** B blamed `#12` and marked it a draft, its check saying `waiting: the next submit`, and a submit on A marks `#12` ready for review at the same head before B's next pass
 - **THEN** a wait on A reports `#12` waiting to be taken in by B, and goes on following it
+
+### Requirement: A withdrawal for a hand-over holds no pull request
+A submission withdrawn for a hand-over SHALL name, in its record's
+`withdrawn.handed_over_to` and its log line, the host the intake mark
+named. No round SHALL hold its pull request, mark it a draft or wait for
+a submitter's act for it. Whichever host holds the mark SHALL take the
+request in again at the head it holds, as its conditions hold, the host
+that withdrew it included (120, 137; rule core.33).
+
+#### Scenario: The mark comes back
+- **WHEN** host A hands `pull/12`, opened by `sluice submit`, over to host B, and main's mark comes back to A
+- **THEN** A takes `pull/12` in again at its head and lands it, and `pull/12` is never a draft
+
+#### Scenario: A submit after a hand-over
+- **WHEN** host A hands `pull/12` over to host B, and its agent runs `sluice submit` again with no new commits
+- **THEN** the submit marks `pull/12` neither a draft nor ready for review
+
+#### Scenario: A wait on a hand-over says where it went
+- **WHEN** host A hands `pull/12` over to host B, and `sluice wait` on A follows A's submission of it
+- **THEN** the wait says the submission was handed over to B and follows `#12`, and `sluice status` of the submission says `handed over to b`
+
+#### Scenario: A request closed is still withdrawn
+- **WHEN** main's mark came back to host A and A took `pull/12` in again, and a person closes it and opens it again
+- **THEN** A's submission is withdrawn naming no host, and `pull/12` is a draft that no round takes in again
+
+### Requirement: An older hand-over's withdrawal reads as it was
+A withdrawal whose record names no host SHALL be read as the sluice
+that wrote it read it. One whose `by` is the words sluice 0.60.0 to
+0.70.2 gave every hand-over, `<host> takes <branch>'s pull requests
+in`, SHALL hold no pull request. Any other SHALL hold one as before
+(120; record 0088 as amended).
+
+#### Scenario: An older hand-over comes back
+- **WHEN** host A's withdrawal of `pull/12` names no host and says `b takes main's pull requests in`, and main's mark comes back to A
+- **THEN** A takes `pull/12` in again at its head, and `pull/12` is never a draft
+
+#### Scenario: An older operator's withdrawal
+- **WHEN** a submission of `pull/12`, opened by `sluice submit`, was withdrawn by the operator before withdrawals named a host
+- **THEN** `pull/12` waits for its submitter's act as before
