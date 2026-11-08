@@ -39,4 +39,4 @@ when its check passes as written.
 
 ## 5. The site
 
-- [ ] 5.1 `sluice wait` in `site/src/content/docs/reference/commands.md` says a wait reports its own submission. It is landed where its work landed, by whatever landing. Where a later submission or its pull request carries the work, the wait follows it and names it in `carried_by`, and it is withdrawn when that stops short. The exit table's `4` reads withdrawn, and none of its work landed. True when `sluice exec bolt/sluice-tells-each-submitter-its-own-end -- moon run site:prose` passes.
+- [x] 5.1 `sluice wait` in `site/src/content/docs/reference/commands.md` says a wait reports its own submission. It is landed where its work landed, by whatever landing. Where a later submission or its pull request carries the work, the wait follows it and names it in `carried_by`, and it is withdrawn when that stops short. The exit table's `4` reads withdrawn, and none of its work landed. True when `sluice exec bolt/sluice-tells-each-submitter-its-own-end -- moon run site:prose` passes.
