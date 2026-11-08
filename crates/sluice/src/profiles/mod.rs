@@ -47,6 +47,9 @@ pub struct Bound {
     pub state: records::Records,
     /// The pull request driver, which also takes pull requests in.
     pub pulls: Rc<github::pulls::Pulls>,
+    /// 135: sluice's host process, reached through its socket, or, in its
+    /// own repositories' tasks, read in place.
+    pub host_process: Box<dyn crate::host_process::HostProcess>,
 }
 
 /// The driver seam as an instance binds it: a pull request's place,
@@ -203,6 +206,7 @@ impl Bound {
             },
             state,
             pulls,
+            host_process: Box::new(crate::host_process::Socketed::default()),
         })
     }
 
@@ -521,6 +525,10 @@ impl crate::exec::Host for Bound {
         self.branch.next_pass();
         self.state.next_pass();
         self.pulls.next_pass();
+    }
+
+    fn host_process(&self) -> &dyn crate::host_process::HostProcess {
+        &*self.host_process
     }
 
     fn default_branch(&self) -> Result<Option<sluice_core::overview::OrderFrom>> {

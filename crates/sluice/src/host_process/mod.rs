@@ -23,6 +23,7 @@
 //! own process and a socket's path stays within the 104 bytes macOS binds,
 //! however deep the state folder (design D1).
 
+pub mod ask;
 pub mod client;
 pub mod environment;
 pub mod index;
@@ -43,6 +44,7 @@ use anyhow::{Context, Result};
 
 use crate::instance::Instance;
 use crate::profiles::places::{repository_key, user_scratch, USER_SCRATCH_VAR};
+pub use ask::{Following, Here, Holding, Holds, HostProcess, Socketed};
 use protocol::{receive, send, Answer, Hello, Named, Request, RoomView, Started};
 use room::{Asked, Asker, Room, Shared};
 
@@ -221,7 +223,11 @@ fn run_holding(paths: Paths, _lock: File) -> Result<i32> {
         instance.reserved,
     ));
     let hosting = Arc::new(Hosting {
-        tasks: tasks::Tasks::new(tasks::repository_body(room.clone(), asked_only())),
+        tasks: tasks::Tasks::new(tasks::repository_body(
+            room.clone(),
+            asked_only(),
+            named.clone(),
+        )),
         paths,
         named,
         room,
@@ -400,17 +406,13 @@ fn answer(hosting: &Arc<Hosting>, stream: UnixStream) -> Result<()> {
     match request {
         Request::Serve { repository } => {
             note(hosting, &repository);
+            // Where passes are taken only when asked, the repository is
+            // held for the next ask; otherwise it is passed at once.
             let task = hosting.tasks.handle(&repository);
-            match asked_only() {
-                true => match task.pass() {
-                    Ok(_) => send(&mut writer, &Answer::Ok),
-                    Err(e) => send(&mut writer, &Answer::Error(e)),
-                },
-                false => {
-                    task.wake();
-                    send(&mut writer, &Answer::Ok)
-                }
+            if !asked_only() {
+                task.wake();
             }
+            send(&mut writer, &Answer::Ok)
         }
         Request::Pass { repository } => {
             note(hosting, &repository);
@@ -500,7 +502,12 @@ fn closed(stream: &UnixStream) -> bool {
 
 /// The room as a person reads it (150).
 fn view(hosting: &Hosting) -> Result<RoomView> {
-    let mut room = hosting.room.lock();
+    view_of(&hosting.room)
+}
+
+/// `room` as a person reads it (150).
+pub(crate) fn view_of(room: &Shared) -> Result<RoomView> {
+    let mut room = room.lock();
     let running = room.running()?;
     Ok(RoomView {
         bound: room.bound(),

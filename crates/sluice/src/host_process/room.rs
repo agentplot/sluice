@@ -30,7 +30,11 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use sluice_seams::{Part, RunKind, Running};
+use sluice_seams::{
+    AtBound, Equip, Equipped, HostRun, KeptOutTask, Launch, Limits, Part, Platform, Progress,
+    Reading, Reads, RunHandle, RunKind, RunReport, RunRequest, Running, Setting, Settings, TaskLog,
+    TaskProgress, Tests,
+};
 
 use crate::host_count::{self, Admission, HostCount};
 
@@ -111,15 +115,24 @@ struct Held {
     admission: Option<Admission>,
 }
 
+/// How a room counts the runs going on the host.
+enum Count {
+    /// Its own: each run started from a part, until it ends.
+    Own(BTreeMap<u64, RunKind>),
+    /// The host's registry of running checks: every live entry, an older
+    /// sluice's and the parts it holds among them.
+    Registry(HostCount),
+    /// As last seen of a check seam that counts them itself, as the tests'
+    /// fakes do, with the parts it holds beside them.
+    Seen(Running),
+}
+
 /// The host's room: see the module's documentation.
 pub struct Room {
     bound: usize,
     reserved: usize,
-    /// The host's registry of running checks, where the room counts.
-    registry: Option<HostCount>,
+    count: Count,
     held: BTreeMap<u64, Held>,
-    /// Runs started with no registry to count them, until they end.
-    going: BTreeMap<u64, RunKind>,
     /// Combinations' waits, by repository, with when each last asked.
     queue_waits: BTreeMap<PathBuf, Instant>,
     /// Sessions' and previews' waits in the order they came to wait.
@@ -135,9 +148,8 @@ impl Room {
         Room {
             bound,
             reserved,
-            registry: None,
+            count: Count::Own(BTreeMap::new()),
             held: BTreeMap::new(),
-            going: BTreeMap::new(),
             queue_waits: BTreeMap::new(),
             session_waits: Vec::new(),
             turn: Turn::Queue,
@@ -151,13 +163,36 @@ impl Room {
     /// them, counts against it.
     pub fn over(registry: HostCount, bound: usize, reserved: usize) -> Room {
         Room {
-            registry: Some(registry),
+            count: Count::Registry(registry),
             ..Room::new(bound, reserved)
+        }
+    }
+
+    /// A room of `bound` runs, `reserved` of them kept for combinations,
+    /// counting the runs going as [`Room::see`] last saw them.
+    pub fn seeing(bound: usize, reserved: usize) -> Room {
+        Room {
+            count: Count::Seen(Running::default()),
+            ..Room::new(bound, reserved)
+        }
+    }
+
+    /// The runs going on the host as a check seam that counts them itself
+    /// sees them now, the parts this room holds apart.
+    pub fn see(&mut self, running: Running) {
+        if let Count::Seen(r) = &mut self.count {
+            *r = running;
         }
     }
 
     pub fn bound(&self) -> usize {
         self.bound
+    }
+
+    /// The bound and the reserve as the host's settings say them now.
+    pub fn bounds(&mut self, bound: usize, reserved: usize) {
+        self.bound = bound;
+        self.reserved = reserved;
     }
 
     pub fn reserved(&self) -> usize {
@@ -170,16 +205,12 @@ impl Room {
 
     /// The runs going on the host and the parts held, by kind.
     pub fn running(&self) -> Result<Running> {
-        if let Some(r) = &self.registry {
-            return r.running();
-        }
-        let mut out = Running::default();
-        let kinds = self
-            .held
-            .values()
-            .map(|h| h.kind)
-            .chain(self.going.values().copied());
-        for kind in kinds {
+        let (mut out, going): (Running, Vec<RunKind>) = match &self.count {
+            Count::Registry(r) => return r.running(),
+            Count::Own(going) => (Running::default(), going.values().copied().collect()),
+            Count::Seen(r) => (*r, Vec::new()),
+        };
+        for kind in self.held.values().map(|h| h.kind).chain(going) {
             match kind {
                 RunKind::Queue => out.queue += 1,
                 RunKind::Session => out.sessions += 1,
@@ -266,8 +297,8 @@ impl Room {
         if let Some(why) = refused {
             return Ok(Asked::Refused(why));
         }
-        let admission = match &self.registry {
-            Some(r) => {
+        let admission = match &self.count {
+            Count::Registry(r) => {
                 let (entry_kind, limit) = match kind {
                     RunKind::Queue => (host_count::Kind::Queue, self.bound),
                     RunKind::Session => (
@@ -295,7 +326,7 @@ impl Room {
                     }
                 }
             }
-            None => None,
+            Count::Own(_) | Count::Seen(_) => None,
         };
         let id = self.id();
         self.held.insert(id, Held { kind, admission });
@@ -318,11 +349,11 @@ impl Room {
     /// keeps it counted from now: the part is the room's no longer.
     pub fn started(&mut self, id: u64) {
         if let Some(held) = self.held.remove(&id) {
-            match held.admission {
-                Some(a) => a.started(),
-                None => {
-                    self.going.insert(id, held.kind);
-                }
+            if let Some(a) = held.admission {
+                a.started();
+            }
+            if let Count::Own(going) = &mut self.count {
+                going.insert(id, held.kind);
             }
         }
     }
@@ -335,7 +366,9 @@ impl Room {
 
     /// The run started from part `id` ended, where no registry counts it.
     pub fn ended(&mut self, id: u64) {
-        self.going.remove(&id);
+        if let Count::Own(going) = &mut self.count {
+            going.remove(&id);
+        }
     }
 
     /// Whether any part is held or any run waits: what keeps the host
@@ -424,6 +457,129 @@ impl Drop for Holding {
         if !self.done {
             self.room.lock().give_back(self.id);
         }
+    }
+}
+
+/// A check seam whose parts are held of a room, every other ask its own:
+/// the tests' fakes as sluice's host process holds them (design D13). The
+/// room counts the runs going as the seam sees them.
+pub struct Roomed<'a> {
+    pub inner: &'a dyn Tests,
+    pub room: Shared,
+    /// The repository its runs are for.
+    pub repository: PathBuf,
+}
+
+impl Roomed<'_> {
+    /// Ask for a part of `kind` now: held, or refused with why.
+    pub fn ask(&self, asker: &Asker) -> Result<Asked> {
+        let running = self.inner.running()?;
+        let mut room = self.room.lock();
+        room.see(running);
+        room.ask(asker, &self.repository, Instant::now())
+    }
+}
+
+impl Tests for Roomed<'_> {
+    fn start(&self, request: &RunRequest, part: Part) -> Result<RunHandle> {
+        let kind = part.kind();
+        let Ok(held) = part.take::<Holding>() else {
+            return Err(AtBound.into());
+        };
+        // The seam counts the run from its start; the part is the room's
+        // until then, and given back where the start fails.
+        let run = self.inner.start(request, Part::new(kind, ()))?;
+        held.started();
+        Ok(run)
+    }
+
+    fn hold(&self, kind: RunKind) -> Result<Option<Part>> {
+        let asked = match kind {
+            RunKind::Queue => self.ask(&Asker::Queue(self.repository.clone()))?,
+            RunKind::Session => {
+                let waiter = self.room.lock().wait();
+                let asked = self.ask(&Asker::Session(waiter));
+                self.room.lock().let_go(waiter);
+                asked?
+            }
+        };
+        Ok(match asked {
+            Asked::Held(id) => Some(self.room.part(kind, id)),
+            Asked::Refused(_) => None,
+        })
+    }
+
+    fn progress(&self, run: &RunHandle) -> Result<Progress> {
+        self.inner.progress(run)
+    }
+
+    fn unmet(&self, limits: &Limits) -> Result<Option<String>> {
+        self.inner.unmet(limits)
+    }
+
+    fn bound(&self) -> Result<usize> {
+        self.inner.bound()
+    }
+
+    fn platform(&self) -> Result<Platform> {
+        self.inner.platform()
+    }
+
+    fn launch(&self, launch: &Launch) -> Result<()> {
+        self.inner.launch(launch)
+    }
+
+    fn job_alive(
+        &self,
+        kind: &(String, Setting),
+        claim: &str,
+        remote: Option<&str>,
+    ) -> Result<bool> {
+        self.inner.job_alive(kind, claim, remote)
+    }
+
+    fn wake(&self, kind: &(String, Setting), branch: &str, remote: Option<&str>) -> Result<()> {
+        self.inner.wake(kind, branch, remote)
+    }
+
+    fn running(&self) -> Result<Running> {
+        let running = self.inner.running()?;
+        let mut room = self.room.lock();
+        room.see(running);
+        room.running()
+    }
+
+    fn proven(&self, run: &RunHandle, report: &RunReport) -> Result<Vec<String>> {
+        self.inner.proven(run, report)
+    }
+
+    fn session_runs(&self) -> Result<Vec<HostRun>> {
+        self.inner.session_runs()
+    }
+
+    fn logs(&self, run: &RunHandle, tasks: &[String]) -> Result<Vec<TaskLog>> {
+        self.inner.logs(run, tasks)
+    }
+
+    fn tasks(&self, run: &RunHandle) -> Result<Vec<TaskProgress>> {
+        self.inner.tasks(run)
+    }
+
+    fn kept_out(
+        &self,
+        worktree: &Path,
+        tests: &Settings,
+        required: &[String],
+    ) -> Result<Vec<KeptOutTask>> {
+        self.inner.kept_out(worktree, tests, required)
+    }
+
+    fn reads(&self, reading: &Reading) -> Result<Vec<Reads>> {
+        self.inner.reads(reading)
+    }
+
+    fn equip(&self, equip: &Equip) -> Result<Equipped> {
+        self.inner.equip(equip)
     }
 }
 

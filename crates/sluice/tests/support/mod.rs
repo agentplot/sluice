@@ -554,11 +554,275 @@ pub fn share_readers(dir: PathBuf) {
 }
 
 /// The host over the fakes: session runs counted by the fake check seam,
-/// a reserve, no run directories, the test's own [`readers`], and the
-/// thread's [`version`].
+/// a reserve, no run directories, the test's own [`readers`], the thread's
+/// [`version`], and the host process in the test's own process.
 pub struct FakeHost {
     pub world: sluice_fakes::World,
     pub reserved: usize,
+    pub process: FakeProcess,
+}
+
+impl FakeHost {
+    pub fn new(world: sluice_fakes::World, reserved: usize) -> FakeHost {
+        FakeHost {
+            world,
+            reserved,
+            process: FakeProcess {
+                reserved,
+                ..FakeProcess::default()
+            },
+        }
+    }
+}
+
+thread_local! {
+    /// The room of the fakes' host process on this thread, which outlives
+    /// each command a test runs, as sluice's host process outlives the
+    /// commands that reach it (record 0087; design D12).
+    static ROOM: RefCell<Option<sluice::host_process::room::Shared>> = const { RefCell::new(None) };
+}
+
+/// The fakes' host's room on this thread, bounded as the check seam and
+/// `reserved` say now.
+pub fn fake_room(bound: usize, reserved: usize) -> sluice::host_process::room::Shared {
+    ROOM.with(|r| {
+        let room = r
+            .borrow_mut()
+            .get_or_insert_with(|| {
+                sluice::host_process::room::Shared::new(sluice::host_process::room::Room::seeing(
+                    bound, reserved,
+                ))
+            })
+            .clone();
+        room.lock().bounds(bound, reserved);
+        room
+    })
+}
+
+/// sluice's host process as the fakes' host answers it, in the test's own
+/// process (design D13): a pass and a step run the pass or the round on
+/// the fakes' seams there, through the same `host_process::pass` the host
+/// process runs; a session's or a preview's room is asked of the room it
+/// keeps; and it passes only when asked, so a follower asks a pass at each
+/// tick and a serve holds the repository for the next ask. What it reads
+/// with lasts one command.
+#[derive(Default)]
+pub struct FakeProcess {
+    reserved: usize,
+    kept: RefCell<sluice::host_process::pass::Kept>,
+    reader: RefCell<Option<sluice::reader::Reader>>,
+    driver: RefCell<Option<sluice::reader::Driver>>,
+}
+
+impl FakeProcess {
+    fn room(
+        &self,
+        here: &sluice::host_process::Here<'_, '_>,
+    ) -> anyhow::Result<sluice::host_process::room::Shared> {
+        Ok(fake_room(here.s.seams().tests.bound()?, self.reserved))
+    }
+
+    /// The fakes' seams with their parts held of the room, as the host
+    /// process holds a repository's.
+    fn roomed<'a>(
+        &self,
+        here: &sluice::host_process::Here<'a, '_>,
+    ) -> anyhow::Result<sluice::host_process::room::Roomed<'a>> {
+        Ok(sluice::host_process::room::Roomed {
+            inner: here.s.seams().tests,
+            room: self.room(here)?,
+            repository: here.repository()?,
+        })
+    }
+}
+
+impl sluice::host_process::HostProcess for FakeProcess {
+    fn asked_only(&self) -> bool {
+        true
+    }
+
+    fn note(&self, _: &sluice::host_process::Here<'_, '_>) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// It passes only when asked: a serve holds the repository, and the
+    /// test's next command that asks moves it.
+    fn serve(&self, _: &sluice::host_process::Here<'_, '_>) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// The fakes' host process is the test's own process: it answers.
+    fn reach(&self, _: &sluice::host_process::Here<'_, '_>) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn step(
+        &self,
+        here: &sluice::host_process::Here<'_, '_>,
+        branch: &str,
+    ) -> anyhow::Result<serde_json::Value> {
+        let roomed = self.roomed(here)?;
+        let seams = sluice_core::Seams {
+            tests: &roomed,
+            ..here.s.seams()
+        };
+        let s = sluice_core::Sluice::new(seams, here.clock).as_peer(here.host.peer());
+        sluice::host_process::pass::step(&s, here.pulls, here.clock, branch)
+    }
+
+    fn pass(
+        &self,
+        here: &sluice::host_process::Here<'_, '_>,
+    ) -> anyhow::Result<sluice::host_process::pass::Report> {
+        use sluice::reader::{Driver, Drives, Reader};
+        let roomed = self.roomed(here)?;
+        let seams = sluice_core::Seams {
+            tests: &roomed,
+            ..here.s.seams()
+        };
+        let s = sluice_core::Sluice::new(seams, here.clock).as_peer(here.host.peer());
+        let (readers, repository) = (here.host.readers()?, here.host.repository()?);
+        let mut driver = self.driver.borrow_mut();
+        if driver.is_none() {
+            *driver = Driver::try_take(&readers, &repository)?;
+        }
+        // Design D7: an older `sluice run` drives the repository.
+        if driver.is_none() {
+            return Ok(sluice::host_process::pass::Report {
+                in_play: true,
+                ..Default::default()
+            });
+        }
+        let mut reader = self.reader.borrow_mut();
+        match &mut *reader {
+            Some(r) => {
+                let _ = r.step(true, Drives::Nobody);
+            }
+            None => {
+                *reader = Some(Reader::take_given(
+                    &readers,
+                    &repository,
+                    here.host.version(),
+                    Drives::Nobody,
+                )?)
+            }
+        }
+        // Design D7: an older reader reads until it lets go.
+        let Some(Reader::Lead(lead)) = &mut *reader else {
+            return Ok(sluice::host_process::pass::Report {
+                in_play: true,
+                ..Default::default()
+            });
+        };
+        sluice::host_process::pass::pass(
+            &s,
+            here.host,
+            here.pulls,
+            here.clock,
+            Some(lead),
+            sluice::tick(None),
+            &mut self.kept.borrow_mut(),
+        )
+    }
+
+    fn follow<'a>(
+        &'a self,
+        _: &sluice::host_process::Here<'a, '_>,
+        _: sluice::host_process::protocol::FollowKind,
+    ) -> anyhow::Result<Box<dyn sluice::host_process::Following + 'a>> {
+        Ok(Box::new(NoReports))
+    }
+
+    fn hold<'a>(
+        &'a self,
+        here: &sluice::host_process::Here<'a, '_>,
+        kind: sluice_seams::RunKind,
+        _place: &str,
+    ) -> anyhow::Result<Box<dyn sluice::host_process::Holding + 'a>> {
+        let roomed = self.roomed(here)?;
+        let waiter = roomed.room.lock().wait();
+        Ok(Box::new(FakeHolding {
+            roomed,
+            waiter,
+            kind,
+            said: None,
+        }))
+    }
+
+    fn room(
+        &self,
+        here: &sluice::host_process::Here<'_, '_>,
+    ) -> anyhow::Result<
+        Option<(
+            sluice::host_process::protocol::Named,
+            sluice::host_process::protocol::RoomView,
+        )>,
+    > {
+        let roomed = self.roomed(here)?;
+        let running = sluice_seams::Tests::running(&roomed)?;
+        let mut room = roomed.room.lock();
+        let view = sluice::host_process::protocol::RoomView {
+            bound: room.bound(),
+            reserve: room.reserved(),
+            queue: running.queue,
+            sessions: running.sessions,
+            waiting: room.waiting(std::time::Instant::now()),
+            turn: room.turn(),
+        };
+        let named = sluice::host_process::protocol::Named {
+            version: here.host.version().to_string(),
+            pid: std::process::id(),
+            since: "2026-11-07T00:00:00Z".into(),
+        };
+        Ok(Some((named, view)))
+    }
+}
+
+/// A follow of the fakes' host process, which reports nothing of its own:
+/// its follower asks a pass at each tick.
+struct NoReports;
+
+impl sluice::host_process::Following for NoReports {
+    fn next(
+        &mut self,
+        _: std::time::Duration,
+    ) -> anyhow::Result<Option<sluice::host_process::pass::Report>> {
+        Ok(None)
+    }
+}
+
+/// A session's or a preview's ask of the fakes' room, its wait let go
+/// when it is dropped.
+struct FakeHolding<'a> {
+    roomed: sluice::host_process::room::Roomed<'a>,
+    waiter: u64,
+    kind: sluice_seams::RunKind,
+    said: Option<sluice::host_process::room::Why>,
+}
+
+impl sluice::host_process::Holding for FakeHolding<'_> {
+    fn next(
+        &mut self,
+        _: std::time::Duration,
+    ) -> anyhow::Result<Option<sluice::host_process::Holds>> {
+        use sluice::host_process::room::{Asked, Asker};
+        match self.roomed.ask(&Asker::Session(self.waiter))? {
+            Asked::Held(id) => Ok(Some(sluice::host_process::Holds::Held(
+                self.roomed.room.part(self.kind, id),
+            ))),
+            Asked::Refused(why) if self.said != Some(why) => {
+                self.said = Some(why);
+                Ok(Some(sluice::host_process::Holds::Waiting(why)))
+            }
+            Asked::Refused(_) => Ok(None),
+        }
+    }
+}
+
+impl Drop for FakeHolding<'_> {
+    fn drop(&mut self) {
+        self.roomed.room.lock().let_go(self.waiter);
+    }
 }
 
 impl sluice::exec::Host for FakeHost {
@@ -645,6 +909,10 @@ impl sluice::exec::Host for FakeHost {
 
     fn version(&self) -> &str {
         version()
+    }
+
+    fn host_process(&self) -> &dyn sluice::host_process::HostProcess {
+        &self.process
     }
 
     fn default_branch(&self) -> anyhow::Result<Option<sluice_core::overview::OrderFrom>> {

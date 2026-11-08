@@ -20,9 +20,10 @@ use std::time::{Duration, Instant};
 
 use sluice_core::{Clock, Sluice, SystemClock};
 
+use super::ask::Inside;
 use super::log;
 use super::pass::{self, Kept, Report};
-use super::protocol::FollowKind;
+use super::protocol::{FollowKind, Named};
 use super::room::Shared;
 use crate::exec::Host;
 use crate::profiles::checks::RoomHandle;
@@ -316,8 +317,8 @@ impl Inbox {
 /// The body of a repository's task in the host process: its own binding,
 /// holding its parts of `room`, passing at its tick or, when `asked_only`,
 /// at each ask (design D5, D13).
-pub fn repository_body(room: Shared, asked_only: bool) -> Body {
-    Arc::new(move |inbox: Inbox| repository(inbox, room.clone(), asked_only))
+pub fn repository_body(room: Shared, asked_only: bool, named: Named) -> Body {
+    Arc::new(move |inbox: Inbox| repository(inbox, room.clone(), asked_only, named.clone()))
 }
 
 /// The folder a repository is bound from: its main worktree where its
@@ -336,7 +337,7 @@ fn tick(watched: bool) -> Duration {
     Duration::from_secs(if watched { 1 } else { 3 })
 }
 
-fn repository(inbox: Inbox, room: Shared, asked_only: bool) {
+fn repository(inbox: Inbox, room: Shared, asked_only: bool, named: Named) {
     let common = inbox.repository.clone();
     let bound = match Bound::open(&open_dir(&common), Rc::new(crate::retry::Policy::round())) {
         Ok(b) => b,
@@ -350,7 +351,8 @@ fn repository(inbox: Inbox, room: Shared, asked_only: bool) {
         }
     };
     let bound = Bound {
-        tests: bound.tests.with_room(RoomHandle::Here(room)),
+        tests: bound.tests.with_room(RoomHandle::Here(room.clone())),
+        host_process: Box::new(Inside { room, named }),
         ..bound
     };
     // In a test's host process, a pass's time moves on by its tick as a

@@ -47,10 +47,7 @@ fn sluice(f: &Fakes, args: &[&str]) -> (i32, String) {
         run(
             cli,
             f.seams(),
-            &support::FakeHost {
-                world: f.world.clone(),
-                reserved: 0,
-            },
+            &support::FakeHost::new(f.world.clone(), 0),
             &(),
             &(),
             &f.clock,
@@ -1594,10 +1591,7 @@ fn status_refuses_a_checkout_cache() {
     );
     let cli = Cli::try_parse_from(["sluice", "status", BRANCH]).unwrap();
     let mut out = Vec::new();
-    let host = support::FakeHost {
-        world: f.world.clone(),
-        reserved: 0,
-    };
+    let host = support::FakeHost::new(f.world.clone(), 0);
     let e = run(
         cli,
         f.seams(),
@@ -2506,10 +2500,7 @@ fn overview_watch_prints_a_line_at_start_and_on_each_change() {
     let code = run(
         cli,
         f.seams(),
-        &support::FakeHost {
-            world: f.world.clone(),
-            reserved: 0,
-        },
+        &support::FakeHost::new(f.world.clone(), 0),
         &(),
         &(),
         &f.clock,
@@ -3446,10 +3437,7 @@ fn a_watch_ends_once_its_repository_is_removed() {
     };
     let cli = Cli::try_parse_from(["sluice", "overview", "--json", "--watch"]).unwrap();
     let mut out = Vec::new();
-    let host = support::FakeHost {
-        world: f.world.clone(),
-        reserved: 0,
-    };
+    let host = support::FakeHost::new(f.world.clone(), 0);
     let e = run(cli, f.seams(), &host, &(), &(), &f.clock, &pause, &mut out).unwrap_err();
     // `main` prints it as the error document and exits 3.
     assert_failure(&failure(&format!("{e:#}")), gone);
@@ -4630,10 +4618,7 @@ fn exec_with(f: &Fakes, reserved: usize, pause: &dyn Pause, args: &[&str]) -> (i
     let cli =
         Cli::try_parse_from(["sluice", "exec"].into_iter().chain(args.iter().copied())).unwrap();
     let mut out = Vec::new();
-    let host = support::FakeHost {
-        world: f.world.clone(),
-        reserved,
-    };
+    let host = support::FakeHost::new(f.world.clone(), reserved);
     let code = run(cli, f.seams(), &host, &(), &(), &f.clock, pause, &mut out).unwrap();
     (code, String::from_utf8(out).unwrap())
 }
@@ -4860,10 +4845,7 @@ fn the_counts_say_when_agents_checks_hold_the_queue_back() {
 fn overview_doc(f: &Fakes, reserved: usize) -> serde_json::Value {
     let cli = Cli::try_parse_from(["sluice", "overview", "--json"]).unwrap();
     let mut out = Vec::new();
-    let host = support::FakeHost {
-        world: f.world.clone(),
-        reserved,
-    };
+    let host = support::FakeHost::new(f.world.clone(), reserved);
     let pause = Rounds(Cell::new(0));
     run(cli, f.seams(), &host, &(), &(), &f.clock, &pause, &mut out).unwrap();
     serde_json::from_slice(&out).unwrap()
@@ -5069,10 +5051,7 @@ fn overview_watch_prints_when_a_checks_task_moves() {
     };
     let cli = Cli::try_parse_from(["sluice", "overview", "--json", "--watch"]).unwrap();
     let mut out = Vec::new();
-    let host = support::FakeHost {
-        world: f.world.clone(),
-        reserved: 0,
-    };
+    let host = support::FakeHost::new(f.world.clone(), 0);
     run(cli, f.seams(), &host, &(), &(), &f.clock, &pause, &mut out).unwrap();
     let out = String::from_utf8(out).unwrap();
     let docs: Vec<serde_json::Value> = out
@@ -5455,10 +5434,7 @@ fn release(f: &Fakes, args: &[&str]) -> (i32, String) {
     )
     .unwrap();
     let mut out = Vec::new();
-    let host = support::FakeHost {
-        world: f.world.clone(),
-        reserved: 0,
-    };
+    let host = support::FakeHost::new(f.world.clone(), 0);
     let code = run(
         cli,
         f.seams(),
@@ -5837,10 +5813,7 @@ fn status_and_overview_carry_a_worktrees_last_result() {
     run(
         cli,
         f.seams(),
-        &support::FakeHost {
-            world: f.world.clone(),
-            reserved: 0,
-        },
+        &support::FakeHost::new(f.world.clone(), 0),
         &(),
         &(),
         &f.clock,
@@ -5970,10 +5943,7 @@ fn a_held_place_is_one_entry() {
 fn sluice_with(f: &Fakes, pause: &dyn Pause, args: &[&str]) -> (i32, String) {
     let cli = Cli::try_parse_from(std::iter::once("sluice").chain(args.iter().copied())).unwrap();
     let mut out = Vec::new();
-    let host = support::FakeHost {
-        world: f.world.clone(),
-        reserved: 0,
-    };
+    let host = support::FakeHost::new(f.world.clone(), 0);
     let code = settled(|| run(cli, f.seams(), &host, &(), &(), &f.clock, pause, &mut out)).unwrap();
     (code, String::from_utf8(out).unwrap())
 }
@@ -6418,10 +6388,7 @@ fn sluice_pulls(
 ) -> (i32, String) {
     let cli = Cli::try_parse_from(std::iter::once("sluice").chain(args.iter().copied())).unwrap();
     let mut out = Vec::new();
-    let host = support::FakeHost {
-        world: f.world.clone(),
-        reserved: 0,
-    };
+    let host = support::FakeHost::new(f.world.clone(), 0);
     let code =
         settled(|| run(cli, f.seams(), &host, &(), pulls, &f.clock, pause, &mut out)).unwrap();
     (code, String::from_utf8(out).unwrap())
@@ -7520,10 +7487,7 @@ fn a_round_failing_before_the_landing_is_an_error() {
     };
     let cli = Cli::try_parse_from(["sluice", "submit", BRANCH, "--worktree", "unit/a"]).unwrap();
     let mut out = Vec::new();
-    let host = support::FakeHost {
-        world: f.world.clone(),
-        reserved: 0,
-    };
+    let host = support::FakeHost::new(f.world.clone(), 0);
     let e = run(cli, f.seams(), &host, &(), &(), &f.clock, &pause, &mut out).unwrap_err();
     assert!(format!("{e:#}").contains("crashed before moving"), "{e:#}");
     let out = String::from_utf8(out).unwrap();
@@ -8946,6 +8910,10 @@ mod refused_alone {
             self.host.readers()
         }
 
+        fn host_process(&self) -> &dyn sluice::host_process::HostProcess {
+            self.host.host_process()
+        }
+
         fn default_branch(&self) -> anyhow::Result<Option<sluice_core::overview::OrderFrom>> {
             self.host.default_branch()
         }
@@ -8977,10 +8945,7 @@ mod refused_alone {
             )],
         );
         let host = Naming {
-            host: support::FakeHost {
-                world: f.world.clone(),
-                reserved: 0,
-            },
+            host: support::FakeHost::new(f.world.clone(), 0),
             systems: vec!["linux-x64".into()],
         };
         let cli = Cli::try_parse_from(["sluice", "run", "--rounds", "1"]).unwrap();
@@ -9029,10 +8994,7 @@ mod read_once {
         let cli =
             Cli::try_parse_from(std::iter::once("sluice").chain(args.iter().copied())).unwrap();
         let mut out = Vec::new();
-        let host = support::FakeHost {
-            world: f.world.clone(),
-            reserved: 0,
-        };
+        let host = support::FakeHost::new(f.world.clone(), 0);
         let code = run(cli, seams, &host, &(), &(), &f.clock, pause, &mut out).unwrap();
         (code, String::from_utf8(out).unwrap())
     }
