@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, TimeDelta, Utc};
 use serde_json::json;
 use sluice::identity::Identity;
-use sluice::profiles::github::check::{check, Finding};
+use sluice::profiles::github::check::{check, round_job, Finding};
 use sluice::profiles::github::{App, Bearer, Repo};
 use sluice::retry::Policy;
 use support::http::{json, Answer, Fake, Request};
@@ -59,6 +59,12 @@ struct Forge {
     permissions: serde_json::Value,
     reaches: serde_json::Value,
     rulesets: Vec<(u64, serde_json::Value)>,
+    /// `main`'s `.github/workflows/sluice.yml`, where it holds one.
+    workflow: Option<String>,
+    /// The `sluice` environment, where there is one, and the branches its
+    /// deployment rule names.
+    environment: Option<serde_json::Value>,
+    branch_policies: serde_json::Value,
     clock: Clock,
 }
 
@@ -67,13 +73,21 @@ impl Forge {
         Forge {
             permissions: json!({
                 "contents": "write", "workflows": "write", "checks": "write",
-                "pull_requests": "write", "metadata": "read"
+                "pull_requests": "write", "actions": "write", "metadata": "read"
             }),
             reaches: json!([{ "full_name": "o/r" }]),
             rulesets: vec![(
                 11,
                 json!([{ "actor_id": APP, "actor_type": "Integration", "bypass_mode": "always" }]),
             )],
+            workflow: Some(sluice::profiles::github::init::workflow()),
+            environment: Some(json!({
+                "name": "sluice",
+                "deployment_branch_policy": {
+                    "protected_branches": false, "custom_branch_policies": true
+                }
+            })),
+            branch_policies: json!([{ "name": "main", "type": "branch" }]),
             clock: clock.clone(),
         }
     }
@@ -117,6 +131,28 @@ impl Forge {
                 .map(|(id, _)| json!({ "type": "update", "ruleset_id": id }))
                 .collect();
             return json(200, json!(rules));
+        }
+        if path.starts_with("/repos/o/r/contents/.github/workflows/sluice.yml") {
+            use base64::Engine as _;
+            return match &self.workflow {
+                Some(w) => json(
+                    200,
+                    json!({
+                        "encoding": "base64",
+                        "content": base64::engine::general_purpose::STANDARD.encode(w),
+                    }),
+                ),
+                None => json(404, json!({ "message": "Not Found" })),
+            };
+        }
+        if path == "/repos/o/r/environments/sluice" {
+            return match &self.environment {
+                Some(e) => json(200, e.clone()),
+                None => json(404, json!({ "message": "Not Found" })),
+            };
+        }
+        if path.starts_with("/repos/o/r/environments/sluice/deployment-branch-policies") {
+            return json(200, json!({ "branch_policies": self.branch_policies }));
         }
         // Who may bypass a ruleset is shown to its admins alone.
         for (id, actors) in &self.rulesets {
@@ -1762,4 +1798,83 @@ fn the_list_says_whether_it_changed() {
     let moved = app.listed(&repo(), "main").unwrap();
     assert!(moved.changed);
     assert_eq!(moved.pulls.len(), 2);
+}
+
+/// forge-identity, "No round job on the branch" (C.8; design D13): `main`
+/// is the forge's and holds no `.github/workflows/sluice.yml`, and the
+/// check names the workflow and `sluice init actions`; one that holds this
+/// version's passes, and one that differs is named too.
+#[test]
+fn forge_check_names_a_missing_round_job() {
+    let clock = Clock::new();
+    let fake = Forge::new(&clock).start();
+    let found = round_job(&app(&fake, &clock), &repo(), "main");
+    assert!(failures(&found).is_empty(), "{found:?}");
+    assert_eq!(found.len(), 3, "{found:?}");
+
+    let mut f = Forge::new(&clock);
+    f.workflow = None;
+    let fake = f.start();
+    let found = round_job(&app(&fake, &clock), &repo(), "main");
+    let got = failures(&found);
+    assert_eq!(got.len(), 1, "{found:?}");
+    assert!(
+        got[0].contains(".github/workflows/sluice.yml") && got[0].contains("sluice init actions"),
+        "{}",
+        got[0]
+    );
+
+    let mut f = Forge::new(&clock);
+    f.workflow = Some("name: ours\n".into());
+    let fake = f.start();
+    let found = round_job(&app(&fake, &clock), &repo(), "main");
+    let got = failures(&found);
+    assert_eq!(got.len(), 1, "{found:?}");
+    assert!(got[0].contains("not the round job"), "{}", got[0]);
+}
+
+/// forge-identity, "The app may not dispatch it" (C.8; design D13): with
+/// Actions read alone, the check names the Actions permission.
+#[test]
+fn forge_check_names_the_actions_permission() {
+    let clock = Clock::new();
+    let mut f = Forge::new(&clock);
+    f.permissions["actions"] = json!("read");
+    let fake = f.start();
+    let found = round_job(&app(&fake, &clock), &repo(), "main");
+    let got = failures(&found);
+    assert_eq!(got.len(), 1, "{found:?}");
+    assert!(got[0].contains("Actions read and write"), "{}", got[0]);
+}
+
+/// forge-identity, "An environment any branch may use" (C.8; design D4,
+/// D13): the `sluice` environment with no branch rule, or none at all, or
+/// one admitting another branch, is named.
+#[test]
+fn forge_check_names_an_environment_any_branch_may_use() {
+    let clock = Clock::new();
+    let one = |f: Forge| -> Vec<String> {
+        let fake = f.start();
+        let found = round_job(&app(&fake, &clock), &repo(), "main");
+        failures(&found).into_iter().map(String::from).collect()
+    };
+    let mut f = Forge::new(&clock);
+    f.environment = Some(json!({ "name": "sluice", "deployment_branch_policy": null }));
+    let got = one(f);
+    assert_eq!(got.len(), 1, "{got:?}");
+    assert!(
+        got[0].contains("any branch") && got[0].contains("`sluice` environment"),
+        "{got:?}"
+    );
+
+    let mut f = Forge::new(&clock);
+    f.environment = None;
+    let got = one(f);
+    assert!(got[0].contains("no `sluice` environment"), "{got:?}");
+
+    let mut f = Forge::new(&clock);
+    f.branch_policies =
+        json!([{ "name": "main", "type": "branch" }, { "name": "*", "type": "branch" }]);
+    let got = one(f);
+    assert!(got[0].contains("not main alone"), "{got:?}");
 }

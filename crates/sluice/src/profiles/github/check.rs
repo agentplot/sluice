@@ -154,3 +154,110 @@ fn ruleset(app: u64, branch: &str, r: &Value) -> Finding {
     }
     ok(format!("{name} on {branch} lets only app {app} through"))
 }
+
+/// 137, C.8; design D13 of pull-requests-are-queued-on-the-forge: for a
+/// branch the forge keeps, whether `branch` holds the round job `sluice
+/// init actions` writes at this version, whether the app may dispatch it,
+/// and whether the `sluice` environment exists and admits `branch` alone.
+pub fn round_job(app: &App, repo: &Repo, branch: &str) -> Vec<Finding> {
+    let mut found = Vec::new();
+    let path = format!(
+        "/repos/{}/{}/contents/{}?ref={branch}",
+        repo.owner,
+        repo.name,
+        super::init::WORKFLOW_PATH
+    );
+    let wf = super::init::WORKFLOW_PATH;
+    found.push(match app.get(&path, Bearer::Repo(repo)) {
+        Ok(v) => match content(&v) {
+            Some(text) if text == super::init::workflow() => ok(format!(
+                "{branch} holds the round job of sluice {}",
+                crate::VERSION
+            )),
+            Some(_) => failed(format!(
+                "{branch}'s {wf} is not the round job sluice {} writes: write it again with \
+                 `sluice init actions` and land it",
+                crate::VERSION
+            )),
+            None => failed(format!("{branch}'s {wf} could not be read as a file")),
+        },
+        Err(e) if format!("{e:#}").contains("404") => failed(format!(
+            "{branch} holds no {wf}, so nothing takes its pull requests in: write it with \
+             `sluice init actions` and land it"
+        )),
+        Err(e) => failed(format!("reading {branch}'s {wf}: {e:#}")),
+    });
+    match app.installation(repo) {
+        Ok(i) => found.push(match i.permissions.get("actions").map(String::as_str) {
+            Some("write") => ok(format!("the app may dispatch {repo}'s round job")),
+            other => failed(format!(
+                "the app may not dispatch {repo}'s round job (actions: {}): give it Actions \
+                 read and write, so a submit and a recorded result wake it",
+                other.unwrap_or("none")
+            )),
+        }),
+        Err(e) => found.push(failed(format!("{e:#}"))),
+    }
+    found.push(environment(app, repo, branch));
+    found
+}
+
+/// A file's text as the contents API answers it, base64 in `content`.
+fn content(v: &Value) -> Option<String> {
+    if v["encoding"] != "base64" {
+        return None;
+    }
+    let packed: String = v["content"].as_str()?.split_whitespace().collect();
+    use base64::Engine as _;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(packed)
+        .ok()?;
+    String::from_utf8(bytes).ok()
+}
+
+/// The `sluice` environment, which holds the app's key: it exists, and its
+/// deployment branch rule admits `branch` alone (C.8; design D4).
+fn environment(app: &App, repo: &Repo, branch: &str) -> Finding {
+    let at = format!("/repos/{}/{}/environments/sluice", repo.owner, repo.name);
+    let env = match app.get(&at, Bearer::Repo(repo)) {
+        Ok(v) => v,
+        Err(e) if format!("{e:#}").contains("404") => {
+            return failed(format!(
+                "{repo} has no `sluice` environment to hold the app's key: make one whose \
+                 deployment branch rule admits {branch} alone"
+            ))
+        }
+        Err(e) => return failed(format!("reading the `sluice` environment: {e:#}")),
+    };
+    let rule = &env["deployment_branch_policy"];
+    if rule.is_null() || rule["custom_branch_policies"] != true {
+        return failed(format!(
+            "any branch of {repo} may use the `sluice` environment, and with it the app's key: \
+             give it a deployment branch rule admitting {branch} alone"
+        ));
+    }
+    let path = format!("{at}/deployment-branch-policies");
+    let names: Vec<String> = match app.get(&path, Bearer::Repo(repo)) {
+        Ok(v) => v["branch_policies"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|p| p["type"].as_str().is_none_or(|t| t == "branch"))
+            .filter_map(|p| p["name"].as_str().map(str::to_string))
+            .collect(),
+        Err(e) => return failed(format!("reading the `sluice` environment's rule: {e:#}")),
+    };
+    if names == [branch] {
+        ok(format!("the `sluice` environment admits {branch} alone"))
+    } else {
+        failed(format!(
+            "the `sluice` environment admits {}, not {branch} alone: give it a deployment \
+             branch rule admitting {branch} alone",
+            if names.is_empty() {
+                "no branch".to_string()
+            } else {
+                names.join(", ")
+            }
+        ))
+    }
+}

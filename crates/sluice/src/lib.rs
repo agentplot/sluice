@@ -521,6 +521,12 @@ pub enum Command {
         #[command(subcommand)]
         command: ForgeCommand,
     },
+    /// Set a repository up for a part of sluice.
+    #[command(after_help = "Example:\n  $ sluice init actions")]
+    Init {
+        #[command(subcommand)]
+        command: InitCommand,
+    },
     /// What the forge's jobs run (137, C.8).
     #[command(after_help = "Examples:\n  $ sluice job round --branch main\n  $ sluice job round")]
     Job {
@@ -1134,6 +1140,19 @@ pub enum ForgeCommand {
 }
 
 #[derive(Subcommand, Debug)]
+pub enum InitCommand {
+    /// Write the forge's round job, `.github/workflows/sluice.yml`, add
+    /// `[signers.forge]` and `[pools.forge]` to the policy where absent,
+    /// and say what to set on GitHub (137, C.8).
+    #[command(after_help = "Examples:\n  $ sluice init actions\n  $ sluice init actions --force")]
+    Actions {
+        /// Write the workflow over one that differs.
+        #[arg(long)]
+        force: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
 pub enum JobCommand {
     /// The round job of a branch the forge keeps: its rounds, its pull
     /// requests taken in, until nothing is its to do now; with no branch,
@@ -1535,6 +1554,9 @@ pub fn run(
             await_submission(&s, &waiting, sub, None, out)
         }
         Command::Inbox { worktree, json } => inbox(&s, &worktree, json, out),
+        Command::Init {
+            command: InitCommand::Actions { force },
+        } => profiles::init_actions(&std::env::current_dir()?, force, out),
         Command::Job {
             command: JobCommand::Round { branch },
         } => match branch {

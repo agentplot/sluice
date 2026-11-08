@@ -9367,3 +9367,148 @@ fn status_and_wait_say_a_combination_waits_for_a_host_whose_engine_answers() {
     let (_, out) = sluice(&f, &["status", BRANCH, "--json"]);
     assert_eq!(json(&out)["waiting"], serde_json::json!([]));
 }
+
+// ---------------------------------------------------------------------------
+// sluice init actions (137, C.8; design D13 of
+// pull-requests-are-queued-on-the-forge)
+// ---------------------------------------------------------------------------
+
+/// A git repository on `main` whose working copy holds `policy`.
+fn init_repo(name: &str, policy: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("sluice-init-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join(".config")).unwrap();
+    let ok = std::process::Command::new("git")
+        .args(["init", "-q", "-b", "main"])
+        .current_dir(&dir)
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .status()
+        .unwrap();
+    assert!(ok.success());
+    std::fs::write(dir.join(".config/sluice.toml"), policy).unwrap();
+    dir
+}
+
+/// `sluice init actions`, with `--force` where `force`, in `dir`.
+fn init_actions(dir: &std::path::Path, force: bool) -> (i32, String) {
+    let mut out = Vec::new();
+    let code = sluice::profiles::init_actions(dir, force, &mut out).unwrap();
+    (code, String::from_utf8(out).unwrap())
+}
+
+const SIGNED: &str = "[signers.box]\nssh = \"box ssh-ed25519 AAAA\"\n\n\
+                      [branches.main]\nremote = \"origin\"\ntrust = [\"box\"]\n\n\
+                      [branches.main.pull_requests]\n";
+
+/// forge-rounds, "A repository with signers and no pool" and "The signer
+/// and the pool" (C.8; design D13): the workflow is written at this
+/// version, the policy gains `[signers.forge]` and `[pools.forge]` with no
+/// runners, and the output names what to set on GitHub; a second run
+/// changes nothing.
+#[test]
+fn init_actions_writes_the_round_job() {
+    let dir = init_repo("writes", SIGNED);
+    let (code, said) = init_actions(&dir, false);
+    assert_eq!(code, 0, "{said}");
+    let written = std::fs::read_to_string(dir.join(".github/workflows/sluice.yml")).unwrap();
+    assert_eq!(written, sluice::profiles::github::init::workflow());
+    let policy = std::fs::read_to_string(dir.join(".config/sluice.toml")).unwrap();
+    let p = sluice_core::policy::Policy::parse(&policy).unwrap();
+    assert_eq!(p.signers["forge"].identity.0, "github");
+    let pool = p
+        .pools
+        .iter()
+        .find(|p| p.name == "forge")
+        .expect("[pools.forge]");
+    assert!(pool.runners.is_empty());
+    assert_eq!(pool.signer, "forge");
+    assert_eq!(
+        p.rules_for("main").unwrap().unwrap().round_job.as_deref(),
+        Some("pool/forge/round")
+    );
+    for word in [
+        "`sluice`",
+        "SLUICE_APP_ID",
+        "SLUICE_APP_KEY",
+        "admits main alone",
+        "write Actions",
+    ] {
+        assert!(said.contains(word), "{word}: {said}");
+    }
+    let (code, said) = init_actions(&dir, false);
+    assert_eq!(code, 0, "{said}");
+    assert_eq!(
+        std::fs::read_to_string(dir.join(".config/sluice.toml")).unwrap(),
+        policy
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// forge-rounds, "A workflow already there" (C.8; design D13): one that
+/// differs is left, the output saying how, exit 1; `--force` writes it.
+#[test]
+fn init_actions_leaves_a_differing_workflow() {
+    let dir = init_repo("differs", SIGNED);
+    let path = dir.join(".github/workflows/sluice.yml");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "name: ours\non: push\n").unwrap();
+    let (code, said) = init_actions(&dir, false);
+    assert_eq!(code, 1, "{said}");
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "name: ours\non: push\n"
+    );
+    assert!(said.contains("- name: ours"), "{said}");
+    assert!(said.contains("+ name: sluice"), "{said}");
+    assert!(said.contains("--force"), "{said}");
+    let (code, said) = init_actions(&dir, true);
+    assert_eq!(code, 0, "{said}");
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        sluice::profiles::github::init::workflow()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// forge-rounds, "No signers" (C.8; design D13): a policy that names no
+/// `[signers]` is refused with exit 2, and nothing is written.
+#[test]
+fn init_actions_refuses_a_policy_with_no_signers() {
+    let policy = "[branches.main]\nremote = \"origin\"\n";
+    let dir = init_repo("no-signers", policy);
+    let (code, said) = init_actions(&dir, false);
+    assert_eq!(code, 2, "{said}");
+    assert!(said.contains("[signers]"), "{said}");
+    assert!(
+        said.contains("hosts that run the checks need signers"),
+        "{said}"
+    );
+    assert!(!dir.join(".github").exists());
+    assert_eq!(
+        std::fs::read_to_string(dir.join(".config/sluice.toml")).unwrap(),
+        policy
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// forge-rounds, "The template's environment" (C.8; design D4): the
+/// workflow's round job is its only job naming the `sluice` environment,
+/// the only one given the app's key, and no pull request's run starts it.
+#[test]
+fn the_round_job_alone_names_the_environment() {
+    let w = sluice::profiles::github::init::workflow();
+    assert_eq!(w.matches("environment:").count(), 1, "{w}");
+    let jobs = &w[w.find("\njobs:\n").expect("its jobs")..];
+    let round = jobs.find("\n  round:\n").expect("the round job");
+    let named = jobs.find("environment: sluice").expect("the environment");
+    assert!(named > round, "{w}");
+    let others = jobs[round + 1..]
+        .lines()
+        .skip(1)
+        .filter(|l| l.starts_with("  ") && !l.starts_with("   ") && l.ends_with(':'))
+        .count();
+    assert_eq!(others, 0, "one job: {w}");
+    assert_eq!(w.matches("secrets.SLUICE_APP_KEY").count(), 1, "{w}");
+    assert!(!w.contains("pull_request"), "{w}");
+}
