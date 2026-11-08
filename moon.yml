@@ -57,7 +57,7 @@ tasks:
     tags: [check-fast]
     options: {runFromWorkspaceRoot: true}
   # OpenSpec's Claude Code skills and commands under .claude are what the
-  # openspec devenv.nix pins writes (record 0098; core.24).
+  # openspec devenv.nix pins writes (record 0101; core.24).
   openspec-claude:
     command: 'sh check-openspec-claude.sh'
     inputs: ['/.claude/skills/**/*', '/.claude/commands/**/*', '/check-openspec-claude.sh', '/devenv.nix', '/devenv.lock']

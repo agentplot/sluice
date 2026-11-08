@@ -1,5 +1,5 @@
 ---
-number: 98
+number: 101
 title: sluice's devenv declares its MCP servers, writes Claude Code's files at a place's readiness, and holds OpenSpec's files to its pin
 status: accepted
 date: 2026-11-07
