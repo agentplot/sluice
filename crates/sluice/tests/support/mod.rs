@@ -586,10 +586,20 @@ impl FakeHost {
 }
 
 thread_local! {
+    /// Whether the fakes' host process on this thread is to end at its
+    /// next ask, as one killed does.
+    static ENDS: Cell<bool> = const { Cell::new(false) };
     /// The room of the fakes' host process on this thread, which outlives
     /// each command a test runs, as sluice's host process outlives the
     /// commands that reach it (record 0087; design D12).
     static ROOM: RefCell<Option<sluice::host_process::room::Shared>> = const { RefCell::new(None) };
+}
+
+/// The fakes' host process on this thread ends at its next ask, killed:
+/// it lets the reader's place go, answers that ask with nothing, and the
+/// next ask finds one started again, which takes the place afresh (129).
+pub fn end_host_process() {
+    ENDS.with(|e| e.set(true));
 }
 
 /// The fakes' host's room on this thread, bounded as the check seam and
@@ -620,6 +630,9 @@ pub fn fake_room(bound: usize, reserved: usize) -> sluice::host_process::room::S
 pub struct FakeProcess {
     reserved: usize,
     kept: RefCell<sluice::host_process::pass::Kept>,
+    /// The policies its passes read, kept across them as the host
+    /// process's task keeps them (129).
+    policies: sluice_core::Policies,
     reader: RefCell<Option<sluice::reader::Reader>>,
     driver: RefCell<Option<sluice::reader::Driver>>,
 }
@@ -676,7 +689,9 @@ impl sluice::host_process::HostProcess for FakeProcess {
             tests: &roomed,
             ..here.s.seams()
         };
-        let s = sluice_core::Sluice::new(seams, here.clock).as_peer(here.host.peer());
+        let s = sluice_core::Sluice::new(seams, here.clock)
+            .as_peer(here.host.peer())
+            .keeping(&self.policies);
         sluice::host_process::pass::step(&s, here.pulls, here.clock, branch)
     }
 
@@ -685,12 +700,20 @@ impl sluice::host_process::HostProcess for FakeProcess {
         here: &sluice::host_process::Here<'_, '_>,
     ) -> anyhow::Result<sluice::host_process::pass::Report> {
         use sluice::reader::{Driver, Drives, Reader};
+        if ENDS.with(|e| e.replace(false)) {
+            *self.reader.borrow_mut() = None;
+            *self.driver.borrow_mut() = None;
+            *self.kept.borrow_mut() = Default::default();
+            anyhow::bail!("sluice's host process ended");
+        }
         let roomed = self.roomed(here)?;
         let seams = sluice_core::Seams {
             tests: &roomed,
             ..here.s.seams()
         };
-        let s = sluice_core::Sluice::new(seams, here.clock).as_peer(here.host.peer());
+        let s = sluice_core::Sluice::new(seams, here.clock)
+            .as_peer(here.host.peer())
+            .keeping(&self.policies);
         let (readers, repository) = (here.host.readers()?, here.host.repository()?);
         let mut driver = self.driver.borrow_mut();
         if driver.is_none() {
@@ -709,12 +732,11 @@ impl sluice::host_process::HostProcess for FakeProcess {
                 let _ = r.step(true, Drives::Nobody);
             }
             None => {
-                *reader = Some(Reader::take_given(
-                    &readers,
-                    &repository,
-                    here.host.version(),
-                    Drives::Nobody,
-                )?)
+                let mut r =
+                    Reader::take_given(&readers, &repository, here.host.version(), Drives::Nobody)?;
+                // An older reader's lease, taken at once.
+                let _ = r.step(true, Drives::Nobody);
+                *reader = Some(r);
             }
         }
         // Design D7: an older reader reads until it lets go.

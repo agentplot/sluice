@@ -500,7 +500,11 @@ impl Task {
                 bound.version(),
                 Drives::Nobody,
             ) {
-                Ok(r) => self.reader = Some(r),
+                Ok(mut r) => {
+                    // An older reader's lease, taken at once.
+                    let _ = r.step(true, Drives::Nobody);
+                    self.reader = Some(r);
+                }
                 Err(e) => return Err(format!("{e:#}")),
             },
         }

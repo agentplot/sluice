@@ -280,8 +280,16 @@ pub fn run(
         if INTERRUPTED.load(Ordering::SeqCst) {
             return Ok(STOPPED);
         }
+        // 129: a repository gone ends the watch as a failing overview
+        // ends, with the host process's read's words where it wrote them.
         if host.repository_gone(&repository) {
-            anyhow::bail!("the repository at {repository} is gone");
+            let said = follow
+                .read()
+                .and_then(|d| d["error"]["message"].as_str().map(str::to_string));
+            match said {
+                Some(words) => anyhow::bail!("{words}"),
+                None => anyhow::bail!("the repository at {repository} is gone"),
+            }
         }
         if let Some(doc) = follow.read() {
             let now = untimed(&doc);
