@@ -5430,7 +5430,9 @@ fn handed_over() {
 /// withdraws it, ends its run and releases its checkout, and runs no round
 /// for `main`, which would read main moved since A last read it. The
 /// request carries the submission's work on B, so the wait follows the
-/// request and is never told it was withdrawn (122, 137).
+/// request and is never told it was withdrawn (122, 137). Out of time, it
+/// prints its own submission's record, naming the request it follows as it
+/// stands (record 0100 D2, D3).
 #[test]
 fn handed_over_by_a_wait() {
     let g = OnGitHub::new("intake-handed-wait", "");
@@ -5444,7 +5446,12 @@ fn handed_over_by_a_wait() {
     let out = g.sluice(&["wait", &id.to_string(), "--timeout", "2s", "--json"]);
     assert_eq!(out.status.code(), Some(sluice::WAITING), "{}", text(&out));
     let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(doc["pull_request"], n, "{doc}");
+    assert_eq!(doc["id"], id, "{doc}");
+    assert_eq!(
+        doc["carried_by"],
+        serde_json::json!({ "pull_request": n, "state": "open" }),
+        "{doc}"
+    );
     let a = g.of(n);
     assert_eq!(a[0]["withdrawn"]["by"], "b takes main's pull requests in");
     assert_eq!(a[0]["withdrawn"]["handed_over_to"], "b");

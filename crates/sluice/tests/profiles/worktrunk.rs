@@ -1555,6 +1555,44 @@ fn a_wait_follows_the_resubmission_that_carries_its_work() {
     assert_eq!(s.status(first)["state"], "withdrawn");
 }
 
+/// 67, 122; record 0100 D2, D3: a wait on a withdrawn submission started
+/// only once the resubmission carrying its work has landed ends with its
+/// own submission landed by that one's landing and names it, as a wait
+/// standing while it landed does, never with the commit a fast-forward
+/// would give, its own head.
+#[test]
+fn a_wait_started_after_the_resubmission_landed_names_it() {
+    let s = Scratch::new("wt-carried-landed");
+    let (_, first, second) = resubmitted(&s, "a", &[("a.txt", "a\n")], &[("more.txt", "more\n")]);
+    s.land(second);
+    let landed_as = s.status(second)["landed_as"].as_str().unwrap().to_string();
+    let out = s.sluice(&["wait", &first.to_string(), "--timeout", "60s"]);
+    let said = text(&out);
+    assert_eq!(out.status.code(), Some(sluice::LANDED), "{said}");
+    assert!(
+        said.contains(&format!(
+            "landed as {}: bolt/x holds its work, by #{second}'s landing",
+            &landed_as[..7]
+        )),
+        "{said}"
+    );
+
+    let out = s.sluice(&["wait", &first.to_string(), "--timeout", "60s", "--json"]);
+    assert_eq!(out.status.code(), Some(sluice::LANDED), "{}", text(&out));
+    let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(doc["id"], first, "{doc}");
+    assert_eq!(doc["state"], "landed", "{doc}");
+    assert_eq!(doc["landed_elsewhere"], true, "{doc}");
+    assert_eq!(doc["landed_as"], landed_as.as_str(), "{doc}");
+    assert_ne!(doc["landed_as"], doc["head"], "{doc}");
+    assert_eq!(
+        doc["carried_by"],
+        serde_json::json!({ "id": second, "state": "landed" }),
+        "{doc}"
+    );
+    assert_eq!(s.status(first)["state"], "withdrawn");
+}
+
 /// 67; record 0100 D2, D3: a wait on a submission whose resubmission, which
 /// carried its work, is blamed ends with its own submission withdrawn,
 /// exit 4, naming the resubmission and how it ended, never with the

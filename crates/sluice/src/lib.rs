@@ -3041,6 +3041,16 @@ fn decided(
     Ok(match carried(s, waiting, read, out)? {
         Carried::Entry(e) => Next::Follow(e),
         Carried::Request(n) => Next::End(Waited::Request(own.clone(), n)),
+        // Landed by what carried its work: named, where `read` is its own,
+        // and its own's end where `read` is what it followed.
+        Carried::Landed(o, e) => {
+            let by = CarriedBy::Entry(e);
+            let end = match o.id == own.id {
+                true => o,
+                false => own_end(s, own.clone(), Some(&by))?,
+            };
+            Next::End(Waited::Decided(end, Some(by), None))
+        }
         Carried::Outcome(o, _) if o.id == own.id => Next::End(Waited::Decided(o, None, None)),
         // What carried its work ended as its request closed: the request.
         Carried::Outcome(_, Some(n)) => {
@@ -3061,6 +3071,10 @@ enum Carried {
     /// Its outcome, to report, with the number of its pull request where
     /// that was read closed, which ended its work (record 0100 D2).
     Outcome(Submission, Option<u64>),
+    /// Landed by the landing of what carried its work, a later submission
+    /// from its place: its record as that landing landed it, and that
+    /// submission (record 0100 D2).
+    Landed(Submission, Submission),
     /// A later submission from its place that carries its work, to follow
     /// in its stead (67).
     Entry(Submission),
@@ -3070,7 +3084,11 @@ enum Carried {
 
 /// 122, 67, 137: a submission withdrawn whose work goes on is never
 /// reported withdrawn. Its branch holds its head: it landed, as the commit
-/// that landed it, whichever landing that was. A later submission from
+/// that landed it, whichever landing that was; where a later submission
+/// from its place that holds its head landed, by that one's landing,
+/// which names it, however long ago it landed (record 0100 D2, D3; a
+/// branch landing by fast-forward would otherwise give its own head as
+/// the commit that landed it). A later submission from
 /// its place holds its head: the wait follows that one. Its pull request
 /// is open, no draft, on a head that holds its head: the wait follows the
 /// request, taken in again here or on another host, or the submission it
@@ -3094,24 +3112,34 @@ fn carried(
             sub.id
         ))
     };
+    // A head that is this one's, or holds it.
+    let carries =
+        |head: &Rev| *head == sub.head || branch.contains(head, &sub.head).unwrap_or(false);
     let landed = branch.read(&sub.branch).and_then(|tip| match tip {
         Some(tip) => branch.landed_by(&tip, &sub.head),
         None => Ok(None),
     });
     match landed {
         Ok(Some(to)) => {
-            let mut landed = sub;
-            landed.state = State::Landed;
-            landed.landed_as = Some(to);
-            landed.landed_elsewhere = true;
-            return Ok(Carried::Outcome(landed, None));
+            let by = landed_carrier(s, &sub, &carries).unwrap_or_else(|e| {
+                unread(&format!("{}'s records", sub.branch), e);
+                None
+            });
+            let to = by.as_ref().and_then(|e| e.landed_as.clone()).unwrap_or(to);
+            let landed = Submission {
+                state: State::Landed,
+                landed_as: Some(to),
+                landed_elsewhere: true,
+                ..sub
+            };
+            return Ok(match by {
+                Some(e) => Carried::Landed(landed, e),
+                None => Carried::Outcome(landed, None),
+            });
         }
         Ok(None) => {}
         Err(e) => unread(&sub.branch, e),
     }
-    // A head that is this one's, or holds it.
-    let carries =
-        |head: &Rev| *head == sub.head || branch.contains(head, &sub.head).unwrap_or(false);
     // 137: a hand-over's withdrawal says the host it handed over to.
     let left = left(&sub);
     let follows = |what: String, out: &mut dyn Write| -> Result<()> {
@@ -3179,6 +3207,31 @@ fn carried(
         }
         None => Carried::Outcome(sub, closed),
     })
+}
+
+/// Record 0100 D2: the later submission from `sub`'s place, a worktree's or
+/// a pull request's, that `carries` its head and landed, whose landing is
+/// the one that took `sub`'s work: the first such in the branch's live
+/// records, else its place's latest, which the finished index names once
+/// it has left them (rule core.41). `None` where none landed, as where
+/// another queue's landing took it (record 0085).
+fn landed_carrier(
+    s: &Sluice<'_>,
+    sub: &Submission,
+    carries: &dyn Fn(&Rev) -> bool,
+) -> Result<Option<Submission>> {
+    let place = &sub.from.worktree;
+    let landed_it = |e: &Submission| {
+        e.id > sub.id && e.from.worktree == *place && e.state == State::Landed && carries(&e.head)
+    };
+    let live = s.status(&sub.branch)?.submissions;
+    if let Some(e) = live.into_iter().find(|e| landed_it(e)) {
+        return Ok(Some(e));
+    }
+    let latest = s
+        .latest_of(&sub.branch, std::slice::from_ref(place))?
+        .remove(place);
+    Ok(latest.filter(|e| landed_it(e)))
 }
 
 /// Whether `e` is a spent allowance of GitHub's calls the retry policy
