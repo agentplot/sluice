@@ -1488,32 +1488,157 @@ fn inbox_delivers_nothing_of_another_worktrees_outcome() {
     assert_eq!(s.status(n)["delivered"], serde_json::Value::Null);
 }
 
-/// 67, 122: a wait on a submission its session's next submit withdrew
-/// follows the submission that carries its work, says so, and reports
-/// that one's landing; the withdrawn one's record stands as it is.
-#[test]
-fn a_wait_follows_the_resubmission_that_carries_its_work() {
-    let s = Scratch::new("wt-carried");
-    let a = s.session("a", &[("a.txt", "a\n")]);
+/// A session `name` that submits `changes` to `bolt/x`, then a commit of
+/// `more` on top of them: its first submission, which the second
+/// withdrew, and the second, which carries the first's work (67).
+fn resubmitted(
+    s: &Scratch,
+    name: &str,
+    changes: &[(&str, &str)],
+    more: &[(&str, &str)],
+) -> (PathBuf, u64, u64) {
+    let a = s.session(name, changes);
     let first = id(&s.wt_submit(&a, &["--no-wait", "--json"]));
-    std::fs::write(a.join("more.txt"), "more\n").unwrap();
+    for (p, c) in more {
+        std::fs::write(a.join(p), c).unwrap();
+    }
     let dir = a.to_str().unwrap();
     s.repo.git(&["-C", dir, "add", "-A"]);
     s.repo.git(&["-C", dir, "commit", "-q", "-m", "more"]);
     let second = id(&s.wt_submit(&a, &["--no-wait", "--json"]));
     assert_eq!(s.status(first)["state"], "withdrawn");
+    (a, first, second)
+}
+
+/// 67, 122; record 0100 D2, D3: a wait on a submission its session's next
+/// submit withdrew follows the submission that carries its work, says so,
+/// and ends with its own submission landed by that one's landing, never
+/// with that one's record; the withdrawn one's record stands as it is.
+#[test]
+fn a_wait_follows_the_resubmission_that_carries_its_work() {
+    let s = Scratch::new("wt-carried");
+    let (_, first, second) = resubmitted(&s, "a", &[("a.txt", "a\n")], &[("more.txt", "more\n")]);
     let out = s.sluice(&["wait", &first.to_string(), "--timeout", "60s"]);
     let said = text(&out);
-    assert_eq!(out.status.code(), Some(0), "{said}");
+    assert_eq!(out.status.code(), Some(sluice::LANDED), "{said}");
     assert!(
         said.contains(&format!(
-            "#{first} withdrawn by resubmission: #{second} carries its work"
+            "#{first} withdrawn by resubmission: #{second} carries its work, so this wait follows it"
         )),
         "{said}"
     );
-    assert!(said.contains("passed · landed as"), "{said}");
+    let landed_as = s.status(second)["landed_as"].as_str().unwrap().to_string();
+    assert!(
+        said.contains(&format!(
+            "landed as {}: bolt/x holds its work, by #{second}'s landing",
+            &landed_as[..7]
+        )),
+        "{said}"
+    );
     assert_eq!(s.status(second)["state"], "landed");
     assert_eq!(s.status(first)["state"], "withdrawn");
+
+    // Under --json, its own record, naming what carried its work.
+    let (_, first, second) = resubmitted(&s, "b", &[("b.txt", "b\n")], &[("more-b.txt", "more\n")]);
+    let out = s.sluice(&["wait", &first.to_string(), "--timeout", "60s", "--json"]);
+    assert_eq!(out.status.code(), Some(sluice::LANDED), "{}", text(&out));
+    let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(doc["id"], first, "{doc}");
+    assert_eq!(doc["state"], "landed", "{doc}");
+    assert_eq!(doc["landed_elsewhere"], true, "{doc}");
+    assert_eq!(doc["landed_as"], s.status(second)["landed_as"], "{doc}");
+    assert_eq!(
+        doc["carried_by"],
+        serde_json::json!({ "id": second, "state": "landed" }),
+        "{doc}"
+    );
+    assert_eq!(s.status(first)["state"], "withdrawn");
+}
+
+/// 67; record 0100 D2, D3: a wait on a submission whose resubmission, which
+/// carried its work, is blamed ends with its own submission withdrawn,
+/// exit 4, naming the resubmission and how it ended, never with the
+/// resubmission's failure as its own.
+#[test]
+fn a_wait_exits_withdrawn_when_what_carried_its_work_failed() {
+    let s = Scratch::new("wt-carried-failed");
+    let (_, first, second) = resubmitted(&s, "a", &[("a.txt", "a\n")], &[("broken", "x\n")]);
+    let out = s.sluice(&["wait", &first.to_string(), "--timeout", "60s", "--json"]);
+    assert_eq!(out.status.code(), Some(sluice::WITHDRAWN), "{}", text(&out));
+    let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(doc["id"], first, "{doc}");
+    assert_eq!(doc["state"], "withdrawn", "{doc}");
+    assert_eq!(
+        doc["carried_by"],
+        serde_json::json!({ "id": second, "state": "failed" }),
+        "{doc}"
+    );
+    assert_eq!(s.status(second)["state"], "failed");
+
+    let out = s.sluice(&["wait", &first.to_string(), "--timeout", "60s"]);
+    let said = text(&out);
+    assert_eq!(out.status.code(), Some(sluice::WITHDRAWN), "{said}");
+    assert!(
+        said.contains(&format!(
+            "#{first} withdrawn by resubmission: #{second}, which carried its work, failed\n\
+             sluice status {second}"
+        )),
+        "{said}"
+    );
+}
+
+/// 67; record 0100 D2, D3: a wait out of time while it follows the
+/// resubmission that carries its work prints its own submission's record,
+/// naming what it follows as it stands, and how to wait on its own again.
+#[test]
+fn a_wait_out_of_time_while_it_follows_prints_its_own_record() {
+    let s = Scratch::new("wt-carried-timeout");
+    let (_, first, second) = resubmitted(&s, "a", &[("a.txt", "a\n")], &[("slow", "x\n")]);
+    let out = s.sluice(&["wait", &first.to_string(), "--timeout", "2s", "--json"]);
+    assert_eq!(out.status.code(), Some(sluice::WAITING), "{}", text(&out));
+    let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(doc["id"], first, "{doc}");
+    assert_eq!(doc["state"], "withdrawn", "{doc}");
+    assert_eq!(doc["carried_by"]["id"], second, "{doc}");
+    let state = &doc["carried_by"]["state"];
+    assert!(state == "queued" || state == "testing", "{doc}");
+
+    // Its words, in a scratch of its own, so no run of the first is under
+    // way to end its round late.
+    let s = Scratch::new("wt-carried-timeout-words");
+    let (_, first, _) = resubmitted(&s, "a", &[("a.txt", "a\n")], &[("slow", "x\n")]);
+    let out = s.sluice(&["wait", &first.to_string(), "--timeout", "2s"]);
+    let said = text(&out);
+    assert_eq!(out.status.code(), Some(sluice::WAITING), "{said}");
+    assert!(
+        said.contains(&format!("still waiting: sluice wait {first}")),
+        "{said}"
+    );
+}
+
+/// 51; record 0100 D3: a wait that followed the resubmission carrying its
+/// work to its landing marks nothing of the resubmission's delivered: its
+/// landing stays pending for its own delivery, which the worktree's inbox
+/// then collects and marks.
+#[test]
+fn a_wait_leaves_the_resubmissions_landing_pending() {
+    let s = Scratch::new("wt-carried-pending");
+    let (a, first, second) = resubmitted(&s, "a", &[("a.txt", "a\n")], &[("more.txt", "more\n")]);
+    let out = s
+        .command(env!("CARGO_BIN_EXE_sluice"), &a)
+        .args(["wait", &first.to_string(), "--timeout", "60s"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(sluice::LANDED), "{}", text(&out));
+    let landed = s.status(second);
+    assert_eq!(landed["state"], "landed", "{landed}");
+    assert!(
+        landed.get("delivered").is_none_or(|d| d.is_null()),
+        "{landed}"
+    );
+    assert!(s.logged("delivered").is_empty());
+    assert_eq!(collected_one(&s, &a)["id"], second);
+    assert!(s.status(second)["delivered"].is_string());
 }
 
 /// 2: a repository with no work tree, a bare clone or a checkout's git
