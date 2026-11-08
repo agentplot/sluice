@@ -219,6 +219,45 @@ fn a_preview_comes_up_or_fails_and_decides_nothing() {
     assert!(s.preview_of(&next).unwrap().is_none());
 }
 
+/// satisfies: 135, previews-1 101; the host-process spec's "The host
+/// process ends once nothing is in play and nothing follows it": a preview
+/// whose command runs, fails or whose checkout is gone is work in play
+/// until it is dropped; one up, or kept as failed, is none.
+#[test]
+fn a_preview_to_drop_is_work_in_play() {
+    let h = harness();
+    let s = h.sluice();
+    assert!(!s.previews_in_play().unwrap(), "no preview");
+    let rev = h.tip();
+    let plan = s.preview_plan(BRANCH, &rev).unwrap().unwrap();
+    h.w().hold_runs(true);
+    let (place, made) = s.make_preview(&plan).unwrap();
+    assert!(!s.previews_in_play().unwrap(), "waiting for room");
+    s.start_preview(&plan, place, session_part(&s)).unwrap();
+    assert!(s.previews_in_play().unwrap(), "its command runs");
+    h.w().complete(&rev);
+    assert!(!s.previews_in_play().unwrap(), "up");
+
+    h.w().remove_preview_checkout(&made.name);
+    assert!(s.previews_in_play().unwrap(), "its checkout gone");
+    assert_eq!(s.release_unusable_previews().unwrap().len(), 1);
+    assert!(!s.previews_in_play().unwrap(), "freed");
+
+    h.work("unit/1", "agent-1", &[("a/one", Some("1"))]);
+    let id = h.submit("unit/1");
+    h.w().hold_runs(false);
+    h.settle();
+    assert_eq!(h.sub(id).state, State::Landed);
+    h.w().preview_fails(true);
+    let next = h.tip();
+    let plan = s.preview_plan(BRANCH, &next).unwrap().unwrap();
+    let (place, _) = s.make_preview(&plan).unwrap();
+    s.start_preview(&plan, place, session_part(&s)).unwrap();
+    assert!(s.previews_in_play().unwrap(), "its command failed");
+    assert_eq!(s.release_unusable_previews().unwrap().len(), 1);
+    assert!(!s.previews_in_play().unwrap(), "kept as failed");
+}
+
 /// satisfies: previews-1 101, rule core.16
 #[test]
 fn a_round_never_releases_a_preview_that_is_up() {
