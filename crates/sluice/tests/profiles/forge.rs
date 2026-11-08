@@ -881,7 +881,9 @@ fn live_pull_request_calls() {
 /// one dispatch of the pool's workflow on the signer's branch, with the
 /// runner of its system and its claim; a job is alive while a queued or
 /// running run of the workflow bears its claim in its title; a wake is a
-/// dispatch to advance the branch.
+/// dispatch to advance the branch, on the repository's default branch as
+/// GitHub names it where the pool names no `ref`, never `main` by default
+/// (design D4, D5).
 #[test]
 fn the_pools_calls() {
     use sluice::profiles::checks::Launcher;
@@ -905,6 +907,12 @@ fn the_pools_calls() {
                     json!({ "id": INSTALLATION, "app_id": APP, "permissions": tokens.permissions }),
                 )
             };
+        }
+        if path == "/repos/o/r" && r.method == "GET" {
+            return json(
+                200,
+                json!({ "full_name": "o/r", "default_branch": "trunk" }),
+            );
         }
         if path == "/repos/o/r/actions/workflows/sluice.yml/dispatches" && r.method == "POST" {
             return (204, vec![], String::new());
@@ -981,8 +989,21 @@ fn the_pools_calls() {
         .rfind(|r| r.path.ends_with("/dispatches"))
         .unwrap();
     let body: serde_json::Value = serde_json::from_str(&wake.body).unwrap();
+    assert_eq!(body["ref"], "trunk");
     assert_eq!(body["inputs"]["mode"], "round");
     assert_eq!(body["inputs"]["branch"], "main");
+    let named = table(&[
+        ("workflow", ".github/workflows/sluice.yml"),
+        ("ref", "refs/heads/release"),
+    ]);
+    pool.wake(&named, "main", Some("origin")).unwrap();
+    let wake = fake
+        .requests()
+        .into_iter()
+        .rfind(|r| r.path.ends_with("/dispatches"))
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_str(&wake.body).unwrap();
+    assert_eq!(body["ref"], "release");
 }
 
 // 134; rule core.29: every call to GitHub's API under the retry policy.
@@ -1179,6 +1200,13 @@ fn a_write_that_makes_something_is_read_back_before_it_is_made_again() {
         .collect();
     assert_eq!(names, ["sluice"]);
 
+    // A request made, its answer lost, is settled by its head alone,
+    // never by the branch's list (request-intake-host; design D9).
+    let (lists, by_head) = (
+        "/repos/o/r/pulls?state=open&base=",
+        "/repos/o/r/pulls?state=open&head=",
+    );
+    let (listed, asked) = (gh.calls("GET", lists), gh.calls("GET", by_head));
     gh.trouble("POST", "/repos/o/r/pulls", 1, Trouble::Taken(502));
     let opened = app.open(&r, "main", "unit/e", "E", "body", false).unwrap();
     assert_eq!(
@@ -1186,6 +1214,8 @@ fn a_write_that_makes_something_is_read_back_before_it_is_made_again() {
         ("unit/e", "E")
     );
     assert_eq!(gh.calls("POST", "/repos/o/r/pulls"), 1);
+    assert_eq!(gh.calls("GET", by_head), asked + 1);
+    assert_eq!(gh.calls("GET", lists), listed, "no branch's list");
     assert_eq!(app.pulls(&r, "main").unwrap().len(), 2);
 }
 
