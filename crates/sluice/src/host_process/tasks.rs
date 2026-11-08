@@ -746,7 +746,10 @@ mod tests {
     /// rule core.29): a look whose read of one repository waits on its
     /// remote returns at once, holds no other repository's look or task,
     /// and counts as the process busy until it ends, when it starts that
-    /// repository's task where work is in play.
+    /// repository's task where work is in play. A task's start is read
+    /// from its body, which counts it, never from whether it holds: one
+    /// asked nothing ends within its first idle wait, sooner than a loaded
+    /// host may wake the thread that looks.
     #[test]
     fn a_slow_look_holds_no_command_and_no_other_look() {
         let (slow, quick, other) = (
@@ -757,8 +760,14 @@ mod tests {
         let answer = Arc::new(AtomicBool::new(false));
         let reads = Arc::new(AtomicUsize::new(0));
         let (waiting, counted) = (answer.clone(), reads.clone());
+        let starts: Arc<Mutex<Vec<PathBuf>>> = Arc::default();
+        let starting = starts.clone();
+        let started = |r: &PathBuf| locked(&starts).iter().filter(|s| *s == r).count();
         let tasks = Tasks::new(
-            Arc::new(|inbox: Inbox| answer_until_idle(&inbox)),
+            Arc::new(move |inbox: Inbox| {
+                locked(&starting).push(inbox.repository.clone());
+                answer_until_idle(&inbox);
+            }),
             Arc::new(move |r: &Path| {
                 if r == Path::new("/host/slow.git") {
                     counted.fetch_add(1, Ordering::SeqCst);
@@ -777,17 +786,19 @@ mod tests {
             began.elapsed() < Duration::from_secs(1),
             "the look returns at once"
         );
-        soon("the quick repository's task starts", || tasks.holds(&quick));
+        soon("the quick repository's task starts", || {
+            started(&quick) == 1
+        });
         // A command's ask is answered meanwhile.
         assert_eq!(tasks.handle(&other).pass(), Ok(Report::default()));
         // A second look while the first still reads reads nothing again.
         tasks.look(&slow);
         std::thread::sleep(Duration::from_millis(50));
         assert_eq!(reads.load(Ordering::SeqCst), 1);
-        assert!(tasks.looking(&slow) && !tasks.holds(&slow));
+        assert!(tasks.looking(&slow) && started(&slow) == 0);
         assert!(tasks.any(), "a look under way keeps the process");
         answer.store(true, Ordering::SeqCst);
-        soon("the slow repository's task starts", || tasks.holds(&slow));
+        soon("the slow repository's task starts", || started(&slow) == 1);
         soon("its look ends", || !tasks.looking(&slow));
     }
 }
