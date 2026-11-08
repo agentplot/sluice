@@ -26,6 +26,62 @@ say `still waiting: sluice wait <branch>`.
   `main`, `state` `queued` or `testing`, and a `queue` whose
   `submission` is `<id>`
 
+### Requirement: A landing stands whatever fails after it
+
+A waiting `sluice submit` and `sluice wait` SHALL report the submission
+as landed and exit 0 once its record says landed or its branch holds its
+work (122; rule core.48), whatever the round that landed it failed after
+the landing, the host process's or, on a branch the forge keeps, its
+round job's (137). What failed SHALL be in that round's log and the
+branch's state, and SHALL never be the wait's outcome. A wait SHALL exit
+3 only for a read it could not make itself.
+
+#### Scenario: The release fails after the landing
+
+- **WHEN** a submission's combination passes, the branch moves to it, and
+  releasing the combination's checkout then fails in the host process's
+  round, while a waiting `sluice submit` follows it
+- **THEN** stdout ends `passed · landed as <rev>`, the host process's log
+  names the failed release, and the command exits 0
+
+#### Scenario: Telling the outcome fails after the landing
+
+- **WHEN** a submission lands, and telling its session the outcome fails
+  in the host process's round, while `sluice wait <n>` follows it
+- **THEN** it reports the submission landed and exits 0
+
+#### Scenario: Under JSON
+
+- **WHEN** a submission lands and releasing its combination's checkout
+  fails in the host process's round, while `sluice wait <n> --json`
+  follows it
+- **THEN** stdout holds one document, the submission's record with
+  `state` `landed` and its `landed_as`, and it exits 0
+
+#### Scenario: The branch moved and the round stopped before recording it
+
+- **WHEN** the host process's round moves the branch to a submission's
+  landing and fails writing that it landed, while a waiting `sluice
+  submit` follows it
+- **THEN** the command reports the submission landed as the landing's
+  commit and exits 0, under `--json` its record with `state` `landed` and
+  that `landed_as`, and the host process's next round records it landed
+
+#### Scenario: A round that fails before the landing
+
+- **WHEN** the host process's round fails before the submission's branch
+  has moved, while a waiting `sluice submit` follows it
+- **THEN** the submit says the failure once on stderr, goes on waiting,
+  and the submission is not reported as landed
+
+#### Scenario: A pull request's submission
+
+- **WHEN** a waiting `sluice submit` follows a pull request the round
+  job lands, and posting sluice's check on its head then fails in the
+  round job's round
+- **THEN** it reports the pull request landed, as GitHub marks it
+  merged, and exits 0
+
 ## ADDED Requirements
 
 ### Requirement: A wait names where its pull request stands
