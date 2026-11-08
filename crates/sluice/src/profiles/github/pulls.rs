@@ -3320,9 +3320,18 @@ impl crate::PullRequests for Pulls {
         }
         if !pull.as_ref().is_some_and(|p| p.open) {
             // 122: closed as the branch took its head, whichever landing
-            // took it: landed, as the commit that landed it.
+            // took it: landed, as the commit that landed it. The branch is
+            // read as a round reads it, from its remote, never from the
+            // host's copy alone, which no fetch may have moved since another
+            // queue's landing closed it; a read that fails is the follow's
+            // error, never a closing (record 0100 D5; rule core.48).
             if let Some(e) = latest.filter(|e| e.state != State::Landed) {
-                if let Some(to) = s.seams().branch.landed_by(&t.tip, &e.head)? {
+                let branches = s.seams().branch;
+                let to = match branches.read(branch)? {
+                    Some(tip) => branches.landed_by(&tip, &e.head)?,
+                    None => None,
+                };
+                if let Some(to) = to {
                     let landed = Submission {
                         state: State::Landed,
                         landed_as: Some(to),
@@ -4012,7 +4021,6 @@ impl Pulls {
             },
             dirty: Vec::new(),
             detached: false,
-            bare: false,
         })
     }
 

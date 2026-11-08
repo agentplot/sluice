@@ -666,24 +666,7 @@ fn closed_while_queued() {
 /// GitHub, as a second copy of the repository on the host lands it, which
 /// GitHub reads as the pull request merged. Returns the landing.
 fn landed_elsewhere(g: &OnGitHub, head: &str) -> String {
-    let git = |args: &[&str]| -> String {
-        let out = crate::support::git_command()
-            .arg("--git-dir")
-            .arg(g.bare.path())
-            .args(args)
-            .env("GIT_AUTHOR_NAME", "another queue")
-            .env("GIT_AUTHOR_EMAIL", "queue@example.com")
-            .env("GIT_COMMITTER_NAME", "another queue")
-            .env("GIT_COMMITTER_EMAIL", "queue@example.com")
-            .output()
-            .unwrap();
-        assert!(
-            out.status.success(),
-            "{}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        String::from_utf8_lossy(&out.stdout).trim().to_string()
-    };
+    let git = |args: &[&str]| g.on_github(args);
     let main = g.main_on_github();
     let tree = git(&["merge-tree", "--write-tree", &main, head]);
     let landing = git(&[
@@ -773,6 +756,65 @@ fn a_withdrawn_submission_whose_work_landed_is_reported_landed() {
     assert!(!said.contains("closed without landing"), "{said}");
 }
 
+/// 122; record 0100 D5: beside a live driver, whose tick is the only fetch
+/// of `main`, `sluice wait main` follows a pull request this host took in;
+/// another queue then lands it, and GitHub reads it closed, with no fetch
+/// of `main` on this host since the wait began. The wait reads the closed
+/// request against `main` as a round reads it, from its remote: it says
+/// landed as the commit that landed it and exits 0, never closed without
+/// landing.
+#[test]
+fn a_wait_beside_a_driver_reads_a_request_another_queue_landed_from_the_branch() {
+    let g = OnGitHub::new("pr-closed-beside-driver", "");
+    // The wait reads the request again every quarter of it.
+    g.discovery("10s");
+    let w = g.session("beside", &[("slow", "x\n")]);
+    let out = g.wt_submit(&w, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let pull = g.pull_from("unit/beside");
+    assert_eq!(g.of(pull.number).len(), 1, "{:?}", g.subs());
+    let _driver = g.driver();
+    let mut child = g
+        .command(env!("CARGO_BIN_EXE_sluice"), &w)
+        .args(["wait", "main", "--timeout", "60s"])
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let heard = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let reader = {
+        let heard = heard.clone();
+        let mut stdout = child.stdout.take().unwrap();
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 4096];
+            while let Ok(n @ 1..) = stdout.read(&mut buf) {
+                heard
+                    .lock()
+                    .unwrap()
+                    .push_str(&String::from_utf8_lossy(&buf[..n]));
+            }
+        })
+    };
+    // Landed elsewhere once the wait has read the request open.
+    let until = Instant::now() + Duration::from_secs(60);
+    while heard.lock().unwrap().is_empty() {
+        assert!(
+            Instant::now() < until,
+            "the wait never said where it stands"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let landing = landed_elsewhere(&g, &pull.head);
+    let status = ended(child).status;
+    reader.join().unwrap();
+    let said = heard.lock().unwrap().clone();
+    assert_eq!(status.code(), Some(sluice::LANDED), "{said}");
+    assert!(
+        said.contains(&format!("landed as {}", &landing[..7])),
+        "{said}"
+    );
+    assert!(!said.contains("closed without landing"), "{said}");
+}
+
 /// 5, 120: the operator's withdrawal of a hand-opened pull request's
 /// submission rests it on its head, open and ready: no work of it goes
 /// on, so a wait on it exits 4 at once.
@@ -791,9 +833,10 @@ fn a_wait_on_a_request_the_operator_withdrew_exits_withdrawn() {
     assert_eq!(doc["id"], id, "{doc}");
 }
 
-/// 67, 122: a wait on a pull request's submission its own submit withdrew
-/// for a new head follows the request to the submission of that head,
-/// and reports it landed.
+/// 67, 122; record 0100 D2, D4: a wait on a pull request's submission its
+/// own submit withdrew for a new head follows the request to the
+/// submission of that head, and ends with its own submission landed by
+/// that one's landing, naming it in `carried_by`.
 #[test]
 fn a_wait_follows_the_new_head_its_submit_withdrew_it_for() {
     let g = OnGitHub::new("pr-follow-new-head", "");
@@ -812,10 +855,58 @@ fn a_wait_follows_the_new_head_its_submit_withdrew_it_for() {
         .unwrap();
     assert_eq!(out.status.code(), Some(sluice::LANDED), "{}", text(&out));
     let doc: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let subs = g.of(n);
+    let second = subs
+        .iter()
+        .find(|x| x["head"] == new.as_str())
+        .unwrap_or_else(|| panic!("{subs:?}"));
+    assert_eq!(second["state"], "landed", "{second}");
+    assert_eq!(doc["id"], first, "{doc}");
     assert_eq!(doc["state"], "landed", "{doc}");
-    assert_eq!(doc["head"], new.as_str(), "{doc}");
-    assert_ne!(doc["id"], first, "{doc}");
+    assert_eq!(doc["landed_elsewhere"], true, "{doc}");
+    assert_eq!(doc["landed_as"], second["landed_as"], "{doc}");
+    assert_eq!(
+        doc["carried_by"],
+        serde_json::json!({ "id": second["id"], "state": "landed" }),
+        "{doc}"
+    );
     assert_eq!(g.of(n)[0]["state"], "withdrawn");
+}
+
+/// 67, 120; record 0100 D2, D3: a pull request closed on the new head that
+/// carries a withdrawn submission's work, before that head lands, ends the
+/// withdrawn submission's wait withdrawn, exit 4, its own record naming the
+/// request closed in `carried_by`.
+#[test]
+fn a_wait_exits_withdrawn_when_the_request_carrying_its_work_closes() {
+    let g = OnGitHub::new("pr-follow-closed", "");
+    let w = g.session("follow-closed", &[("slow", "x\n")]);
+    let out = g.wt_submit(&w, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let n = g.pull_from("unit/follow-closed").number;
+    let first = g.of(n)[0]["id"].as_u64().unwrap();
+    g.commit_in(&w, &[("more.txt", "more\n")]);
+    let out = g.wt_submit(&w, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert_eq!(g.of(n).len(), 2, "{:?}", g.of(n));
+    g.gh.forge.close(n).unwrap();
+    // The wait's first intake asks GitHub, as it does once the host's
+    // interval has passed.
+    g.discovery_passes();
+    let out = g
+        .command(env!("CARGO_BIN_EXE_sluice"), &w)
+        .args(["wait", &first.to_string(), "--timeout", "60s", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(sluice::WITHDRAWN), "{}", text(&out));
+    let doc: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(doc["id"], first, "{doc}");
+    assert_eq!(doc["state"], "withdrawn", "{doc}");
+    assert_eq!(
+        doc["carried_by"],
+        serde_json::json!({ "pull_request": n, "state": "closed" }),
+        "{doc}"
+    );
 }
 
 /// A blamed pull request whose author marks it a draft and then ready
@@ -3943,6 +4034,145 @@ impl OnGitHub {
             .output()
             .unwrap()
     }
+
+    /// [`OnGitHub::submit_by_name`], waiting, spawned: it goes on beside
+    /// the test until [`ended`].
+    fn spawn_by_name(&self, branch: &str, args: &[&str]) -> std::process::Child {
+        self.command(env!("CARGO_BIN_EXE_sluice"), &self.repo.dir().join(".git"))
+            .args(["submit", "main", "--head", branch])
+            .args(args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap()
+    }
+
+    /// `git` in GitHub's own repository, as another queue, or a person
+    /// pushing there, writes it: what it printed.
+    fn on_github(&self, args: &[&str]) -> String {
+        let out = crate::support::git_command()
+            .arg("--git-dir")
+            .arg(self.bare.path())
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "another queue")
+            .env("GIT_AUTHOR_EMAIL", "queue@example.com")
+            .env("GIT_COMMITTER_NAME", "another queue")
+            .env("GIT_COMMITTER_EMAIL", "queue@example.com")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+}
+
+/// `child` once it has ended, within two minutes, with what it said.
+fn ended(mut child: std::process::Child) -> Output {
+    let until = Instant::now() + Duration::from_secs(120);
+    while child.try_wait().unwrap().is_none() {
+        if Instant::now() > until {
+            let _ = child.kill();
+            let out = child.wait_with_output().unwrap();
+            panic!("never ended: {}", text(&out));
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    child.wait_with_output().unwrap()
+}
+
+/// `main` taking pull requests, beside `bolt/x` on GitHub, a branch sluice
+/// lands on whose one commit holds a check that goes on until it is ended
+/// the first time it runs, and `pid`, where that check writes its process.
+fn with_a_hanging_bolt(name: &str) -> (OnGitHub, PathBuf) {
+    let g = OnGitHub::checked_policy(name, "", "1m", "", BOLTS);
+    let pid = g.repo.dir().join(".git/hang.pid");
+    let hang = format!("{}\n", pid.display());
+    g.repo.branch("bolt/x", "main", &[("hang", Some(&hang))]);
+    g.repo
+        .git(&["push", "-q", "origin", "bolt/x:refs/heads/bolt/x"]);
+    (g, pid)
+}
+
+/// Until `pid` exists: the check of the submission first taken in has
+/// started.
+fn started(pid: &Path) {
+    let until = Instant::now() + Duration::from_secs(60);
+    while !pid.exists() {
+        assert!(Instant::now() < until, "the check never started");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// 135, 67; record 0100 D2, D4: a waiting submit by name whose request
+/// `bolt/x` moves under, taken in again on its new head and landed there,
+/// ends with the submission it made, landed by that one's landing and
+/// naming it in `carried_by`, never with that one's record.
+#[test]
+fn a_waiting_submit_ends_with_its_own_submission_when_the_branch_moves_under_it() {
+    let (g, pid) = with_a_hanging_bolt("pr-by-name-moves");
+    let child = g.spawn_by_name("bolt/x", &["--json"]);
+    started(&pid);
+    let n = g.pull_from("bolt/x").number;
+    let first = g.of(n)[0]["id"].as_u64().unwrap();
+    // A commit lands on GitHub's bolt/x, and the next submit by name takes
+    // the request in again on it.
+    let head = g.bolt_on_github();
+    let tree = g.on_github(&["rev-parse", &format!("{head}^{{tree}}")]);
+    let moved = g.on_github(&["commit-tree", &tree, "-p", &head, "-m", "more on bolt/x"]);
+    g.on_github(&["update-ref", "refs/heads/bolt/x", &moved, &head]);
+    let out = g.submit_by_name("bolt/x", &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+
+    let out = ended(child);
+    assert_eq!(out.status.code(), Some(sluice::LANDED), "{}", text(&out));
+    let doc: Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
+    let subs = g.of(n);
+    let second = subs
+        .iter()
+        .find(|x| x["head"] == moved.as_str())
+        .unwrap_or_else(|| panic!("{subs:?}"));
+    assert_eq!(second["state"], "landed", "{second}");
+    assert_eq!(doc["id"], first, "{doc}");
+    assert_eq!(doc["state"], "landed", "{doc}");
+    assert_eq!(doc["carried_by"]["id"], second["id"], "{doc}");
+    assert_eq!(doc["carried_by"]["state"], "landed", "{doc}");
+}
+
+/// 122, 135; the signal `agentplot/crew-state:agentplot/main
+/// signals/2026-11-07-agentplot-ops-d4947942/01-sluice-exits-4-after-its-own-landing`:
+/// a waiting submit by name in the repository's git directory, whose
+/// request another queue of `main` lands once this host took it in, exits
+/// 0 and says `landed as <rev>`, never `withdrawn`, and its submission's
+/// record reads landed, `landed_elsewhere`.
+#[test]
+fn a_waiting_submit_by_name_in_a_bare_clone_reports_another_queues_landing() {
+    let (g, pid) = with_a_hanging_bolt("pr-by-name-elsewhere");
+    let child = g.spawn_by_name("bolt/x", &[]);
+    started(&pid);
+    let pull = g.pull_from("bolt/x");
+    let first = g.of(pull.number)[0]["id"].as_u64().unwrap();
+    let landing = landed_elsewhere(&g, &pull.head);
+    g.discovery_passes();
+
+    let out = ended(child);
+    let said = text(&out);
+    assert_eq!(out.status.code(), Some(sluice::LANDED), "{said}");
+    assert!(
+        said.contains(&format!("landed as {}", &landing[..7])),
+        "{said}"
+    );
+    assert!(!said.contains("withdrawn"), "{said}");
+    let sub = g
+        .of(pull.number)
+        .into_iter()
+        .find(|x| x["id"] == first)
+        .unwrap();
+    assert_eq!(sub["state"], "landed", "{sub}");
+    assert_eq!(sub["landed_elsewhere"], true, "{sub}");
 }
 
 /// 124, C.5, D7: `main` takes pull requests, and this host's `bolt/x`
@@ -5200,7 +5430,9 @@ fn handed_over() {
 /// withdraws it, ends its run and releases its checkout, and runs no round
 /// for `main`, which would read main moved since A last read it. The
 /// request carries the submission's work on B, so the wait follows the
-/// request and is never told it was withdrawn (122, 137).
+/// request and is never told it was withdrawn (122, 137). Out of time, it
+/// prints its own submission's record, naming the request it follows as it
+/// stands (record 0100 D2, D3).
 #[test]
 fn handed_over_by_a_wait() {
     let g = OnGitHub::new("intake-handed-wait", "");
@@ -5214,7 +5446,12 @@ fn handed_over_by_a_wait() {
     let out = g.sluice(&["wait", &id.to_string(), "--timeout", "2s", "--json"]);
     assert_eq!(out.status.code(), Some(sluice::WAITING), "{}", text(&out));
     let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(doc["pull_request"], n, "{doc}");
+    assert_eq!(doc["id"], id, "{doc}");
+    assert_eq!(
+        doc["carried_by"],
+        serde_json::json!({ "pull_request": n, "state": "open" }),
+        "{doc}"
+    );
     let a = g.of(n);
     assert_eq!(a[0]["withdrawn"]["by"], "b takes main's pull requests in");
     assert_eq!(a[0]["withdrawn"]["handed_over_to"], "b");

@@ -1097,6 +1097,45 @@ Under `--json`, the record's `failed` holds both: the task with its
 `hash` and `log`, and the test with `failed_by`, as [the submission's
 record](/sluice/reference/state/#a-submission) says.
 
+A wait reports its own submission, and never another's outcome as its
+own. Its own is the number given, the submission a waiting submit made,
+or, for `sluice wait <branch>`, the worktree's last. It's landed once
+its branch holds its work, by whatever landing took it, its own queue's
+or another's: `landed as 4e1a07c: main holds its work, by a landing not
+its own`, exit `0`, with `landed_elsewhere` in its record. A submission
+withdrawn though its work landed still reads withdrawn in `sluice
+status <id>`, and the wait reports it landed all the same.
+
+A later submission from its worktree, or its pull request, may carry
+its work, as when its session submits again on top of it. The wait then
+says so and follows that one, printing how far that one has got:
+
+```console
+$ sluice wait 12
+#12 withdrawn by resubmission: #13 carries its work, so this wait follows it
+testing main + #13 · 3s of 45m
+landed as b7d2e94: main holds its work, by #13's landing
+```
+
+It ends with its own submission all the same. It's landed once `#13`
+lands, exit `0`. It's withdrawn, exit `4`, once `#13` is blamed, in
+conflict, or withdrawn with nothing carrying its work on, or once the
+pull request is closed or sent back: `#12 withdrawn by resubmission:
+#13, which carried its work, failed`, then `sluice status 13`. Out of
+time or stopped, it prints `still waiting: sluice wait 12`. Under
+`--json`, its document is its own submission's record, with
+`carried_by` naming what it followed and how that stands:
+`{"id":13,"state":"landed"}`, or `{"pull_request":41,"state":"closed"}`
+for a pull request with no submission on this host. The outcome of
+what it followed is that submission's own: the wait marks it delivered
+to no one, and it reaches its session as any outcome does.
+
+A pull request read closed is read against its branch as a round reads
+it, from its remote, before the wait calls it closed without landing.
+One another queue landed is landed, exit `0`, even where no command on
+this host has fetched the branch since. A branch it can't read ends the
+wait as one that couldn't read, exit `3`.
+
 To a branch with pull requests, `sluice wait <branch>` follows the
 worktree's pull request as a waiting `sluice submit` does. Once sluice
 has queued the pull request at its latest commits, it follows that
@@ -1106,7 +1145,10 @@ sluice wait 12` without. Until then, its document under `--json` is
 the one `sluice submit --status --json` prints,
 `{"pull_request","branch","state"}`, the state saying what the pull
 request waits for. Once its submission is decided, it prints the
-submission's record.
+submission's record. Its own submission is the first it reads of the
+pull request. When sluice takes the pull request in again on a new
+head, as when the branch moves under it, the wait follows the new
+head's submission and ends with its own, as above.
 
 When another host takes the branch's pull requests in, the wait takes
 none in and runs no rounds of that branch. It follows the pull request
@@ -1188,7 +1230,11 @@ deliver it again. Under `--json`, the record it prints carries the
 submission marks nothing, and nor does one that ends out of time or
 stopped. A submission by name came from no worktree, and nor did a pull
 request from a branch sluice lands on, so a wait on either marks
-nothing, wherever it runs. An outcome already delivered is reported as it stands. When the
+nothing, wherever it runs. In a bare repository or a git directory,
+which has no files checked out, a wait marks only what one in a
+worktree on the branch its `HEAD` names would. Where it runs in no herdr
+pane, `delivered_to` there names the agent, `SLUICE_AGENT`, else the
+branch. An outcome already delivered is reported as it stands. When the
 wait can't make its mark, it says so on stderr, and the outcome stays
 pending for `sluice inbox`.
 
@@ -1206,6 +1252,11 @@ name](#submitting-a-branch-by-name): no `sluice inbox` collects either.
 A withdrawn submission, and one still queued or under test, is not
 collected. `--worktree <path>` collects for another worktree.
 
+In a bare repository or a git directory, which has no files checked
+out, `sluice inbox` collects only what a worktree on the branch its
+`HEAD` names would, even where that branch has no commit yet. Where its
+`HEAD` names no branch, it collects nothing.
+
 An outcome is delivered once, by whichever comes first: the notice a
 round types into the session's herdr pane when it decides the outcome,
 a `sluice wait` or waiting submit in the worktree that reports it, or
@@ -1213,8 +1264,9 @@ a `sluice wait` or waiting submit in the worktree that reports it, or
 delivered on its submission, with when and to whom: `delivered` and
 `delivered_to` in [the submission's
 record](/sluice/reference/state/#a-submission). `delivered_to` names
-the herdr pane where the command runs in one, else the worktree's path.
-Run again, it prints nothing.
+the herdr pane where the command runs in one, else the worktree's path,
+else, in a bare repository or a git directory, the agent:
+`SLUICE_AGENT`, else the branch. Run again, it prints nothing.
 
 A session that starts again, after a restart or on another host, runs
 `sluice inbox` once, in place of keeping a `sluice wait` for each
@@ -1306,7 +1358,7 @@ or `{"outcomes":[]}` under `--json`, and exits `0`.
 | `0` | landed, whatever failed after the landing: what failed is on stderr, after `sluice: after the landing:` |
 | `1` | failed: this submission was blamed |
 | `2` | a conflict, or a refusal |
-| `4` | withdrawn while it was waited on |
+| `4` | withdrawn, and none of its work landed |
 | `5` | `sluice wait --timeout` ran out; the submission stays queued |
 | `130` | stopped with Ctrl-C; the submission stays queued |
 

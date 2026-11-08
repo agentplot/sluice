@@ -1,3 +1,9 @@
+## Purpose
+
+Lands, as the commit that landed it, a submission whose work its branch
+already holds by whichever landing took it, so that work is never
+formed, run or landed again and never withdrawn (122, 5).
+
 ## ADDED Requirements
 
 ### Requirement: A submission whose work the branch already holds is landed

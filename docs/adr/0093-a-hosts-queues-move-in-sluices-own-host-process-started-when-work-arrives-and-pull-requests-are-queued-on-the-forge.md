@@ -1,6 +1,6 @@
 ---
 number: 93
-title: A host's queues move in sluice's own host process, started when work arrives and gone when idle, and pull requests are queued on the forge
+title: A host's queues move in sluice's own host process, started when work arrives and gone when idle, and each branch's queue runs whole in one of four ways
 status: accepted
 date: 2026-11-06
 decision-makers:
@@ -8,7 +8,7 @@ decision-makers:
 - agentplot-design
 ---
 
-# A host's queues move in sluice's own host process, started when work arrives and gone when idle, and pull requests are queued on the forge
+# A host's queues move in sluice's own host process, started when work arrives and gone when idle, and each branch's queue runs whole in one of four ways
 
 Status: accepted by the user on 2026-11-06, in agentplot-design's pane: "I approved 93."
 
@@ -24,8 +24,8 @@ Record 0068 kept sluice a plain command line that needs no daemon and let a host
 
 ## Considered options
 
-1. **One host process, sluice's own.** The first command that needs the host's queues moved starts it where none answers; it holds every repository on the host that has sluice, each repository's queues apart, and the host's bound on runs in one place, and ends once no queue has work in play and nothing follows it. A branch that takes pull requests is queued on its forge by the forge's jobs, so no host takes requests in.
-2. Record 0092: one host form of `sluice run`, which a host's service manager keeps. One service in place of one per repository, but still a service each host installs and keeps, and still a host taking pull requests in.
+1. **One host process, sluice's own.** The first command that needs the host's queues moved starts it where none answers; it holds every repository on the host that has sluice, each repository's queues apart, and the host's bound on runs in one place, and ends once no queue has work in play and nothing follows it.
+2. Record 0092: one host form of `sluice run`, which a host's service manager keeps. One service in place of one per repository, but still a service each host installs and keeps.
 3. One process per queue, started by its submit. Ten submits to ten branches are ten processes, and the host's bound and the forge's allowance are coordinated across them through files.
 4. Every command runs rounds itself, as a waiting submit does today. Nothing new runs, but ten waits are ten processes forming one branch's candidate.
 
@@ -37,7 +37,8 @@ Option 1.
 - **One process per user on a host.** It holds a task for each repository with work, each repository's queues apart, so a refusal or a slow fetch in one holds no other's round (26); one scheduler keeping the host's bound on runs, a queue's candidates before sessions' runs (71, 150); and one forge client, one allowance. Its concurrency is the language's, inside one process, never processes coordinating through files.
 - **Gone when idle, and nothing lost.** It ends once no queue it holds has work in play and nothing follows it. It keeps nothing the records do not hold, so a crash or a sleeping laptop loses nothing: the next command that finds work in play and no host process starts one. It finds its repositories in an index sluice writes in the host's state whenever any command of sluice's finds a repository has sluice, a policy at a revision the host holds or records, the user's choice. A run outlives the process that started it and is equipped from its repository's policy (147). A command of a newer sluice has an older process hand its repositories over and end (135).
 - **The reader is the host process.** A watch or a wait that finds no reader starts the host process, which reads, and follows it (129).
-- **Pull requests are queued on the forge.** A branch's requests are taken in only where its records are on its remote, by the instance that keeps the branch there: on a forge, the forge's jobs, as a pool, one round at a time. A branch whose records each host keeps takes no requests in. A host's submit opens or updates its request and marks it ready, and the host follows it by the forge's state and sluice's check on its head, its status showing the request's entry there as fields (137, C.5). The intake mark, its renewal and lease, hand-overs and their withdrawals all go (120, 140).
+- **No intake mark.** The intake mark, its renewal and lease, hand-overs and their withdrawals all go (120, 140). Whatever executes a branch's queue takes its requests in. A host's submit opens or updates its request and marks it ready, and the host follows it by the forge's state and sluice's check on its head, its status showing the request's entry there as fields (137, C.5).
+- **Where a queue runs.** Each branch's queue runs whole in one of four ways, behind one contract with Flume, as the amendment of 2026-11-08 below has it.
 - **sluice calls no other program.** Flume reads each outcome at its settles; its step per settle is nothing (flume C.6).
 
 ### Consequences
@@ -67,3 +68,28 @@ What it decides stands: one host process for each user on a host, started by the
 10. **A newer command waits out an older host process's hand-over**: until that process has ended and let its lock go, for the minute it gives its tasks to finish their rounds and a start's ten seconds after, then it starts its own, and names `host/log` where the older one still runs. Not taken: a ten-second wait for the older socket to go, which fails the newer command whenever a round outlasts it, since the process it starts ends at once on the held lock.
 11. **A pool's job holds its run's room at its start**: a run a lead marks starting under the claim it gives a pool's job holds no room of the lead's host, and the job's round holds its part as it starts it, as `start_claimed` does, opening it again where its host has none (88, S19; rule core.49). Not taken: the lead holding a part for it, which holds room on the lead's host for a run another host runs; and the job's round reading it as a stopped round's and opening it again, which never starts it.
 12. **A start refused at the bound starts no further run that round**: each run decided behind it is opened again, its part given back, with no place made, as clause 71 has had it, since a refusal says the host holds none of the room the round counted on, as after a hand-over. Not taken: the runs behind it started in the parts the round still holds, which a host process that refused the first may not count.
+
+## Amendment of 2026-11-08: one contract with Flume, and a queue runs whole in one of four ways
+
+sluice keeps one contract with Flume and the Boomdrive runner however a queue runs, and each branch's queue runs whole in one of four ways: with no daemon, by a daemon on this machine, by a daemon on another machine, or by a GitHub Action. Status: accepted by the user on 2026-11-08, on their card ("Approved"), and point 3 as it reads now on their card the same day ("Yes: machines choose how sluice runs, the repository says what must pass").
+
+Deciders: the user, 2026-11-08, in agentplot-ops's pane, as agentplot-ops relayed it (signal 2026-11-08-agentplot-ops-134a1434/01). They asked for sluice's direction to be handled as two separate things. The first is how sluice works with Flume and the Boomdrive runner: `sluice submit` starts the background processes, and sluice reports to Flume when the work is done, so Flume marks it and launches a fix. The second is local against remote execution, which doesn't change the first: "It seems like the GitHub job idea, just for doing the pushes to main and not for running the test, is a [...] band-aid from a design perspective. In my mind there's going to be local execution and then there's going to be remote execution but that doesn't change."; "I think we need to support either a daemon running on the same machine or a different machine, or a GitHub action". The same day, refining it (signal 2026-11-08-agentplot-ops-77e3a93c/01-sluice-runs-four-ways): "I'd argue that it's really four options because sluice runs on the same machine as a background process that gets kicked off. We did that to avoid the daemon but let's face it: a remote executor is a daemon. What stops you from running a daemon on the same host or a remote host? It's kind of the same thing but sluice should also be able to run without a daemon". Reading the plan that followed, the same day: "Why would it be the responsibility of a repository to know how its surrounding infrastructure is actually set up?" agentplot-design for writing it into this record and the statement, and for the choices marked as its own.
+
+1. **Two concerns, kept apart.** How sluice works with Flume and the Boomdrive runner is one concern, and where a branch's queue executes is another. A change to one never changes the other.
+2. **One contract, wherever the queue runs.** `sluice submit` adds its entry and returns at once, having started whatever background work the way that executes its branch needs. Once the submission is decided, sluice reports its outcome to its submitter as this record has it (the notice, `sluice inbox` and `sluice wait`), and Flume reads that report, marks its place, and launches the kind's landing fix on a kick-back (flume record 0056; weir record 0005). sluice still calls no program of Flume's. The user's "sluice report" is this report. Whether it is also a command of its own is the build's choice, and it changes nothing of the contract.
+3. **A queue executes whole, in one of four ways, and the machines choose it.**
+   - **No daemon.** The submitting machine's own sluice process executes it: `sluice submit` starts it, and it ends when idle (135, as decided above). sluice works this way with nothing set.
+   - **A daemon on this machine.** The machine keeps `sluice daemon` running. That is the same host process, which never ends when idle.
+   - **A daemon on another machine.** That machine keeps `sluice daemon` running, and it runs the queues of the repositories it holds.
+   - **A GitHub Action.** GitHub Actions' jobs execute it: they take the requests in, run the checks on GitHub's machines and push the landing. The repository carries the workflow GitHub runs. This is the one thing any way puts in a repository, since GitHub runs only jobs a repository defines.
+
+   No setting chooses a way. A daemon is a command a machine keeps running by its own choice. The repository says only what a landing must pass and whose test results it accepts: its gate and its signers. Those stay in the repository because a machine can't vouch for itself, and the branch's own revision is what is read, so no change loosens its own checks (core.15, 78). A shared branch's queue runs where its results count. A machine whose signature the branch does not accept leads none of its rounds and runs none of its checks. It submits, and leaves the queue to one whose signature the branch accepts.
+
+   Whatever executes a branch's queue takes its requests in, forms and tests its candidates, and lands them. Nothing does one part of that while another does the rest. No request is taken in by two ways, two machines or two copies of one repository.
+4. **Not taken.** A forge's jobs taking requests in and landing them while machines run the checks, the split the user called a band-aid. A branch on GitHub Actions runs its checks there too, and the change that built the split is reverted whole on its bolt (`sluice-runs-one-host-process--takes-out-the-forge-round`).
+5. **What stands.** Everything else above stands: one host process per user, started when work arrives and gone when idle, as the no-daemon way, with nothing installed on a machine that uses it. So does the removal of the intake mark, its renewal, its lease and its hand-overs. Whatever executes a branch takes its requests in.
+6. **Consequences.**
+   - sluice runs standing only as a daemon its branch's policy chooses, on this machine or another. That settles wldn's question of a machine whose signature a branch's tests need: that branch executes by a daemon on that machine, which stays up.
+   - Rules core.31 and core.33 are amended to match, each marked proposed.
+   - The statement's clauses 135 and 137 and C.8's table follow, marked proposed (agentplot/blueprints, design/sluice/requirements.md).
+   - Left to the build, within points 2 and 3 (agentplot-design's choice): how a machine's service manager keeps `sluice daemon` running, and what a machine whose signature a branch does not accept starts when it submits. Units are queued from this amendment.

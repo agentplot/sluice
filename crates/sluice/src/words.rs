@@ -204,6 +204,25 @@ pub fn landed_elsewhere(branch: &str, landed_as: &Rev) -> String {
     )
 }
 
+/// 122, record 0100 D3: a wait's last line for its own submission, whose
+/// work `branch` holds as `landed_as` by the landing of `by`, what carried
+/// that work and the wait followed: `#<b>` or `pull request #<n>`.
+pub fn landed_carried(branch: &str, landed_as: &Rev, by: &str) -> String {
+    format!(
+        "landed as {}: {branch} holds its work, by {by}'s landing",
+        landed_as.short()
+    )
+}
+
+/// 67, record 0100 D3: a wait's last line for its own submission `id`,
+/// which `left` the queue (`withdrawn by <who>`), once `by`, what carried
+/// its work and the wait followed, stopped short as `how` says (`failed`,
+/// `is in conflict`, `was withdrawn by <who>`, `was closed without
+/// landing`, `was sent back`).
+pub fn carrier_stopped(id: u64, left: &str, by: &str, how: &str) -> String {
+    format!("#{id} {left}: {by}, which carried its work, {how}")
+}
+
 /// 140: what a submission that takes the queue though no check reads its
 /// changes at the branch's revision waits for: entry `behind`, whose
 /// checks would read it or whose work it conflicts with.
