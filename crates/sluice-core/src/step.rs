@@ -691,7 +691,10 @@ impl Sluice<'_> {
     /// round's, goes back to open for a later round, as does one the check
     /// seam refuses at the bound; a place made for it is released as any
     /// candidate's is (123), into `releases` when its release was not
-    /// plain.
+    /// plain. 84, 139 (rule core.38): the stopped round's run is read
+    /// against the host first, as its start would have read it, so an
+    /// engine gone since its claim leaves it a run whose tests could not
+    /// run, with the reason.
     fn perform_starts(
         &self,
         branch: &str,
@@ -732,10 +735,47 @@ impl Sluice<'_> {
             let name = c.runs[i].place.clone().expect("a starting run has a place");
             let Some(part) = parts.remove(&name) else {
                 // No room was held for it: a stopped round's (core.49).
-                self.reopen(branch, &c.id, i, &name, false)?;
+                if self.meets(unmet) {
+                    self.reopen_made(branch, &c.id, i, &name, releases)?;
+                } else {
+                    let checks = match c.runs[i].checks.is_empty() {
+                        true => from.rules.required.clone(),
+                        false => c.runs[i].checks.clone(),
+                    };
+                    let kind = from.policy.limits.executor.as_deref().unwrap_or("open");
+                    let why = unmet.found().unwrap_or_default().to_string();
+                    let report = unstarted(&checks, kind, why);
+                    let home = from.home.as_deref();
+                    self.not_started(branch, &c, i, &name, &report, home, releases)?;
+                }
                 continue;
             };
             self.start_run(branch, &from, &c, i, unmet, part, releases)?;
+        }
+        Ok(())
+    }
+
+    /// 71, 123: run `i` of candidate `cand`, decided into `place` and not
+    /// started, open again ([`Sluice::reopen`]), the checkout a stopped
+    /// start made for it released first, into `releases` when its release
+    /// was not plain, and released again by the rounds after where it
+    /// failed.
+    fn reopen_made(
+        &self,
+        branch: &str,
+        cand: &str,
+        i: usize,
+        place: &str,
+        releases: &mut Vec<ReleaseOutcome>,
+    ) -> Result<()> {
+        if !self.seams.checkout.made()?.iter().any(|p| p == place) {
+            return self.reopen(branch, cand, i, place, false);
+        }
+        let outcome = self.release_made(branch, place)?;
+        let retry = matches!(outcome.how, Releasing::Failed { .. });
+        self.reopen(branch, cand, i, place, retry)?;
+        if outcome.how != Releasing::Released {
+            releases.push(outcome);
         }
         Ok(())
     }
@@ -781,7 +821,7 @@ impl Sluice<'_> {
         };
         let Some(part) = self.seams.tests.hold(RunKind::Queue)? else {
             let name = c.runs[i].place.clone().expect("a starting run has a place");
-            self.reopen(branch, &c.id, i, &name, false)?;
+            self.reopen_made(branch, &c.id, i, &name, releases)?;
             return Ok(Some(Started::AtBound));
         };
         let unmet = Unmet::of(from.policy.limits.clone());
