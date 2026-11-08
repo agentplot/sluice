@@ -371,28 +371,32 @@ In the host process it holds through `Room` itself.
 
 **What a person reads.** The overview's `room` gains `waiting`, by
 kind, and `turn`, `queue` or `sessions`, read from the host process
-where one answers. Its `host` is `{version, pid, since}`, or null where
-none answers. `sluice status` with no target prints the same room
-line.
+where one answers. Its `host_process` is `{version, pid, since}`, or
+null where none answers, beside `host`, which stays the host's name that
+the tools watching the host read. `sluice status` with no target prints
+the same room line.
 
 ### D13. Passes when asked: the tests' host
 
 The tests drive rounds one command at a time. A host process that took
 passes on its own would race them. Under `SLUICE_ROUND_SLEEP=record`,
 the value the tests already set to skip pauses, the host process takes
-no pass of its own. It runs a pass only for a `pass`, a `serve` or a
-`step`, and answers each once the pass ends. Each follower, a wait, a
-watch or `sluice run`, sends `pass` at each of its ticks. A test's
+no pass of its own. It runs a pass only for a `pass` or a `step`, and
+answers each once the pass ends; a `serve` holds the repository for the
+next ask, so a `--no-wait` submit leaves the queue for the test's next
+command. Each follower, a wait, a watch or `sluice run`, sends `pass` at
+each of its ticks. A test's
 rounds are therefore those its commands asked for, in its own order.
 The process still checks at each real second whether it should end
 (D6), so a test's scratch removed ends it.
 
 `exec::Host` gains `host_process(&self) -> &dyn HostProcess`, the
 requests of D2 as methods. `Bound` answers through the socket.
-`support::FakeHost` answers in the test's own process: `serve`,
-`pass` and `step` run the pass or the round on the fakes' seams
-there, `hold` asks a `Room` it keeps, and every follower asks a pass,
-since the fake takes passes only when asked. The tests over the fakes
+`support::FakeHost` answers in the test's own process: `pass` and
+`step` run the pass or the round on the fakes' seams there, a `serve`
+holds the repository for the next ask, `hold` asks a `Room` it keeps,
+and every follower asks a pass, since the fake takes passes only when
+asked. The tests over the fakes
 therefore keep their commands. Their rounds run through the same
 `host_process::pass` the host process runs.
 

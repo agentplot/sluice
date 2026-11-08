@@ -79,7 +79,8 @@ What sluice does at the bolt's base, 68d68a9a:
   taking turns with sessions' runs, and sessions' and previews' runs
   start in the order they came to wait (150, S75; record 0087). The
   overview's `room` names the runs waiting and whose turn is next, and
-  its `host` names the host process.
+  its `host_process` names the host process, beside `host`, the host's
+  name.
 - **The docs stop naming a service.** The README's "No daemon"
   paragraph, the site's pages and the plugin's skills say sluice starts
   its own process when work arrives and nothing is installed. They

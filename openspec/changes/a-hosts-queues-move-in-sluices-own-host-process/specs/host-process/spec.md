@@ -239,8 +239,9 @@ at its first tick after that run ends.
 
 ### Requirement: The overview names the host process and the runs waiting
 
-`sluice overview --json` SHALL give `host`, the host process's
-`version`, `pid` and `since`, or null where none answers. Its `room`
+`sluice overview --json` SHALL give `host_process`, the host process's
+`version`, `pid` and `since`, or null where none answers, beside `host`,
+the host's name. Its `room`
 SHALL give `waiting`, the runs waiting for room by kind, and `turn`,
 whose the next room a combination and a session both want is, `queue` or
 `sessions`. `sluice status` with no target SHALL print the same room on
@@ -251,4 +252,4 @@ its line (150).
 - **WHEN** the bound is one, a combination's run holds it, and `sluice
   exec main` waits for room
 - **THEN** `sluice overview --json` gives `room.waiting.sessions` 1 and
-  `host.pid` the host process's pid
+  `host_process.pid` the host process's pid
