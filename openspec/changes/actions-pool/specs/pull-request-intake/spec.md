@@ -5,12 +5,26 @@ A branch's policy SHALL accept a `[branches."<pattern>".pull_requests]`
 table with `reviews`, a count of approving reviews, default 0, and
 `checks`, a list of check names other systems post, default empty;
 sluice's own required checks are read from its results, never listed
-there. The table SHALL be refused on a branch with no `remote`. The
+there. The table SHALL be refused on a branch with no `remote`. On a
+branch whose records each host keeps, the policy naming no
+`[signers]`, or in a policy that names no pool, the table SHALL refuse
+that branch alone, naming `[signers]` or `[pools]` and `sluice init
+actions`, since nothing would take its requests in; every other branch
+of the policy SHALL read as before, and a submit to the refused branch
+SHALL open and push nothing (56, 137 as amended 2026-11-07, S64). The
 conditions SHALL be read from the branch's revision.
 
 #### Scenario: Pull requests need a remote
 - **WHEN** a branch's policy has a `pull_requests` table and no `remote`
 - **THEN** the policy is refused with a message naming the branch and `remote`
+
+#### Scenario: Pull requests need the branch's records on its remote
+- **WHEN** `main` names `remote = "origin"` and a `pull_requests` table, the policy names no `[signers]`, and `bolt/x` names `remote = "origin"` and no `pull_requests`
+- **THEN** `sluice status main` shows `main` refused, naming `[signers]` and `sluice init actions`; `wt submit main` exits 2 with those words and nothing is pushed or opened; and `sluice step bolt/x` lands a submission to `bolt/x`
+
+#### Scenario: Pull requests need a pool
+- **WHEN** `main` takes pull requests, the policy names `[signers.box]` and no pool
+- **THEN** `main` is refused, naming `[pools]` and `sluice init actions`
 
 #### Scenario: A pull request cannot loosen its own conditions
 - **WHEN** a pull request changes `.config/sluice.toml` to lower `reviews`
