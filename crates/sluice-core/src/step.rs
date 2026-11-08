@@ -3923,6 +3923,57 @@ mod tests {
             .cloned()
     }
 
+    /// satisfies: forge-rounds' "A run waits for a host" (87, 107; D7 of
+    /// pull-requests-are-queued-on-the-forge): a pool that names no runners
+    /// is launched no run, so a run no standing executor has room for stays
+    /// open and the combination is not passed.
+    #[test]
+    fn a_pool_with_no_runners_is_launched_no_run() {
+        let policy = "[tests]\nrunner = \"fake\"\n\n[checkout]\n\n\
+            [branches.main]\nrequired = [\"#gate\"]\nparallel = 4\nremote = \"origin\"\n\
+            trust = [\"box\", \"forge\"]\n\
+            \n[signers.box]\nssh = \"box ssh-ed25519 AAAA\"\n\
+            \n[signers.forge]\ngithub = { workflow = \".github/workflows/sluice.yml\", ref = \"refs/heads/main\" }\n\
+            \n[pools.forge]\ngithub = { workflow = \".github/workflows/sluice.yml\" }\nsigner = \"forge\"\n\
+            \n[systems]\nlinux-x64 = { os = \"linux\", arch = \"x86_64\" }\n";
+        let f = Fakes::new();
+        let tip = f
+            .world
+            .init("main", &[(POLICY_PATH, policy), ("a/lib", "1")]);
+        f.world.on_remote("main");
+        f.world.task("a:test", "a/");
+        let head = f.world.work(&tip, &[("a/lib", Some("2"))]);
+        f.world.session("unit/a", "agent", &head);
+        f.world.hold_runs(true);
+        // No standing executor has room: the lead has none, and no other
+        // host has shown a sign of life.
+        f.world.host_limit(0);
+        f.world.be_host("lead");
+        let s = sluice(&f).as_peer(crate::Peer {
+            name: "lead".into(),
+            lease: std::time::Duration::from_secs(300),
+            alive: std::time::Duration::from_secs(120),
+            signer: None,
+            systems: None,
+        });
+        let one = submit(&s, "unit/a");
+        for _ in 0..3 {
+            s.step("main").unwrap();
+        }
+        assert!(f.world.launches().is_empty(), "{:?}", f.world.launches());
+        let line = s.read_line("main").unwrap();
+        let c = holding(&line, &[one]).expect("#1 under test");
+        assert!(c.state.under_test(), "{:?}", c.state);
+        assert!(
+            c.runs
+                .iter()
+                .all(|r| r.state == RunState::Open && r.host.is_none()),
+            "{:?}",
+            c.runs
+        );
+        assert_ne!(s.state(one).unwrap().unwrap().state, State::Landed);
+    }
+
     /// Design D1, D2 (25, 81; rules core.7, core.17): a round drops the
     /// combination holding a withdrawn submission before it reads any run,
     /// its place listed to release and its finished run read for nothing,

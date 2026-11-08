@@ -93,6 +93,8 @@ pub struct Pool {
     /// `runners`, and its value, for the profile.
     pub kind: (String, Setting),
     pub signer: String,
+    /// Empty where the table names none: such a pool takes no run, and its
+    /// jobs only run rounds (87, 107).
     pub runners: BTreeMap<String, String>,
 }
 
@@ -435,17 +437,21 @@ impl Policy {
                 Some(v) => bail!("{at} signer must name a signer, not {v}"),
                 None => bail!("{at} names no signer; its jobs sign as one of [signers]"),
             };
+            // D7 of pull-requests-are-queued-on-the-forge: a pool that names
+            // no runners runs rounds alone, and the lead launches it no run
+            // (87, 107).
             let runners = match table.remove("runners") {
-                Some(toml::Value::Table(t)) if !t.is_empty() => t
+                Some(toml::Value::Table(t)) => t
                     .into_iter()
                     .map(|(s, v)| match v {
                         toml::Value::String(l) => Ok((s, l)),
                         v => bail!("{at} runners.{s} must be a string, not {v}"),
                     })
                     .collect::<Result<BTreeMap<_, _>>>()?,
-                _ => bail!(
-                    "{at} names no runners: a table of each system it runs and the runner for it"
+                Some(v) => bail!(
+                    "{at} runners must be a table of each system it runs and the runner for it, not {v}"
                 ),
+                None => BTreeMap::new(),
             };
             let kind = one(table, &at, "kind")?;
             let Some(s) = signers.get(&signer) else {
@@ -1634,6 +1640,25 @@ checks = ["codeql"]
             "systems = [\"x\"]\n\n[signers.forge]",
         ));
         assert!(e.contains("[signers.box]") && e.contains("\"x\""), "{e}");
+    }
+
+    /// satisfies: forge-rounds' "A pool with no runners runs rounds alone"
+    /// (87, 107; D7).
+    #[test]
+    fn a_pool_may_name_no_runners() {
+        let p = Policy::parse(&PEERS.replace(
+            "runners = { linux-x64 = \"ubuntu-24.04\", linux-arm64 = \"ubuntu-24.04-arm\", macos-arm64 = \"macos-15\" }\n",
+            "",
+        ))
+        .unwrap();
+        assert_eq!(p.pools.len(), 1);
+        assert_eq!(p.pools[0].signer, "forge");
+        assert!(p.pools[0].runners.is_empty());
+        let e = refused(&PEERS.replace(
+            "runners = { linux-x64 = \"ubuntu-24.04\", linux-arm64 = \"ubuntu-24.04-arm\", macos-arm64 = \"macos-15\" }",
+            "runners = \"ubuntu-24.04\"",
+        ));
+        assert!(e.contains("[pools.forge] runners"), "{e}");
     }
 
     #[test]

@@ -23,7 +23,7 @@ task that names the one means whichever stands.
 
 ## 2. The forge keeps a branch that takes pull requests
 
-- [ ] 2.1 `[pools.<name>] runners` is optional in `crates/sluice-core/src/policy.rs`, `Pool.runners` empty where none is named, and the lead launches no run on a pool with none (D7). True when `cargo test -p sluice-core --lib -- a_pool_may_name_no_runners a_pool_with_no_runners_is_launched_no_run` passes, the second over the fakes with no standing executor's room.
+- [x] 2.1 `[pools.<name>] runners` is optional in `crates/sluice-core/src/policy.rs`, `Pool.runners` empty where none is named, and the lead launches no run on a pool with none (D7). True when `cargo test -p sluice-core --lib -- a_pool_may_name_no_runners a_pool_with_no_runners_is_launched_no_run` passes, the second over the fakes with no standing executor's room.
 - [ ] 2.2 `Rules` says which pool's round job keeps the branch where its records are on its remote, it takes pull requests and the policy names a pool, and `Step::keeps` in `crates/sluice-core/src/step.rs` answers false for that branch in any instance not named `pool/<pool>/round`, which then claims its runs (75); a round job takes it from an older lead after the lease by its own observation (D1). True when `cargo test -p sluice-core --lib -- a_host_never_takes_a_branch_the_forge_keeps a_round_job_takes_a_branch_an_older_host_led` passes.
 
 ## 3. The round job
