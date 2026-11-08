@@ -244,6 +244,11 @@ mod bound {
         /// A session on `unit/<name>` off `branch`, with one commit of its
         /// own file, submitted without waiting.
         fn submit(&self, branch: &str, name: &str) {
+            self.submit_with(branch, name, &[]);
+        }
+
+        /// [`Setup::submit`], the submit run with `env` besides.
+        fn submit_with(&self, branch: &str, name: &str, env: &[(&str, &str)]) {
             let dir: PathBuf = self.sessions.path().join(name);
             self.repo.git(&[
                 "worktree",
@@ -264,10 +269,39 @@ mod bound {
             git(&["commit", "-q", "-m", name]);
             let out = self
                 .command(&dir)
+                .envs(env.iter().copied())
                 .args(["submit", branch, "--no-wait", "--json"])
                 .output()
                 .unwrap();
             assert!(out.status.success(), "{}", text(&out));
+        }
+
+        /// The host process that answers, ended: one a submit run with the
+        /// tests' setting started, which passes only when asked (design
+        /// D13), so the next command starts one from its own environment
+        /// that reads the host's configuration as it then stands.
+        fn end_host_process(&self) {
+            let out = self
+                .command(self.repo.dir())
+                .env("SLUICE_ROUND_SLEEP", "record")
+                .args(["overview", "--json"])
+                .output()
+                .unwrap();
+            let doc: serde_json::Value =
+                serde_json::from_slice(&out.stdout).unwrap_or_else(|_| panic!("{}", text(&out)));
+            let Some(pid) = doc["host_process"]["pid"].as_i64() else {
+                return;
+            };
+            let pid = nix::unistd::Pid::from_raw(pid as i32);
+            let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGKILL);
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while nix::sys::signal::kill(pid, None).is_ok() {
+                assert!(
+                    std::time::Instant::now() < until,
+                    "the host process lives on"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
         }
     }
 
@@ -426,7 +460,11 @@ mod bound {
             config: Rc::new(host_config(2)),
             state: Rc::new(Scratch::new("instance-cores-state")),
         };
-        s.submit("bolt/a", "ca");
+        // Queued with nothing run: the host process the submit starts
+        // passes only when asked, and is ended before the configuration
+        // it read changes.
+        s.submit_with("bolt/a", "ca", &[("SLUICE_ROUND_SLEEP", "record")]);
+        s.end_host_process();
         // Stated once the submission is in, so a host that refuses them
         // still has a combination that would run.
         std::fs::write(
