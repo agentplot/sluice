@@ -8,21 +8,6 @@ core.10, core.16, core.23).
 
 ## Requirements
 
-### Requirement: A combination holding a submission out of the queue is obsolete
-A combination under test that holds a submission no longer in the queue,
-whoever withdrew it (a session, a planner, the operator, a resubmission,
-or a hand-over of the branch's pull requests to another host), SHALL be
-obsolete. The host's next round of the branch SHALL drop it before it
-reads any run of any combination (5, 21, 67, 137).
-
-#### Scenario: Withdrawn while under test
-- **WHEN** `#5` is under test on the host and its session withdraws it
-- **THEN** the host's next round drops `#5`'s combination before reading any run, and the branch's records hold no combination with `#5` in it
-
-#### Scenario: Handed over while under test
-- **WHEN** host A is testing `pull/12`'s combination and host B takes main's pull requests in
-- **THEN** A's pass that withdraws `pull/12` leaves no combination with it in A's records
-
 ### Requirement: An obsolete combination's run is ended and its checkout released
 For an obsolete combination, the host SHALL end its own run of it with
 everything the run started, and SHALL release the checkout it made for
@@ -51,3 +36,18 @@ session anything of it (25, 81).
 #### Scenario: Its run had failed
 - **WHEN** `#5`'s run failed a check and `#5` was withdrawn before any round read it
 - **THEN** no submission is blamed and no session is told of a failure
+
+### Requirement: A combination holding a submission that left the queue is obsolete
+A combination under test that holds a submission no longer in the queue,
+whoever withdrew it (a session, a planner, the operator, a resubmission,
+or a pull request's new head, draft or close), SHALL be obsolete. The
+next round of the branch SHALL drop it before it reads any run of any
+combination (5, 21, 67).
+
+#### Scenario: Withdrawn while under test
+- **WHEN** `#5` is under test on the host and its session withdraws it
+- **THEN** the host's next round drops `#5`'s combination before reading any run, and the branch's records hold no combination with `#5` in it
+
+#### Scenario: A pull request closed while under test
+- **WHEN** `pull/12`'s combination is under test on `main`, which the forge keeps, and a person closes `#12`
+- **THEN** the round job's next round withdraws `pull/12` and leaves no combination with it in `main`'s records
