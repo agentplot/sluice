@@ -3164,6 +3164,7 @@ impl Sluice<'_> {
         }
 
         // This host's runs that ended, reported while its claim holds.
+        let mut recorded = false;
         let mine: Vec<(Candidate, usize)> = line
             .doc
             .candidates
@@ -3217,16 +3218,16 @@ impl Sluice<'_> {
                 }
                 Progress::Finished(report) => {
                     let report = self.after_run(&unmet.limits, report)?;
-                    self.update(branch, |l| {
+                    recorded |= self.update(branch, |l| {
                         let now = self.now();
                         let Some(x) = l.candidate(&c.id).cloned() else {
-                            return Ok(());
+                            return Ok(false);
                         };
                         let r = &x.runs[i];
                         // 77: a report under a claim this host no longer
                         // holds is never written.
                         if r.host.as_deref() != Some(me.as_str()) || r.state != RunState::Testing {
-                            return Ok(());
+                            return Ok(false);
                         }
                         self.finish_run(
                             l,
@@ -3242,7 +3243,7 @@ impl Sluice<'_> {
                         if let Some(p) = &place {
                             l.doc.release.retain(|q| q != p);
                         }
-                        Ok(())
+                        Ok(true)
                     })?;
                     if let Some(p) = place {
                         let outcome = self.release_made(branch, &p)?;
@@ -3250,6 +3251,28 @@ impl Sluice<'_> {
                             releases.push(outcome);
                         }
                     }
+                }
+            }
+        }
+
+        // 111: a result recorded on a branch the forge keeps is work no
+        // running instance will take: its round job is woken, once a round.
+        // A wake that is lost loses nothing; the schedule takes it (59;
+        // design D5 of pull-requests-are-queued-on-the-forge).
+        if recorded && rules.round_job.is_some() {
+            if let Some(pool) = self
+                .policy_at(&tip)?
+                .and_then(|p| p.pools.into_iter().next())
+            {
+                if let Err(e) = self
+                    .seams
+                    .tests
+                    .wake(&pool.kind, branch, rules.remote.as_deref())
+                {
+                    tracing::warn!(
+                        sluice.branch = %branch,
+                        "waking {branch}'s round job failed: {e:#}; the schedule's next run wakes it"
+                    );
                 }
             }
         }

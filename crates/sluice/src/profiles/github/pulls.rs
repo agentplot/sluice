@@ -757,6 +757,33 @@ impl Pulls {
         Ok(latest)
     }
 
+    /// 111, 136, design D5: wake the round job of `branch`, at `t`, where
+    /// the forge keeps it. A wake that fails is a warning and loses
+    /// nothing: the schedule's next run wakes it (59).
+    fn wake(&self, s: &Sluice<'_>, t: &Target, branch: &str) {
+        let wake = || -> Result<()> {
+            let Some(policy) = s.policy_at(&t.tip)? else {
+                return Ok(());
+            };
+            if !policy
+                .rules_for(branch)?
+                .is_some_and(|r| r.round_job.is_some())
+            {
+                return Ok(());
+            }
+            let Some(pool) = policy.pools.first() else {
+                return Ok(());
+            };
+            s.seams().tests.wake(&pool.kind, branch, Some(&t.remote))
+        };
+        if let Err(e) = wake() {
+            crate::telemetry::warn(&format!(
+                "sluice: warning: {branch}'s round job was not woken: {e:#}; the schedule's next \
+                 run wakes it"
+            ));
+        }
+    }
+
     /// The file of intake's lock on `branch`, and its path.
     fn lock_file(&self, branch: &str) -> Result<(std::fs::File, PathBuf)> {
         std::fs::create_dir_all(&self.locks)?;
@@ -3979,6 +4006,9 @@ impl Pulls {
         if let Err(e) = self.kept.moved(&t.repo, branch) {
             crate::telemetry::warn(&format!("sluice: warning: {e:#}"));
         }
+        // 111, 136: and the round job of a branch the forge keeps is woken
+        // to take them in, once for the act (design D5).
+        self.wake(&s, &t, branch);
         // 124: how the host's copy differs, and ADR 0050: why the runner
         // could not be asked, beneath what the act did.
         let beneath = |mut opened: Vec<Opened>| {

@@ -7681,3 +7681,74 @@ fn a_host_claims_and_never_leads() {
     assert_eq!(g.lead().as_deref(), Some("pool/forge/round"));
     assert_eq!(g.of(n)[0]["state"], "testing");
 }
+
+impl OnGitHub {
+    /// The rounds of the pool's workflow GitHub took for `branch`.
+    fn wakes_of(&self, branch: &str) -> usize {
+        self.gh
+            .dispatches()
+            .iter()
+            .filter(|(w, i)| w == "sluice.yml" && i["mode"] == "round" && i["branch"] == branch)
+            .count()
+    }
+}
+
+/// forge-rounds, "A submit wakes it" (111, 136; design D5): a submit that
+/// opens a pull request into a branch the forge keeps dispatches one
+/// round of the pool's workflow for it.
+#[test]
+fn a_submit_wakes_the_round_job() {
+    let g = OnGitHub::forge("rj-submit-wakes", "");
+    let dir = g.session("wakes", &[("w.txt", "w\n")]);
+    let out = g.wt_submit(&dir, &["--no-wait"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(
+        g.gh.dispatches()
+            .iter()
+            .map(|(w, i)| (w.as_str(), i["mode"].clone(), i["branch"].clone()))
+            .collect::<Vec<_>>(),
+        [("sluice.yml", "round".into(), "main".into())],
+        "{}",
+        text(&out)
+    );
+}
+
+/// forge-rounds, "A recorded result wakes it" (111; design D5): the host
+/// whose step records the result of a run of `main`'s combination
+/// dispatches one round of `main`.
+#[test]
+fn a_recorded_result_wakes_the_round_job() {
+    let g = OnGitHub::forge("rj-result-wakes", "");
+    g.by_hand("unit/result", &[("r.txt", Some("r\n"))], false);
+    g.job();
+    let before = g.wakes_of("main");
+    g.host_runs_the_checks();
+    assert_eq!(g.wakes_of("main"), before + 1, "{:?}", g.remote_log());
+}
+
+/// forge-rounds, "A lost wake" (59, 111; design D5): GitHub refuses the
+/// dispatch after a submit; the submit warns that the round job was not
+/// woken and exits as it would have, and the next `sluice job round` with
+/// no branch wakes `main`'s round.
+#[test]
+fn a_lost_wake_is_a_warning() {
+    let g = OnGitHub::forge("rj-lost-wake", "");
+    g.gh.trouble(
+        "POST",
+        "/repos/o/r/actions/workflows/",
+        1,
+        github::Trouble::Status(403),
+    );
+    let dir = g.session("lost", &[("l.txt", "l\n")]);
+    let out = g.wt_submit(&dir, &["--no-wait"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(
+        text(&out).contains("main's round job was not woken"),
+        "{}",
+        text(&out)
+    );
+    assert_eq!(g.wakes_of("main"), 0);
+    let out = g.job_with(&[]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(g.wakes_of("main"), 1, "{}", text(&out));
+}
