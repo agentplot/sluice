@@ -1,4 +1,6 @@
 #!/bin/sh
-# A user's own source: prints whatever the test left for it.
+# A user's own source: prints whatever the test left for it, and is held
+# open, as a stream is, while the test wants it.
 printf '%s\n' "$*" >>"$FAKE/stream-calls"
 cat "$FAKE/stream.jsonl" 2>/dev/null
+while [ -f "$FAKE/hold" ]; do sleep 1; done

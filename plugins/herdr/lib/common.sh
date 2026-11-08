@@ -6,10 +6,17 @@
 : "${HERDR_PLUGIN_STATE_DIR:=${XDG_STATE_HOME:-$HOME/.local/state}/herdr-agentplot.sluice}"
 : "${HERDR_PLUGIN_CONFIG_DIR:=${XDG_CONFIG_HOME:-$HOME/.config}/herdr/plugins/config/agentplot.sluice}"
 root=$HERDR_PLUGIN_ROOT
-# Each herdr server, told apart by its socket, has its own watcher, lease,
-# documents and tokens; the tab-bar copy is shared, at a path that lasts.
-base=$HERDR_PLUGIN_STATE_DIR
-state=$base/servers/$(printf '%s' "${HERDR_SOCKET_PATH:-none}" | cksum | cut -d' ' -f1)
+# The host's state, one for every herdr server of the user's: the lease,
+# each repository's documents, learned worktrees and blamed tests, the
+# events told, forecasts, probes, the popup's asks, the problem with
+# sluice, and the tab-bar copy, at a path that lasts (D3).
+state=$HERDR_PLUGIN_STATE_DIR
+# The folder of the herdr server in the environment, told apart by its
+# socket: what is that server's alone, the tokens last set in it and their
+# sequence. Made only by what writes there, since a script run with no
+# server, the segment's, is no server's.
+# shellcheck disable=SC2034 # read by the scripts that source this
+server=$state/servers/$(printf '%s' "${HERDR_SOCKET_PATH:-none}" | cksum | cut -d' ' -f1)
 # shellcheck disable=SC2034 # read by the scripts that source this
 config=$HERDR_PLUGIN_CONFIG_DIR
 lib=$root/lib
@@ -26,6 +33,25 @@ say() {
 
 hd() {
   "${HERDR_BIN_PATH:-herdr}" "$@"
+}
+
+# Run a command as the server registered in folder $1 runs one: with that
+# server's socket and herdr in its environment (D2). The socket read is
+# left in as_s, for what the caller says of the server.
+as() {
+  as_d=$1
+  shift
+  as_s=
+  as_b=
+  read -r as_s 2>/dev/null <"$as_d/socket"
+  read -r as_b 2>/dev/null <"$as_d/herdr"
+  (
+    # The export is meant to stay in this subshell, with the call it is for.
+    # shellcheck disable=SC2030
+    if [ -n "$as_s" ]; then export HERDR_SOCKET_PATH="$as_s"; else unset HERDR_SOCKET_PATH; fi
+    if [ -n "$as_b" ]; then export HERDR_BIN_PATH="$as_b"; else unset HERDR_BIN_PATH; fi
+    "$@"
+  )
 }
 
 # jq with the plugin's words and rules loaded.
@@ -63,25 +89,6 @@ name_of() {
   basename "${1%/.git}" .git
 }
 
-# A fixed-length name for a string: SHA-256 by whichever tool the system
-# has (sha256sum on Linux and busybox, shasum or openssl on macOS), else
-# two checksums, said once in the log.
-digest() {
-  if command -v sha256sum >/dev/null 2>&1; then
-    printf '%s' "$1" | sha256sum | cut -d' ' -f1
-  elif command -v shasum >/dev/null 2>&1; then
-    printf '%s' "$1" | shasum -a 256 | cut -d' ' -f1
-  elif command -v openssl >/dev/null 2>&1; then
-    printf '%s' "$1" | openssl dgst -sha256 | sed 's/.*= *//'
-  else
-    if [ ! -f "$state/no-sha256" ]; then
-      : >"$state/no-sha256"
-      say "no sha256sum, shasum or openssl: told events are named by checksums, which two may share"
-    fi
-    echo "$(sum "$1")-$(sum "x$1")-${#1}"
-  fi
-}
-
 # Replace a file in one step, from stdin; nothing in, nothing replaced.
 put() {
   tmp="$1.tmp.$$"
@@ -109,6 +116,20 @@ set_problem() {
     printf '%s\n' "$1" >"$state/problem"
     say "$1"
   fi
+}
+
+# Have the host's watcher serve the herdr server in the environment, where
+# a lease stands and that server is not served, or is served at a socket
+# another server has since taken: the popup's or the setup action's server
+# the watcher dropped, or never heard from (D2). The environment's socket is
+# read as the process was given it: as() changes it only in its subshell.
+# shellcheck disable=SC2031
+enlist() {
+  [ -n "${HERDR_SOCKET_PATH:-}" ] && [ -f "$state/watch.lease" ] || return 0
+  if [ -f "$server/socket" ] && { [ ! -e "$server/link" ] || [ "$HERDR_SOCKET_PATH" -ef "$server/link" ]; }; then
+    return 0
+  fi
+  sh "$root/bin/watch.sh" --ensure
 }
 
 # Every document the watcher holds, as one array.

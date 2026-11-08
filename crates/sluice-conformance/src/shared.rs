@@ -2,16 +2,18 @@
 //! test that runs one cites the clauses it exercises, here on the fakes
 //! (`tests/`) and in the `sluice` crate on the real profiles.
 
+use sluice_core::line::Line;
+use sluice_core::policy::POLICY_PATH;
 use sluice_core::preview::{PreviewRefusal, PreviewState};
 use sluice_core::records::{
-    parse_lines, BranchDoc, Event, LogLine, ResultKind, State, Submission, BRANCH_SCHEMA,
-    SUBMISSION_SCHEMA,
+    parse_lines, to_document, BranchDoc, Event, LogLine, ResultKind, State, Submission,
+    BRANCH_FILE, BRANCH_SCHEMA, SUBMISSION_SCHEMA,
 };
 use sluice_core::session::Recorded;
-use sluice_core::{Forecast, Requester, Sluice, SubmitRefusal};
+use sluice_core::{Forecast, Lookup, Requester, Sluice, SubmitRefusal};
 use sluice_seams::{
-    Decided, LastResult, Outcome, Progress, ReleasePolicy, Released, Rev, RunHandle, RunKind,
-    RunOutcome, SessionPlace,
+    Changes, Decided, LastResult, Outcome, Progress, ReleasePolicy, Released, Rev, RunHandle,
+    RunKind, RunOutcome, SessionPlace, Written,
 };
 
 use crate::{Rig, BRANCH};
@@ -1729,6 +1731,184 @@ pub fn records_held_after_a_refresh_are_the_records_read(h: &impl Rig) {
     let held = state.read_held(BRANCH).unwrap();
     assert_eq!(held, state.read(BRANCH).unwrap());
     assert!(held.version > 1, "a round wrote the records");
+}
+
+/// A `[[checkout.cache]]` table, which this sluice refuses wherever a
+/// policy holds it (S64; ADR 0049).
+const CACHE: &str = "\n[[checkout.cache]]\nkey = [\"Cargo.lock\"]\npaths = [\"target\"]\n";
+
+/// The branch's records as a sluice that read `at`'s policy left them: a
+/// round stood on `at` last, and none has run since (129).
+fn last_saw(h: &impl Rig, at: &Rev) {
+    let s = h.sluice();
+    let lock = s.seams().state.lock(BRANCH).unwrap().expect("the lock");
+    let snapshot = s.seams().state.read(BRANCH).unwrap();
+    let version = snapshot.version;
+    let mut doc = Line::load(BRANCH, snapshot).unwrap().doc;
+    doc.base = Some(at.clone());
+    let mut changes = Changes::default();
+    changes.put.insert(BRANCH_FILE.into(), to_document(&doc));
+    let written = s.seams().state.write(BRANCH, version, changes).unwrap();
+    assert!(matches!(written, Written::Written(_)), "{written:?}");
+    drop(lock);
+}
+
+/// A quiet branch mended outside sluice: one submission landed, a commit
+/// on the branch adding a `[[checkout.cache]]` table, `r1`, the branch's
+/// records last seeing it, and a commit taking the table out again, `r2`,
+/// which this host holds and no round has read (124, 129).
+struct Mended {
+    landed: u64,
+    r1: Rev,
+    r2: Rev,
+}
+
+fn mended(h: &impl Rig) -> Mended {
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let landed = h.submit("unit/a");
+    h.settle();
+    assert_eq!(h.sub(landed).state, State::Landed);
+    let clean = h.file(&h.tip(), POLICY_PATH).expect("the branch's policy");
+    let r1 = h.elsewhere(&[(POLICY_PATH, Some(&format!("{clean}{CACHE}")))]);
+    last_saw(h, &r1);
+    let r2 = h.elsewhere(&[(POLICY_PATH, Some(&clean))]);
+    if !h.on_remote() {
+        assert_eq!(
+            h.sluice().seams().branch.held(BRANCH).unwrap(),
+            Some(r2.clone())
+        );
+    }
+    Mended { landed, r1, r2 }
+}
+
+/// The branch's records as they stand, to tell that no round ran after.
+struct Before {
+    files: std::collections::BTreeMap<String, Vec<u8>>,
+    moved: usize,
+}
+
+fn moved(h: &impl Rig) -> usize {
+    h.events()
+        .iter()
+        .filter(|e| matches!(e, Event::Moved { .. }))
+        .count()
+}
+
+fn before(h: &impl Rig) -> Before {
+    Before {
+        files: h.files(),
+        moved: moved(h),
+    }
+}
+
+/// That no round ran since `before`: the records are as they were, their
+/// `base` still `at`, and no `moved` is logged (129).
+fn no_round_since(h: &impl Rig, before: &Before, at: &Rev) {
+    assert!(
+        h.files() == before.files,
+        "the branch's records were written"
+    );
+    assert_eq!(h.doc().base.as_ref(), Some(at));
+    assert_eq!(moved(h), before.moved, "a round moved the branch's base");
+}
+
+/// branch-refusal's "A quiet branch mended outside sluice" (26, 56, 124,
+/// 129; rule core.15): status and the overview read the branch's policy
+/// at the revision this host holds, so the branch is read whole, its gate
+/// the mended revision's, with no round run.
+pub fn a_quiet_branch_mended_outside_sluice_is_read_whole(h: &impl Rig) {
+    let m = mended(h);
+    let was = before(h);
+    let s = h.sluice();
+    let status = s.status(BRANCH).expect("status reads the branch whole");
+    assert_eq!(status.at.as_ref(), Some(&m.r1));
+    assert_eq!(status.parallel, Some(4));
+    assert_eq!(status.finished, 1);
+    assert!(status.submissions.is_empty());
+    let view = s
+        .overview(None)
+        .unwrap()
+        .into_iter()
+        .find(|v| v.branch == BRANCH)
+        .expect("the overview shows the branch");
+    assert_eq!(view.unread, None);
+    assert_eq!(view.at.as_ref(), Some(&m.r1));
+    assert_eq!(view.parallel, Some(4));
+    if !h.on_remote() {
+        assert_eq!(view.revision.as_ref(), Some(&m.r2));
+    }
+    no_round_since(h, &was, &m.r1);
+}
+
+/// branch-refusal's "Status of a submission on the mended branch" (26,
+/// 56, 124): `sluice status <n>` finds the submission and reads its
+/// branch's status, which says nothing of the refusal the mend ended.
+pub fn status_of_a_submission_on_a_mended_branch_answers_for_it(h: &impl Rig) {
+    let m = mended(h);
+    let s = h.sluice();
+    match s.lookup(m.landed).unwrap() {
+        Lookup::Found(sub) => {
+            assert_eq!((sub.id, sub.branch.as_str()), (m.landed, BRANCH));
+            assert_eq!(sub.state, State::Landed);
+        }
+        other => panic!("{} not found: {other:?}", m.landed),
+    }
+    let status = s.status(BRANCH).expect("its branch's status reads");
+    assert!(status.warnings.is_empty(), "{:?}", status.warnings);
+    assert_eq!(status.refused, None);
+}
+
+/// branch-refusal's "The refusal names the revision this host holds" (26,
+/// 56, 124; record 0069): the records last saw a revision whose policy
+/// reads, the branch moved outside sluice to one adding a
+/// `[[checkout.cache]]` table, and status and the overview refuse it
+/// naming the revision this host holds, never the records'.
+pub fn a_refusal_names_the_revision_this_host_holds(h: &impl Rig) {
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let landed = h.submit("unit/a");
+    h.settle();
+    assert_eq!(h.sub(landed).state, State::Landed);
+    let r1 = h.doc().base.expect("a round stood on the branch");
+    let clean = h.file(&h.tip(), POLICY_PATH).expect("the branch's policy");
+    let r2 = h.elsewhere(&[(POLICY_PATH, Some(&format!("{clean}{CACHE}")))]);
+    let was = before(h);
+    let s = h.sluice();
+    let refused = format!(
+        "{:#}",
+        s.status(BRANCH).expect_err("status refuses the branch")
+    );
+    let view = s
+        .overview(None)
+        .unwrap()
+        .into_iter()
+        .find(|v| v.branch == BRANCH)
+        .expect("the overview shows the branch");
+    let unread = view.unread.expect("the overview refuses the branch");
+    for words in [&refused, &unread] {
+        assert!(
+            words.contains(r2.as_str()) && words.contains("[[checkout.cache]]"),
+            "{words}"
+        );
+        assert!(!words.contains(r1.as_str()), "{words}");
+    }
+    no_round_since(h, &was, &r1);
+}
+
+/// branch-refusal's "The state is left as it was" (26, 129; record 0046):
+/// status of a mended branch still names the revision its records last
+/// saw as `at`, and a status, an overview and a view of it fetch nothing
+/// and leave its records, their version and its log as they were.
+pub fn a_read_of_a_mended_branch_leaves_its_state_as_it_was(h: &impl Rig) {
+    let m = mended(h);
+    let was = before(h);
+    let (version, log) = (h.version(), h.log());
+    let s = h.sluice();
+    assert_eq!(s.status(BRANCH).unwrap().at.as_ref(), Some(&m.r1));
+    s.overview(None).unwrap();
+    s.branch_view_of(BRANCH).unwrap();
+    assert_eq!(h.version(), version);
+    assert!(h.log() == log, "the log was written");
+    no_round_since(h, &was, &m.r1);
 }
 
 /// The cases of this file the fakes run here, the real profiles in the

@@ -1488,43 +1488,209 @@ fn inbox_delivers_nothing_of_another_worktrees_outcome() {
     assert_eq!(s.status(n)["delivered"], serde_json::Value::Null);
 }
 
-/// 67, 122: a wait on a submission its session's next submit withdrew
-/// follows the submission that carries its work, says so, and reports
-/// that one's landing; the withdrawn one's record stands as it is.
-#[test]
-fn a_wait_follows_the_resubmission_that_carries_its_work() {
-    let s = Scratch::new("wt-carried");
-    let a = s.session("a", &[("a.txt", "a\n")]);
+/// A session `name` that submits `changes` to `bolt/x`, then a commit of
+/// `more` on top of them: its first submission, which the second
+/// withdrew, and the second, which carries the first's work (67).
+fn resubmitted(
+    s: &Scratch,
+    name: &str,
+    changes: &[(&str, &str)],
+    more: &[(&str, &str)],
+) -> (PathBuf, u64, u64) {
+    let a = s.session(name, changes);
     let first = id(&s.wt_submit(&a, &["--no-wait", "--json"]));
-    std::fs::write(a.join("more.txt"), "more\n").unwrap();
+    for (p, c) in more {
+        std::fs::write(a.join(p), c).unwrap();
+    }
     let dir = a.to_str().unwrap();
     s.repo.git(&["-C", dir, "add", "-A"]);
     s.repo.git(&["-C", dir, "commit", "-q", "-m", "more"]);
     let second = id(&s.wt_submit(&a, &["--no-wait", "--json"]));
     assert_eq!(s.status(first)["state"], "withdrawn");
+    (a, first, second)
+}
+
+/// 67, 122; record 0100 D2, D3: a wait on a submission its session's next
+/// submit withdrew follows the submission that carries its work, says so,
+/// and ends with its own submission landed by that one's landing, never
+/// with that one's record; the withdrawn one's record stands as it is.
+#[test]
+fn a_wait_follows_the_resubmission_that_carries_its_work() {
+    let s = Scratch::new("wt-carried");
+    let (_, first, second) = resubmitted(&s, "a", &[("a.txt", "a\n")], &[("more.txt", "more\n")]);
     let out = s.sluice(&["wait", &first.to_string(), "--timeout", "60s"]);
     let said = text(&out);
-    assert_eq!(out.status.code(), Some(0), "{said}");
+    assert_eq!(out.status.code(), Some(sluice::LANDED), "{said}");
     assert!(
         said.contains(&format!(
-            "#{first} withdrawn by resubmission: #{second} carries its work"
+            "#{first} withdrawn by resubmission: #{second} carries its work, so this wait follows it"
         )),
         "{said}"
     );
-    assert!(said.contains("passed · landed as"), "{said}");
+    let landed_as = s.status(second)["landed_as"].as_str().unwrap().to_string();
+    assert!(
+        said.contains(&format!(
+            "landed as {}: bolt/x holds its work, by #{second}'s landing",
+            &landed_as[..7]
+        )),
+        "{said}"
+    );
     assert_eq!(s.status(second)["state"], "landed");
+    assert_eq!(s.status(first)["state"], "withdrawn");
+
+    // Under --json, its own record, naming what carried its work.
+    let (_, first, second) = resubmitted(&s, "b", &[("b.txt", "b\n")], &[("more-b.txt", "more\n")]);
+    let out = s.sluice(&["wait", &first.to_string(), "--timeout", "60s", "--json"]);
+    assert_eq!(out.status.code(), Some(sluice::LANDED), "{}", text(&out));
+    let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(doc["id"], first, "{doc}");
+    assert_eq!(doc["state"], "landed", "{doc}");
+    assert_eq!(doc["landed_elsewhere"], true, "{doc}");
+    assert_eq!(doc["landed_as"], s.status(second)["landed_as"], "{doc}");
+    assert_eq!(
+        doc["carried_by"],
+        serde_json::json!({ "id": second, "state": "landed" }),
+        "{doc}"
+    );
     assert_eq!(s.status(first)["state"], "withdrawn");
 }
 
-/// 2: a repository with no work tree, a bare clone or a checkout's git
-/// directory, holds no uncommitted work: the driver reads its session with
-/// no git status, which refuses to run there, and finds it bare, with no
-/// path and nothing held beyond its commits.
+/// 67, 122; record 0100 D2, D3: a wait on a withdrawn submission started
+/// only once the resubmission carrying its work has landed ends with its
+/// own submission landed by that one's landing and names it, as a wait
+/// standing while it landed does, never with the commit a fast-forward
+/// would give, its own head.
 #[test]
-fn a_repository_with_no_work_tree_is_read_with_no_status() {
-    use sluice_seams::Driver as _;
-    let s = Scratch::new("wt-bare-session");
+fn a_wait_started_after_the_resubmission_landed_names_it() {
+    let s = Scratch::new("wt-carried-landed");
+    let (_, first, second) = resubmitted(&s, "a", &[("a.txt", "a\n")], &[("more.txt", "more\n")]);
+    s.land(second);
+    let landed_as = s.status(second)["landed_as"].as_str().unwrap().to_string();
+    let out = s.sluice(&["wait", &first.to_string(), "--timeout", "60s"]);
+    let said = text(&out);
+    assert_eq!(out.status.code(), Some(sluice::LANDED), "{said}");
+    assert!(
+        said.contains(&format!(
+            "landed as {}: bolt/x holds its work, by #{second}'s landing",
+            &landed_as[..7]
+        )),
+        "{said}"
+    );
+
+    let out = s.sluice(&["wait", &first.to_string(), "--timeout", "60s", "--json"]);
+    assert_eq!(out.status.code(), Some(sluice::LANDED), "{}", text(&out));
+    let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(doc["id"], first, "{doc}");
+    assert_eq!(doc["state"], "landed", "{doc}");
+    assert_eq!(doc["landed_elsewhere"], true, "{doc}");
+    assert_eq!(doc["landed_as"], landed_as.as_str(), "{doc}");
+    assert_ne!(doc["landed_as"], doc["head"], "{doc}");
+    assert_eq!(
+        doc["carried_by"],
+        serde_json::json!({ "id": second, "state": "landed" }),
+        "{doc}"
+    );
+    assert_eq!(s.status(first)["state"], "withdrawn");
+}
+
+/// 67; record 0100 D2, D3: a wait on a submission whose resubmission, which
+/// carried its work, is blamed ends with its own submission withdrawn,
+/// exit 4, naming the resubmission and how it ended, never with the
+/// resubmission's failure as its own.
+#[test]
+fn a_wait_exits_withdrawn_when_what_carried_its_work_failed() {
+    let s = Scratch::new("wt-carried-failed");
+    let (_, first, second) = resubmitted(&s, "a", &[("a.txt", "a\n")], &[("broken", "x\n")]);
+    let out = s.sluice(&["wait", &first.to_string(), "--timeout", "60s", "--json"]);
+    assert_eq!(out.status.code(), Some(sluice::WITHDRAWN), "{}", text(&out));
+    let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(doc["id"], first, "{doc}");
+    assert_eq!(doc["state"], "withdrawn", "{doc}");
+    assert_eq!(
+        doc["carried_by"],
+        serde_json::json!({ "id": second, "state": "failed" }),
+        "{doc}"
+    );
+    assert_eq!(s.status(second)["state"], "failed");
+
+    let out = s.sluice(&["wait", &first.to_string(), "--timeout", "60s"]);
+    let said = text(&out);
+    assert_eq!(out.status.code(), Some(sluice::WITHDRAWN), "{said}");
+    assert!(
+        said.contains(&format!(
+            "#{first} withdrawn by resubmission: #{second}, which carried its work, failed\n\
+             sluice status {second}"
+        )),
+        "{said}"
+    );
+}
+
+/// 67; record 0100 D2, D3: a wait out of time while it follows the
+/// resubmission that carries its work prints its own submission's record,
+/// naming what it follows as it stands, and how to wait on its own again.
+#[test]
+fn a_wait_out_of_time_while_it_follows_prints_its_own_record() {
+    let s = Scratch::new("wt-carried-timeout");
+    let (_, first, second) = resubmitted(&s, "a", &[("a.txt", "a\n")], &[("slow", "x\n")]);
+    let out = s.sluice(&["wait", &first.to_string(), "--timeout", "2s", "--json"]);
+    assert_eq!(out.status.code(), Some(sluice::WAITING), "{}", text(&out));
+    let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(doc["id"], first, "{doc}");
+    assert_eq!(doc["state"], "withdrawn", "{doc}");
+    assert_eq!(doc["carried_by"]["id"], second, "{doc}");
+    let state = &doc["carried_by"]["state"];
+    assert!(state == "queued" || state == "testing", "{doc}");
+
+    // Its words, in a scratch of its own, so no run of the first is under
+    // way to end its round late.
+    let s = Scratch::new("wt-carried-timeout-words");
+    let (_, first, _) = resubmitted(&s, "a", &[("a.txt", "a\n")], &[("slow", "x\n")]);
+    let out = s.sluice(&["wait", &first.to_string(), "--timeout", "2s"]);
+    let said = text(&out);
+    assert_eq!(out.status.code(), Some(sluice::WAITING), "{said}");
+    assert!(
+        said.contains(&format!("still waiting: sluice wait {first}")),
+        "{said}"
+    );
+}
+
+/// 51; record 0100 D3: a wait that followed the resubmission carrying its
+/// work to its landing marks nothing of the resubmission's delivered: its
+/// landing stays pending for its own delivery, which the worktree's inbox
+/// then collects and marks.
+#[test]
+fn a_wait_leaves_the_resubmissions_landing_pending() {
+    let s = Scratch::new("wt-carried-pending");
+    let (a, first, second) = resubmitted(&s, "a", &[("a.txt", "a\n")], &[("more.txt", "more\n")]);
+    let out = s
+        .command(env!("CARGO_BIN_EXE_sluice"), &a)
+        .args(["wait", &first.to_string(), "--timeout", "60s"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(sluice::LANDED), "{}", text(&out));
+    let landed = s.status(second);
+    assert_eq!(landed["state"], "landed", "{landed}");
+    assert!(
+        landed.get("delivered").is_none_or(|d| d.is_null()),
+        "{landed}"
+    );
+    assert!(s.logged("delivered").is_empty());
+    assert_eq!(collected_one(&s, &a)["id"], second);
+    assert!(s.status(second)["delivered"].is_string());
+}
+
+/// 2, 3, 51: a folder with no files checked out, a bare clone or a
+/// checkout's git directory, is read by the driver's `recipient` as the
+/// worktree on the branch its `HEAD` names, with no path, and by its
+/// `session` with nothing held beyond its commits, neither running git
+/// status, which refuses to run there; `recipient` reads no `HEAD` commit,
+/// so a branch with none yet is read all the same, and a `HEAD` on no
+/// branch is no one's (record 0099; rule core.48).
+#[test]
+fn a_folder_with_no_files_checked_out_is_read_with_no_status_and_no_commit() {
+    let s = Scratch::new("wt-bare-recipient");
     let bare = s.repo.dir().with_extension("bare");
+    let _ = std::fs::remove_dir_all(&bare);
     s.repo.git(&[
         "clone",
         "-q",
@@ -1533,25 +1699,61 @@ fn a_repository_with_no_work_tree_is_read_with_no_status() {
         bare.to_str().unwrap(),
     ]);
     s.repo.write("untracked.txt", "u\n");
-    let driver = sluice::profiles::worktrunk::Worktrunk::new("h");
-    for dir in [bare, s.repo.dir().join(".git")] {
+    let driver = Worktrunk::new("h");
+    let agent = |branch: &str| {
+        std::env::var("SLUICE_AGENT")
+            .ok()
+            .filter(|a| !a.is_empty())
+            .unwrap_or_else(|| branch.to_string())
+    };
+    for dir in [bare.clone(), s.repo.dir().join(".git")] {
+        let me = driver.recipient(dir.to_str().unwrap()).unwrap();
+        let me = me.unwrap_or_else(|| panic!("{} read as no one's", dir.display()));
+        assert_eq!(me.worktree, "main", "{}", dir.display());
+        assert_eq!(me.path, None, "{}", dir.display());
+        assert_eq!(me.head, None);
+        assert_eq!(me.agent, agent("main"));
+        assert_eq!(me.host.as_deref(), Some("h"));
         let session = driver.session(dir.to_str().unwrap()).unwrap();
-        assert!(session.bare, "{}", dir.display());
         assert!(session.dirty.is_empty(), "{:?}", session.dirty);
         assert_eq!(session.from.path, None);
     }
+
+    let b = bare.to_str().unwrap();
+    s.repo
+        .git(&["--git-dir", b, "symbolic-ref", "HEAD", "refs/heads/nothing"]);
+    let me = driver
+        .recipient(b)
+        .unwrap()
+        .expect("a branch with no commit");
+    assert_eq!(me.worktree, "nothing");
+    assert_eq!(me.path, None);
+
+    let tip = s.repo.rev("main");
+    s.repo
+        .git(&["--git-dir", b, "update-ref", "--no-deref", "HEAD", &tip]);
+    assert_eq!(driver.recipient(b).unwrap(), None);
+
+    let checkout = std::fs::canonicalize(s.repo.dir()).unwrap();
+    let me = driver
+        .recipient(s.repo.dir().to_str().unwrap())
+        .unwrap()
+        .expect("the checkout's");
+    assert_eq!(me.worktree, "main");
+    assert_eq!(me.path.as_deref(), checkout.to_str());
     let session = driver.session(s.repo.dir().to_str().unwrap()).unwrap();
-    assert!(!session.bare);
     assert_eq!(session.dirty, vec!["?? untracked.txt".to_string()]);
 }
 
-/// 2, 51: a wait and an inbox read in the repository's git directory,
-/// which has no work tree, run no git status there: the wait reports the
-/// landing and exits 0, saying plainly that no session works there, so
-/// its outcome stays pending; the inbox collects nothing and says the
-/// same; the session's own inbox then collects it.
+/// 2, 51: a wait and an inbox in the repository's git directory, which has
+/// no files checked out and whose `HEAD` names `main`, read as the
+/// worktree on `main` would: worktree `a`'s landing is not theirs, so the
+/// wait reports it and exits 0, saying nothing of it pending, of git status
+/// or of files checked out, and marks nothing; the inbox collects nothing
+/// and says nothing; `a`'s own inbox then collects it (record 0099; rule
+/// core.48).
 #[test]
-fn a_wait_with_no_work_tree_says_plainly_what_it_cannot_deliver() {
+fn a_wait_with_no_files_checked_out_reads_as_a_worktree_on_its_branch() {
     let s = Scratch::new("wt-bare-wait");
     let a = s.session("a", &[("a.txt", "a\n")]);
     let n = id(&s.wt_submit(&a, &["--no-wait", "--json"]));
@@ -1565,25 +1767,109 @@ fn a_wait_with_no_work_tree_says_plainly_what_it_cannot_deliver() {
     let said = text(&out);
     assert_eq!(out.status.code(), Some(0), "{said}");
     assert!(said.contains("landed as"), "{said}");
-    assert!(!said.contains("git status"), "{said}");
-    assert!(
-        said.contains(&format!(
-            "#{n} stays pending for its session's sluice inbox"
-        )) && said.contains("is a repository with no files checked out, so no session works in it"),
-        "{said}"
-    );
+    for word in ["pending", "git status", "checked out"] {
+        assert!(!said.contains(word), "{word} in {said}");
+    }
     assert_eq!(s.status(n)["delivered"], serde_json::Value::Null);
+    assert!(s.logged("delivered").is_empty());
     let out = inbox(&s, &git_dir, &["--json"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert_eq!(String::from_utf8_lossy(&out.stderr), "");
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(v, serde_json::json!({ "outcomes": [] }));
-    assert!(
-        text(&out).contains("no files checked out"),
-        "{}",
-        text(&out)
-    );
     let e = collected_one(&s, &a);
     assert_eq!(e["id"], n);
+}
+
+/// `sluice` run in `dir` with the harness naming `agent-a`, in no herdr
+/// pane.
+fn as_agent_a(s: &Scratch, dir: &Path, args: &[&str]) -> Output {
+    s.command(env!("CARGO_BIN_EXE_sluice"), dir)
+        .env("SLUICE_AGENT", "agent-a")
+        .args(args)
+        .output()
+        .unwrap()
+}
+
+/// The git directory of worktree `dir`, which has no files checked out and
+/// whose `HEAD` is the worktree's own.
+fn own_git_dir(s: &Scratch, dir: &Path) -> PathBuf {
+    PathBuf::from(s.repo.git(&[
+        "-C",
+        dir.to_str().unwrap(),
+        "rev-parse",
+        "--absolute-git-dir",
+    ]))
+}
+
+/// 51: worktree `a`'s own git directory, whose `HEAD` names `a`'s branch,
+/// is that worktree with no path: a wait there on `a`'s landing marks it
+/// delivered to the agent the harness names, and its inbox collects `a`'s
+/// next submission, blamed, delivered to the same agent (record 0099's
+/// D3; rule core.48).
+#[test]
+fn a_git_directory_delivers_its_branchs_own() {
+    let s = Scratch::new("wt-gitdir-own");
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let n = id(&s.wt_submit(&a, &["--no-wait", "--json"]));
+    s.land(n);
+    let own = own_git_dir(&s, &a);
+    let out = as_agent_a(&s, &own, &["wait", &n.to_string()]);
+    let said = text(&out);
+    assert_eq!(out.status.code(), Some(0), "{said}");
+    assert!(said.contains("landed as"), "{said}");
+    let record = s.status(n);
+    assert!(record["delivered"].is_string(), "{record}");
+    assert_eq!(record["delivered_to"], "agent-a", "{record}");
+
+    std::fs::write(a.join("broken"), "x\n").unwrap();
+    let dir = a.to_str().unwrap();
+    s.repo.git(&["-C", dir, "add", "-A"]);
+    s.repo.git(&["-C", dir, "commit", "-q", "-m", "broken"]);
+    let m = id(&s.wt_submit(&a, &["--no-wait", "--json"]));
+    assert_eq!(s.decide(m)["state"], "failed");
+    let out = as_agent_a(&s, &own, &["inbox", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let outcomes = v["outcomes"].as_array().unwrap();
+    assert_eq!(outcomes.len(), 1, "{v}");
+    assert_eq!(outcomes[0]["id"], m, "{v}");
+    assert_eq!(outcomes[0]["state"], "failed", "{v}");
+    assert_eq!(outcomes[0]["delivered_to"], "agent-a", "{v}");
+    assert_eq!(s.status(m)["delivered_to"], "agent-a");
+}
+
+/// 2, 51: a git directory whose `HEAD` names a branch with no commit fails
+/// no delivery read: a wait there reports the landing and exits 0, saying
+/// nothing of what it could not read, and marks nothing; its inbox
+/// collects nothing and says nothing (record 0099; rule core.48).
+#[test]
+fn a_head_with_no_commit_fails_no_delivery_read() {
+    let s = Scratch::new("wt-gitdir-unborn");
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let n = id(&s.wt_submit(&a, &["--no-wait", "--json"]));
+    s.land(n);
+    let own = own_git_dir(&s, &a);
+    s.repo.git(&[
+        "--git-dir",
+        own.to_str().unwrap(),
+        "symbolic-ref",
+        "HEAD",
+        "refs/heads/nothing",
+    ]);
+    let out = as_agent_a(&s, &own, &["wait", &n.to_string()]);
+    let said = text(&out);
+    assert_eq!(out.status.code(), Some(0), "{said}");
+    assert!(said.contains("landed as"), "{said}");
+    for word in ["could not read", "pending", "no git", "commit:"] {
+        assert!(!said.contains(word), "{word} in {said}");
+    }
+    assert_eq!(s.status(n)["delivered"], serde_json::Value::Null);
+    let out = as_agent_a(&s, &own, &["inbox", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert_eq!(String::from_utf8_lossy(&out.stderr), "");
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v, serde_json::json!({ "outcomes": [] }));
 }
 
 /// 124, 51, 2: a branch sluice lands on submitted by name, from the

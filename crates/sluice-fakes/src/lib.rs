@@ -78,6 +78,9 @@ struct RunState {
     request: RunRequest,
     /// The host that started it, whose count it is in (71).
     host: String,
+    /// The system its host ran as it started, where Nix manages the host
+    /// (84, record 0097).
+    nix_system: Option<String>,
     complete: bool,
     lost: bool,
     killed: bool,
@@ -202,6 +205,15 @@ struct Inner {
     unmet: BTreeMap<String, String>,
     /// Every look at what a host lacks, by the host that looked, in order.
     looks: Vec<String>,
+    /// The system each host runs, by host, as the link Nix keeps for the
+    /// active system names it; a host with none is one Nix doesn't manage
+    /// (84; record 0097).
+    nix_systems: BTreeMap<String, String>,
+    /// Every ask whether a host's system was switched during a run, by the
+    /// host that asked, in order.
+    system_looks: Vec<String>,
+    /// Each start's place, with the places live as it started, in order.
+    live_at_start: Vec<(String, Vec<String>)>,
     /// Why each host's executor cannot hold a run's memory limit, by host,
     /// as the check seam's look says it (84, 87).
     memory_unmet: BTreeMap<String, String>,
@@ -813,6 +825,31 @@ impl World {
     /// order.
     pub fn engine_looks(&self) -> Vec<String> {
         self.0.borrow().looks.clone()
+    }
+
+    /// From now, this world's host runs the system Nix names `system`, a
+    /// store path; with `None`, it is a host Nix doesn't manage, as every
+    /// host is until this is asked (84; record 0097, design D8). A run
+    /// notes its host's system as it starts.
+    pub fn nix_system(&self, system: Option<&str>) {
+        let mut inner = self.0.borrow_mut();
+        let host = inner.host.clone();
+        match system {
+            Some(s) => inner.nix_systems.insert(host, s.into()),
+            None => inner.nix_systems.remove(&host),
+        };
+    }
+
+    /// Each ask whether the host's system was switched during a run, by
+    /// the host that asked, in order.
+    pub fn system_looks(&self) -> Vec<String> {
+        self.0.borrow().system_looks.clone()
+    }
+
+    /// Each start's place, with the places live as it started, in order of
+    /// starting.
+    pub fn live_at_each_start(&self) -> Vec<(String, Vec<String>)> {
+        self.0.borrow().live_at_start.clone()
     }
 
     /// The next start finds its place made and stops before starting.
@@ -1624,7 +1661,6 @@ impl World {
                 },
                 dirty: Vec::new(),
                 detached: false,
-                bare: false,
             },
         );
     }
@@ -2141,9 +2177,13 @@ impl Tests for FakeTests {
         }
         let complete = !inner.hold;
         let host = inner.host.clone();
+        let nix_system = inner.nix_systems.get(&host).cloned();
+        let live = inner.places.keys().cloned().collect();
+        inner.live_at_start.push((request.place.name.clone(), live));
         inner.runs.push(RunState {
             request: request.clone(),
             host,
+            nix_system,
             complete,
             lost: false,
             killed: false,
@@ -2192,6 +2232,29 @@ impl Tests for FakeTests {
         }
         inner.looks.push(host.clone());
         Ok(inner.unmet.get(&host).cloned())
+    }
+
+    /// 84, 114, record 0097 (design D4, D5): as the check profile reads
+    /// the link Nix keeps, the system the run noted as it started against
+    /// the one its host runs now, in the profile's words.
+    fn switched(&self, run: &RunHandle) -> Result<Option<String>> {
+        let mut inner = self.0 .0.borrow_mut();
+        let host = inner.host.clone();
+        inner.system_looks.push(host.clone());
+        let began = run
+            .0
+            .strip_prefix("run-")
+            .and_then(|n| n.parse::<usize>().ok())
+            .and_then(|n| inner.runs.get(n))
+            .ok_or_else(|| anyhow!("no run {}", run.0))?
+            .nix_system
+            .clone();
+        Ok(match (began, inner.nix_systems.get(&host)) {
+            (Some(from), Some(to)) if from != *to => Some(format!(
+                "the host's system was switched during the run, from {from} to {to}"
+            )),
+            _ => None,
+        })
     }
 
     fn bound(&self) -> Result<usize> {

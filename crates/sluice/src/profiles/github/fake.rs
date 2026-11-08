@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use super::app::Repo;
 use super::forge::{
     latest_opinionated, Check, Comment, Forge, Posted, Posting, Pull, Request, Review, Standing,
+    Status,
 };
 
 /// The author this fake gives every pull request sluice opens.
@@ -276,6 +277,13 @@ impl Forge for FileForge {
         Ok(self.held()?.posted.remove(rev).unwrap_or_default())
     }
 
+    /// Post the check run `name` on `rev`, or patch the run `existing`. A
+    /// completed run, `Failure` or `Success`, patched `Queued` or
+    /// `InProgress` stays completed and takes only the posting's title,
+    /// summary and text, as GitHub kept WilldanGroup/switchboard-kit #268's
+    /// check on `977138a9` failed under `waiting: the next submit` (record
+    /// 0096). Any other posting replaces the run whole. `posts` keeps what
+    /// sluice sent.
     fn post_named(
         &self,
         _: &Repo,
@@ -294,11 +302,19 @@ impl Forge for FileForge {
                 }
             };
             let on = h.posted.entry(rev.into()).or_default();
+            let mut kept = posting.clone();
+            if let Some(was) = on.iter().find(|p| p.id == id) {
+                let completed = matches!(was.posting.status, Status::Failure | Status::Success);
+                let undecided = matches!(posting.status, Status::Queued | Status::InProgress);
+                if completed && undecided {
+                    kept.status = was.posting.status;
+                }
+            }
             on.retain(|p| p.id != id);
             on.push(Posted {
                 id,
                 name: name.into(),
-                posting: posting.clone(),
+                posting: kept,
             });
             h.posts.push((rev.into(), name.into(), posting.clone()));
             Ok(id)
@@ -569,6 +585,63 @@ mod tests {
         let drafted = f.open(&repo, "main", "unit/c", "C", "", true).unwrap();
         assert!(drafted.draft && f.by_ref("unit/c").unwrap().unwrap().draft);
         assert!(f.readied(&repo, drafted.number).unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Record 0096: a run posted `Failure` and patched `Queued` stays a
+    /// failure under the queued posting's words, as GitHub kept
+    /// switchboard-kit #268's; a decided posting replaces it whole.
+    #[test]
+    fn a_completed_check_run_stays_completed() {
+        let (f, repo, dir) = forge("completed");
+        let failed = Posting {
+            status: Status::Failure,
+            title: "failed: a:test".into(),
+            summary: "a:test failed".into(),
+            text: Some("the report".into()),
+        };
+        let id = f.post(&repo, "aaa", None, &failed).unwrap();
+        let held = Posting {
+            status: Status::Queued,
+            title: "waiting: the next submit".into(),
+            summary: "Its submission left the queue".into(),
+            text: None,
+        };
+        f.post(&repo, "aaa", Some(id), &held).unwrap();
+        let now = f.posted(&repo, "aaa").unwrap().unwrap();
+        assert_eq!(now.id, id);
+        assert_eq!(
+            now.posting,
+            Posting {
+                status: Status::Failure,
+                ..held.clone()
+            }
+        );
+        let testing = Posting {
+            status: Status::InProgress,
+            title: "testing".into(),
+            summary: String::new(),
+            text: None,
+        };
+        f.post(&repo, "aaa", Some(id), &testing).unwrap();
+        assert_eq!(
+            f.posted(&repo, "aaa").unwrap().unwrap().posting.status,
+            Status::Failure
+        );
+        let landed = Posting {
+            status: Status::Success,
+            title: "landed".into(),
+            summary: String::new(),
+            text: None,
+        };
+        f.post(&repo, "aaa", Some(id), &landed).unwrap();
+        assert_eq!(f.posted(&repo, "aaa").unwrap().unwrap().posting, landed);
+        f.post(&repo, "aaa", Some(id), &held).unwrap();
+        assert_eq!(
+            f.posted(&repo, "aaa").unwrap().unwrap().posting.status,
+            Status::Success
+        );
+        assert_eq!(f.held().unwrap().posts[1].2, held);
         let _ = std::fs::remove_dir_all(dir);
     }
 }

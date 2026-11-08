@@ -227,13 +227,21 @@ let
     '';
   };
 
+  # The flake's checks' tools (record 0098): the nix nix:typecheck and
+  # nix:test evaluate with, and the statix nix:lint runs. nixpkgs' builds,
+  # pinned by devenv.lock and asserted to be these versions, so every host
+  # that runs the gate runs the same (core.24). treefmt.nix's nixfmt and
+  # deadnix are from the same nixpkgs.
+  nixVersion = "2.34.8";
+  statixVersion = "0.5.8-unstable-2026-07-17";
+
   # OpenSpec, which root:specs validates openspec/specs with: the release
   # the specs are written with, built as nixpkgs builds its older one. Bump
   # the version, then each hash from the mismatch the build reports, then
   # write OpenSpec's Claude Code skills and commands under .claude/ again
   # with it, `sh check-openspec-claude.sh --write` in the shell, since the
   # tree tracks them as this release writes them and root:openspec-claude
-  # holds them to it (record 0098).
+  # holds them to it (record 0101).
   openspecVersion = "1.14.3";
   openspec = pkgs.openspec.overrideAttrs (
     finalAttrs: _: {
@@ -302,11 +310,26 @@ in
     # The plugins' screenshots, optimized losslessly as they are taken
     # (plugins/screenshots-capture.sh).
     pkgs.oxipng
+    (
+      assert pkgs.nix.version == nixVersion;
+      pkgs.nix
+    )
+    (
+      assert pkgs.statix.version == statixVersion;
+      pkgs.statix
+    )
   ];
+
+  # The flake's inputs as flake.lock locks them (nix/inputs.nix), fetched
+  # by this shell outside the gate's sandbox and given to nix:typecheck and
+  # nix:test by their store paths, which they read with no network and no
+  # nix daemon, so every host evaluates the flake against the inputs the
+  # lock pins (core.24, record 0098).
+  env.SLUICE_FLAKE_INPUTS = builtins.toJSON (import ./nix/inputs.nix { }).paths;
 
   env.PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers-chromium}";
 
-  # Claude Code's project files (boomdrive's record 0022; record 0098):
+  # Claude Code's project files (boomdrive's record 0022; record 0101):
   # .mcp.json from the servers below and .claude/settings.json from the
   # rest, each a link devenv makes into the store and git ignores. The
   # repository's one server is devenv's hosted one, which searches packages
@@ -352,7 +375,7 @@ in
     # devenv's files, Claude Code's above, made here as well as by devenv's
     # own task: a place's readiness is sluice's equip, which sources this
     # script from `devenv print-dev-env` and runs no task, and the agent
-    # started after it reads them as it starts (record 0098). Its words go
+    # started after it reads them as it starts (record 0101). Its words go
     # to no output a caller reads the environment from, and a working copy
     # where they cannot be written still gets its shell.
     if ! (${writeFiles}) >/dev/null; then

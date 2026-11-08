@@ -73,7 +73,8 @@ impl GroupRequest {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Accepted {
     pub id: u64,
-    /// Submissions queued ahead of it on the branch.
+    /// Submissions queued ahead of it on the branch, in the order a round
+    /// takes them (6, 7).
     pub ahead: Vec<u64>,
     /// The earlier submission from the same place it withdrew (67).
     pub withdrew: Vec<u64>,
@@ -393,7 +394,7 @@ impl Queue {
 }
 
 /// A branch's queue as read from its records (26, 49).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Status {
     pub branch: String,
     pub at: Option<Rev>,
@@ -410,6 +411,9 @@ pub struct Status {
     pub parallel: Option<usize>,
     /// The submissions in the branch's live records.
     pub submissions: Vec<Submission>,
+    /// 6 to 8: the branch's chain on `at`, in the order a round takes it,
+    /// what is landing first ([`Line::order`]).
+    pub chain: Vec<u64>,
     /// How many have moved to its finished records, which
     /// [`Sluice::history`] reads.
     pub finished: usize,
@@ -467,6 +471,14 @@ impl Status {
     /// is known by them.
     pub fn is_unknown(&self) -> bool {
         self.at.is_none() && !self.recorded
+    }
+
+    /// 6, 7: the submissions ahead of submission `id` in the queue, in the
+    /// order a round takes them ([`order::ahead_of`]).
+    pub fn ahead_of(&self, id: u64) -> Vec<u64> {
+        order::ahead_of(id, &self.chain, |i| {
+            self.submissions.iter().find(|s| s.id == i)
+        })
     }
 }
 
@@ -726,7 +738,6 @@ impl Sluice<'_> {
             from: self.seams.driver.named(branch)?,
             dirty: Vec::new(),
             detached: false,
-            bare: false,
         };
         let submitted = SubmittedHead {
             head: at,
@@ -1374,6 +1385,13 @@ impl Sluice<'_> {
     /// not fetched for a read. Only a branch whose records have seen no
     /// revision yet is read from the branch itself.
     ///
+    /// 56, 124, 129: its policy at the branch's revision as this host holds
+    /// it, so a policy mended outside sluice is read whole with no round
+    /// run, and one refused there names that revision; at the revision its
+    /// records last saw only where the host holds none (ADR 0046 as
+    /// amended 2026-11-06; rule core.15). Nothing is fetched for it and
+    /// nothing written.
+    ///
     /// 105: a branch removed is read from its records as any other, and
     /// said to be gone: by that read where it was made, and otherwise by
     /// the revision the host holds of it, with no fetch (record 0091).
@@ -1382,20 +1400,24 @@ impl Sluice<'_> {
         let found = snapshot.version > 0 || !snapshot.files.is_empty();
         let kept_out = kept_out(&Line::read_log(&snapshot)?);
         let line = Line::load(branch, snapshot)?;
-        let (at, gone) = match &line.doc.base {
-            Some(base) => (
-                Some(base.clone()),
-                self.seams.branch.held(branch)?.is_none(),
-            ),
+        // The revision this host holds of the branch, read with no fetch,
+        // once the branch is read where its records have seen no revision:
+        // what says it gone and what its policy is read at.
+        let (at, held, gone) = match &line.doc.base {
+            Some(base) => {
+                let held = self.seams.branch.held(branch)?;
+                let gone = held.is_none();
+                (Some(base.clone()), held, gone)
+            }
             None => {
                 let read = self.seams.branch.read(branch)?;
                 let gone = read.is_none();
-                (read, gone)
+                (read, self.seams.branch.held(branch)?, gone)
             }
         };
         let recorded = found || (gone && self.seams.state.branches()?.iter().any(|b| b == branch));
-        let policy = match &at {
-            Some(rev) => self.policy_at(rev)?,
+        let policy = match held.or_else(|| at.clone()) {
+            Some(rev) => self.policy_at(&rev)?,
             None => None,
         };
         let parallel = match &policy {
@@ -1421,6 +1443,7 @@ impl Sluice<'_> {
             crate::refused_writes::standing(&line.doc.refused_writes, || self.now());
         let on_remote =
             !refused_writes.is_empty() && self.seams.branch.copy(branch)? != HostCopy::Itself;
+        let chain = line.order(at.as_ref(), true).chain;
         Ok(Status {
             branch: branch.into(),
             at,
@@ -1445,6 +1468,7 @@ impl Sluice<'_> {
             failed_releases: line.doc.failed_releases.clone(),
             refused_writes,
             on_remote,
+            chain,
             submissions: line.subs.into_values().collect(),
             warnings,
             stale: self.seams.state.stale(branch).map(|r| r.remote),
@@ -1777,12 +1801,6 @@ fn admit(
             },
         );
     }
-    let ahead: Vec<u64> = l
-        .subs
-        .values()
-        .filter(|s| !s.state.is_out())
-        .map(|s| s.id)
-        .collect();
     l.subs.insert(
         id,
         Submission {
@@ -1820,6 +1838,10 @@ fn admit(
             head: submitted.head.clone(),
         },
     );
+    // 6, 7: ahead of it in the order a round takes the queue, as status
+    // reads it.
+    let chain = l.order(l.doc.base.as_ref(), true).chain;
+    let ahead = order::ahead_of(id, &chain, |i| l.subs.get(&i));
     Accepted {
         id,
         ahead,
@@ -1899,7 +1921,6 @@ mod tests {
                     },
                     dirty: Vec::new(),
                     detached: false,
-                    bare: false,
                 },
             );
         }
@@ -2225,6 +2246,10 @@ mod tests {
 
         fn unmet(&self, _: &sluice_seams::Limits) -> Result<Option<String>> {
             unreachable!("a submit runs nothing")
+        }
+
+        fn switched(&self, _: &RunHandle) -> Result<Option<String>> {
+            Ok(None)
         }
 
         fn bound(&self) -> Result<usize> {
@@ -2718,6 +2743,32 @@ mod tests {
             assert_eq!(s.after, vec![earlier], "none names another of the act");
             assert_eq!(s.priority, 3);
         }
+    }
+
+    /// 6, 7: what a submit names ahead of it, and the chain status reads,
+    /// follow the order a round takes the queue in, not the order of
+    /// submission: one at priority 5 is ahead of one submitted before it
+    /// at 0, and one at priority 9 after that one is behind both.
+    #[test]
+    fn ahead_is_the_queues_order() {
+        let h = Host::new();
+        for w in ["a", "b", "c"] {
+            h.place(w);
+        }
+        let submit = |w: &str, after: &[u64], priority: i64| {
+            let mut req = h.group(&[w], after);
+            req.priority = priority;
+            h.sluice().submit_group(&req).unwrap().unwrap().remove(0)
+        };
+        let a = submit("a", &[], 0);
+        let b = submit("b", &[], 5);
+        assert!(b.ahead.is_empty(), "{:?}", b.ahead);
+        let c = submit("c", &[a.id], 9);
+        assert_eq!(c.ahead, [b.id, a.id]);
+        let status = h.sluice().status(BRANCH).unwrap();
+        assert_eq!(status.chain, [b.id, a.id, c.id]);
+        assert_eq!(status.ahead_of(a.id), [b.id]);
+        assert_eq!(status.ahead_of(c.id), [b.id, a.id]);
     }
 
     /// 23, 125: a group given a subject per place keeps each on its own
