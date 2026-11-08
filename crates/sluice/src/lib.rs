@@ -268,9 +268,9 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Wait for a submission's outcome, running sluice's rounds meanwhile
-    /// unless `sluice run` drives the repository on this host, as a waiting
-    /// submit does.
+    /// Wait for a submission's outcome, following sluice's host process,
+    /// which runs the rounds, as a waiting submit does; the wait runs no
+    /// round of its own.
     #[command(after_help = WAIT_AFTER_HELP)]
     Wait {
         /// A submission's number, or a branch: this worktree's last
@@ -4270,11 +4270,11 @@ fn read_hold(host: &dyn exec::Host, branch: &str) -> Option<BranchHold> {
 /// updated, each marked one of the group, or none when any worktree is
 /// refused; then every pull request marked ready and queued, each
 /// submission said after its pull request, or none when any falls short
-/// of its conditions, each such named. It says where each stands; then,
-/// unless `no_wait`, it follows each, taking pull requests in and running
-/// rounds as a waiting pull-request submit does, or leaving both to
-/// `sluice run` where it lives on the host (135), until every one is
-/// decided, and reports each one's outcome in the order given.
+/// of its conditions, each such named. It says where each stands, takes
+/// the pull requests in once and tells sluice's host process, which runs
+/// the rounds (135); then, unless `no_wait`, it follows each as a waiting
+/// pull-request submit does until every one is decided, and reports each
+/// one's outcome in the order given.
 #[allow(clippy::too_many_arguments)]
 fn submit_pull_group(
     s: &Sluice<'_>,

@@ -74,6 +74,22 @@ impl Why {
     }
 }
 
+/// The reasons a waiting `sluice exec` or `sluice preview` has said: each
+/// once, whatever order the host process answers them in (150).
+#[derive(Debug, Default)]
+pub struct Told(Vec<Why>);
+
+impl Told {
+    /// `why`'s words, where they were not said yet.
+    pub fn first(&mut self, why: Why) -> Option<&'static str> {
+        if self.0.contains(&why) {
+            return None;
+        }
+        self.0.push(why);
+        Some(why.words())
+    }
+}
+
 /// The runs waiting for room, by kind, and whose turn the next contested
 /// run is: what the overview's `room` shows (150).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -719,6 +735,30 @@ mod tests {
         held(&mut room, &Asker::Session(a), now);
         assert_eq!(refused(&mut room, &Asker::Session(b), now), Why::AtBound);
         assert_eq!(room.waiting(now).sessions, 1);
+    }
+
+    /// run-bound, "A check waiting for room says why" (150): a check whose
+    /// wait is at the bound, then owed to a combination, then at the bound
+    /// again, as S75's third agent's is, says each reason once.
+    #[test]
+    fn a_waiting_check_says_each_reason_once() {
+        let mut told = Told::default();
+        let said: Vec<&str> = [
+            Why::AtBound,
+            Why::CombinationFirst,
+            Why::AtBound,
+            Why::CombinationFirst,
+        ]
+        .into_iter()
+        .filter_map(|why| told.first(why))
+        .collect();
+        assert_eq!(
+            said,
+            [
+                "waiting: the host is at its bound",
+                "waiting: a combination's run starts first"
+            ]
+        );
     }
 
     /// 91, 102: the part of the bound kept for combinations is never a

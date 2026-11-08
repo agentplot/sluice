@@ -349,7 +349,7 @@ impl Exec<'_> {
             pulls: &(),
             clock: self.clock,
         };
-        let mut told: Option<crate::host_process::room::Why> = None;
+        let mut told = crate::host_process::room::Told::default();
         let (place, run) = 'start: loop {
             let mut holding =
                 self.host
@@ -358,11 +358,12 @@ impl Exec<'_> {
             let part = loop {
                 match holding.next(std::time::Duration::from_millis(100))? {
                     Some(crate::host_process::Holds::Held(part)) => break part,
-                    Some(crate::host_process::Holds::Waiting(why)) if told != Some(why) => {
-                        say(out, json, why.words())?;
-                        told = Some(why);
+                    Some(crate::host_process::Holds::Waiting(why)) => {
+                        if let Some(words) = told.first(why) {
+                            say(out, json, words)?;
+                        }
                     }
-                    Some(crate::host_process::Holds::Waiting(_)) | None => {}
+                    None => {}
                 }
                 if !self.pause.pause() {
                     say(out, json, "stopped: nothing ran")?;
@@ -394,10 +395,8 @@ impl Exec<'_> {
                     break 'start (place, run);
                 }
                 Err(e) if e.downcast_ref::<AtBound>().is_some() => {
-                    let why = crate::host_process::room::Why::AtBound;
-                    if told != Some(why) {
-                        say(out, json, why.words())?;
-                        told = Some(why);
+                    if let Some(words) = told.first(crate::host_process::room::Why::AtBound) {
+                        say(out, json, words)?;
                     }
                     if !self.pause.pause() {
                         say(out, json, "stopped: nothing ran")?;

@@ -220,7 +220,7 @@ impl Ask<'_> {
                 pulls: &(),
                 clock: self.clock,
             };
-            let mut told: Option<crate::host_process::room::Why> = None;
+            let mut told = crate::host_process::room::Told::default();
             let stopped = |out: &mut dyn Write| -> Result<i32> {
                 say(
                     out,
@@ -241,11 +241,12 @@ impl Ask<'_> {
                 let part = loop {
                     match holding.next(std::time::Duration::from_millis(100))? {
                         Some(crate::host_process::Holds::Held(part)) => break part,
-                        Some(crate::host_process::Holds::Waiting(why)) if told != Some(why) => {
-                            say(out, json, why.words())?;
-                            told = Some(why);
+                        Some(crate::host_process::Holds::Waiting(why)) => {
+                            if let Some(words) = told.first(why) {
+                                say(out, json, words)?;
+                            }
                         }
-                        Some(crate::host_process::Holds::Waiting(_)) | None => {}
+                        None => {}
                     }
                     if !self.pause.pause() {
                         return stopped(out);
@@ -275,10 +276,8 @@ impl Ask<'_> {
                         break 'start;
                     }
                     Err(e) if e.downcast_ref::<sluice_seams::AtBound>().is_some() => {
-                        let why = crate::host_process::room::Why::AtBound;
-                        if told != Some(why) {
-                            say(out, json, why.words())?;
-                            told = Some(why);
+                        if let Some(words) = told.first(crate::host_process::room::Why::AtBound) {
+                            say(out, json, words)?;
                         }
                         if !self.pause.pause() {
                             return stopped(out);
