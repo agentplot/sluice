@@ -15,6 +15,6 @@ devenv.local.nix
 /site/public/screenshots/
 
 # Claude Code's project files, which devenv writes from devenv.nix at each
-# entry to the shell (boomdrive's record 0022; record 0097)
+# entry to the shell (boomdrive's record 0022; record 0098)
 /.mcp.json
 /.claude/settings.json

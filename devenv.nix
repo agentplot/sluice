@@ -233,7 +233,7 @@ let
   # write OpenSpec's Claude Code skills and commands under .claude/ again
   # with it, `sh check-openspec-claude.sh --write` in the shell, since the
   # tree tracks them as this release writes them and root:openspec-claude
-  # holds them to it (record 0097).
+  # holds them to it (record 0098).
   openspecVersion = "1.14.3";
   openspec = pkgs.openspec.overrideAttrs (
     finalAttrs: _: {
@@ -306,7 +306,7 @@ in
 
   env.PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers-chromium}";
 
-  # Claude Code's project files (boomdrive's record 0022; record 0097):
+  # Claude Code's project files (boomdrive's record 0022; record 0098):
   # .mcp.json from the servers below and .claude/settings.json from the
   # rest, each a link devenv makes into the store and git ignores. The
   # repository's one server is devenv's hosted one, which searches packages
@@ -352,7 +352,7 @@ in
     # devenv's files, Claude Code's above, made here as well as by devenv's
     # own task: a place's readiness is sluice's equip, which sources this
     # script from `devenv print-dev-env` and runs no task, and the agent
-    # started after it reads them as it starts (record 0097). Its words go
+    # started after it reads them as it starts (record 0098). Its words go
     # to no output a caller reads the environment from, and a working copy
     # where they cannot be written still gets its shell.
     if ! (${writeFiles}) >/dev/null; then
