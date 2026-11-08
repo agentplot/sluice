@@ -82,12 +82,13 @@ answers, a pause apart, for five minutes. Past them it says `could not read
 that command in `next`. That is no outcome: never take it for a failure.
 Run the command it names, which reads the submission's record again.
 
-A waiting submit also runs sluice's rounds, so it is what moves the queue on
-a single machine. A verdict takes from a minute to most of an hour, and an
-agent whose submission holds its session hears nothing meanwhile: no
-message, no word from the user. So an agent submits with `--no-wait` and
-waits with `sluice wait`, which runs the rounds the same way, in its
-harness's background:
+sluice's own host process moves the queue: a submit tells it of the
+submission, starting it where none runs, and it ends once the host's
+queues are empty. Nothing is installed or kept running for it. A verdict
+takes from a minute to most of an hour, and an agent whose submission
+holds its session hears nothing meanwhile: no message, no word from the
+user. So an agent submits with `--no-wait` and waits with `sluice wait`,
+which follows the host process, in its harness's background:
 
 ```sh
 sluice submit main --no-wait --json        # {"id":12,"branch":"main","ahead":[...]}
@@ -161,11 +162,11 @@ and forms no combination on any of them until every one is queued. Once
 queued, each is its own submission: blamed, withdrawn and waited on
 (`sluice wait <id>`) alone. See [references/submit.md](references/submit.md).
 
-Nothing moves while nobody waits and no `sluice run` is going, so a
-`--no-wait` submission with nobody waiting on it sits at `queued`; `sluice
-wait` moves it, as do `sluice step main` (one round) and `sluice run
---rounds N`. Do not submit again to move it: a second submit from the same
-worktree replaces the first. On a pull-request branch, `--no-wait --json`
+A `--no-wait` submission moves with nobody waiting on it: sluice's host
+process, which the submit told, runs its rounds. `sluice wait` follows it,
+and `sluice step main` asks the host process for one round of the branch.
+Do not submit again to move it: a second submit from the same worktree
+replaces the first. On a pull-request branch, `--no-wait --json`
 answers `{"id","branch","ahead","pull_request"}` when sluice queued the
 pull request at once, its conditions holding: hand `id` to `sluice wait`.
 Otherwise it answers `{"pull_request","branch","state"}`, `state` what the
