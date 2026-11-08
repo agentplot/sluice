@@ -1,15 +1,17 @@
 //! One reader of a repository's queues per host (129; ADR 0056; rule
-//! core.25): the first `sluice overview --json --watch`, `sluice wait` or
-//! waiting `sluice submit` of a repository on the host holds its lock and
-//! keeps the overview it reads beside it, and every other watch and wait
-//! of the repository on the host follows that document instead of reading
-//! the records itself. A watch of a newer sluice than the reader's takes
-//! the reader's lease, and the reader, finding it taken, lets go and
-//! follows, so the newest sluice that watches reads, and never two at once.
-//! Where the host runs `sluice run`, that one process is the repository's
-//! driver on the host, and its reader, whatever lease a watch holds: no
-//! watch or wait takes the reader's place while it lives, and one that held
-//! it lets it go (135; ADR 0068; rule core.31).
+//! core.25): sluice's host process is the reader of every repository it
+//! holds, holding the reader's lock and keeping the overview it reads
+//! beside it, and every watch and wait of the repository on the host
+//! follows that document instead of reading the records itself, taking no
+//! lock and no lease (135; record 0093). The host process also holds each
+//! repository's driver's lock, so a wait or a watch of an older sluice
+//! finds a driver live and follows. A reader of an older sluice, a watch or
+//! a wait from before the host process, may still hold a repository's
+//! reader's lock: the host process takes its lease, the older reader,
+//! finding it taken, lets go and follows, and the host process reads from
+//! then on, so never two read at once. Where an older `sluice run` holds
+//! the driver's lock, the host process runs no round of that repository
+//! and follows its document until it ends.
 //!
 //! ```text
 //! $XDG_STATE_HOME/sluice/readers/     (default ~/.local/state)
@@ -22,24 +24,25 @@
 //!                                not
 //!   <repository, flat>.version   the reader's version of sluice, written
 //!                                whole when it takes the lock
-//!   <repository, flat>.lease     locked by a watch of a newer sluice that
-//!                                has taken the reader's lease, until it is
+//!   <repository, flat>.lease     locked by the host process once it has
+//!                                taken an older reader's lease, until it is
 //!                                the reader
-//!   <repository, flat>.driver    locked by `sluice run` for as long as it runs
+//!   <repository, flat>.driver    locked by the host process, or an older
+//!                                `sluice run`, for as long as it drives the
+//!                                repository
 //! ```
 //!
 //! The repository is its common git directory, which every worktree of it
 //! shares, written as one file name as `running/` writes a run directory.
 //! The locks and the lease go with their process, however it ends, so a
-//! reader, a watch holding the lease, or a driver that stops leaves nothing
-//! to clean and no time to wait out: the next watch or wait to try the lock
-//! becomes the reader, and the next `sluice run` the driver. The document
-//! and the version are each written to a temporary file and renamed over
-//! the last, so a follower reads a whole one or none. The version is a file
-//! of its own: a follower of a sluice from before it empties the lock file
-//! at every try, and a follower prints the document as it finds it. A
-//! reader of such a sluice names no version and never looks at the lease,
-//! so it is followed until it stops.
+//! reader, a lease holder or a driver that stops leaves nothing to clean
+//! and no time to wait out. The document and the version are each written
+//! to a temporary file and renamed over the last, so a follower reads a
+//! whole one or none. The version is a file of its own: a follower of a
+//! sluice from before it empties the lock file at every try, and a
+//! follower prints the document as it finds it. A reader of such a sluice
+//! names no version and never looks at the lease, so it is followed until
+//! it stops.
 //!
 //! The two times are how a forecast tells a reader that keeps its tick
 //! from one that has stalled, with nothing written to the document when
@@ -187,10 +190,14 @@ pub enum Drives {
 }
 
 impl Drives {
-    /// As a watch or a wait finds it: another drives while a driver of
-    /// `repository` lives on the host, as [`driver_live`] probes it.
+    /// As a reader of an older sluice finds it: another drives while a
+    /// process holds `repository`'s driver's lock on the host, sluice's
+    /// host process or an older `sluice run`. A probe, its shared lock
+    /// dropped at once; one that fails reads as none.
     pub fn probe(dir: &Path, repository: &str) -> Drives {
-        if driver_live(dir, repository) {
+        let held = File::open(driver_file(dir, repository))
+            .is_ok_and(|lock| matches!(lock.try_lock_shared(), Err(TryLockError::WouldBlock)));
+        if held {
             Drives::Another
         } else {
             Drives::Nobody
@@ -229,15 +236,22 @@ impl Driver {
     }
 }
 
-/// Whether a driver of `repository` lives on the host: a process holds
-/// its lock among the readers in `dir`. A probe, its shared lock dropped at
-/// once; one that fails reads as no driver, so a wait runs rounds rather
-/// than wait on nothing (135).
-pub fn driver_live(dir: &Path, repository: &str) -> bool {
-    let Ok(lock) = File::open(driver_file(dir, repository)) else {
-        return false;
-    };
-    matches!(lock.try_lock_shared(), Err(TryLockError::WouldBlock))
+impl Driver {
+    /// The driver of `repository` among the readers in `dir` where its
+    /// lock is free now, tried once: sluice's host process, whose repository
+    /// task tries it again at its next pass (135; design D7).
+    pub fn try_take(dir: &Path, repository: &str) -> Result<Option<Driver>> {
+        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+        let path = driver_file(dir, repository);
+        let lock = File::create(&path).with_context(|| format!("creating {}", path.display()))?;
+        match lock.try_lock() {
+            Ok(()) => Ok(Some(Driver { _lock: lock })),
+            Err(TryLockError::WouldBlock) => Ok(None),
+            Err(TryLockError::Error(e)) => {
+                Err(e).with_context(|| format!("locking {}", path.display()))
+            }
+        }
+    }
 }
 
 /// The driver's lock of `repository` among the readers in `dir`: a name
@@ -280,6 +294,18 @@ impl Lead {
 }
 
 impl Follow {
+    /// A follower of `repository`'s reader among the readers in `dir`,
+    /// which never takes the reader's lock or its lease: a watch's or a
+    /// wait's, sluice's host process being the reader (129, 135; rule
+    /// core.25).
+    pub fn of(dir: &Path, repository: &str, version: &str) -> Follow {
+        Follow {
+            files: Files::of(dir, repository),
+            version: version.to_string(),
+            lease: None,
+        }
+    }
+
     /// The reader's document; `None` while there is no whole one, as when
     /// the reader has only just started.
     pub fn read(&self) -> Option<Value> {
@@ -420,7 +446,7 @@ pub fn current(dir: &Path, repository: &str, now: SystemTime) -> Result<Option<V
 /// The lock on `path`, when no live process holds it. Opening it never
 /// empties the file.
 /// Whether a newer watch holds the lease at `path`: it holds it alone.
-/// Asked shared, as [`driver_live`] asks, and let go at once: a process
+/// Asked shared, as [`Drives::probe`] asks, and let go at once: a process
 /// started meanwhile by another thread holds what it inherits until it
 /// runs its program, and a shared lock it holds is no lease to the next
 /// probe, where an exclusive one would read as a newer watch's (129).
@@ -466,7 +492,7 @@ fn write_whole(tmp: &Path, path: &Path, bytes: &[u8]) -> Result<()> {
 /// Whether `version` is older than `own`, both as release numbers: three
 /// numbers, dot-separated, compared in order. Anything else is no version,
 /// which is never older, nor has any older than it.
-fn older(version: &str, own: &str) -> bool {
+pub(crate) fn older(version: &str, own: &str) -> bool {
     matches!((release(version), release(own)), (Some(v), Some(o)) if v < o)
 }
 
@@ -1104,13 +1130,13 @@ mod tests {
     #[test]
     fn a_held_driver_reads_as_live_until_dropped() {
         let s = Scratch::new("driver-live");
-        assert!(!driver_live(&s.0, REPO));
+        assert!(Drives::probe(&s.0, REPO) != Drives::Another);
         assert!(!driver_file(&s.0, REPO).exists());
         let driver = Driver::take(&s.0, REPO).unwrap().expect("the driver");
-        assert!(driver_live(&s.0, REPO));
-        assert!(!driver_live(&s.0, "/Users/someone/other/.git"));
+        assert!(Drives::probe(&s.0, REPO) == Drives::Another);
+        assert!(Drives::probe(&s.0, "/Users/someone/other/.git") != Drives::Another);
         drop(driver);
-        assert!(soon(|| !driver_live(&s.0, REPO)));
+        assert!(soon(|| Drives::probe(&s.0, REPO) != Drives::Another));
     }
 
     /// 135: a second driver taken while one is held is another's: `None`,
@@ -1141,7 +1167,7 @@ mod tests {
         let driver = Driver::take(&s.0, REPO).unwrap();
         held.join().unwrap();
         assert!(driver.is_some(), "a probe read as another run");
-        assert!(driver_live(&s.0, REPO));
+        assert!(Drives::probe(&s.0, REPO) == Drives::Another);
     }
 
     /// A repository whose name is the longest one kept whole has its
@@ -1153,7 +1179,7 @@ mod tests {
         let _driver = Driver::take(&s.0, &repository)
             .unwrap()
             .expect("the driver");
-        assert!(driver_live(&s.0, &repository));
+        assert!(Drives::probe(&s.0, &repository) == Drives::Another);
     }
 
     /// 135: a watch or wait takes no free reader's place while a driver

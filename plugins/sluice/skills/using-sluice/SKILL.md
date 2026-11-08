@@ -82,12 +82,13 @@ answers, a pause apart, for five minutes. Past them it says `could not read
 that command in `next`. That is no outcome: never take it for a failure.
 Run the command it names, which reads the submission's record again.
 
-A waiting submit also runs sluice's rounds, so it is what moves the queue on
-a single machine. A verdict takes from a minute to most of an hour, and an
-agent whose submission holds its session hears nothing meanwhile: no
-message, no word from the user. So an agent submits with `--no-wait` and
-waits with `sluice wait`, which runs the rounds the same way, in its
-harness's background:
+sluice's own host process moves the queue: a submit tells it of the
+submission, starting it where none runs, and it ends once the host's
+queues are empty. Nothing is installed or kept running for it. A verdict
+takes from a minute to most of an hour, and an agent whose submission
+holds its session hears nothing meanwhile: no message, no word from the
+user. So an agent submits with `--no-wait` and waits with `sluice wait`,
+which follows the host process, in its harness's background:
 
 ```sh
 sluice submit main --no-wait --json        # {"id":12,"branch":"main","ahead":[...]}
@@ -161,22 +162,22 @@ and forms no combination on any of them until every one is queued. Once
 queued, each is its own submission: blamed, withdrawn and waited on
 (`sluice wait <id>`) alone. See [references/submit.md](references/submit.md).
 
-Nothing moves while nobody waits and no `sluice run` is going, so a
-`--no-wait` submission with nobody waiting on it sits at `queued`; `sluice
-wait` moves it, as do `sluice step main` (one round) and `sluice run
---rounds N`. Do not submit again to move it: a second submit from the same
-worktree replaces the first. On a pull-request branch, no host takes the
-pull request in: the forge's round job, a GitHub Actions workflow, takes it
-in and lands it, and a submit wakes it. `--no-wait --json` answers
-`{"pull_request","branch","state","queue"}`, `state` as sluice's check on
-the head pushed says, or `waiting to be taken in` before the round job has
-read it, and writes no submission. Run `sluice wait main` in the worktree,
-which follows the pull request by GitHub and that check, and prints the
-same document under `--json`. `queue` says where the round job holds the
-pull request: `submission` and `state` once it is taken in, what is
-`ahead` of it, and `waits_for`, what it lacks before it is taken in, or
-taken in again. The wait ends as the pull request lands or is sent back;
-don't submit again to move it.
+A `--no-wait` submission moves with nobody waiting on it: sluice's host
+process, which the submit told, runs its rounds. `sluice wait` follows it,
+and `sluice step main` asks the host process for one round of the branch.
+Do not submit again to move it: a second submit from the same worktree
+replaces the first. On a pull-request branch, no host takes the pull
+request in: the forge's round job, a GitHub Actions workflow that runs
+`sluice job round`, takes it in and lands it, and a submit wakes it.
+`--no-wait --json` answers `{"pull_request","branch","state","queue"}`,
+`state` as sluice's check on the head pushed says, or `waiting to be taken
+in` before the round job has read it, and writes no submission. Run
+`sluice wait main` in the worktree, which follows the pull request by
+GitHub and that check, and prints the same document under `--json`.
+`queue` says where the round job holds the pull request: `submission` and
+`state` once it is taken in, what is `ahead` of it, and `waits_for`, what
+it lacks before it is taken in, or taken in again. The wait ends as the
+pull request lands or is sent back; don't submit again to move it.
 
 A submission that sits at `queued` while another is testing is waiting its
 turn. `sluice status <branch>` says `testing N at once (up to M)`. N is one

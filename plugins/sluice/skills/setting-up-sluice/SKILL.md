@@ -287,10 +287,11 @@ requests means on that branch:
 - Nobody presses merge, uses GitHub's merge queue or merges by hand on
   that branch. Only who lands a pull request changes, from the merge
   button to sluice's push.
-- The round job, a GitHub Actions workflow, takes each pull request in and
-  lands it, with every host off; a pull request opened by hand is found
-  within five minutes. The hosts whose results the branch trusts run its
-  tests.
+- The round job, a GitHub Actions workflow that runs `sluice job round`,
+  takes each pull request in and lands it, with every host off; a pull
+  request opened by hand is found within five minutes. The hosts whose
+  results the branch trusts run its tests in sluice's host process, which
+  any command of sluice's there starts and nothing installs.
 
 sluice has no mode in which GitHub's button lands and sluice only tests.
 Whenever the user asks for one (keep the merge button, have sluice only
@@ -427,9 +428,9 @@ sluice protect        # git hook: only sluice moves a gated branch (submit, step
 Host settings live in one file on the host, never in the repository:
 `$XDG_CONFIG_HOME/sluice/config.toml`, `~/.config/sluice/config.toml` when
 `XDG_CONFIG_HOME` is unset. Every repository on the host shares it. sluice
-reads it as each command starts and never writes it; a `sluice run` kept
-running takes a change once restarted. Before writing it, find out who
-writes it:
+reads it as each command starts and never writes it; sluice's host
+process takes a change when it next starts, once the queues it moves have
+emptied. Before writing it, find out who writes it:
 
 ```sh
 f="${XDG_CONFIG_HOME:-$HOME/.config}/sluice/config.toml"
@@ -520,8 +521,8 @@ For a branch on GitHub, do these in this order, or a step is refused:
 For more than one host or system, follow [peers](references/profiles/peers.md)'s
 "Set it up, in order": a signing key per host, `[signing]` in each host's
 file (checked first on each host, as *The host's file* says), then one
-landing that adds `[signers]` and rewrites `trust`, then `sluice run` kept
-running on each standing executor.
+landing that adds `[signers]` and rewrites `trust`, then each standing
+executor started as that page says.
 
 A pattern with `remote = "origin"` needs no push by hand: `sluice branch
 create <branch> --from main` makes each branch under it there as the app,

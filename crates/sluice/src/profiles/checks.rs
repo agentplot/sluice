@@ -60,12 +60,15 @@ use anyhow::{anyhow, bail, Context as _, Result};
 use serde::{Deserialize, Serialize};
 use sluice_seams::{
     log_tail, AtBound, Enforced, Equip, EquipStep, Equipped, HostRun, KeptOutTask, Limits, Network,
-    NotRun, Outcome, Place, Progress, Reading, Reads, Rev, RunHandle, RunReport, RunRequest,
-    Running, Setting, Settings, Source, TaskLog, TaskProgress, TaskResult, Tests, Through,
+    NotRun, Outcome, Part, Place, Progress, Reading, Reads, Rev, RunHandle, RunKind, RunReport,
+    RunRequest, Running, Setting, Settings, Source, TaskLog, TaskProgress, TaskResult, Tests,
+    Through,
 };
 
 use super::moon::{self, Moon};
-use crate::host_count::{self, HostCount};
+use crate::host_count::HostCount;
+use crate::host_process::ask::Lent;
+use crate::host_process::room::{Asked, Asker, Holding, Room, Shared};
 use crate::instance::{HostCache, Instance};
 use crate::runs::{Ended, Request, RunState, Runs};
 use crate::sessions::Sessions;
@@ -218,6 +221,10 @@ pub struct Checks {
     sessions: Option<Sessions>,
     /// The host's running checks, when not the host's own directory.
     running: Option<HostCount>,
+    /// The host's room every run's part is held of (71, 150; rule
+    /// core.49; design D12): the room itself in the process that holds it,
+    /// made once over the host's running checks otherwise.
+    room: std::cell::OnceCell<RoomHandle>,
     /// Where the container engine is looked for, when not where the
     /// sandbox lets a run reach it.
     engines: Option<Vec<Endpoint>>,
@@ -232,6 +239,7 @@ impl Checks {
             instance,
             sessions: None,
             running: None,
+            room: std::cell::OnceCell::new(),
             pool: None,
             engines: None,
         }
@@ -253,6 +261,28 @@ impl Checks {
     pub fn with_running(mut self, dir: PathBuf) -> Self {
         self.running = Some(HostCount::new(dir));
         self
+    }
+
+    /// The same profile, holding every run's part of `room`, the host's
+    /// room in the process that holds it (design D12).
+    pub fn with_room(self, room: RoomHandle) -> Self {
+        let _ = self.room.set(room);
+        self
+    }
+
+    /// The host's room this profile holds its parts of.
+    fn room(&self) -> Result<&RoomHandle> {
+        if let Some(r) = self.room.get() {
+            return Ok(r);
+        }
+        let room = Room::over(
+            self.host_count()?,
+            self.instance.bound,
+            self.instance.reserved,
+        );
+        Ok(self
+            .room
+            .get_or_init(|| RoomHandle::Here(Shared::new(room))))
     }
 
     /// The same profile, looking for the container engine at the unix
@@ -306,34 +336,81 @@ impl Checks {
     pub fn instance(&self) -> &Instance {
         &self.instance
     }
+}
 
-    /// 71: admit the run `name` of `request` against the host's count:
-    /// a session's or a preview's under the bound less the reserve, any
-    /// other under the bound. `None` at the bound.
-    fn admit(
-        &self,
-        request: &RunRequest,
-        name: &str,
-        session: bool,
-    ) -> Result<Option<host_count::Admission>> {
-        let kind = if session || request.place.name.starts_with(super::places::PREVIEW) {
-            host_count::Kind::Session
-        } else {
-            host_count::Kind::Queue
-        };
-        let limit = match kind {
-            host_count::Kind::Queue => self.instance.bound,
-            host_count::Kind::Session => self.instance.bound.saturating_sub(self.instance.reserved),
-        };
-        let entry = host_count::Entry {
-            kind,
-            repository: self.common.clone(),
-            place: request.place.name.clone(),
-            run_dir: self.runs.dir(name),
-            pid: std::process::id(),
-            admitted: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        };
-        self.host_count()?.admit(&entry, limit)
+/// How a profile reaches the host's room (design D12): the room itself, in
+/// the process that holds it.
+#[derive(Clone)]
+pub enum RoomHandle {
+    Here(Shared),
+}
+
+impl RoomHandle {
+    /// A part of `kind` for a run of `repository`; `None` where the room
+    /// refuses it. A session's or a preview's ask here waits for nothing:
+    /// its wait is let go as it is refused.
+    fn hold(&self, kind: RunKind, repository: &Path) -> Result<Option<Part>> {
+        match self {
+            RoomHandle::Here(shared) => match kind {
+                RunKind::Queue => shared.hold_queue(repository),
+                RunKind::Session => {
+                    let mut room = shared.lock();
+                    let waiter = room.wait();
+                    let asked = room.ask(
+                        &Asker::Session(waiter),
+                        repository,
+                        std::time::Instant::now(),
+                    )?;
+                    room.let_go(waiter);
+                    drop(room);
+                    Ok(match asked {
+                        Asked::Held(id) => Some(shared.part(kind, id)),
+                        Asked::Refused(_) => None,
+                    })
+                }
+            },
+        }
+    }
+}
+
+/// A part a start takes, as the room it was held of carries it: the room
+/// itself, or the host process's over the connection `sluice exec` or
+/// `sluice preview` held it on (design D12).
+enum Begun {
+    Here(Holding),
+    Host(Lent, Option<(String, PathBuf)>),
+}
+
+impl Begun {
+    fn of(part: Part) -> Option<Begun> {
+        match part.take::<Holding>() {
+            Ok(h) => Some(Begun::Here(h)),
+            Err(part) => part.take::<Lent>().ok().map(|l| Begun::Host(l, None)),
+        }
+    }
+
+    /// The run begins in `run_dir`, in the place `place`.
+    fn begin(&mut self, place: &str, run_dir: &Path) -> Result<()> {
+        match self {
+            Begun::Here(h) => h.begin(place, run_dir),
+            Begun::Host(_, at) => {
+                *at = Some((place.to_string(), run_dir.to_path_buf()));
+                Ok(())
+            }
+        }
+    }
+
+    /// The run's supervisor holds its run directory.
+    fn started(self) {
+        match self {
+            Begun::Here(h) => h.started(),
+            Begun::Host(lent, Some((place, run_dir))) => {
+                // A host process that ended meanwhile counts the run by its
+                // supervisor when the next one starts.
+                let _ = lent.started(&place, &run_dir);
+            }
+            Begun::Host(_, None) => {}
+        }
     }
 }
 
@@ -748,6 +825,19 @@ const KEEP: [&str; 10] = [
     "PROTO_HOME",
     "MOON_HOME",
 ];
+
+/// 135 (design D3): whether a run keeps `name` of the environment it is
+/// started from, `KEEP` and the locale's `LC_*`: what sluice's host
+/// process keeps of its starter's, beside the host's own settings.
+pub fn run_keeps(name: &str) -> bool {
+    KEEP.contains(&name) || name.starts_with("LC_")
+}
+
+/// 135 (design D3): what a development shell sets that the host process
+/// keeps none of, by prefix, whatever else would keep it: the shell's own
+/// settings name the shell's working copy, which no repository the host
+/// process holds is (rule core.1 keeps their names here).
+pub const SHELL_ONLY: [&str; 5] = ["DEVENV_", "DIRENV_", "IN_NIX_SHELL", "NIX_", "MOON_"];
 
 /// Whether sluice sets `name` for every run itself: what it keeps of its
 /// own environment, the locale's `LC_*` and its own `SLUICE_*`. A host's
@@ -1432,7 +1522,16 @@ pub fn hostname() -> String {
 }
 
 impl Tests for Checks {
-    fn start(&self, request: &RunRequest) -> Result<RunHandle> {
+    /// 71, 150 (rule core.49; design D12): of the host's room.
+    fn hold(&self, kind: RunKind) -> Result<Option<Part>> {
+        self.room()?.hold(kind, &self.common)
+    }
+
+    fn start(&self, request: &RunRequest, part: Part) -> Result<RunHandle> {
+        // 71 (rule core.49): the room its part holds, or none it honours.
+        let Some(mut held) = Begun::of(part) else {
+            return Err(AtBound.into());
+        };
         let runner = text(&request.tests, "runner")?
             .ok_or_else(|| anyhow!("[tests] names no runner: \"moon\" or \"command\""))?
             .to_string();
@@ -1462,18 +1561,8 @@ impl Tests for Checks {
         } else {
             request.place.name.clone()
         };
-        // 71: admitted against the host's count before anything runs; a
-        // session's or a preview's run never into the reserve (91, 102).
-        let admission = match self.admit(request, name, session)? {
-            Some(a) => a,
-            None => {
-                if session {
-                    // The run's number goes unused; nothing is in it.
-                    let _ = std::fs::remove_dir(self.runs.dir(name));
-                }
-                return Err(AtBound.into());
-            }
-        };
+        // 71: the run's room, held since its count, names the run from now.
+        held.begin(&request.place.name, &self.runs.dir(name))?;
         let dir = self.runs.prepare(name)?;
         let script = dir.join("toolchain.sh");
         // 147: equipped up to the version check before the runner is
@@ -1634,7 +1723,7 @@ impl Tests for Checks {
             },
         )?;
         // Its supervisor holds the run directory, which keeps it counted.
-        admission.started();
+        held.started();
         Ok(RunHandle(name.clone()))
     }
 

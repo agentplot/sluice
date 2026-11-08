@@ -529,8 +529,9 @@ settings, never a repository's. They live in one file on the host,
 `~/.config/sluice/config.toml` where `XDG_CONFIG_HOME` is unset, and
 every repository on the host reads the same file. sluice reads it when a
 command starts and never writes it: a change counts from the next
-command, and a `sluice run` you keep running takes it once you start it
-again. Without the file, every setting has its default.
+command, and sluice's host process takes it when it next starts, once
+the host's queues it moves have emptied. Without the file, every setting
+has its default.
 
 ```toml
 [runs]
@@ -692,8 +693,9 @@ installed on shares. Between two askings, sluice asks GitHub nothing.
 
 The systems this host runs, by the policy's
 [`[systems]`](#systems-what-a-test-runs-on) names. Without it, the host
-runs the one system it is. `sluice run` refuses a system whose operating
-system and architecture the host isn't.
+runs the one system it is. sluice's host process claims no run of a
+repository whose policy names, for a system this lists, an operating
+system and architecture the host isn't, and says so in its log.
 
 ### `[signing]`
 
