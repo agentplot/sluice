@@ -1233,10 +1233,6 @@ pub struct Session {
     /// The place is on no branch, so it names no session's work (3): a
     /// submission from it is refused.
     pub detached: bool,
-    /// The place is a repository with no work tree, a bare one or a git
-    /// directory: it holds no uncommitted work, and no session works in
-    /// it, so no outcome is delivered there (2, 51).
-    pub bare: bool,
 }
 
 /// One entry contested in a conflict, with what it submitted (65).
@@ -1479,6 +1475,18 @@ pub trait Driver {
     /// 2, 47: the head of a session's place, who holds it, and anything
     /// the place holds beyond its commits.
     fn session(&self, worktree: &str) -> Result<Session>;
+
+    /// 51: who collects outcomes in `folder`: the submitter a submit there
+    /// would record, read from neither the folder's files nor its `HEAD`'s
+    /// commit, so a folder with no files checked out, or whose branch has
+    /// no commit yet, is read as the worktree on the branch its `HEAD`
+    /// names with no path; `None` where `HEAD` names no branch, a place that
+    /// submitted nothing (2, 3; record 0099; rule core.48). A driver whose
+    /// `session` reads no commit keeps this one.
+    fn recipient(&self, folder: &str) -> Result<Option<Submitter>> {
+        let s = self.session(folder)?;
+        Ok((!s.detached).then_some(s.from))
+    }
 
     /// 124: who submits `branch` by name: the agent the session's harness
     /// names, else the branch; the branch as its work and its head; this

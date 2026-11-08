@@ -58,6 +58,12 @@ impl sluice_seams::Driver for Drivers {
         }
     }
 
+    /// 51: a folder is never a pull request's place, so worktrunk's reads
+    /// who collects there (C.5; record 0099).
+    fn recipient(&self, folder: &str) -> Result<Option<sluice_seams::Submitter>> {
+        self.worktrunk.recipient(folder)
+    }
+
     /// 124: a branch named is no pull request's place, so worktrunk's
     /// names its submitter (C.5).
     fn named(&self, branch: &str) -> Result<sluice_seams::Submitter> {

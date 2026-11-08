@@ -314,7 +314,6 @@ impl Driver for Requests<'_> {
             },
             dirty: Vec::new(),
             detached: false,
-            bare: false,
         })
     }
 
