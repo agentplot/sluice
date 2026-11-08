@@ -734,6 +734,29 @@ kill "$a" 2>/dev/null
 wait "$a" 2>/dev/null
 pass
 
+fresh 'watch: another herdr server in its place as the tokens go out'
+doc >"$FAKE/overview-work.json"
+printf '%s\n' "$testing95" >"$FAKE/watch-work.jsonl"
+touch "$FAKE/hold"
+sock=$HERDR_SOCKET_PATH
+# The old server's first report is held, so the new server registers
+# while the watcher's run of tokens.sh still has what it set to keep.
+touch "$H/stall"
+SLUICE_HERDR_TICK=60 sh "$plugin/bin/watch.sh" --ticks 60 2>/dev/null &
+a=$!
+within 15 'grep -q "pane report-metadata p1 .*--token sluice=#95 testing" "$FAKE/herdr-calls"' || fail "the first server's pane got no token"
+rm -f "$sock"
+: >"$sock"
+: >"$FAKE/herdr-calls"
+sh "$plugin/bin/watch.sh" --ensure
+rm -f "$H/stall"
+within 10 'grep -q "pane report-metadata p1 .*--token sluice=#95 testing" "$FAKE/herdr-calls"' ||
+  fail "the new server was not given the tokens the old one had: $(calls)"
+rm -f "$FAKE/hold"
+kill "$a" 2>/dev/null
+wait "$a" 2>/dev/null
+pass
+
 fresh 'watch: idle ticks run nothing'
 # Panes in a worktree with nothing to say and outside git: no token.
 jq -n -c --arg other "$other" --arg home "$scratch/home" '{result: {panes: [

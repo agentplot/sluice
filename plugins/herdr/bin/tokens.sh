@@ -10,6 +10,7 @@
 set -u
 . "$(dirname "$0")/../lib/common.sh"
 . "$lib/panes.sh"
+. "$lib/lease.sh"
 
 refresh=false
 read=false
@@ -96,4 +97,14 @@ EOF
   report "$kind" "$id" "$name" "$value"
 done
 IFS=$old_ifs
-jq -n -c --argjson want "$want" '{panes: ($want.panes | map({(.id): .v}) | add // {}), spaces: ($want.spaces | map({(.id): .v}) | add // {})}' | put "$last"
+# What was set is kept only while the record this run read still stands,
+# under the lock a registration takes: a server started at this one's path
+# and registered while these calls went out has had it removed (D2), and
+# keeping it again would have the next run take the new server for one
+# already set. Left unkept, the next run sets every token in it; where the
+# lock cannot be had, it sets again what this run set.
+if take_lock; then
+  [ -f "$last" ] &&
+    jq -n -c --argjson want "$want" '{panes: ($want.panes | map({(.id): .v}) | add // {}), spaces: ($want.spaces | map({(.id): .v}) | add // {})}' | put "$last"
+  drop_lock
+fi
