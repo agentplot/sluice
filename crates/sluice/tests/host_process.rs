@@ -82,6 +82,22 @@ fn queued_from(d: &OnDisk, dir: &Path) -> u64 {
     doc["id"].as_u64().expect("a number")
 }
 
+/// The host process the test's queueing commands started, which passes
+/// only when asked, since they run with the tests' setting (design D13),
+/// ended, so that the test's own reach starts one from its environment,
+/// which passes at its own tick, as a host's does: the test then reads
+/// what a live host process does with what was queued.
+fn live_from_here(d: &OnDisk) {
+    if let Some(pid) = answering(d) {
+        kill(pid);
+        within(
+            10,
+            "the host process that passes when asked is gone",
+            || !alive(pid),
+        );
+    }
+}
+
 /// 135 (design D1): a second host process started while the first lives
 /// ends at once and moves nothing; the first goes on.
 #[test]
@@ -171,6 +187,7 @@ fn a_served_repository_is_moved_by_the_host_process() {
     let id = queued(&d, "a");
     let client = d.client(d.repo.dir());
     let repository = d.repository(d.repo.dir());
+    live_from_here(&d);
     client.serve(Path::new(&repository)).expect("served");
     within(60, "the submission lands", || {
         state(&d, d.repo.dir(), id) == "landed"
@@ -198,12 +215,10 @@ fn a_refused_policy_in_one_repository_holds_no_others_round() {
     ]);
     let id_b = queued_from(&d, b.dir());
     let client = d.client(d.repo.dir());
-    client
-        .serve(Path::new(&d.repository(d.repo.dir())))
-        .expect("a served");
-    client
-        .serve(Path::new(&d.repository(b.dir())))
-        .expect("b served");
+    let (a, b_repo) = (d.repository(d.repo.dir()), d.repository(b.dir()));
+    live_from_here(&d);
+    client.serve(Path::new(&a)).expect("a served");
+    client.serve(Path::new(&b_repo)).expect("b served");
     within(60, "b's submission lands", || {
         state(&d, b.dir(), id_b) == "landed"
     });
@@ -243,6 +258,7 @@ fn a_repository_an_older_sluice_run_drives_is_left_to_it() {
         .unwrap()
         .expect("the older run's lock");
     let client = d.client(d.repo.dir());
+    live_from_here(&d);
     client.serve(Path::new(&a)).unwrap();
     client.serve(Path::new(&b_repo)).unwrap();
     within(60, "b's submission lands", || {
@@ -263,15 +279,69 @@ fn the_host_process_ends_once_its_queues_are_empty() {
     let d = OnDisk::new("host-ends", POLICY);
     let id = queued(&d, "a");
     let client = d.client(d.repo.dir());
-    client
-        .serve(Path::new(&d.repository(d.repo.dir())))
-        .unwrap();
+    let repository = d.repository(d.repo.dir());
+    live_from_here(&d);
+    client.serve(Path::new(&repository)).unwrap();
     let pid = client.answering().unwrap().expect("it runs").named.pid;
     within(60, "the submission lands", || {
         state(&d, d.repo.dir(), id) == "landed"
     });
     within(10, "the host process ends", || !alive(pid));
     assert!(!client.paths().socket.exists(), "its socket went with it");
+}
+
+/// reader-tick, "An idle tick starts no process" (129, 135; design D4): a
+/// host process that lives on, here for an agent's held room, looks at
+/// each repository in its index every three seconds as an idle tick
+/// reads it, and starts no task for one with nothing in play. On a host
+/// whose config names a system it is not, a task's start is refused and
+/// logged: nothing is logged while the repository is idle, and once work
+/// is in play there the refusal is logged once, however many looks pass
+/// the repository by.
+#[test]
+fn the_host_processs_look_at_an_idle_repository_starts_nothing() {
+    let policy = format!("{POLICY}\n[systems.elsewhere]\nos = \"windows\"\narch = \"x86_64\"\n");
+    let d = OnDisk::new("host-look-idle", &policy);
+    d.land("a");
+    let repository = d.repository(d.repo.dir());
+    within(15, "the host process ends once idle", || {
+        answering(&d).is_none()
+    });
+    let dir = d.config.path().join("sluice");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("config.toml"),
+        "[runs]\nsystems = [\"elsewhere\"]\n",
+    )
+    .unwrap();
+    let client = d.client(d.repo.dir());
+    let mut held = client
+        .hold(
+            sluice_seams::RunKind::Session,
+            Path::new(&repository),
+            "an-agent",
+        )
+        .expect("the host process starts");
+    let answer = held.next(Some(Duration::from_secs(10))).unwrap();
+    assert!(
+        matches!(answer, Some(sluice::host_process::protocol::Answer::Held)),
+        "{answer:?}"
+    );
+    let refused = || {
+        std::fs::read_to_string(client.paths().log())
+            .unwrap()
+            .lines()
+            .filter(|l| l.contains("this host claims no run of it"))
+            .count()
+    };
+    std::thread::sleep(Duration::from_secs(7));
+    assert_eq!(refused(), 0, "two looks at the idle repository");
+
+    queued(&d, "b");
+    within(10, "the start refused", || refused() == 1);
+    std::thread::sleep(Duration::from_secs(7));
+    assert_eq!(refused(), 1, "two looks pass it by");
+    drop(held);
 }
 
 /// 135 (design D6): the host process ends at its next tick once its state

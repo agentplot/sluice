@@ -1083,13 +1083,16 @@ fn a_ready_command_is_never_run() {
 const STALE_LOCK: &str = "error: flake.lock is not up to date";
 
 /// `sluice` in `dir`, its state and configuration in `state`, out of
-/// reach of the host's own and of every credential.
+/// reach of the host's own and of every credential. The host process its
+/// submit starts passes only when asked, so the test's own steps are the
+/// rounds that run (design D13).
 fn sluice_in(dir: &std::path::Path, state: &Scratch, args: &[&str]) -> std::process::Output {
     support::isolated(&mut std::process::Command::new(env!(
         "CARGO_BIN_EXE_sluice"
     )))
     .args(args)
     .current_dir(dir)
+    .env("SLUICE_ROUND_SLEEP", "record")
     .env("XDG_CONFIG_HOME", state.path().join("config"))
     .env("XDG_STATE_HOME", state.path().join("state"))
     .env_remove("SLUICE_AGENT")
