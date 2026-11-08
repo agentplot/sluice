@@ -145,6 +145,16 @@ inputs.sluice.url = "github:agentplot/sluice";
 # then: inputs.sluice.packages.${system}.default
 ```
 
+Its modules, `darwinModules.sluice` and `nixosModules.sluice`, install
+the package and write the host's own settings from
+`services.sluice.settings`, each key named as the file names it
+([who writes it](https://agentplot.github.io/sluice/reference/configuration/#who-writes-it)):
+
+```nix
+imports = [ inputs.sluice.nixosModules.sluice ];
+services.sluice = { enable = true; user = "alice"; settings.runs.max = 3; };
+```
+
 </details>
 
 Each installs two executables: `sluice`, and `wt-submit`, which

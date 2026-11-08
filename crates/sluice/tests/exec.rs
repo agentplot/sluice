@@ -1050,6 +1050,100 @@ fn a_check_that_says_the_engine_is_down_while_it_answers_is_recorded_as_failed()
     );
 }
 
+/// Where the binary reads the active system's link in place of the
+/// host's `/run/current-system` (record 0097, design D8).
+const SYSTEM_LINK: &str = "SLUICE_SYSTEM_LINK";
+
+/// A link in `dir` standing for the host's `/run/current-system`, to
+/// `<dir>/aaa`: the link, and the store path it names.
+fn system_link(dir: &Path) -> (PathBuf, PathBuf) {
+    let (link, system) = (dir.join("current-system"), dir.join("aaa"));
+    std::os::unix::fs::symlink(&system, &link).unwrap();
+    (link, system)
+}
+
+/// The worktrees `sluice status` lists a checkout of.
+fn worktrees(s: &Setup) -> usize {
+    let out = s.sluice(&["status", "--json"]);
+    let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    doc["worktrees"].as_array().map_or(0, Vec::len)
+}
+
+/// 84, 114, 139; record 0097 (design D5, D7); the host-requirements
+/// spec's "The tests": a check that switches the host's system and fails
+/// is not run, naming the system before and after, and nothing is
+/// recorded under its key; the check that passed beside it keeps its
+/// pass, and nothing is released.
+#[test]
+fn a_check_that_fails_after_the_hosts_system_was_switched_is_not_run_and_a_pass_is_recorded() {
+    let dir = Scratch::short();
+    let socket = support::engine(dir.path(), "HTTP/1.0 200 OK");
+    let (link, from) = system_link(dir.path());
+    let to = dir.path().join("bbb");
+    let s = moon_setup(
+        "exec-system-switched",
+        &format!("ln -sfn '{}' '{}'\nexit 1\n", to.display(), link.display()),
+    );
+    let env = [
+        (ENGINE_SOCKETS, socket.as_path()),
+        (SYSTEM_LINK, link.as_path()),
+    ];
+    let out = s.sluice_with(&env, &["exec", "bolt/x"]);
+    let said = text(&out);
+    assert_eq!(out.status.code(), Some(1), "{said}");
+    assert!(
+        said.contains(&format!(
+            "could not run: a:test: the host's system was switched during the run, \
+             from {} to {}",
+            from.display(),
+            to.display()
+        )),
+        "{said}"
+    );
+    assert_eq!(
+        recorded(&s),
+        [("b:test".to_string(), "pass".to_string())],
+        "{said}"
+    );
+    assert!(s.worktree.exists());
+    assert_eq!(worktrees(&s), 1, "the worktree's checkout stays");
+}
+
+/// 84; rules core.37, core.38; record 0097; the host-requirements spec's
+/// "A test that says the host was switched": what a check prints is
+/// never read as a switch; while the host's system stood, its fail is
+/// recorded under its key.
+#[test]
+fn a_check_that_says_the_system_was_switched_while_it_stood_is_recorded_as_failed() {
+    let dir = Scratch::short();
+    let socket = support::engine(dir.path(), "HTTP/1.0 200 OK");
+    let (link, _) = system_link(dir.path());
+    let s = moon_setup(
+        "exec-system-says",
+        "echo \"the host's system was switched during the run, \
+         from /nix/store/aaa-darwin-system to /nix/store/bbb-darwin-system\"\nexit 1\n",
+    );
+    let env = [
+        (ENGINE_SOCKETS, socket.as_path()),
+        (SYSTEM_LINK, link.as_path()),
+    ];
+    let out = s.sluice_with(&env, &["exec", "bolt/x"]);
+    let said = text(&out);
+    assert_eq!(out.status.code(), Some(1), "{said}");
+    assert!(said.contains("failed: a:test"), "{said}");
+    assert!(!said.contains("could not run"), "{said}");
+    let mut got = recorded(&s);
+    got.sort();
+    assert_eq!(
+        got,
+        [
+            ("a:test".to_string(), "fail".to_string()),
+            ("b:test".to_string(), "pass".to_string())
+        ],
+        "{said}"
+    );
+}
+
 /// Design D5; the host-requirements spec's "An engine at a TCP address"
 /// and "Nothing answers at the TCP address": with `docker = true` and
 /// `DOCKER_HOST` naming a fake engine's TCP port, `sluice exec` runs the

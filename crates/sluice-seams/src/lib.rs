@@ -817,6 +817,20 @@ pub trait Tests {
     /// never a fail (114, 139).
     fn unmet(&self, limits: &Limits) -> Result<Option<String>>;
 
+    /// 84, 114, 139, record 0097: whether the host's system moved since
+    /// `run` began, in the profile's words, else `None`. It reads only what
+    /// the executor can see on the host for itself, as the run began and
+    /// now, and runs nothing (rules core.37, core.38); a host whose system
+    /// it cannot read, or a run that noted none as it began, answers
+    /// `None`, read as before.
+    ///
+    /// The core asks it only after a run in which a check did not pass and
+    /// the time limit did not end it, whatever the policy asks of the host,
+    /// and before it looks at the engine: where it answers, those checks
+    /// have no outcome, for the reason it gives, and the engine is not
+    /// looked at.
+    fn switched(&self, run: &RunHandle) -> Result<Option<String>>;
+
     /// 71: the most checks running on the host at once, whatever
     /// repositories and branches they serve and whatever their windows.
     /// `running` counts them.

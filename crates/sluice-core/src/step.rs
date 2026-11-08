@@ -1535,7 +1535,7 @@ impl Sluice<'_> {
                         );
                     }
                     Progress::Finished(report) => {
-                        let report = self.after_run(limits, report)?;
+                        let report = self.after_run(&run, limits, report)?;
                         self.finish_run(line, &c, i, &run, report, rules, home, now)?;
                     }
                 }
@@ -1583,31 +1583,46 @@ impl Sluice<'_> {
         Ok(())
     }
 
-    /// Design D5 (114, 139; record 0074): a finished run under `limits`,
-    /// read with what the host lacks after it. Where a check did not pass
-    /// in a run its time limit did not end, the host is looked at again,
-    /// once, as the report is first taken; where what the run asked of it
-    /// has gone, every check that failed, was failed by a task it depends
-    /// on or was left without a result has no outcome, with why, the tasks
-    /// it was failed by none either, and a check that passed keeps its
-    /// pass (84, 149). A run that asks nothing of the host is never looked
-    /// at, and a required check the runner keeps out of its CI mode stays
-    /// missing.
-    pub(crate) fn after_run(&self, limits: &Limits, mut report: RunReport) -> Result<RunReport> {
+    /// 114, 139; records 0074 (design D5) and 0097 (design D3): the
+    /// finished run `run` under `limits`, read with what became of the host
+    /// during it. Where a check did not pass in a run its time limit did
+    /// not end, the host is looked at again, once, as the report is first
+    /// taken: first whether its system was switched during the run,
+    /// whatever the policy asks of the host; then, where it was not and
+    /// the run asks for the container engine, whether the engine has gone.
+    /// Where either holds, every check that failed, was failed by a task
+    /// it depends on or was left without a result has no outcome, with
+    /// why, the tasks it was failed by none either, and a check that passed
+    /// keeps its pass (84, 149). A switch is the reason where both hold,
+    /// and the engine is then not looked at. A run whose checks all passed,
+    /// or that its time limit ended, is never looked at, and a required
+    /// check the runner keeps out of its CI mode stays missing.
+    pub(crate) fn after_run(
+        &self,
+        run: &RunHandle,
+        limits: &Limits,
+        mut report: RunReport,
+    ) -> Result<RunReport> {
         let unpassed = report.tasks.iter().any(|t| t.outcome == Outcome::Fail)
             || !report.failed_by.is_empty()
             || report.missing.iter().any(|m| !report.kept_out.contains(m));
-        if !limits.docker || report.timed_out || !unpassed {
+        if report.timed_out || !unpassed {
             return Ok(report);
         }
-        let engine = Limits {
-            docker: true,
-            ..Limits::default()
+        let reason = match self.seams.tests.switched(run)? {
+            Some(why) => why,
+            None if limits.docker => {
+                let engine = Limits {
+                    docker: true,
+                    ..Limits::default()
+                };
+                match self.seams.tests.unmet(&engine)? {
+                    Some(why) => format!("after the run, {why}"),
+                    None => return Ok(report),
+                }
+            }
+            None => return Ok(report),
         };
-        let Some(why) = self.seams.tests.unmet(&engine)? else {
-            return Ok(report);
-        };
-        let reason = format!("after the run, {why}");
         let (failed, passed) = std::mem::take(&mut report.tasks)
             .into_iter()
             .partition(|t| t.outcome == Outcome::Fail);
@@ -3291,7 +3306,7 @@ impl Sluice<'_> {
                     }
                 }
                 Progress::Finished(report) => {
-                    let report = self.after_run(&unmet.limits, report)?;
+                    let report = self.after_run(&handle, &unmet.limits, report)?;
                     self.update(branch, |l| {
                         let now = self.now();
                         let Some(x) = l.candidate(&c.id).cloned() else {

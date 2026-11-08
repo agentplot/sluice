@@ -194,6 +194,12 @@ struct Meta {
     /// `.moon/cache`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     store: Option<PathBuf>,
+    /// 84, record 0097 (design D1, D2): the store path the active
+    /// system's link named as the run began, before its checkout was
+    /// equipped; none on a host Nix doesn't manage, and on a run an older
+    /// sluice started, each read as before (D4).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    nix_system: Option<PathBuf>,
 }
 
 /// A pool the binding hands this profile, to start runs on (88; ADR 0034).
@@ -228,6 +234,8 @@ pub struct Checks {
     /// Where the container engine is looked for, when not where the
     /// sandbox lets a run reach it.
     engines: Option<Vec<Endpoint>>,
+    /// The link the active system is read from, when not the host's.
+    system_link: Option<PathBuf>,
 }
 
 impl Checks {
@@ -242,6 +250,7 @@ impl Checks {
             room: std::cell::OnceCell::new(),
             pool: None,
             engines: None,
+            system_link: None,
         }
     }
 
@@ -298,6 +307,25 @@ impl Checks {
     pub fn with_engine_endpoints(mut self, endpoints: Vec<Endpoint>) -> Self {
         self.engines = Some(endpoints);
         self
+    }
+
+    /// The same profile, reading the active system from the link at
+    /// `path` in place of the host's (design D8).
+    pub fn with_system_link(mut self, path: PathBuf) -> Self {
+        self.system_link = Some(path);
+        self
+    }
+
+    /// The link the active system is read from: the one this profile was
+    /// given, else the one [`SYSTEM_LINK_VAR`] names, else the host's
+    /// [`SYSTEM_LINK`] (design D1, D8).
+    fn system_link(&self) -> PathBuf {
+        match &self.system_link {
+            Some(p) => p.clone(),
+            None => std::env::var_os(SYSTEM_LINK_VAR)
+                .filter(|v| !v.is_empty())
+                .map_or_else(|| PathBuf::from(SYSTEM_LINK), PathBuf::from),
+        }
     }
 
     /// Where the container engine is looked for: the endpoints this
@@ -1109,6 +1137,38 @@ pub fn docker_host(value: &str, tls: Option<EngineTls>) -> Option<Endpoint> {
 /// `DOCKER_HOST`.
 pub const ENGINE_SOCKETS_VAR: &str = "SLUICE_ENGINE_SOCKETS";
 
+/// The link NixOS and nix-darwin keep to the active system's store path,
+/// pointed at another by every switch (84, record 0097; design D1). A host
+/// where it is no link is one Nix doesn't manage, and nothing of its
+/// system is read.
+pub const SYSTEM_LINK: &str = "/run/current-system";
+
+/// The tests' way to name the link the active system is read from, in
+/// place of [`SYSTEM_LINK`], as [`ENGINE_SOCKETS_VAR`] names the engine's
+/// sockets (design D8).
+pub const SYSTEM_LINK_VAR: &str = "SLUICE_SYSTEM_LINK";
+
+/// 84, record 0097 (design D1): the store path `link` names, read as a
+/// link and nothing more, no command run (rule core.37); `None` where it
+/// is no link, or cannot be read.
+fn nix_system(link: &Path) -> Option<PathBuf> {
+    std::fs::read_link(link).ok()
+}
+
+/// 84, 114, record 0097 (design D4, D5): the words of a switch, where the
+/// run noted a system as it `began` and the link names another `now`;
+/// `None` where it noted none, the link names none now, or both name one.
+fn switch(began: Option<&Path>, now: Option<&Path>) -> Option<String> {
+    let (from, to) = (began?, now?);
+    (from != to).then(|| {
+        format!(
+            "the host's system was switched during the run, from {} to {}",
+            from.display(),
+            to.display()
+        )
+    })
+}
+
 /// How long the engine look waits for an endpoint to take its connection,
 /// and again for its answer (design D2).
 const ENGINE_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
@@ -1564,6 +1624,10 @@ impl Tests for Checks {
         // 71: the run's room, held since its count, names the run from now.
         held.begin(&request.place.name, &self.runs.dir(name))?;
         let dir = self.runs.prepare(name)?;
+        // 84, record 0097 (design D2): the host's system as the run
+        // begins, before its checkout is equipped, so a switch while it is
+        // equipped is one during the run.
+        let system = nix_system(&self.system_link());
         let script = dir.join("toolchain.sh");
         // 147: equipped up to the version check before the runner is
         // asked anything, and through the setup only where it runs a check.
@@ -1708,6 +1772,7 @@ impl Tests for Checks {
             kept_out: plan.kept_out,
             deps: plan.deps,
             store,
+            nix_system: system,
         };
         self.runs.start(
             name,
@@ -1739,6 +1804,22 @@ impl Tests for Checks {
             return Ok(None);
         }
         Ok(engine_unmet(&self.engines()))
+    }
+
+    /// 84, 114, record 0097 (design D3, D4): the system the run noted as
+    /// it began against the one the link names now; nothing read where the
+    /// run noted none.
+    fn switched(&self, run: &RunHandle) -> Result<Option<String>> {
+        let request = self.runs.request(&run.0)?;
+        let meta: Meta = serde_json::from_value(request.meta.clone())
+            .with_context(|| format!("reading run {}", run.0))?;
+        let Some(began) = meta.nix_system else {
+            return Ok(None);
+        };
+        Ok(switch(
+            Some(&began),
+            nix_system(&self.system_link()).as_deref(),
+        ))
     }
 
     fn progress(&self, run: &RunHandle) -> Result<Progress> {
@@ -2129,4 +2210,34 @@ fn took_ms(started: &str, ended: &str) -> Option<u64> {
     let a = chrono::DateTime::parse_from_rfc3339(started).ok()?;
     let b = chrono::DateTime::parse_from_rfc3339(ended).ok()?;
     u64::try_from((b - a).num_milliseconds()).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 84, record 0097 (design D2, D4), the host-requirements spec's "A
+    /// run an older sluice started": a run's request an older sluice wrote
+    /// noted no system, and reads no switch whatever the link names now.
+    #[test]
+    fn a_run_noted_with_no_system_reads_no_switch() {
+        let older = serde_json::json!({
+            "runner": "moon",
+            "revision": "0123456789abcdef0123456789abcdef01234567",
+            "place": "/tmp/sluice/try/main/4",
+            "targets": ["a:test"],
+            "executor": {"kind": "sandbox", "confined": false},
+            "host": "a-host",
+            "started_ms": 1_780_000_000_000_i64,
+        });
+        let meta: Meta = serde_json::from_value(older).unwrap();
+        assert_eq!(meta.nix_system, None);
+        for now in [
+            Some(Path::new("/nix/store/bbb-darwin-system")),
+            Some(Path::new("/nix/store/aaa-darwin-system")),
+            None,
+        ] {
+            assert_eq!(switch(meta.nix_system.as_deref(), now), None, "{now:?}");
+        }
+    }
 }

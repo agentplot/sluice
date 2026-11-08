@@ -443,7 +443,12 @@ The host is one of three setups:
    store everyone may read, as Nix's store is: sluice refuses a key anyone
    but its owner may read, so the key goes on the host by hand or through
    the tool's handling of secrets, mode `0600`, and the managed file names
-   its path.
+   its path. Where the link points into the Nix store and the host's
+   configuration imports sluice's own module (`darwinModules.sluice` or
+   `nixosModules.sluice`), the tables go in `services.sluice.settings`,
+   each key named as in the file (`runs.max = 3;`,
+   `forge.key = "~/.config/sluice/app.pem";`), and a key file by its path
+   as a string, never a Nix path, which evaluation refuses.
 3. **Several hosts as peers.** Each host has its own file, checked and
    written on that host as 1 or 2 says. Each holds what is that host's
    alone: its signer and key, the systems it runs, its bound, its name
