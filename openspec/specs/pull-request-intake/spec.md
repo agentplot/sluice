@@ -24,12 +24,12 @@ the branch's revision.
 - **THEN** its conditions are still the ones on the branch's revision
 
 ### Requirement: A pull request is submitted when it is ready
-On the host that takes a branch's pull requests in, each asking of the
-branch's open pull requests SHALL submit every open pull request into
-the branch, from a branch of the same repository, that is out of draft
-and whose head has at least `reviews` approving reviews and a passing
-result for every name in `checks`. Every other open pull request SHALL
-wait, and no check of sluice's SHALL run for it (136, 137).
+The forge's round job of a branch, at each asking of its open pull
+requests, SHALL submit every open pull request into the branch, from a
+branch of the same repository, that is out of draft and whose head has
+at least `reviews` approving reviews and a passing result for every
+name in `checks`. Every other open pull request SHALL wait, and no
+check of sluice's SHALL run for it (136, 137).
 
 #### Scenario: Waiting for QA
 - **WHEN** a pull request is out of draft with one approving review and `checks = ["qa/approved"]`, and `qa/approved` has not passed
@@ -41,7 +41,7 @@ wait, and no check of sluice's SHALL run for it (136, 137).
 
 #### Scenario: A pull request opened by hand
 - **WHEN** a person opens a pull request into the branch from a branch of the repository, out of draft, with every condition holding
-- **THEN** the next asking submits it, within the host's `discovery` interval, with no `sluice submit` run for it
+- **THEN** the next round job's asking submits it, with no `sluice submit` run for it and no host's sluice running
 
 #### Scenario: Reviews on an older head do not count
 - **WHEN** a pull request's only approving review was given on a commit before its current head
@@ -100,43 +100,6 @@ back to ready for review on the same head.
 - **WHEN** the operator withdrew a hand-opened pull request's submission, and its author pushes a new commit
 - **THEN** the next round submits the new head once its conditions hold
 
-### Requirement: A pull request a submit opened comes back only on its submitter's act
-A pull request a submit opened or updated is one whose description
-names its agent. When its submission is withdrawn, blamed, timed out or
-removed for a conflict, sluice SHALL mark it a draft. No round SHALL
-submit it again until a submit marks it ready for review, or a person
-does on GitHub, after the submission left. That holds on any head,
-the one sent back included. A withdrawal for a hand-over of intake
-holds none of this (120, 137).
-
-#### Scenario: Refused, then its branch moves
-- **WHEN** a pull request `wt submit` opened is removed for a conflict, and another submission lands a fix on its branch so its head moves
-- **THEN** it is a draft, no round submits it, and nothing lands in its agent's name
-
-#### Scenario: Blamed, then submitted again on the same head
-- **WHEN** a pull request `wt submit` opened is blamed, and its agent runs `wt submit` again with no new commits
-- **THEN** the next round submits the same head and its checks run again
-
-#### Scenario: Timed out, then submitted again on the same head
-- **WHEN** a pull request `wt submit` opened is blamed because the branch's time limit ended its run, and its agent runs `wt submit` again with no new commits
-- **THEN** the next round submits the same head and its checks run again
-
-#### Scenario: Marked ready by a person
-- **WHEN** a pull request `wt submit` opened was sent back and marked a draft, and a person marks it ready for review on GitHub
-- **THEN** the next round submits it once its conditions hold
-
-#### Scenario: Withdrawn by the operator
-- **WHEN** the operator runs `sluice withdraw` on the submission of a pull request `wt submit` opened
-- **THEN** sluice marks the pull request a draft and no later round submits it until a submit or a person marks it ready
-
-#### Scenario: Held when it cannot be marked a draft
-- **WHEN** a pull request `wt submit` opened is sent back and GitHub refuses to mark it a draft
-- **THEN** no round submits it, its `sluice` check says it waits for the next submit, and each later round tries the draft again
-
-#### Scenario: Withdrawn for a hand-over
-- **WHEN** the submission of a pull request `wt submit` opened is withdrawn because another host takes the branch's pull requests in
-- **THEN** sluice marks it no draft, and the host that holds the mark takes it in again as its conditions hold
-
 ### Requirement: A pull request sluice cannot read holds no other
 When a round cannot fetch an open pull request's head, or cannot read
 its reviews, checks or timeline, draft or ready, it SHALL print a
@@ -192,7 +155,7 @@ only until it is first submitted at that head.
 
 #### Scenario: A round between the opens
 
-- **WHEN** `sluice run` is running for `main` while three pull requests marked as one group are opened by hand, their conditions all holding
+- **WHEN** a round job runs for `main` while three pull requests marked as one group are opened by hand, their conditions all holding
 - **THEN** no round submits the first before the third is open, and the first combination formed holds all three
 
 #### Scenario: One of the group is closed
@@ -212,3 +175,52 @@ queued (120, 125).
 
 - **WHEN** a group's three pull requests were submitted together and a commit no submit made is pushed to the second
 - **THEN** only the second's submission is withdrawn and the second is marked a draft; the first and third are tested without it and land, and no round submits the second until its submitter submits it again or a person marks it ready for review
+
+### Requirement: A pull request table nothing would take in refuses its branch alone
+On a branch whose records each host keeps, the policy naming no
+`[signers]`, or in a policy that names no pool, a `pull_requests` table
+SHALL refuse that branch alone, naming `[signers]` or `[pools]` and
+`sluice init actions`, since nothing would take its requests in; every
+other branch of the policy SHALL read as before, and a submit to the
+refused branch SHALL open and push nothing (56, 137 as amended
+2026-11-07, S64).
+
+#### Scenario: Pull requests need the branch's records on its remote
+- **WHEN** `main` names `remote = "origin"` and a `pull_requests` table, the policy names no `[signers]`, and `bolt/x` names `remote = "origin"` and no `pull_requests`
+- **THEN** `sluice status main` shows `main` refused, naming `[signers]` and `sluice init actions`; `wt submit main` exits 2 with those words and nothing is pushed or opened; and `sluice step bolt/x` lands a submission to `bolt/x`
+
+#### Scenario: Pull requests need a pool
+- **WHEN** `main` takes pull requests, the policy names `[signers.box]` and no pool
+- **THEN** `main` is refused, naming `[pools]` and `sluice init actions`
+
+### Requirement: A pull request a submit opened returns only on its submitter's act
+A pull request a submit opened or updated is one whose description
+names its agent. When its submission is withdrawn, blamed, timed out or
+removed for a conflict, sluice SHALL mark it a draft. No round SHALL
+submit it again until a submit marks it ready for review, or a person
+does on GitHub, after the submission left. That holds on any head,
+the one sent back included (120).
+
+#### Scenario: Refused, then its branch moves
+- **WHEN** a pull request `wt submit` opened is removed for a conflict, and another submission lands a fix on its branch so its head moves
+- **THEN** it is a draft, no round submits it, and nothing lands in its agent's name
+
+#### Scenario: Blamed, then submitted again on the same head
+- **WHEN** a pull request `wt submit` opened is blamed, and its agent runs `wt submit` again with no new commits
+- **THEN** the next round submits the same head and its checks run again
+
+#### Scenario: Timed out, then submitted again on the same head
+- **WHEN** a pull request `wt submit` opened is blamed because the branch's time limit ended its run, and its agent runs `wt submit` again with no new commits
+- **THEN** the next round submits the same head and its checks run again
+
+#### Scenario: Marked ready by a person
+- **WHEN** a pull request `wt submit` opened was sent back and marked a draft, and a person marks it ready for review on GitHub
+- **THEN** the next round submits it once its conditions hold
+
+#### Scenario: Withdrawn by the operator
+- **WHEN** the operator runs `sluice withdraw` on the submission of a pull request `wt submit` opened
+- **THEN** sluice marks the pull request a draft and no later round submits it until a submit or a person marks it ready
+
+#### Scenario: Held when it cannot be marked a draft
+- **WHEN** a pull request `wt submit` opened is sent back and GitHub refuses to mark it a draft
+- **THEN** no round submits it, its `sluice` check says it waits for the next submit, and each later round tries the draft again
