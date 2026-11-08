@@ -268,10 +268,11 @@ fn run_holding(paths: Paths, _lock: File) -> Result<i32> {
 }
 
 /// Keep the previous process's log as `log.1`, and send this one's output
-/// to `log`.
+/// to `log`. A log the command that started it made, which holds nothing
+/// yet, is this process's own.
 fn take_log(paths: &Paths) -> Result<()> {
     let log = paths.log();
-    if log.exists() {
+    if std::fs::metadata(&log).is_ok_and(|m| m.len() > 0) {
         let _ = std::fs::rename(&log, paths.previous_log());
     }
     let file = OpenOptions::new()

@@ -36,6 +36,14 @@ pub struct Kept {
 pub struct Report {
     /// Each line the pass said, as `sluice run` printed it on stdout.
     pub lines: Vec<String>,
+    /// 97, 123, previews-1 101: what it freed or released of the host's,
+    /// whatever branch: worktrees and previews gone, said as they were.
+    #[serde(default)]
+    pub freed: Vec<String>,
+    /// 123: what each branch's round said of the checkouts it released,
+    /// by branch: what a wait on the branch says, as its own rounds did.
+    #[serde(default)]
+    pub released: BTreeMap<String, Vec<String>>,
     /// 26: each branch this pass passed by, with its words.
     pub failed: BTreeMap<String, String>,
     /// Whether any branch still has work in play once the pass ended: a
@@ -76,8 +84,10 @@ pub fn pass(
         telemetry::warn(&format!("sluice: warning: {e:#}"));
     }
     // 97, previews-1 101: every pass, whether or not a branch has a queue.
-    exec::tell_abandoned(&mut out, false, &s.release_abandoned()?)?;
-    preview::tell_dropped(&mut out, false, &s.release_unusable_previews()?)?;
+    let mut freed: Vec<u8> = Vec::new();
+    exec::tell_abandoned(&mut freed, false, &s.release_abandoned()?)?;
+    preview::tell_dropped(&mut freed, false, &s.release_unusable_previews()?)?;
+    out.extend_from_slice(&freed);
     let mut branches = seams.state.branches()?;
     match pulls.branches(seams) {
         Ok(b) => branches.extend(b),
@@ -110,9 +120,15 @@ pub fn pass(
             }
         };
         if let Some(round) = round {
-            exec::tell_abandoned(&mut out, false, &round.released)?;
-            preview::tell_dropped(&mut out, false, &round.previews)?;
-            exec::tell_releases(&mut out, false, &round.releases)?;
+            let mut gone: Vec<u8> = Vec::new();
+            exec::tell_abandoned(&mut gone, false, &round.released)?;
+            preview::tell_dropped(&mut gone, false, &round.previews)?;
+            freed.extend_from_slice(&gone);
+            out.extend_from_slice(&gone);
+            let mut released: Vec<u8> = Vec::new();
+            exec::tell_releases(&mut released, false, &round.releases)?;
+            out.extend_from_slice(&released);
+            report.released.insert(branch.clone(), lines_of(&released));
             if matches!(round.step, Step::Stepped | Step::Held) {
                 let said = kept.said.entry(branch.clone()).or_default();
                 crate::tell_hold(&mut out, branch, round.held.as_ref(), said)?;
@@ -140,11 +156,17 @@ pub fn pass(
     report.in_play = branches
         .iter()
         .any(|b| report.failed.contains_key(b) || s.in_play(b).unwrap_or(true));
-    report.lines = String::from_utf8_lossy(&out)
+    report.lines = lines_of(&out);
+    report.freed = lines_of(&freed);
+    Ok(report)
+}
+
+/// `said`, a pass's output, as its lines.
+fn lines_of(said: &[u8]) -> Vec<String> {
+    String::from_utf8_lossy(said)
         .lines()
         .map(str::to_string)
-        .collect();
-    Ok(report)
+        .collect()
 }
 
 /// Whether any branch of the repository has work in play, read from the

@@ -1443,7 +1443,11 @@ pub fn run(
                     }
                 },
             };
-            let intake = takes_pulls(&s, &sub.branch)?.then_some(pulls);
+            // A policy the wait cannot read is the host process's rounds'
+            // to say (133): the wait follows its submission all the same.
+            let intake = takes_pulls(&s, &sub.branch)
+                .unwrap_or(false)
+                .then_some(pulls);
             let waiting = Waiting {
                 host,
                 clock,
@@ -3171,8 +3175,23 @@ fn wait_on(
         // use is forgotten.
         s.next_pass();
         waiting.host.next_pass();
-        let failed = follower
-            .tick(&here)
+        let reports = follower.tick(&here);
+        // 97, 123: what the host process's passes freed, and what its rounds
+        // of this branch released, as a wait's own rounds said them.
+        for r in &reports {
+            let lines = r
+                .freed
+                .iter()
+                .chain(r.released.get(&branch).into_iter().flatten());
+            for line in lines {
+                if waiting.json {
+                    eprintln!("{line}");
+                } else {
+                    writeln!(out, "{line}")?;
+                }
+            }
+        }
+        let failed = reports
             .into_iter()
             .filter_map(|r| r.failed.get(&branch).cloned())
             .next_back();
