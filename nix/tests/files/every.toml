@@ -1,0 +1,35 @@
+# Written by sluice's flake module from services.sluice.settings; a change goes there.
+
+[[caches]]
+dir = "~/.cache/sccache"
+socket = "~/.cache/sccache/server.sock"
+
+[caches.env]
+RUSTC_WRAPPER = "sccache"
+SCCACHE_DIR = "~/.cache/sccache"
+
+[[caches]]
+dir = "~/.moon/cache/shared"
+
+[caches.env]
+MOON_CACHE_SHARED_WORKTREE_CACHE = "true"
+
+[forge]
+app_id = 123456
+discovery = "60s"
+key = "~/.config/sluice/app.pem"
+
+[peers]
+alive = "2m"
+lease = "5m"
+name = "host-a"
+
+[runs]
+cores = 12
+max = 3
+reserved = 1
+systems = ["aarch64-darwin", "x86_64-linux"]
+
+[signing]
+key = "~/.config/sluice/signing"
+signer = "host-a"

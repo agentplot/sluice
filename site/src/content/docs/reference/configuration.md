@@ -566,6 +566,37 @@ caches' `env` reaches every run exactly as written, and the agents'
 shells need the same values: set both from the same managed
 configuration, so they agree.
 
+On nix-darwin and NixOS, sluice's own flake gives a module that writes
+the file, `darwinModules.sluice` or `nixosModules.sluice`:
+
+```nix
+imports = [ inputs.sluice.darwinModules.sluice ]; # nixosModules.sluice on NixOS
+services.sluice = {
+  enable = true;
+  # user = "alice";  # on NixOS: the user who runs sluice
+  settings = {
+    runs = { max = 3; cores = 12; };
+    forge = { app_id = 123456; key = "~/.config/sluice/app.pem"; };
+    caches = [ { dir = "~/.cache/sccache"; } ];
+  };
+};
+```
+
+`services.sluice.settings` holds the tables below, each key named as the
+file names it. A key you leave out stays out of the file, so sluice's
+default holds. A key the module does not know goes into the file as you
+wrote it, and sluice refuses it if sluice does not know it either. Name
+each key file by its path on the host, from `/` or under `~/`.
+Evaluation fails on a key under the Nix store, on a key's text, and on
+a Nix path such as `./app.pem`, which would copy the key into the store.
+The module links `~/.config/sluice/config.toml` to the file it writes,
+for nix-darwin's primary user, or on NixOS for `services.sluice.user`.
+A file already there that is no link moves once, to
+`config.toml.before-nix`. The module puts sluice in the system profile:
+set `services.sluice.package` to install your own build, or to `null`
+to install none. It writes nothing else and installs no service, since
+sluice needs none.
+
 **Several hosts as peers.** Hosts that submit to one branch on a remote,
 or run its checks, each have a file of their own, set up on each host in
 one of the two ways above. Each holds what is that host's alone: its own
