@@ -1956,6 +1956,16 @@ impl Sluice<'_> {
                         passed_at: None,
                         carries: Vec::new(),
                     });
+                    // 82, C.6: on a branch whose records are on its remote,
+                    // a combination is pushed there as it is formed, so the
+                    // instance that starts it, or forms the next on it, can
+                    // fetch it: a round job's repository is made afresh for
+                    // each job (D6 of pull-requests-are-queued-on-the-forge).
+                    if rules.signed {
+                        self.seams
+                            .state
+                            .publish_candidate(&line.branch, &cid, &rev)?;
+                    }
                     prev = rev.clone();
                     ids.push(cid);
                     ahead.push((id, rev));
@@ -1984,6 +1994,9 @@ impl Sluice<'_> {
                         .filter(|r| self.mine(r))
                         .filter_map(|r| r.place.clone()),
                 );
+                dropped.push(c.id.clone());
+            } else if !keep && c.state == CandidateState::Formed && rules.signed {
+                // Pushed as it was formed, never started.
                 dropped.push(c.id.clone());
             }
             keep

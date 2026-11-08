@@ -131,8 +131,8 @@ fn submit(f: &Fakes, worktree: &str, changes: &[(&str, Option<&str>)]) -> i32 {
     sluice(f, &(), &["submit", BRANCH, "--worktree", worktree])
 }
 
-/// Pull requests whose forge cannot be read: a round says so as a
-/// warning, with what reads as a token in it.
+/// Pull requests whose forge cannot be read: a status of the requests the
+/// host follows says so as a warning, with what reads as a token in it.
 struct Unreadable;
 
 impl PullRequests for Unreadable {
@@ -140,13 +140,7 @@ impl PullRequests for Unreadable {
         Ok(Vec::new())
     }
 
-    fn intake(
-        &self,
-        _: Seams<'_>,
-        _: &dyn Clock,
-        _: &str,
-        _: sluice::Taker,
-    ) -> anyhow::Result<bool> {
+    fn intake(&self, _: Seams<'_>, _: &dyn Clock, _: &str) -> anyhow::Result<bool> {
         anyhow::bail!("the forge refused ghp_0123456789abcdefghijABCDEFGHIJ012345")
     }
 
@@ -173,6 +167,15 @@ impl PullRequests for Unreadable {
         _: u64,
     ) -> anyhow::Result<Followed> {
         anyhow::bail!("{branch} takes no pull requests")
+    }
+
+    fn across(
+        &self,
+        _: Seams<'_>,
+        _: &dyn Clock,
+        _: &str,
+    ) -> anyhow::Result<Option<sluice::Across>> {
+        anyhow::bail!("the forge refused ghp_0123456789abcdefghijABCDEFGHIJ012345")
     }
 }
 
@@ -295,7 +298,8 @@ fn a_summary_says_where_the_output_is_kept_and_a_warning_is_sent_whole() {
         submit(&f, "unit/a", &[("tests/t_a.py", Some("broken"))]),
         FAILED
     );
-    assert_eq!(sluice(&f, &Unreadable, &["step", BRANCH]), LANDED);
+    assert_eq!(sluice(&f, &(), &["step", BRANCH]), LANDED);
+    assert_eq!(sluice(&f, &Unreadable, &["status", BRANCH]), LANDED);
     telemetry.flush();
 
     let records = records(&logs);

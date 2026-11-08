@@ -50,7 +50,7 @@ The planner's ruling of 2026-11-07, on this change's question, sets its scope: t
 
 **D3. The workflow's round job.**
 
-1. **`profiles/github/workflows/sluice.yml`, `workflow_dispatch` with the inputs `Actions::wake` sends and a schedule every five minutes, one job `round` in the `sluice` environment, one per branch at a time, downloading the release that wrote it** (chosen). Its steps: an empty repository whose `origin` is the repository's address, which the round's own fetch fills (124, C.6); the release; the state folder restored (D6); the host config written (D4); `sluice job round`; the state folder saved. A dispatch with `mode: run` runs no job until `actions-pool` adds the run jobs.
+1. **`profiles/github/workflows/sluice.yml`, `workflow_dispatch` with the inputs `Actions::wake` sends and a schedule every five minutes, one job `round` in the `sluice` environment, one per branch at a time, downloading the release that wrote it** (chosen). Its steps: an empty repository whose `origin` is the repository's address, its branches fetched into `origin`'s tracking branches with the job's own read-only token, which nothing keeps, since sluice reads which remote a branch is on from the revisions the host holds and never by a fetch (124, C.6; rule core.27), and its own fetches and pushes carry the app's token; the release; the state folder restored (D6); the host config written (D4); `sluice job round`; the state folder saved. Construction's own: the fetch of the branches, the path not taken a job that reads nothing until sluice fetches, which would find no branch to route. A dispatch with `mode: run` runs no job until `actions-pool` adds the run jobs.
 2. `cargo install` or a Nix build in the job: minutes per round, and a toolchain the round needs nowhere else.
 
 **D4. The job's credential.**
@@ -65,7 +65,7 @@ The planner's ruling of 2026-11-07, on this change's question, sets its scope: t
 
 **D6. State between jobs.**
 
-1. **The state folder restored from and saved to the forge's cache, keyed by branch and run** (chosen), so a job reads conditionally on what the last kept (136; core.32) and measures the lease from the first reading any job made (73).
+1. **The state folder restored from and saved to the forge's cache, keyed by branch and run** (chosen), so a job reads conditionally on what the last kept (136; core.32) and measures the lease from the first reading any job made (73). Construction's own: the cache holds the repository's `.git/sluice-remote` beside the state folder, since that is where a host keeps its first reading of a branch's records; the path not taken, moving that reading into the state folder, would move every host's.
 2. A fresh state per job: every read unconditional, and the lease measured from nothing.
 
 **D7. A pool with no runners.**
@@ -107,6 +107,13 @@ The planner's ruling of 2026-11-07, on this change's question, sets its scope: t
 
 1. **`OnGitHub` gives `main` its records on the bare remote and a round job run in a clone of its own with the job's config and a state folder kept across its calls** (chosen); `round()` is the job's round, the host's step that claims and runs the checks, and the job's round again.
 2. A fake forge job inside the test process: it would test a path no workflow runs.
+
+**Construction's own, made building D1 to D14, each cheap to change later.**
+
+- *A combination is pushed to the remote as it is formed* on a branch whose records are on its remote, and a combination dropped before it started is removed there too: a round job's repository is made afresh, so the job that starts a combination, or forms the next on it, fetches what an earlier job formed (82). The path not taken, a job that forms again what it cannot fetch, would form a combination twice under one name.
+- *A held request's check says what sent it back*, `Sent back as \`failed: app:test\`.` above its words, since a wait on any host now reads its outcome from the check and the hold's title alone names no test (120; record 0096). The path not taken, a wait reading the branch's records for the outcome, is D9's option 2.
+- *A report comment already made is edited to what its request's view says now*, a combination formed again and started included, and *a check of one required test completed on a combination since dropped is posted as a new run when it is undecided again*, which GitHub shows in its place: the round job can read a result before the blame of an entry ahead of it, and a report or a check of that result would otherwise stand (17, 21; ADR 0044). The path not taken, holding every report until the candidates ahead have verdicts, would hold a request's report for a run that passed.
+- *`sluice job round` with no branch reads the branches its repository holds as its remote's tracking branches*, as the workflow's empty repository holds them (core.27).
 
 ## Decision outcome
 

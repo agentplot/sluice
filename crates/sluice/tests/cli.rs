@@ -6340,7 +6340,6 @@ impl sluice::PullRequests for Pull7 {
         _: sluice_core::Seams<'_>,
         _: &dyn sluice_core::Clock,
         _: &str,
-        _: sluice::Taker,
     ) -> anyhow::Result<bool> {
         Ok(true)
     }
@@ -6358,7 +6357,6 @@ impl sluice::PullRequests for Pull7 {
             number: 7,
             said: "opened #7".into(),
             copy: None,
-            submission: None,
         }))
     }
 
@@ -6384,7 +6382,6 @@ impl sluice::PullRequests for Pull7 {
         Ok(sluice::Followed::Open {
             title: "waiting".into(),
             lines: Vec::new(),
-            taken_in_by: None,
             queue: None,
             submission: None,
             names: Default::default(),
@@ -6397,14 +6394,26 @@ impl sluice::PullRequests for Pull7 {
 /// The branch, taking pull requests.
 fn pulls_setup() -> Fakes {
     let f = Fakes::new();
-    let policy = POLICY.replace(
-        "[branches.\"bolt/*\"]\n",
-        "[branches.\"bolt/*\"]\nremote = \"origin\"\n",
-    ) + "\n[branches.\"bolt/*\".pull_requests]\n";
+    // 137: the forge's round job keeps a branch that takes pull requests,
+    // its records on its remote (record 0101).
+    let policy = POLICY
+        .replace(
+            "[branches.\"bolt/*\"]\n",
+            "[branches.\"bolt/*\"]\nremote = \"origin\"\n",
+        )
+        .replace(
+            "trust = [\"open\", \"sandbox\", \"container\"]\n",
+            "trust = [\"box\"]\n",
+        )
+        + "\n[branches.\"bolt/*\".pull_requests]\n\
+           \n[signers.box]\nssh = \"box ssh-ed25519 AAAA\"\n\
+           \n[signers.forge]\ngithub = { workflow = \".github/workflows/sluice.yml\", ref = \"refs/heads/main\" }\n\
+           \n[pools.forge]\ngithub = { workflow = \".github/workflows/sluice.yml\" }\nsigner = \"forge\"\n";
     f.world.init(
         BRANCH,
         &[(".config/sluice.toml", &policy), ("plugin/a", "a")],
     );
+    f.world.on_remote(BRANCH);
     f.world.task("plugin:test", "plugin/");
     f
 }

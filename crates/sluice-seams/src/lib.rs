@@ -1629,13 +1629,15 @@ pub trait State {
         Ok(())
     }
 
-    /// 82: make a candidate open to claims fetchable by every host that
-    /// may claim it, before it is opened.
+    /// 82: make a candidate fetchable by every instance of the branch: one
+    /// open to claims, before it is opened, and on a branch whose records
+    /// are on its remote one formed, as it is formed, so the instance that
+    /// starts it, or forms the next on it, fetches it (record 0101).
     fn publish_candidate(&self, _branch: &str, _id: &str, _rev: &Rev) -> Result<()> {
         Ok(())
     }
 
-    /// 82: a candidate no longer open to claims.
+    /// 82: a candidate no longer open to claims, or dropped once formed.
     fn unpublish_candidate(&self, _branch: &str, _id: &str) -> Result<()> {
         Ok(())
     }

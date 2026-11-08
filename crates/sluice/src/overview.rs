@@ -79,7 +79,6 @@ fn document_held(
                 views.len() - 1
             }
         };
-        views[at]["taken_in_by"] = serde_json::to_value(&a.taken_in_by)?;
         views[at]["pull_requests"] = serde_json::to_value(&a.pull_requests)?;
     }
     let mut sessions = sessions_json(&s.session_places()?, &s.held()?);
@@ -482,7 +481,6 @@ fn across_in(doc: &serde_json::Value, branch: &str) -> Option<Across> {
         .iter()
         .find(|v| v["branch"] == branch)?;
     Some(Across {
-        taken_in_by: serde_json::from_value(view["taken_in_by"].clone()).ok()?,
         pull_requests: serde_json::from_value(view.get("pull_requests")?.clone()).ok()?,
     })
 }
