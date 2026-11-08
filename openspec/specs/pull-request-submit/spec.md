@@ -66,21 +66,19 @@ from that revision, the output SHALL say so with both revisions (1,
 
 ### Requirement: A waiting submit follows its pull request
 A `wt submit` or `sluice submit` that waits SHALL report each state its
-pull request reaches, as GitHub and sluice's check on its head show
-them, run no round and take nothing in, and exit with the outcome:
-landed, failed or conflict (137).
+pull request reaches, run sluice's rounds while it waits as it does
+today, and exit with the outcome: landed, failed or conflict.
 
 #### Scenario: Waits through review
-- **WHEN** an agent's waiting submit opens a pull request that needs a review, and a reviewer approves it, and a round job takes it in and lands it
-- **THEN** the submit prints waiting, then queued or testing, then landed, and exits 0, having run no round
+- **WHEN** an agent's waiting submit opens a pull request that needs a review, and a reviewer approves it, and it lands
+- **THEN** the submit prints waiting, then queued or testing, then landed, and exits 0
 
 ### Requirement: A submit that does not wait answers with what sluice read
 A `wt submit` or `sluice submit` with `--no-wait` SHALL return once the
-pull request is open and marked ready at the head it pushed and its
-round job is woken, and SHALL answer with the pull request and its
-state as sluice's check on that head says, or `waiting to be taken in`
-where no check stands there. It SHALL write no submission. Either
-answer SHALL exit 0 (137, C.5).
+pull request is open and sluice has read it once, and SHALL answer with
+the submission sluice took for the pull request at the head it pushed,
+when sluice took it then because its conditions held; otherwise with the
+pull request and what it waits for. Either answer SHALL exit 0.
 
 #### Scenario: No wait
 - **WHEN** an agent runs `wt submit main --no-wait`
@@ -88,21 +86,22 @@ answer SHALL exit 0 (137, C.5).
 
 #### Scenario: No wait, in words
 - **WHEN** `main` takes pull requests with no conditions, and an agent runs `wt submit main --no-wait`
-- **THEN** after the line `pushed unit/<name> · opened #<n>: <title>` it prints `#<n> waits to be taken in`, and exits 0
+- **THEN** after the line `pushed unit/<name> · opened #<n>: <title>` it prints `submission <id> to main from #<n> · nothing queued ahead`, and exits 0
 
 ### Requirement: A submit that does not wait answers in one document
-Under `--json`, a `--no-wait` submit's answer SHALL be `pull_request`,
-`branch`, `state` and `queue`, the state and the block of sluice's
-check on the head pushed, `queue` `null` where no check stands there
-(137).
+Under `--json`, a `--no-wait` submit's answer with a submission SHALL be
+the document a `--no-wait` submit prints on any branch, `id`, `branch`
+and `ahead`, with `pull_request`, the pull request's number, beside
+them; its answer with a pull request SHALL be `pull_request`, `branch`
+and `state`, the state sluice posts on it.
 
 #### Scenario: No wait, its conditions hold
 - **WHEN** `main` takes pull requests with no conditions, and an agent runs `wt submit main --no-wait --json` from a worktree on `unit/ready`
-- **THEN** it exits 0 and prints `{"pull_request": <n>, "branch": "main", "state": "waiting to be taken in", "queue": null}`, with no `id`; and once a round job has taken it in, `sluice wait main --json` follows it to `landed`
+- **THEN** it exits 0 and prints one document with the `id` of a submission from the pull request's checkout `pull/<n>` at the head pushed, `branch` `main`, `ahead`, and `pull_request` `<n>`; and `sluice wait <id> --json` follows that submission to `landed`
 
 #### Scenario: No wait, waiting for a review
-- **WHEN** `main` takes pull requests with `reviews = 1`, a round job has posted `#<n>`'s check, and the agent runs `wt submit main --no-wait --json` with nothing committed since
-- **THEN** it exits 0 and prints `pull_request` `<n>`, `branch` `main`, `state` `waiting: needs 1 review` and a `queue` whose `waits_for` is `["1 review"]`
+- **WHEN** `main` takes pull requests with `reviews = 1`, and an agent runs `wt submit main --no-wait --json`
+- **THEN** it exits 0 and prints `{"pull_request": <n>, "branch": "main", "state": "waiting: needs 1 review"}`, with no `id`, and no submission of the pull request is queued
 
 ### Requirement: The agent's worktree is removed only on landing
 When a pull request opened by `wt submit` lands, the worktrunk driver
@@ -261,39 +260,30 @@ anything is pushed or opened.
 - **WHEN** an agent runs `sluice submit main --check --subject "Batch review cards"`
 - **THEN** it exits 64 and nothing is forecast, pushed or opened
 
-### Requirement: A pull request's status names sluice's check
+### Requirement: A pull request's status on another host names sluice's check
 
-`sluice submit <branch> --status --json` and `wt submit <branch> --status --json` SHALL print a pull request landed or sent back with `state` `landed`, `failed` or `conflict`, the `title` and `summary` of sluice's check on its head, and its `pull_request`, `branch`, `head`, `draft` and `sends`, and SHALL exit 0, as `--status` does wherever it finds the worktree's pull request (137).
+On a host that does not take the branch's pull requests in (137), `sluice submit <branch> --status --json` and `wt submit <branch> --status --json` SHALL print a pull request landed or sent back with `state` `landed`, `failed` or `conflict`, the `title` and `summary` of sluice's check on its head, and its `pull_request`, `branch`, `head`, `draft` and `sends`, and SHALL exit 0, as `--status` does wherever it finds the worktree's pull request.
 
-#### Scenario: Sent back by the round job
+#### Scenario: Sent back on another host
 
-- **WHEN** a round job blamed an agent's pull request `<n>` at `<rev>` and marked it a draft, and `wt submit main --status --json` runs in the agent's worktree on host `a`
+- **WHEN** host B takes main's pull requests in, B blamed an agent's pull request `<n>` at `<rev>` and marked it a draft, and `wt submit main --status --json` runs in the agent's worktree on host A
 - **THEN** it exits 0 and prints `pull_request` `<n>`, `branch` `main`, `state` `failed`, the `title` and `summary` of sluice's check on `<rev>`, `head` `<rev>`, `draft` `true` and `sends` `<rev>`
 
-### Requirement: A submit takes again a pull request the round job sent back
+### Requirement: A submit takes again a pull request another host sent back
 
-`sluice submit <branch>` and `wt submit <branch>` SHALL mark the worktree's pull request ready for review at the head pushed when sluice's check on its head before the push says it was sent back, failed or in conflict, or held for the next submit, draft or not (120, C.5). They SHALL NOT mark a draft, even for a moment, a pull request whose check says anything else.
+Where another host takes the branch's pull requests in (137), `sluice submit <branch>` and `wt submit <branch>` SHALL mark the worktree's pull request ready for review at the head pushed when sluice's check on its head before the push says it was sent back, failed or in conflict, or held for the next submit, draft or not, as a submit does on the host that takes it in (120, C.5). They SHALL NOT mark a draft, even for a moment, a pull request whose check says anything else.
 
 #### Scenario: Sent back as a draft
 
-- **WHEN** a round job blamed an agent's pull request `<n>` and marked it a draft, and the agent runs `sluice submit main --no-wait` on host `a` with nothing committed since
-- **THEN** `<n>` is ready for review at that head, and the next round job takes it in again
+- **WHEN** host B takes main's pull requests in, B blamed an agent's pull request `<n>` and marked it a draft, and the agent runs `sluice submit main --no-wait` on host A with nothing committed since
+- **THEN** `<n>` is ready for review at that head, and B's next pass takes it in again
 
 #### Scenario: Sent back, not a draft
 
-- **WHEN** a round job blamed pull request `<n>`, which a person opened from `unit/review` and which it therefore did not mark a draft, and an agent runs `sluice submit main --no-wait` on host `a` from a worktree on `unit/review` with nothing committed since
-- **THEN** `<n>` is marked a draft and then ready for review at that head, and the next round job takes it in again
+- **WHEN** host B blamed pull request `<n>`, which a person opened from `unit/review` and which B therefore did not mark a draft, and an agent runs `sluice submit main --no-wait` on host A from a worktree on `unit/review` with nothing committed since
+- **THEN** `<n>` is marked a draft and then ready for review at that head, and B's next pass takes it in again
 
-#### Scenario: Still queued
+#### Scenario: Still queued on the other host
 
-- **WHEN** the round job has pull request `<n>` queued, its `sluice` check saying `queued: next on main`, and the agent runs `sluice submit main --no-wait` on host `a` with nothing committed since
-- **THEN** `<n>` is never marked a draft, and its submission stays queued
-
-### Requirement: A pull request taken again waits to be taken in
-
-A pull request a submit on a host took again at the head it stood at SHALL read as waiting to be taken in, to that submit, a wait and `--status` on the host, while sluice's check on that head still says what sent it back or held it; once the check says anything else, it SHALL read as the check says (120, C.5; record 0096).
-
-#### Scenario: Taken again, its check still failed
-
-- **WHEN** a round job blamed pull request `<n>`, which a person opened from `unit/review`, and an agent's `sluice submit main --no-wait` on host `a` takes it again at that head, its check still saying `failed: …`
-- **THEN** the submit prints `#<n> waits to be taken in` and exits 0, `sluice submit main --status --json` gives `state` `waiting to be taken in`, and `wt submit main --no-wait` run again marks nothing
+- **WHEN** host B has pull request `<n>` queued, its `sluice` check saying `queued: next on main`, and the agent runs `sluice submit main --no-wait` on host A with nothing committed since
+- **THEN** `<n>` is never marked a draft, and B's submission of it stays queued
