@@ -6162,6 +6162,23 @@ fn wait_returns_at_its_timeout_with_the_record() {
     assert_eq!(json(&out)["state"], "testing");
 }
 
+/// 1: a wait whose time is up before its first pass, as on a host so busy
+/// that its start takes its whole limit, still takes that pass: its round
+/// starts the queued submission's run, and out of time its record is as
+/// that pass left it, never as it stood before the wait moved anything.
+#[test]
+fn a_wait_out_of_time_at_its_start_takes_its_first_pass() {
+    let f = setup();
+    f.world.hold_runs(true);
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"]);
+    assert_eq!(state_of(&f, 1), "queued");
+    let (code, out) = sluice(&f, &["wait", "1", "--timeout", "0s", "--json"]);
+    assert_eq!(code, sluice::WAITING, "{out}");
+    assert_eq!(json(&out)["state"], "testing", "{out}");
+    assert_eq!(f.world.started().len(), 1, "{out}");
+}
+
 /// ADR 0041: a branch names this worktree's last submission to it;
 /// nothing submitted, or no such submission, is not found.
 #[test]
