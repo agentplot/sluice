@@ -3,13 +3,9 @@
 ### Requirement: A changed pull request leaves the queue
 A submitted pull request SHALL be withdrawn when its head changes, when
 it is moved back to draft, or when it is closed, merged by hand without
-its head reaching the branch included. One that leaves the open pull
-requests because the branch, as that pass fetched it, holds its head
-SHALL NOT be withdrawn: its work landed, by whichever landing took it,
-and the round lands its submission as that landing (122, 5). After a
-new head, a pull request opened by hand SHALL wait for its conditions
-on that head; one a submit opened SHALL be marked a draft and wait for
-its submitter's act.
+its head reaching the branch included. After a new head, a pull request
+opened by hand SHALL wait for its conditions on that head; one a submit
+opened SHALL be marked a draft and wait for its submitter's act.
 
 #### Scenario: A new commit while queued
 - **WHEN** a commit is pushed to a submitted pull request a person opened by hand
@@ -22,6 +18,14 @@ its submitter's act.
 #### Scenario: Closed while queued
 - **WHEN** a submitted pull request is closed
 - **THEN** its submission is withdrawn
+
+## ADDED Requirements
+
+### Requirement: A pull request whose head the branch holds is not withdrawn
+A submitted pull request that leaves the open pull requests because the
+branch, as that pass fetched it, holds its head SHALL NOT be withdrawn:
+its work landed, by whichever landing took it, and the round lands its
+submission as that landing (122, 5).
 
 #### Scenario: Landed by another queue while queued
 - **WHEN** a submitted pull request is under test, and another queue of the branch, a second copy of the repository, lands its head, so GitHub calls it merged

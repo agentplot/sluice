@@ -448,7 +448,9 @@ the pane, and `delivered_to` is the session. The pull request was
 posted on, and it's `pull/41`. `sluice inbox` printed it, or a wait on
 the submission reported it, and it's the session's herdr pane, as
 `herdr:<pane>@<socket>`, or the worktree's path where the session runs
-in no herdr pane.
+in no herdr pane. Read in a bare repository or a git directory, which
+has no files checked out, and in no herdr pane, it's the agent:
+`SLUICE_AGENT`, else the branch.
 
 Until then the outcome is pending: the submission stands decided with
 neither field. The log has one `pending` event saying why it wasn't

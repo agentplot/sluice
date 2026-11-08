@@ -738,7 +738,6 @@ impl Sluice<'_> {
             from: self.seams.driver.named(branch)?,
             dirty: Vec::new(),
             detached: false,
-            bare: false,
         };
         let submitted = SubmittedHead {
             head: at,
@@ -1922,7 +1921,6 @@ mod tests {
                     },
                     dirty: Vec::new(),
                     detached: false,
-                    bare: false,
                 },
             );
         }
