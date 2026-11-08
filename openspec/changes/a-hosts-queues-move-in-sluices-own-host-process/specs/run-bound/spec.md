@@ -66,9 +66,14 @@ A round SHALL hold the room for each run it decides to start before it
 writes that decision, and keep it through its landings, releases and
 outcomes until the run starts, so no other run takes it between (71;
 rule core.49). A start that fails, a refused write of the decision and a
-round that stops SHALL give the room back at once. A run with no room
-held SHALL NOT be marked starting, and one marked starting with none, a
-stopped round's, SHALL be opened again by the next round.
+round that stops SHALL give the room back at once. A start the check
+seam refuses at the bound SHALL start no further run that round: each
+run decided behind it SHALL be opened again, its room given back, with
+no place made (71). A run with no room held SHALL NOT be marked
+starting, save one a round marks starting under a claim it gives a
+pool's job, whose room the job's own round SHALL hold as it starts it,
+opening it again where its host has none (88, S19). One marked starting
+with none, a stopped round's, SHALL be opened again by the next round.
 
 #### Scenario: An agent's check asks between the count and the start (S75)
 
@@ -91,6 +96,20 @@ stopped round's, SHALL be opened again by the next round.
   repositories each decide at once to start one run
 - **THEN** exactly one of the two runs starts, and the other combination
   waits and is started by a later round once the host has room
+
+#### Scenario: A start refused at the bound
+
+- **WHEN** the bound is two, a round decides two combinations' runs, and
+  the check seam refuses the first start at the bound
+- **THEN** neither run starts, the second is open again with no place
+  made, and the next round starts both
+
+#### Scenario: A pool's job starts the run its claim holds (S19)
+
+- **WHEN** a lead marks a run starting under the claim it gives a pool's
+  job, and the job's round runs
+- **THEN** the job's round holds the run's room and starts it, and the
+  run is not opened again as a stopped round's
 
 ## ADDED Requirements
 

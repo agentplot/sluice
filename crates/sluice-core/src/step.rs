@@ -158,6 +158,13 @@ enum Read {
 /// ends, or dropped with it, gives its room back.
 type Parts = BTreeMap<String, Part>;
 
+/// 88: whether `run` is held by a claim a lead gave a pool's job, which the
+/// lead marked starting with no room of its own host's, the job's to hold
+/// at its start (S19).
+fn given_out(run: &SystemRun) -> bool {
+    run.host.as_deref().is_some_and(|h| h.starts_with("pool/"))
+}
+
 /// What a round's decide step did.
 enum Decided {
     /// Its write was made; what the round looked at of the host, and the
@@ -689,12 +696,14 @@ impl Sluice<'_> {
     /// the host where `unmet`, the round's look, has not (design D4). 71
     /// (rule core.49): a run marked starting with no part held, a stopped
     /// round's, goes back to open for a later round, as does one the check
-    /// seam refuses at the bound; a place made for it is released as any
-    /// candidate's is (123), into `releases` when its release was not
-    /// plain. 84, 139 (rule core.38): the stopped round's run is read
-    /// against the host first, as its start would have read it, so an
-    /// engine gone since its claim leaves it a run whose tests could not
-    /// run, with the reason.
+    /// seam refuses at the bound and every run decided behind it; a place
+    /// made for it is released as any candidate's is (123), into
+    /// `releases` when its release was not plain. 84, 139 (rule core.38):
+    /// the stopped round's run is read against the host first, as its
+    /// start would have read it, so an engine gone since its claim leaves
+    /// it a run whose tests could not run, with the reason. 88, S19: a run
+    /// a lead marked starting under the claim it gave a pool's job is no
+    /// stopped round's; the job's round holds its part as it starts it.
     fn perform_starts(
         &self,
         branch: &str,
@@ -731,9 +740,11 @@ impl Sluice<'_> {
                 &fresh
             }
         };
+        let mut full = false;
         for (c, i) in starting {
             let name = c.runs[i].place.clone().expect("a starting run has a place");
-            let Some(part) = parts.remove(&name) else {
+            let held = parts.remove(&name);
+            if held.is_none() && !given_out(&c.runs[i]) {
                 // No room was held for it: a stopped round's (core.49).
                 if self.meets(unmet) {
                     self.reopen_made(branch, &c.id, i, &name, releases)?;
@@ -749,8 +760,30 @@ impl Sluice<'_> {
                     self.not_started(branch, &c, i, &name, &report, home, releases)?;
                 }
                 continue;
+            }
+            // 71: once a start is refused at the bound, the host holds none
+            // of the room this round counted on; each run decided behind it
+            // is open again, its part given back, no place made for it.
+            if full {
+                drop(held);
+                self.reopen_made(branch, &c.id, i, &name, releases)?;
+                continue;
+            }
+            let part = match held {
+                Some(part) => part,
+                // 88, S19: a run a lead marked starting under the claim it
+                // gave this pool's job holds its room at the job's start, as
+                // `start_claimed` holds it (rule core.49).
+                None => match self.seams.tests.hold(RunKind::Queue)? {
+                    Some(part) => part,
+                    None => {
+                        self.reopen_made(branch, &c.id, i, &name, releases)?;
+                        full = true;
+                        continue;
+                    }
+                },
             };
-            self.start_run(branch, &from, &c, i, unmet, part, releases)?;
+            full = self.start_run(branch, &from, &c, i, unmet, part, releases)? == Started::AtBound;
         }
         Ok(())
     }

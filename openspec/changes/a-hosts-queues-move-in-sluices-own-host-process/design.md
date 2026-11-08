@@ -323,7 +323,13 @@ opened again, before it writes the decision that marks the run
 starting. Where `hold` gives none, it marks no further run starting.
 The round keeps its parts through its landings, releases and outcomes
 and hands each to its run's `start_run`. A run marked starting with no
-part, a stopped round's, is opened again by the next round as today.
+part, a stopped round's, is opened again by the next round as today. A
+start the check seam refuses at the bound opens again each run decided
+behind it, its part dropped and no place made, as 71 has it: the host
+holds none of the room the round counted on. A run a lead marks
+starting under the claim it gives a pool's job is no stopped round's:
+the job's round holds its part as it starts it, as `start_claimed`
+does, and opens it again where its host has none (88, S19).
 `capacity` and `starting_here` go from the decision, since a part is
 the count. `perform_starts`'s second reading of `running()` goes too.
 `start_claimed` takes the part its claim's start holds.
