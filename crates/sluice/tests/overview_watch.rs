@@ -58,6 +58,16 @@ impl Watch {
         Watch::spawn(d.command(d.repo.dir()), stderr, None)
     }
 
+    /// [`Watch::of`], asking a pass at each of its ticks, as a follower
+    /// does of a host process the tests' commands started, which takes
+    /// passes only when asked (135; design D13).
+    fn asking(d: &OnDisk) -> Watch {
+        let stderr = d.state.path().join("watch-stderr");
+        let mut c = d.command(d.repo.dir());
+        c.env("SLUICE_ROUND_SLEEP", "record");
+        Watch::spawn(c, stderr, None)
+    }
+
     fn spawn(mut c: Command, stderr: PathBuf, own: Option<(Scratch, Scratch)>) -> Watch {
         let mut child = c
             .args(["overview", "--json", "--watch"])
@@ -121,6 +131,32 @@ impl Watch {
             .recv_timeout(ENDS_WITHIN)
             .unwrap_or_else(|e| panic!("no line: {e}; {}", self.stderr()));
         parse(&line)
+    }
+
+    /// The first line it printed for which `holds` holds, within `within`.
+    fn first_line_where(
+        &self,
+        within: Duration,
+        holds: impl Fn(&serde_json::Value) -> bool,
+    ) -> serde_json::Value {
+        let until = Instant::now() + within;
+        let mut seen = Vec::new();
+        while let Some(left) = until.checked_duration_since(Instant::now()) {
+            match self.lines.recv_timeout(left) {
+                Ok(l) => {
+                    let line = parse(&l);
+                    if holds(&line) {
+                        return line;
+                    }
+                    seen.push(line);
+                }
+                Err(_) => break,
+            }
+        }
+        panic!(
+            "no such line within {within:?}: {seen:?}; {}",
+            self.stderr()
+        )
     }
 
     /// What it said on stderr so far.
@@ -344,9 +380,14 @@ fn a_watch_reads_the_policy_again_once_the_branch_moves() {
 }
 
 /// 129, 148: `main` written by a command that is not sluice's, the
-/// refusal counted in its state; a watch, the host's reader, and a second
-/// watch beside it, which follows the reader's document; the follower's
-/// document gives `main` the cause the reader's gives it.
+/// refusal counted in its state; a watch, which follows the document of
+/// the reader, sluice's host process, and a second watch beside it; once
+/// the reader's document gives `main` the cause, the second watch's gives
+/// it the same (135; record 0093). The host process the landing started
+/// last read before the refusal and takes passes only when asked, as the
+/// tests' does (design D13): the first watch asks one at each tick, and
+/// prints the reader's document as it finds it, so the cause comes at a
+/// pass it asked, not necessarily on its first line.
 #[test]
 fn a_followers_overview_carries_refused_writes() {
     let d = OnDisk::new("watched-refused", MAIN);
@@ -363,8 +404,12 @@ fn a_followers_overview_carries_refused_writes() {
         .unwrap();
     assert!(!refused.status.success(), "the write went through");
 
-    let reader = Watch::of(&d);
-    let read = reader.first_line();
+    let watch = Watch::asking(&d);
+    let read = watch.first_line_where(ENDS_WITHIN, |line| {
+        line["branches"][0]["refused_writes"]
+            .as_array()
+            .is_some_and(|causes| !causes.is_empty())
+    });
     let causes = &read["branches"][0]["refused_writes"];
     assert_eq!(causes.as_array().map(Vec::len), Some(1), "{read}");
     assert_eq!(causes[0]["times"], 1, "{read}");
