@@ -223,11 +223,10 @@ fn run_holding(paths: Paths, _lock: File) -> Result<i32> {
         instance.reserved,
     ));
     let hosting = Arc::new(Hosting {
-        tasks: tasks::Tasks::new(tasks::repository_body(
-            room.clone(),
-            asked_only(),
-            named.clone(),
-        )),
+        tasks: tasks::Tasks::new(
+            tasks::repository_body(room.clone(), asked_only(), named.clone()),
+            Arc::new(|r: &Path| index::in_play(r).unwrap_or(true)),
+        ),
         paths,
         named,
         room,
@@ -335,7 +334,8 @@ fn serve(hosting: &Arc<Hosting>, listener: &UnixListener) -> Result<i32> {
 
 /// 135 (design D4): each repository in the index whose directory is gone
 /// leaves it, and each other it holds no task for is looked at as an idle
-/// tick reads it, so work another host wrote to its records is found.
+/// tick reads it, and given a task only where work is in play there, so work another host wrote to its records is
+/// found and an idle repository costs that read alone (129).
 fn scan(hosting: &Hosting) {
     let index = hosting.paths.index();
     match index.prune(|r| !r.is_dir()) {
@@ -347,9 +347,7 @@ fn scan(hosting: &Hosting) {
         Err(e) => log(&format!("sluice host: reading the index: {e:#}")),
     }
     for repository in index.list().unwrap_or_default() {
-        if !hosting.tasks.holds(&repository) {
-            hosting.tasks.hold_if_in_play(&repository);
-        }
+        hosting.tasks.hold_if_in_play(&repository);
     }
 }
 

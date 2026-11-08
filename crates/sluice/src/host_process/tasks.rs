@@ -44,6 +44,10 @@ pub enum Job {
 /// What a task's thread runs, given its inbox.
 pub type Body = Arc<dyn Fn(Inbox) + Send + Sync>;
 
+/// Whether a repository has work in play, read as an idle tick reads it
+/// (129, 135; design D4).
+pub type InPlay = Arc<dyn Fn(&Path) -> bool + Send + Sync>;
+
 struct Slot {
     id: u64,
     kind: FollowKind,
@@ -61,7 +65,12 @@ struct Inner {
     running: Mutex<BTreeMap<PathBuf, Entry>>,
     /// Repositories whose task panicked, to start again at the next tick.
     panicked: Mutex<BTreeSet<PathBuf>>,
+    /// Repositories whose task could not start, with the words it logged
+    /// once: the host process's look passes them by until a command asks
+    /// for them again.
+    refused: Mutex<BTreeMap<PathBuf, String>>,
     body: Body,
+    in_play: InPlay,
     stopping: AtomicBool,
     next: AtomicU64,
 }
@@ -75,11 +84,13 @@ fn locked<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 pub struct Tasks(Arc<Inner>);
 
 impl Tasks {
-    pub fn new(body: Body) -> Tasks {
+    pub fn new(body: Body, in_play: InPlay) -> Tasks {
         Tasks(Arc::new(Inner {
             running: Mutex::new(BTreeMap::new()),
             panicked: Mutex::new(BTreeSet::new()),
+            refused: Mutex::new(BTreeMap::new()),
             body,
+            in_play,
             stopping: AtomicBool::new(false),
             next: AtomicU64::new(1),
         }))
@@ -136,10 +147,18 @@ impl Tasks {
         }
     }
 
-    /// Start `repository`'s task where none runs, which ends at once where
-    /// nothing is in play there and nothing follows it (135; design D4).
+    /// Start `repository`'s task where none runs and work is in play there,
+    /// read as an idle tick reads it (129, 135; design D4): the host process's look at its index at its start and
+    /// every few seconds after, so an idle repository costs it that read
+    /// alone. A repository whose task could not start is passed by until a
+    /// command asks for it again.
     pub fn hold_if_in_play(&self, repository: &Path) {
-        self.handle(repository);
+        if self.holds(repository) || locked(&self.0.refused).contains_key(repository) {
+            return;
+        }
+        if (self.0.in_play)(repository) {
+            self.handle(repository);
+        }
     }
 
     /// Whether a task runs for `repository`.
@@ -312,6 +331,25 @@ impl Inbox {
     pub fn end(&self) {
         locked(&self.tasks.0.running).remove(&self.repository);
     }
+
+    /// The task could not start, in `words`: logged where they are not
+    /// the words last logged for its repository, and the task ended, so
+    /// the host process's look passes the repository by until a command
+    /// asks for it again.
+    pub fn refuse(&self, words: String) {
+        let mut refused = locked(&self.tasks.0.refused);
+        if refused.get(&self.repository) != Some(&words) {
+            log(&words);
+            refused.insert(self.repository.clone(), words);
+        }
+        drop(refused);
+        self.end();
+    }
+
+    /// The task started: what refused it before is over.
+    pub fn started(&self) {
+        locked(&self.tasks.0.refused).remove(&self.repository);
+    }
 }
 
 /// The body of a repository's task in the host process: its own binding,
@@ -342,11 +380,10 @@ fn repository(inbox: Inbox, room: Shared, asked_only: bool, named: Named) {
     let bound = match Bound::open(&open_dir(&common), Rc::new(crate::retry::Policy::round())) {
         Ok(b) => b,
         Err(e) => {
-            log(&format!(
+            inbox.refuse(format!(
                 "sluice host: {}: could not be opened: {e:#}",
                 common.display()
             ));
-            inbox.end();
             return;
         }
     };
@@ -362,13 +399,13 @@ fn repository(inbox: Inbox, room: Shared, asked_only: bool, named: Named) {
     let s = Sluice::new(bound.seams(), clock).as_peer(bound.peer());
     // 87: a host whose config names a system it is not claims no run here.
     if let Err(e) = s.check_host_systems() {
-        log(&format!(
+        inbox.refuse(format!(
             "sluice host: {}: {e:#}; this host claims no run of it",
             common.display()
         ));
-        inbox.end();
         return;
     }
+    inbox.started();
     let (Ok(readers), repository) = (bound.readers(), common.to_string_lossy().into_owned()) else {
         inbox.end();
         return;
@@ -555,26 +592,17 @@ mod tests {
     fn a_task_that_panics_is_started_again_at_the_next_tick() {
         let starts = Arc::new(AtomicUsize::new(0));
         let counted = starts.clone();
-        let tasks = Tasks::new(Arc::new(move |inbox: Inbox| {
-            let n = counted.fetch_add(1, Ordering::SeqCst);
-            if n == 0 {
-                panic!("a fault in one repository's pass");
-            }
-            // The second start answers its asks, then ends when idle.
-            loop {
-                match inbox.next(Duration::from_millis(50)) {
-                    Some(Job::Pass(reply)) => {
-                        let _ = reply.send(Ok(Report::default()));
-                    }
-                    Some(_) => {}
-                    None => {
-                        if inbox.end_if_idle().is_ok() {
-                            return;
-                        }
-                    }
+        let tasks = Tasks::new(
+            Arc::new(move |inbox: Inbox| {
+                let n = counted.fetch_add(1, Ordering::SeqCst);
+                if n == 0 {
+                    panic!("a fault in one repository's pass");
                 }
-            }
-        }));
+                // The second start answers its asks, then ends when idle.
+                answer_until_idle(&inbox);
+            }),
+            Arc::new(|_: &Path| true),
+        );
         let other = Tasks::clone(&tasks);
         let repo = PathBuf::from("/host/a.git");
         tasks.hold_if_in_play(&repo);
@@ -593,5 +621,84 @@ mod tests {
         let a = tasks.handle(&repo);
         assert_eq!(a.pass(), Ok(Report::default()));
         assert!(starts.load(Ordering::SeqCst) >= 3);
+    }
+
+    /// A task's body that answers its asks, then ends when idle.
+    fn answer_until_idle(inbox: &Inbox) {
+        loop {
+            match inbox.next(Duration::from_millis(50)) {
+                Some(Job::Pass(reply)) => {
+                    let _ = reply.send(Ok(Report::default()));
+                }
+                Some(_) => {}
+                None => {
+                    if inbox.end_if_idle().is_ok() {
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    /// `check` holds within ten seconds.
+    fn soon(what: &str, check: impl Fn() -> bool) {
+        let until = Instant::now() + Duration::from_secs(10);
+        while !check() {
+            assert!(Instant::now() < until, "{what}: not within 10s");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// reader-tick, "An idle tick starts no process" (129, 135; design
+    /// D4): the host process's look starts no task for a repository with
+    /// nothing in play, starts one for a repository with work, and passes
+    /// by one whose task could not start, saying why once, until a
+    /// command asks for it.
+    #[test]
+    fn a_look_starts_a_task_only_where_work_is_in_play() {
+        let (idle, busy, refused) = (
+            PathBuf::from("/host/idle.git"),
+            PathBuf::from("/host/busy.git"),
+            PathBuf::from("/host/refused.git"),
+        );
+        let starts: Arc<Mutex<Vec<PathBuf>>> = Arc::default();
+        let counted = starts.clone();
+        let refusing = refused.clone();
+        let tasks = Tasks::new(
+            Arc::new(move |inbox: Inbox| {
+                locked(&counted).push(inbox.repository.clone());
+                if inbox.repository == refusing {
+                    inbox.refuse("its host's systems are not this host's".into());
+                    return;
+                }
+                inbox.started();
+                answer_until_idle(&inbox);
+            }),
+            Arc::new(|r: &Path| r != Path::new("/host/idle.git")),
+        );
+        let started = |r: &PathBuf| locked(&starts).iter().filter(|s| *s == r).count();
+
+        tasks.hold_if_in_play(&idle);
+        assert!(!tasks.holds(&idle), "no task for an idle repository");
+
+        tasks.hold_if_in_play(&busy);
+        soon("the busy repository's task starts", || started(&busy) == 1);
+
+        tasks.hold_if_in_play(&refused);
+        soon("the refused task ends", || {
+            started(&refused) == 1 && !tasks.holds(&refused)
+        });
+        tasks.hold_if_in_play(&refused);
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(started(&refused), 1, "the look passes it by");
+        assert_eq!(
+            locked(&tasks.0.refused).get(&refused).map(String::as_str),
+            Some("its host's systems are not this host's")
+        );
+
+        // A command's ask starts it again.
+        tasks.handle(&refused);
+        soon("a command's ask starts it", || started(&refused) == 2);
+        assert_eq!(started(&idle), 0);
     }
 }

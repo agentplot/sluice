@@ -120,6 +120,29 @@ pub fn has_sluice(repository: &Path) -> Result<bool> {
     bound.holds_policy(&tips)
 }
 
+/// Whether the repository at the common git directory `repository` has
+/// work in play, read as an idle tick reads it (129, 135; design D4): each
+/// remote that keeps branches' records asked once, so work another host
+/// wrote there is found, then its branches' records and its previews, with
+/// no other process started. Records in the host's own files cost no
+/// process at all, and a remote that refuses leaves its branches read as
+/// last fetched. A repository whose directory is gone has none.
+pub fn in_play(repository: &Path) -> Result<bool> {
+    if !repository.is_dir() {
+        return Ok(false);
+    }
+    let bound = Bound::open_with(
+        repository,
+        std::env::current_exe()?,
+        crate::instance::Instance::from_file(None, 1)?,
+        Rc::new(crate::retry::Policy::command()),
+    )?;
+    // A refusal leaves the branches as last fetched, as a pass's ask does.
+    let _ = sluice_seams::State::refresh(&bound.state);
+    let s = sluice_core::Sluice::new(bound.seams(), &sluice_core::SystemClock);
+    Ok(super::pass::in_play(&s))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
