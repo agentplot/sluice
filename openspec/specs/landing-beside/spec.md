@@ -143,9 +143,8 @@ that does not, every head SHALL take the queue.
 
 A landing beside SHALL move the branch only from the revision read,
 on a branch on its remote by a leased push, made only by the instance
-advancing the branch, on a branch the forge keeps its round job alone;
-a move refused SHALL be reported and the submission read again at the
-next round. No signer is asked (140).
+advancing the branch; a move refused SHALL be reported and the
+submission read again at the next round. No signer is asked.
 
 #### Scenario: The branch moved before the landing
 

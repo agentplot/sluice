@@ -197,16 +197,6 @@ pub trait Forge {
     /// The open pull requests into `base`.
     fn pulls(&self, repo: &Repo, base: &str) -> Result<Vec<Pull>>;
 
-    /// The open pull request from the branch `head_ref` of `repo` itself
-    /// into `base`, asked for by its head alone, so a host finding its own
-    /// request asks for no branch's open pull requests (137; rule core.33).
-    fn pull_from(&self, repo: &Repo, base: &str, head_ref: &str) -> Result<Option<Pull>> {
-        Ok(self
-            .pulls(repo, base)?
-            .into_iter()
-            .find(|p| p.head_ref == head_ref && p.from_repo(repo)))
-    }
-
     /// The open pull requests into `base`, and whether their list changed
     /// since the host last read it; a forge that cannot tell says it did.
     fn listed(&self, repo: &Repo, base: &str) -> Result<Listed> {

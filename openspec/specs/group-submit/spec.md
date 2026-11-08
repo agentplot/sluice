@@ -162,33 +162,32 @@ checks the branch's policy names, on the head it pushed (125, C.5).
 #### Scenario: Three pull requests
 
 - **WHEN** `main` takes pull requests with no conditions and `sluice submit main --worktree ../b1 --worktree ../b2 --worktree ../b3 --no-wait` runs
-- **THEN** the three branches are on the remote, each has an open pull request into `main`, ready for review at its head and marked 1, 2 and 3 of 3 of one group, no submission is written on the host, and the output names each pull request and exits 0
+- **THEN** the three branches are on the remote, each has an open pull request into `main`, ready for review at its head and marked 1, 2 and 3 of 3 of one group, three submissions from those pull requests are queued in the order given, and the output names each submission with its pull request and exits 0
 
-### Requirement: Under pull requests the act marks them all ready when every condition holds
+### Requirement: Under pull requests the act queues them all when every condition holds
 
 When every pull request meets its conditions, the act SHALL mark each
-ready for review at its head as one submit does, a draft sluice marked
-on sending it back included, SHALL write no submission, and SHALL wake
-the branch's round job once, which takes the group in, in the order
-given, in one write (125, 137). It SHALL name every pull request and
-what it waits for; under `--json` with `--no-wait`, each item of
-`pull_requests` SHALL hold `pull_request`, `worktree`, `state` and
-`queue`.
+ready for review at its head as one submit does, one sluice marked a
+draft when it was sent back included, and SHALL queue a submission for
+each in one write, in the order given, before any round can take one of
+them alone. It SHALL answer naming every submission with its pull
+request, and under `--json` with `--no-wait` each item of `submissions`
+SHALL hold `pull_request` beside `id`, `worktree` and `ahead`.
 
 #### Scenario: Refused, reviewed, submitted again
 
 - **WHEN** an act over two worktrees to `main` with `reviews = 1` was refused, every pull request needing a review, and a reviewer approves each draft at its head, and the same act runs again
-- **THEN** both pull requests are ready for review, and the next round job submits both in the order given, in one write
+- **THEN** both pull requests are ready for review and two submissions are queued in the order given, in one write
 
 #### Scenario: A pull request sluice held as a draft
 
 - **WHEN** one pull request of an earlier act was blamed and sluice marked it a draft, and its worktree is named again in a new act whose conditions all hold
-- **THEN** the pull request is ready for review at the head pushed, and the next round job takes it in with the rest of the new act
+- **THEN** the pull request is ready for review at the head pushed, and it is queued with the rest of the new act
 
 #### Scenario: A waiting act follows each pull request
 
-- **WHEN** the act of three runs without `--no-wait`, every condition holding, and a round job lands all three
-- **THEN** it reports each one's states as their checks show them, then each one's outcome in the order given, and exits 0
+- **WHEN** the act of three runs without `--no-wait`, every condition holding, and all three land
+- **THEN** it reports each one's states as it reaches them, then each one's outcome in the order given, and exits 0
 
 ### Requirement: Under pull requests the act queues none when one falls short
 

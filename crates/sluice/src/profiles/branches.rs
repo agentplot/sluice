@@ -188,7 +188,7 @@ impl Branches {
             let Some(policy) = self.policy_at(&name, &rev)? else {
                 continue;
             };
-            let remote = policy.remote_of(branch)?;
+            let remote = policy.rules_for(branch)?.and_then(|r| r.remote.clone());
             match (remote, &named) {
                 (Some(remote), None) => named = Some((remote, name, rev, policy)),
                 (Some(remote), Some((was, by, at, _))) if remote != *was => {
@@ -229,7 +229,7 @@ impl Branches {
         let Some(policy) = self.policy_at(branch, rev)? else {
             return Ok(None);
         };
-        policy.remote_of(branch)
+        Ok(policy.rules_for(branch)?.and_then(|r| r.remote.clone()))
     }
 
     /// The policy at `rev`, read from the ref the user knows as `name`,

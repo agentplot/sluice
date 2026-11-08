@@ -474,16 +474,8 @@ fn judge(s: &Sluice<'_>, host: &dyn Host, text: &str) -> Result<Vec<Refused>> {
             continue;
         }
         let needing = if deleting {
-            // git's prune of a branch it has just packed is let through
-            // before any record is read: `git fetch` packs in its
-            // maintenance, and a read of records on a remote fetches,
-            // waiting on the lock the fetch that packs may hold (124; rule
-            // core.29; ADR 0086).
-            if pruned(Path::new(&host.repository()?), branch, &cur)? {
-                continue;
-            }
             let needing = s.needing(branch)?;
-            if needing.is_empty() {
+            if needing.is_empty() || pruned(Path::new(&host.repository()?), branch, &cur)? {
                 continue;
             }
             needing

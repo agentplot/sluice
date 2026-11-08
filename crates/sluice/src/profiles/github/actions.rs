@@ -43,22 +43,6 @@ impl Actions {
         Ok(path.rsplit('/').next().unwrap_or(&path).to_string())
     }
 
-    /// The branch a round of the pool `kind` is started on, which holds
-    /// its workflow: the `ref` the pool names, else the repository's
-    /// default branch as GitHub names it, which the round job runs on
-    /// whichever branch it keeps (design D4, D5).
-    fn round_ref(&self, repo: &Repo, kind: &(String, Setting)) -> Result<String> {
-        if let Ok(git_ref) = field(kind, "ref") {
-            return Ok(branch_of(&git_ref).to_string());
-        }
-        let path = format!("/repos/{}/{}", repo.owner, repo.name);
-        let v = self.app.get(&path, Bearer::Repo(repo))?;
-        v["default_branch"]
-            .as_str()
-            .map(str::to_string)
-            .ok_or_else(|| anyhow!("GitHub names no default branch for {repo}"))
-    }
-
     /// Start a run of `workflow` on `git_ref` (134; rule core.29): a call
     /// that starts something, which nothing reads back, so one whose
     /// answer was not read is never sent again and fails
@@ -142,11 +126,11 @@ impl Launcher for Actions {
     fn wake(&self, kind: &(String, Setting), branch: &str, remote: Option<&str>) -> Result<()> {
         let repo = self.repo(remote)?;
         let workflow = Actions::workflow(kind)?;
-        let on = self.round_ref(&repo, kind)?;
+        let git_ref = field(kind, "ref").unwrap_or_else(|_| "main".into());
         self.dispatch(
             &repo,
             &workflow,
-            &on,
+            branch_of(&git_ref),
             json!({ "mode": "round", "branch": branch, "claim": format!("round/{branch}") }),
         )
     }
