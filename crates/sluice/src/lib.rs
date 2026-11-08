@@ -1568,143 +1568,144 @@ pub fn run(
             target: Some(target),
             all,
             json,
-        } => match {
+        } => {
             host_process::ask::reach_if_in_play(&here);
-            target.parse::<u64>()
-        } {
-            Ok(id) => match s.lookup(id)? {
-                Lookup::Unfound(unread) if unread.is_empty() => {
-                    let next = ["sluice overview".to_string()];
-                    told::tell(
-                        out,
-                        json,
-                        Kind::NotFound,
-                        &format!("no submission {id}"),
-                        &next,
-                    )?;
-                    Ok(1)
-                }
-                Lookup::Unfound(unread) => unfound(id, &unread, json, out),
-                Lookup::Found(sub) if json => {
-                    let doc = with_waiting(&s, &sub, decided_document(&sub, None)?);
-                    writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
-                    Ok(0)
-                }
-                Lookup::Found(sub) => {
-                    if sub.id != id {
-                        writeln!(
+            match target.parse::<u64>() {
+                Ok(id) => match s.lookup(id)? {
+                    Lookup::Unfound(unread) if unread.is_empty() => {
+                        let next = ["sluice overview".to_string()];
+                        told::tell(
                             out,
-                            "submission {id} is #{} now: {}'s queue moved to its remote",
-                            sub.id, sub.branch
+                            json,
+                            Kind::NotFound,
+                            &format!("no submission {id}"),
+                            &next,
                         )?;
+                        Ok(1)
                     }
-                    let branch = sub.branch.clone();
-                    let pusher = pushers.pusher(&branch)?;
-                    let room = s.room(host.reserved())?;
-                    let status = s.status(&branch)?;
-                    let names = status_names(&status, std::slice::from_ref(&sub));
-                    let testing =
-                        progress::lines(&s, &branch, Some(sub.id), clock.now(), Some(&names))?;
-                    // 124, D10: no session of its own moves a submission by
-                    // name on, so its status names its way on.
-                    let ways = if sub.from.by_name() {
-                        ways_on(&s, &sub, &branch)?
+                    Lookup::Unfound(unread) => unfound(id, &unread, json, out),
+                    Lookup::Found(sub) if json => {
+                        let doc = with_waiting(&s, &sub, decided_document(&sub, None)?);
+                        writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
+                        Ok(0)
+                    }
+                    Lookup::Found(sub) => {
+                        if sub.id != id {
+                            writeln!(
+                                out,
+                                "submission {id} is #{} now: {}'s queue moved to its remote",
+                                sub.id, sub.branch
+                            )?;
+                        }
+                        let branch = sub.branch.clone();
+                        let pusher = pushers.pusher(&branch)?;
+                        let room = s.room(host.reserved())?;
+                        let status = s.status(&branch)?;
+                        let names = status_names(&status, std::slice::from_ref(&sub));
+                        let testing =
+                            progress::lines(&s, &branch, Some(sub.id), clock.now(), Some(&names))?;
+                        // 124, D10: no session of its own moves a submission by
+                        // name on, so its status names its way on.
+                        let ways = if sub.from.by_name() {
+                            ways_on(&s, &sub, &branch)?
+                        } else {
+                            Vec::new()
+                        };
+                        write_status(
+                            &status,
+                            pusher.as_ref(),
+                            &testing,
+                            &[sub],
+                            &names,
+                            Some(&room),
+                            out,
+                        )?;
+                        for w in ways {
+                            writeln!(out, "{w}")?;
+                        }
+                        Ok(0)
+                    }
+                },
+                Err(_) => {
+                    let status = s.status(&target)?;
+                    if status.is_unknown() {
+                        let known: Vec<String> =
+                            s.overview(None)?.into_iter().map(|b| b.branch).collect();
+                        let text = match known.as_slice() {
+                            [] => format!("no branch {target}, and no branch has records here"),
+                            _ => format!(
+                                "no branch {target}; branches with records: {}",
+                                known.join(", ")
+                            ),
+                        };
+                        let next: Vec<String> = known
+                            .iter()
+                            .map(|b| format!("sluice status {b}"))
+                            .chain(["sluice overview".to_string()])
+                            .collect();
+                        told::tell(out, json, Kind::NotFound, &text, &next)?;
+                        return Ok(FAILED);
+                    }
+                    // The queue by default; its history, read from the finished
+                    // records too, only when asked (131).
+                    let shown: Vec<Submission> = if all {
+                        s.history(&target)?
                     } else {
-                        Vec::new()
+                        in_queue(&status.submissions).cloned().collect()
                     };
-                    write_status(
-                        &status,
-                        pusher.as_ref(),
-                        &testing,
-                        &[sub],
-                        &names,
-                        Some(&room),
-                        out,
-                    )?;
-                    for w in ways {
-                        writeln!(out, "{w}")?;
-                    }
-                    Ok(0)
-                }
-            },
-            Err(_) => {
-                let status = s.status(&target)?;
-                if status.is_unknown() {
-                    let known: Vec<String> =
-                        s.overview(None)?.into_iter().map(|b| b.branch).collect();
-                    let text = match known.as_slice() {
-                        [] => format!("no branch {target}, and no branch has records here"),
-                        _ => format!(
-                            "no branch {target}; branches with records: {}",
-                            known.join(", ")
-                        ),
-                    };
-                    let next: Vec<String> = known
-                        .iter()
-                        .map(|b| format!("sluice status {b}"))
-                        .chain(["sluice overview".to_string()])
-                        .collect();
-                    told::tell(out, json, Kind::NotFound, &text, &next)?;
-                    return Ok(FAILED);
-                }
-                // The queue by default; its history, read from the finished
-                // records too, only when asked (131).
-                let shown: Vec<Submission> = if all {
-                    s.history(&target)?
-                } else {
-                    in_queue(&status.submissions).cloned().collect()
-                };
-                // 137, design D5: the pull requests this host follows that
-                // another host takes in, as that host shows them; one that
-                // cannot be read is warned of, and the queue still shown.
-                let across = pulls.across(s.seams(), clock, &target).unwrap_or_else(|e| {
-                    telemetry::warn(&format!("sluice: warning: {e:#}"));
-                    None
-                });
-                if json {
-                    let mut doc = status_json(&status, &shown)?;
-                    // 84, record 0074: what each combination waits for.
-                    doc["waiting"] = progress::waiting_json(&s.branch_view_of(&target)?);
-                    if let Some(a) = &across {
-                        doc["taken_in_by"] = serde_json::to_value(&a.taken_in_by)?;
-                        doc["pull_requests"] = serde_json::to_value(&a.pull_requests)?;
-                    }
-                    writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
-                } else {
-                    let pusher = pushers.pusher(&target)?;
-                    let room = s.room(host.reserved())?;
-                    let names = status_names(&status, &shown);
-                    let testing = progress::lines(&s, &target, None, clock.now(), Some(&names))?;
-                    write_status(
-                        &status,
-                        pusher.as_ref(),
-                        &testing,
-                        &shown,
-                        &names,
-                        Some(&room),
-                        out,
-                    )?;
-                    let earlier =
-                        (status.submissions.len() + status.finished).saturating_sub(shown.len());
-                    if shown.is_empty() {
-                        writeln!(out, "nothing in the queue")?;
-                    }
-                    if earlier > 0 {
-                        writeln!(
+                    // 137, design D5: the pull requests this host follows that
+                    // another host takes in, as that host shows them; one that
+                    // cannot be read is warned of, and the queue still shown.
+                    let across = pulls.across(s.seams(), clock, &target).unwrap_or_else(|e| {
+                        telemetry::warn(&format!("sluice: warning: {e:#}"));
+                        None
+                    });
+                    if json {
+                        let mut doc = status_json(&status, &shown)?;
+                        // 84, record 0074: what each combination waits for.
+                        doc["waiting"] = progress::waiting_json(&s.branch_view_of(&target)?);
+                        if let Some(a) = &across {
+                            doc["taken_in_by"] = serde_json::to_value(&a.taken_in_by)?;
+                            doc["pull_requests"] = serde_json::to_value(&a.pull_requests)?;
+                        }
+                        writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
+                    } else {
+                        let pusher = pushers.pusher(&target)?;
+                        let room = s.room(host.reserved())?;
+                        let names = status_names(&status, &shown);
+                        let testing =
+                            progress::lines(&s, &target, None, clock.now(), Some(&names))?;
+                        write_status(
+                            &status,
+                            pusher.as_ref(),
+                            &testing,
+                            &shown,
+                            &names,
+                            Some(&room),
                             out,
-                            "{earlier} no longer in the queue: sluice status {target} --all"
                         )?;
-                    }
-                    if let Some(a) = &across {
-                        writeln!(out, "{}", a.heading(&target))?;
-                        for row in &a.pull_requests {
-                            writeln!(out, "  {}", a.line(row))?;
+                        let earlier = (status.submissions.len() + status.finished)
+                            .saturating_sub(shown.len());
+                        if shown.is_empty() {
+                            writeln!(out, "nothing in the queue")?;
+                        }
+                        if earlier > 0 {
+                            writeln!(
+                                out,
+                                "{earlier} no longer in the queue: sluice status {target} --all"
+                            )?;
+                        }
+                        if let Some(a) = &across {
+                            writeln!(out, "{}", a.heading(&target))?;
+                            for row in &a.pull_requests {
+                                writeln!(out, "  {}", a.line(row))?;
+                            }
                         }
                     }
+                    Ok(0)
                 }
-                Ok(0)
             }
-        },
+        }
         Command::Overview { json, watch } => {
             if !watch {
                 host_process::ask::reach_if_in_play(&here);

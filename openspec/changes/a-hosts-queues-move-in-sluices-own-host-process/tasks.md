@@ -53,7 +53,7 @@ D-number.
 
 ## 5. What goes
 
-- [ ] 5.1 `reader::Driver`, `driver_live` and `Drives` are used only where the host process takes `.driver` and an older sluice's lock is read (D7). `host_count::HostCount::admit` is called only by `Room`. `Command::Run`'s loop, the wait's `intake` with `Taker::Wait`, and `exec.rs`'s and `preview.rs`'s `session_capacity` loops are gone (135; core.31). True when `cargo clippy -p sluice --all-targets -- -D warnings` passes with nothing they used left dead.
+- [x] 5.1 `reader::Driver`, `driver_live` and `Drives` are used only where the host process takes `.driver` and an older sluice's lock is read (D7). `host_count::HostCount::admit` is called only by `Room`. `Command::Run`'s loop, the wait's `intake` with `Taker::Wait`, and `exec.rs`'s and `preview.rs`'s `session_capacity` loops are gone (135; core.31). True when `cargo clippy -p sluice --all-targets -- -D warnings` passes with nothing they used left dead.
 
 ## 6. Docs, rules and the record
 

@@ -467,7 +467,7 @@ mod tests {
                 panic!("an empty host has room");
             };
             room.begin(id, "sluice/try/main/1", &dir).unwrap();
-            assert_eq!(named(&s.count()), [dir.clone()]);
+            assert_eq!(named(&s.count()), std::slice::from_ref(&dir));
             let supervisor = supervise(&dir);
             room.started(id);
             supervisor
@@ -505,14 +505,14 @@ mod tests {
             // Its supervisor is killed.
             drop(supervisor);
         }
-        assert_eq!(named(&count), [dead.clone()]);
+        assert_eq!(named(&count), std::slice::from_ref(&dead));
         assert_eq!(count.running().unwrap(), Running::default());
         let admitted = count.admit(&entry(Kind::Queue, &next), 1).unwrap();
         assert!(
             admitted.is_some(),
             "the dead entry holds no part of the bound"
         );
-        assert_eq!(named(&count), [next.clone()]);
+        assert_eq!(named(&count), std::slice::from_ref(&next));
         let holds = std::fs::read_dir(count.dir())
             .unwrap()
             .filter(|e| {

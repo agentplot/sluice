@@ -125,7 +125,7 @@ mod tests {
         // What a run keeps of the environment it starts from, the tool
         // homes on `PATH` among it, is kept whatever the shell names.
         for (k, _) in std::env::vars().filter(|(k, _)| run_keeps(k)) {
-            assert_eq!(of(&[(k.as_str(), "x")]), [k.clone()]);
+            assert_eq!(of(&[(k.as_str(), "x")]), std::slice::from_ref(&k));
         }
     }
 }
