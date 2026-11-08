@@ -51,14 +51,16 @@ struct OnGitHub {
     job: std::cell::OnceCell<Job>,
 }
 
-/// The forge's round job of a branch (137, C.8; design D4, D6, D14): a
-/// repository of its own, as the workflow's empty one with `origin`'s
-/// branches fetched, its host config naming the app alone, and a state
-/// folder kept from one job to the next.
+/// The forge's round job of a branch (137, C.8; design D4, D6, D14): its
+/// host config naming the app alone, and what the workflow keeps in the
+/// forge's cache from one job to the next, the state folder and what the
+/// repository keeps of its remote, each job's repository made afresh as
+/// the workflow's empty one is.
 struct Job {
-    repo: Repo,
     config: Scratch,
     state: Scratch,
+    /// The repository's `.git/sluice-remote` as the last job left it.
+    remote: Scratch,
 }
 
 /// `[signers.forge]` and `[pools.forge]` with no runners, as `sluice init
@@ -153,22 +155,10 @@ impl OnGitHub {
         g
     }
 
-    /// The round job, made at its first call: an empty repository whose
-    /// `origin` is GitHub's, and a host config of the app alone (design
-    /// D3, D4).
+    /// The round job, made at its first call: a host config of the app
+    /// alone (design D4).
     fn the_job(&self) -> &Job {
         self.job.get_or_init(|| {
-            let repo = Repo {
-                scratch: Scratch::new("round-job"),
-            };
-            repo.git(&["init", "-q", "-b", "main"]);
-            repo.git(&["config", "credential.helper", ""]);
-            repo.git(&["remote", "add", "origin", "https://github.com/o/r.git"]);
-            repo.git(&[
-                "config",
-                &format!("url.{}.insteadOf", self.bare.path().display()),
-                "https://github.com/o/r.git",
-            ]);
             let config = Scratch::new("round-job-config");
             let dir = config.path().join("sluice");
             std::fs::create_dir_all(&dir).unwrap();
@@ -180,33 +170,51 @@ impl OnGitHub {
             )
             .unwrap();
             Job {
-                repo,
                 config,
                 state: Scratch::new("round-job-state"),
+                remote: Scratch::new("round-job-remote"),
             }
         })
     }
 
-    /// `sluice job round` with `args` as the forge's round job runs it: in
-    /// its own repository, `origin`'s branches fetched first as the
-    /// workflow's step does, with its config and the state the last job
-    /// kept (design D3, D6).
+    /// `sluice job round` with `args` as the forge's round job runs it
+    /// (design D3, D6): in an empty repository whose `origin` is GitHub's,
+    /// `origin`'s branches fetched first as the workflow's step does, with
+    /// its config, and with what the last job kept in the forge's cache
+    /// restored before it and kept again after.
     fn job_with(&self, args: &[&str]) -> Output {
         let job = self.the_job();
-        job.repo.git(&[
+        let repo = Repo {
+            scratch: Scratch::new("round-job"),
+        };
+        repo.git(&["init", "-q", "-b", "main"]);
+        repo.git(&["config", "credential.helper", ""]);
+        repo.git(&["remote", "add", "origin", "https://github.com/o/r.git"]);
+        repo.git(&[
+            "config",
+            &format!("url.{}.insteadOf", self.bare.path().display()),
+            "https://github.com/o/r.git",
+        ]);
+        repo.git(&[
             "fetch",
             "-q",
             "--no-tags",
             "origin",
             "+refs/heads/*:refs/remotes/origin/*",
         ]);
-        self.command(env!("CARGO_BIN_EXE_sluice"), job.repo.dir())
+        let kept = repo.dir().join(".git/sluice-remote");
+        copy_dir(job.remote.path(), &kept);
+        let out = self
+            .command(env!("CARGO_BIN_EXE_sluice"), repo.dir())
             .env("XDG_CONFIG_HOME", job.config.path())
             .env("XDG_STATE_HOME", job.state.path())
             .args(["job", "round"])
             .args(args)
             .output()
-            .unwrap()
+            .unwrap();
+        let _ = std::fs::remove_dir_all(job.remote.path());
+        copy_dir(&kept, job.remote.path());
+        out
     }
 
     /// One `sluice job round --branch main`, which must succeed: what it
@@ -628,6 +636,23 @@ impl OnGitHub {
         sluice::reader::Driver::take(&readers, repository.to_str().unwrap())
             .unwrap()
             .expect("no driver of the repository yet")
+    }
+}
+
+/// `from`'s files copied into `to`, made where absent; nothing where
+/// `from` is absent.
+fn copy_dir(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    let Ok(entries) = std::fs::read_dir(from) else {
+        return;
+    };
+    for e in entries.flatten() {
+        let (src, dst) = (e.path(), to.join(e.file_name()));
+        if e.file_type().unwrap().is_dir() {
+            copy_dir(&src, &dst);
+        } else {
+            std::fs::copy(&src, &dst).unwrap();
+        }
     }
 }
 
@@ -7751,4 +7776,22 @@ fn a_lost_wake_is_a_warning() {
     let out = g.job_with(&[]);
     assert!(out.status.success(), "{}", text(&out));
     assert_eq!(g.wakes_of("main"), 1, "{}", text(&out));
+}
+
+/// forge-rounds, "A job after a job" (73, 136; design D6; rule core.32):
+/// two round jobs of `main` run one after the other with what the first
+/// kept in the forge's cache, nothing on GitHub changed between them; the
+/// second's list of `main`'s open pull requests is sent with what GitHub
+/// answered the first, and GitHub answers it unchanged.
+#[test]
+fn a_job_after_a_job_asks_conditionally() {
+    let g = OnGitHub::forge("rj-conditional", "reviews = 1");
+    g.by_hand("unit/waits", &[("w.txt", Some("w\n"))], false);
+    g.job();
+    let lists = |status: u16| g.gh.answered("GET", "/repos/o/r/pulls?", status);
+    let (fresh, unchanged) = (lists(200), lists(304));
+    assert!(fresh >= 1);
+    let said = g.job();
+    assert_eq!(lists(200), fresh, "{said}");
+    assert!(lists(304) > unchanged, "{said}");
 }
