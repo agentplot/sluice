@@ -75,9 +75,10 @@ profile through the binding, as the pool is; the core still sees only
 `sluice init actions` writes two workflows from templates kept in
 `crates/sluice/src/profiles/github/workflows/`:
 
-- `sluice.yml`, whose `workflow_dispatch`, `schedule` and **round** job
-  `forge-rounds` writes (its D2 and D3), gains `workflow_run` of
-  `sluice-pr.yml` and two jobs. A **run** job has
+- `sluice.yml`, on `workflow_dispatch`, `schedule` (every 15 minutes,
+  the backstop of 111) and `workflow_run` of `sluice-pr.yml`. A **round**
+  job takes a branch and runs rounds until the branch is idle or until
+  50 minutes, short of the job's limit (the lease of `peers` D3). A **run** job has
   `permissions: contents: read` and no environment: it fetches the
   combination's ref, runs the checks under the task runner, and uploads
   the run's report as an artifact. A **sign** job, `needs: run`, runs no
@@ -93,9 +94,11 @@ profile through the binding, as the pool is; the core still sees only
 
 The jobs call `sluice job`, which the workflows are written around:
 
-- `sluice job round`, `forge-rounds`'s, leads the branch as
-  `pool/<pool>/round`, and starts a run on the pool where no standing
-  executor has room for it (107).
+- `sluice job round --branch <b>` leads the branch under one name for
+  every round job of the pool, `pool/<pool>/round`, so a scheduled job
+  goes on from the last one with no lease to wait out; the workflow's
+  `concurrency` keeps one per branch at a time. It runs rounds until the
+  branch has nothing to do, or 50 minutes have gone.
 - `sluice job run --claim <c> --branch <b>` makes the claimed run's
   checkout from the combination's ref, runs its checks, and writes the
   run's report and moon's manifests for its keys to a directory the job

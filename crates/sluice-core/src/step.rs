@@ -287,13 +287,6 @@ impl Sluice<'_> {
     /// refused. A branch in this host's own files has no lead. Intake asks
     /// it too, to take a branch's pull requests in only where this
     /// instance keeps the branch (137).
-    ///
-    /// A branch the forge keeps is kept by its round job alone,
-    /// `pool/<pool>/round`: any other instance claims its runs and never
-    /// takes it, however long its records stood (75, 137). The round job
-    /// takes it from an older lead after the lease by its own observation,
-    /// intake being work enough (73; D1 of
-    /// pull-requests-are-queued-on-the-forge).
     pub fn keeps(&self, branch: &str) -> Result<bool> {
         let line = self.read_line(branch)?;
         // 133: the round's first read of the records, answered from what was
@@ -304,13 +297,10 @@ impl Sluice<'_> {
         let Some(tip) = self.seams.branch.read(branch)? else {
             return Ok(true);
         };
-        let Some(rules) = self.rules_at(branch, &tip)?.filter(|r| r.signed) else {
+        if !self.rules_at(branch, &tip)?.is_some_and(|r| r.signed) {
             return Ok(true);
-        };
-        let me = self.peer.name.clone();
-        if rules.round_job.as_ref().is_some_and(|job| *job != me) {
-            return Ok(false);
         }
+        let me = self.peer.name.clone();
         let from = match &line.doc.lead {
             Some(l) if *l == me => return Ok(true),
             None => None,
@@ -325,9 +315,7 @@ impl Sluice<'_> {
                     }
                 };
                 let waited = seconds_between(&since, &now).unwrap_or(0.0);
-                if waited < self.peer.lease.as_secs_f64()
-                    || (rules.round_job.is_none() && !has_work(&line))
-                {
+                if waited < self.peer.lease.as_secs_f64() || !has_work(&line) {
                     return Ok(false);
                 }
                 Some(other.clone())
@@ -1361,6 +1349,35 @@ impl Sluice<'_> {
         Ok(())
     }
 
+    /// Design D5 (137; the obsolete-combinations spec): what a hand-over of
+    /// `branch`'s pull requests to another host ends in its own pass,
+    /// whether or not a round follows: the combinations its withdrawals made
+    /// obsolete dropped, as a round drops them before it reads any run, and
+    /// the places listed to release released, ending this host's runs of
+    /// them. No round: no run is read, and nothing formed, started or
+    /// landed. A branch whose lock another step holds is that step's, which
+    /// began after the withdrawals and drops them itself (rule core.14).
+    /// Each release not plainly released is returned (123).
+    pub fn drop_obsolete(&self, branch: &str) -> Result<Vec<ReleaseOutcome>> {
+        let Some(_lock) = self.seams.state.lock(branch)? else {
+            return Ok(Vec::new());
+        };
+        let mut line = self.read_line(branch)?;
+        let held = line.doc.candidates.len();
+        self.drop_withdrawn(&mut line)?;
+        if line.doc.candidates.len() != held {
+            if let Written::Refused = self.write(&line)? {
+                // 62: written since; the next round reads it again.
+                return Ok(Vec::new());
+            }
+        } else if line.doc.release.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut releases = Vec::new();
+        self.perform_releases(branch, &mut releases)?;
+        Ok(releases)
+    }
+
     /// Design D10: what this host had queued on the branch in its own
     /// records, left behind when another host's queue reached the remote
     /// first, submitted again under new ids, each naming its old one.
@@ -2024,16 +2041,6 @@ impl Sluice<'_> {
                         passed_at: None,
                         carries: Vec::new(),
                     });
-                    // 82, C.6: on a branch whose records are on its remote,
-                    // a combination is pushed there as it is formed, so the
-                    // instance that starts it, or forms the next on it, can
-                    // fetch it: a round job's repository is made afresh for
-                    // each job (D6 of pull-requests-are-queued-on-the-forge).
-                    if rules.signed {
-                        self.seams
-                            .state
-                            .publish_candidate(&line.branch, &cid, &rev)?;
-                    }
                     prev = rev.clone();
                     ids.push(cid);
                     ahead.push((id, rev));
@@ -2062,9 +2069,6 @@ impl Sluice<'_> {
                         .filter(|r| self.mine(r))
                         .filter_map(|r| r.place.clone()),
                 );
-                dropped.push(c.id.clone());
-            } else if !keep && c.state == CandidateState::Formed && rules.signed {
-                // Pushed as it was formed, never started.
                 dropped.push(c.id.clone());
             }
             keep
@@ -3235,7 +3239,6 @@ impl Sluice<'_> {
         }
 
         // This host's runs that ended, reported while its claim holds.
-        let mut recorded = false;
         let mine: Vec<(Candidate, usize)> = line
             .doc
             .candidates
@@ -3289,16 +3292,16 @@ impl Sluice<'_> {
                 }
                 Progress::Finished(report) => {
                     let report = self.after_run(&unmet.limits, report)?;
-                    recorded |= self.update(branch, |l| {
+                    self.update(branch, |l| {
                         let now = self.now();
                         let Some(x) = l.candidate(&c.id).cloned() else {
-                            return Ok(false);
+                            return Ok(());
                         };
                         let r = &x.runs[i];
                         // 77: a report under a claim this host no longer
                         // holds is never written.
                         if r.host.as_deref() != Some(me.as_str()) || r.state != RunState::Testing {
-                            return Ok(false);
+                            return Ok(());
                         }
                         self.finish_run(
                             l,
@@ -3314,7 +3317,7 @@ impl Sluice<'_> {
                         if let Some(p) = &place {
                             l.doc.release.retain(|q| q != p);
                         }
-                        Ok(true)
+                        Ok(())
                     })?;
                     if let Some(p) = place {
                         let outcome = self.release_made(branch, &p)?;
@@ -3322,28 +3325,6 @@ impl Sluice<'_> {
                             releases.push(outcome);
                         }
                     }
-                }
-            }
-        }
-
-        // 111: a result recorded on a branch the forge keeps is work no
-        // running instance will take: its round job is woken, once a round.
-        // A wake that is lost loses nothing; the schedule takes it (59;
-        // design D5 of pull-requests-are-queued-on-the-forge).
-        if recorded && rules.round_job.is_some() {
-            if let Some(pool) = self
-                .policy_at(&tip)?
-                .and_then(|p| p.pools.into_iter().next())
-            {
-                if let Err(e) = self
-                    .seams
-                    .tests
-                    .wake(&pool.kind, branch, rules.remote.as_deref())
-                {
-                    tracing::warn!(
-                        sluice.branch = %branch,
-                        "waking {branch}'s round job failed: {e:#}; the schedule's next run wakes it"
-                    );
                 }
             }
         }
@@ -4032,222 +4013,6 @@ mod tests {
             .iter()
             .find(|c| c.submissions == ids)
             .cloned()
-    }
-
-    /// `main` the forge keeps: its records on `origin`, pull requests, and
-    /// a pool with no runners; the host signs as `a`.
-    fn forge_kept() -> (Fakes, Rev) {
-        let policy = "[tests]\nrunner = \"fake\"\n\n[checkout]\n\n\
-            [branches.main]\nrequired = [\"#gate\"]\nparallel = 4\nremote = \"origin\"\n\
-            trust = [\"a\"]\n\
-            \n[branches.main.pull_requests]\nreviews = 0\n\
-            \n[signers.a]\nssh = \"a ssh-ed25519 AAAA\"\n\
-            \n[signers.forge]\ngithub = { workflow = \".github/workflows/sluice.yml\", ref = \"refs/heads/main\" }\n\
-            \n[pools.forge]\ngithub = { workflow = \".github/workflows/sluice.yml\" }\nsigner = \"forge\"\n";
-        let f = Fakes::new();
-        let tip = f
-            .world
-            .init("main", &[(POLICY_PATH, policy), ("a/lib", "1")]);
-        f.world.on_remote("main");
-        f.world.task("a:test", "a/");
-        f.world.signs_as("a");
-        (f, tip)
-    }
-
-    /// A clock a test moves on by hand.
-    struct Moving(std::cell::Cell<chrono::DateTime<Utc>>);
-
-    impl Clock for Moving {
-        fn now(&self) -> chrono::DateTime<Utc> {
-            let now = self.0.get() + chrono::Duration::seconds(1);
-            self.0.set(now);
-            now
-        }
-    }
-
-    impl Moving {
-        fn new() -> Self {
-            Moving(std::cell::Cell::new(Noon.now()))
-        }
-
-        fn advance(&self, by: chrono::Duration) {
-            self.0.set(self.0.get() + by);
-        }
-    }
-
-    /// Instance `name` over `f`, on its own host, with a lease of five
-    /// minutes, signing as `signer`.
-    fn instance<'a>(
-        f: &'a Fakes,
-        clock: &'a Moving,
-        name: &str,
-        signer: Option<&str>,
-    ) -> Sluice<'a> {
-        f.world.be_host(name);
-        let seams = Seams {
-            checkout: &f.checkout,
-            tests: &f.tests,
-            branch: &f.branch,
-            driver: &f.driver,
-            state: &f.state,
-        };
-        Sluice::new(seams, clock).as_peer(crate::Peer {
-            name: name.into(),
-            lease: std::time::Duration::from_secs(300),
-            alive: std::time::Duration::from_secs(120),
-            signer: signer.map(str::to_string),
-            systems: None,
-        })
-    }
-
-    fn took(s: &Sluice<'_>) -> Vec<(String, Option<String>)> {
-        Line::read_log(&s.seams.state.read("main").unwrap())
-            .unwrap()
-            .into_iter()
-            .filter_map(|l| match l.event {
-                Event::Took { by, from } => Some((by, from)),
-                _ => None,
-            })
-            .collect()
-    }
-
-    /// satisfies: forge-rounds' "A host claims and never leads" and
-    /// peer-lead's "A branch the forge keeps" (73, 75, 137; D1 of
-    /// pull-requests-are-queued-on-the-forge): a host with a combination's
-    /// run to claim claims it, however long the round job has written
-    /// nothing, and never takes the branch.
-    #[test]
-    fn a_host_never_takes_a_branch_the_forge_keeps() {
-        let (f, tip) = forge_kept();
-        let clock = Moving::new();
-        let rules = sluice(&f)
-            .rules_at("main", &tip)
-            .unwrap()
-            .expect("main's rules");
-        assert_eq!(rules.round_job.as_deref(), Some("pool/forge/round"));
-        let head = f.world.work(&tip, &[("a/lib", Some("2"))]);
-        f.world.session("unit/a", "agent", &head);
-        f.world.hold_runs(true);
-        let one = submit(&sluice(&f), "unit/a");
-        // A host with work to do never takes the branch, even with no lead.
-        assert_eq!(
-            instance(&f, &clock, "a", Some("a")).step("main").unwrap(),
-            Step::Led
-        );
-        assert_eq!(s_lead(&f), None);
-        // The round job takes it and forms the combination.
-        let job = || instance(&f, &clock, "pool/forge/round", None);
-        assert_eq!(job().step("main").unwrap(), Step::Stepped);
-        assert_eq!(s_lead(&f).as_deref(), Some("pool/forge/round"));
-        let line = sluice(&f).read_line("main").unwrap();
-        assert!(holding(&line, &[one]).is_some_and(|c| c.state.under_test()));
-        // The round job goes quiet for longer than the lease; the host
-        // claims the run and is still led.
-        for _ in 0..3 {
-            assert_eq!(
-                instance(&f, &clock, "a", Some("a")).step("main").unwrap(),
-                Step::Led
-            );
-            clock.advance(chrono::Duration::minutes(4));
-        }
-        assert_eq!(
-            instance(&f, &clock, "a", Some("a")).step("main").unwrap(),
-            Step::Led
-        );
-        let line = sluice(&f).read_line("main").unwrap();
-        let c = holding(&line, &[one]).expect("#1 under test");
-        assert!(
-            c.runs.iter().any(|r| r.host.as_deref() == Some("a")),
-            "{:?}",
-            c.runs
-        );
-        assert_eq!(line.doc.lead.as_deref(), Some("pool/forge/round"));
-        assert!(took(&sluice(&f))
-            .iter()
-            .all(|(by, _)| by == "pool/forge/round"));
-    }
-
-    /// satisfies: forge-rounds' "A lead an older sluice took" (73, 137; D1
-    /// of pull-requests-are-queued-on-the-forge): a round job takes a
-    /// branch an older host led once it has seen the records unchanged for
-    /// the lease from its first reading, with no submission in them.
-    #[test]
-    fn a_round_job_takes_a_branch_an_older_host_led() {
-        let (f, _) = forge_kept();
-        let clock = Moving::new();
-        let s = sluice(&f);
-        // An older sluice on host `a` took the branch.
-        let lock = s.seams.state.lock("main").unwrap().expect("the lock");
-        let mut line = s.read_line("main").unwrap();
-        line.doc.lead = Some("a".into());
-        assert!(matches!(s.write(&line).unwrap(), Written::Written(_)));
-        drop(lock);
-        let job = || instance(&f, &clock, "pool/forge/round", None);
-        assert_eq!(job().step("main").unwrap(), Step::Led);
-        clock.advance(chrono::Duration::minutes(4));
-        assert_eq!(job().step("main").unwrap(), Step::Led);
-        clock.advance(chrono::Duration::minutes(2));
-        assert_ne!(job().step("main").unwrap(), Step::Led);
-        assert_eq!(s_lead(&f).as_deref(), Some("pool/forge/round"));
-        assert_eq!(
-            took(&sluice(&f)).last().cloned(),
-            Some(("pool/forge/round".to_string(), Some("a".to_string())))
-        );
-    }
-
-    fn s_lead(f: &Fakes) -> Option<String> {
-        sluice(f).read_line("main").unwrap().doc.lead
-    }
-
-    /// satisfies: forge-rounds' "A run waits for a host" (87, 107; D7 of
-    /// pull-requests-are-queued-on-the-forge): a pool that names no runners
-    /// is launched no run, so a run no standing executor has room for stays
-    /// open and the combination is not passed.
-    #[test]
-    fn a_pool_with_no_runners_is_launched_no_run() {
-        let policy = "[tests]\nrunner = \"fake\"\n\n[checkout]\n\n\
-            [branches.main]\nrequired = [\"#gate\"]\nparallel = 4\nremote = \"origin\"\n\
-            trust = [\"box\", \"forge\"]\n\
-            \n[signers.box]\nssh = \"box ssh-ed25519 AAAA\"\n\
-            \n[signers.forge]\ngithub = { workflow = \".github/workflows/sluice.yml\", ref = \"refs/heads/main\" }\n\
-            \n[pools.forge]\ngithub = { workflow = \".github/workflows/sluice.yml\" }\nsigner = \"forge\"\n\
-            \n[systems]\nlinux-x64 = { os = \"linux\", arch = \"x86_64\" }\n";
-        let f = Fakes::new();
-        let tip = f
-            .world
-            .init("main", &[(POLICY_PATH, policy), ("a/lib", "1")]);
-        f.world.on_remote("main");
-        f.world.task("a:test", "a/");
-        let head = f.world.work(&tip, &[("a/lib", Some("2"))]);
-        f.world.session("unit/a", "agent", &head);
-        f.world.hold_runs(true);
-        // No standing executor has room: the lead has none, and no other
-        // host has shown a sign of life.
-        f.world.host_limit(0);
-        f.world.be_host("lead");
-        let s = sluice(&f).as_peer(crate::Peer {
-            name: "lead".into(),
-            lease: std::time::Duration::from_secs(300),
-            alive: std::time::Duration::from_secs(120),
-            signer: None,
-            systems: None,
-        });
-        let one = submit(&s, "unit/a");
-        for _ in 0..3 {
-            s.step("main").unwrap();
-        }
-        assert!(f.world.launches().is_empty(), "{:?}", f.world.launches());
-        let line = s.read_line("main").unwrap();
-        let c = holding(&line, &[one]).expect("#1 under test");
-        assert!(c.state.under_test(), "{:?}", c.state);
-        assert!(
-            c.runs
-                .iter()
-                .all(|r| r.state == RunState::Open && r.host.is_none()),
-            "{:?}",
-            c.runs
-        );
-        assert_ne!(s.state(one).unwrap().unwrap().state, State::Landed);
     }
 
     /// Design D1, D2 (25, 81; rules core.7, core.17): a round drops the

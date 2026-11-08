@@ -251,62 +251,6 @@ impl GitHub {
         self.fake.url()
     }
 
-    /// The branch each run of a workflow GitHub took was started on, in
-    /// order.
-    pub fn dispatched_on(&self) -> Vec<String> {
-        let statuses: Vec<u16> = self
-            .answered
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|(m, p, _)| m == "POST" && p.ends_with("/dispatches"))
-            .map(|(_, _, s)| *s)
-            .collect();
-        self.fake
-            .requests()
-            .into_iter()
-            .filter(|r| r.method == "POST" && r.path.ends_with("/dispatches"))
-            .zip(statuses)
-            .filter(|(_, status)| *status == 204)
-            .map(|(r, _)| {
-                let body: Value = serde_json::from_str(&r.body).unwrap_or(Value::Null);
-                body["ref"].as_str().unwrap_or_default().to_string()
-            })
-            .collect()
-    }
-
-    /// Each run of a workflow started, in order: its file and the inputs
-    /// it was given, as GitHub took them (answered 204).
-    pub fn dispatches(&self) -> Vec<(String, Value)> {
-        let statuses: Vec<u16> = self
-            .answered
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|(m, p, _)| m == "POST" && p.ends_with("/dispatches"))
-            .map(|(_, _, s)| *s)
-            .collect();
-        self.fake
-            .requests()
-            .into_iter()
-            .filter(|r| r.method == "POST" && r.path.ends_with("/dispatches"))
-            .zip(statuses)
-            .filter(|(_, status)| *status == 204)
-            .map(|(r, _)| r)
-            .map(|r| {
-                let workflow = r
-                    .path
-                    .trim_end_matches("/dispatches")
-                    .rsplit('/')
-                    .next()
-                    .unwrap_or_default()
-                    .to_string();
-                let body: Value = serde_json::from_str(&r.body).unwrap_or(Value::Null);
-                (workflow, body["inputs"].clone())
-            })
-            .collect()
-    }
-
     /// Refuse, or take again, a request to mark a pull request a draft or
     /// ready for review.
     pub fn refuse_drafts(&self, refuse: bool) {
@@ -641,30 +585,6 @@ fn run_json(id: u64, name: &str, p: &Posting) -> Value {
     })
 }
 
-/// A query's value with its `%XX` escapes read back.
-fn decoded(v: &str) -> String {
-    let b = v.as_bytes();
-    let mut out = Vec::new();
-    let mut i = 0;
-    while i < b.len() {
-        match (
-            b[i],
-            v.get(i + 1..i + 3)
-                .and_then(|h| u8::from_str_radix(h, 16).ok()),
-        ) {
-            (b'%', Some(x)) => {
-                out.push(x);
-                i += 3;
-            }
-            (c, _) => {
-                out.push(c);
-                i += 1;
-            }
-        }
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
 fn not_found() -> Answer {
     json(404, json!({ "message": "Not Found" }))
 }
@@ -741,39 +661,6 @@ fn answer(forge: &FileForge, bare: Option<&Path>, failing: &Failing, r: &Request
     let rest: Vec<&str> = rest.split('/').skip(1).collect();
     let repo = repo();
     match (m, rest.as_slice()) {
-        // The repository, with the default branch its git names.
-        ("GET", []) => {
-            let default = bare
-                .and_then(|b| {
-                    let out = crate::support::git_command()
-                        .arg("--git-dir")
-                        .arg(b)
-                        .args(["symbolic-ref", "--short", "HEAD"])
-                        .output()
-                        .ok()?;
-                    out.status
-                        .success()
-                        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
-                })
-                .unwrap_or_else(|| "main".into());
-            json(
-                200,
-                json!({ "full_name": repo.to_string(), "default_branch": default }),
-            )
-        }
-        // A workflow's run started on a branch GitHub's git lacks is
-        // refused, as GitHub refuses it.
-        ("POST", ["actions", "workflows", _, "dispatches"])
-            if bare.is_some_and(|b| {
-                let on = body["ref"].as_str().unwrap_or_default();
-                rev(b, &format!("refs/heads/{on}")).is_none()
-            }) =>
-        {
-            let on = body["ref"].as_str().unwrap_or_default();
-            json(422, json!({ "message": format!("No ref found for: {on}") }))
-        }
-        // A workflow's run started, as GitHub answers it: nothing.
-        ("POST", ["actions", "workflows", _, "dispatches"]) => (204, vec![], String::new()),
         ("GET", ["pulls"]) if failing.pulls => server_error(),
         ("GET", ["pulls", n, "reviews"])
             if n.parse().is_ok_and(|n| failing.reviews.contains(&n)) =>
@@ -782,14 +669,7 @@ fn answer(forge: &FileForge, bare: Option<&Path>, failing: &Failing, r: &Request
         }
         ("GET", ["pulls"]) => {
             let base = param("base").unwrap_or_default();
-            let mut ps = forge.pulls(&repo, &base).unwrap();
-            // `head=<owner>:<branch>`: the open pull requests from that
-            // branch alone, as GitHub filters them.
-            if let Some(head) = param("head") {
-                let head = decoded(&head);
-                let (owner, branch) = head.split_once(':').unwrap_or(("", &head));
-                ps.retain(|p| p.head_ref == branch && p.head_repo.split('/').next() == Some(owner));
-            }
+            let ps = forge.pulls(&repo, &base).unwrap();
             json(200, Value::Array(ps.iter().map(pull_json).collect()))
         }
         ("POST", ["pulls"]) | ("PATCH", ["pulls", _])

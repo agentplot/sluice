@@ -18,10 +18,10 @@ credential helper and no prompt.
 
 ## 2. The workflows and `sluice job`
 
-- [ ] 2.1 Add the run and sign jobs and `workflow_run` of `sluice-pr.yml` to the template of `sluice.yml` in `crates/sluice/src/profiles/github/workflows/`, whose round job `forge-rounds` writes, and write `sluice-pr.yml` beside it, with the `sluice` environment on the sign job beside the round job and no `id-token` on run jobs, the run job uploading its report and moon's manifests and the sign job signing only what `proven` keeps, as design D2 says; verify `root:format` passes on them.
-- [ ] 2.2 Add `sluice job run`, `sign` and `record` beside `sluice job round`, which `forge-rounds` builds, as design D2 says; verify `cli.rs` cases over a scratch repository and a bare remote: a run job records nothing, a sign job drops a key the tree does not bear out, a record under a lapsed claim is refused.
-- [ ] 2.3 Extend `sluice init actions`, whose round part `forge-rounds` builds: write `sluice.yml` with its run and sign jobs and `sluice-pr.yml`, give `[pools.forge]` a runner for each system the policy names, leave a differing file unless `--force`, and print the identity token permission the sign job needs; verify `cli.rs` cases over a scratch repository for each actions-pool `init` scenario.
-- [ ] 2.4 Extend `sluice forge check`, whose round part `forge-rounds` builds (the round job on the branch, the dispatch permission, the environment's branch rule), with the run and sign jobs and the forge signer naming the workflow; verify `tests/profiles/forge.rs` cases for each forge-identity scenario.
+- [ ] 2.1 Write the templates of `sluice.yml` (round, run and sign jobs, `schedule`, `workflow_run`) and `sluice-pr.yml` in `crates/sluice/src/profiles/github/workflows/`, with the `sluice` environment on the round and sign jobs only and no `id-token` on run jobs, the run job uploading its report and moon's manifests and the sign job signing only what `proven` keeps, as design D2 says; add that directory to actionlint's includes in `treefmt.nix`; verify `root:format` passes on them.
+- [ ] 2.2 Add `sluice job round`, `run`, `sign` and `record` as design D2 says; verify `cli.rs` cases over a scratch repository and a bare remote: a round job leads under `pool/<pool>/round`, a run job records nothing, a sign job drops a key the tree does not bear out, a record under a lapsed claim is refused.
+- [ ] 2.3 Add `sluice init actions`: write both workflows, add `[signers.forge]` and `[pools.forge]` when absent, leave a differing file unless `--force`, print what to set on GitHub; verify `cli.rs` cases over a scratch repository for each actions-pool `init` scenario.
+- [ ] 2.4 Extend `sluice forge check` with the workflow, the dispatch permission, the environment's branch rule and the forge signer; verify `tests/profiles/forge.rs` cases for each forge-identity scenario.
 
 ## 3. Pull requests
 

@@ -1,13 +1,18 @@
 ## MODIFIED Requirements
 
 ### Requirement: The intake mark is kept by a leased push
-The mark SHALL name the host and whether a `sluice run` or a wait holds
-it, SHALL be renewed by a push leased on the value read once a third of
-the lease has passed, and SHALL be read in the round's own fetch. A push
-refused at its lease SHALL be decided again, once, on the mark that
-fetch brings: this host's is kept, none is pushed again, and another's
-leaves the requests to that host; a second refusal takes nothing in and
-hands nothing over (45, 137; rule core.33).
+The mark SHALL name the host and whether its holder is the host's
+`sluice run` or a wait, SHALL be renewed by a push leased on the value
+read whenever a third of the host's lease has passed since it was last
+renewed, never at each pass, and SHALL be read in the fetch the branch's
+round already makes.
+A push refused at its lease SHALL be decided again, once, on the mark
+the branch's fetch then brings: a mark naming this host SHALL be this
+host's, none standing SHALL be pushed again leased on its absence, and
+a mark naming another host SHALL leave the branch's requests to that
+host. A second refusal SHALL leave the pass taking nothing in and
+handing nothing over. No pass SHALL name, as the host that takes the
+requests in, a host the mark does not name (45, 137; rule core.33).
 
 #### Scenario: A live driver keeps it
 - **WHEN** `sluice run` on host A holds the mark and renews it, and `sluice run` on host B passes main
@@ -43,12 +48,14 @@ another wait of its host holds SHALL stay (137; record 0089).
 
 ### Requirement: A pull request's submission is advanced only on the host that takes it in
 Where each host keeps its own records, a pass on a host that finds the
-mark another host's SHALL withdraw each submission of its records taken
-from a pull request, none landing and none whose head the branch as
-fetched holds, which the round lands as the commit that landed it; it
-SHALL log which host takes the requests in and post nothing on the pull
-request. Its worktrees' submissions SHALL stay (122, 137; rules core.33,
-core.48).
+mark another host's SHALL withdraw every submission of its own records
+taken from a pull request, none landing and none whose head the branch,
+as the pass fetched it, holds, saying in the branch's log which host
+takes the branch's pull requests in, and SHALL post and comment nothing
+on the pull request. A submission whose head the branch holds SHALL be
+left to the round, which lands it as the commit that landed it.
+Submissions from the host's own worktrees SHALL NOT be touched (122,
+137; rules core.33, core.48).
 
 #### Scenario: Handed over
 - **WHEN** host A has `pull/12` queued in its records and host B's `sluice run` takes main's mark

@@ -13,7 +13,7 @@ Full reference: <https://agentplot.github.io/sluice/reference/commands/>.
 | `--priority N` | Higher goes first, ahead of lower-priority submissions not yet under test; the default is 0. |
 | `--subject <text>` | One line saying what lands: the title of the pull request the submit opens, or of one it opened before, and the name of its landing commit. With several worktrees, once for each, in their order, or not at all. |
 | `--worktree <path>` | Submit from another worktree than the current directory. Given more than once, every worktree's head as one act, in that order: see below. |
-| `--json` | One JSON document: the submission record when it finishes; `{id,branch,ahead}` with `--no-wait`; `{"conflict":null}` or `{"conflict":{paths,with}}` with `--check`; `{pull_request,branch,state,queue}` for a pull request, which the forge's round job takes in, with its `head` and `draft` under `--status`; under `--status`, with `sends`, the revision a submit from the worktree would send now; `{branch,submissions}` for several worktrees. |
+| `--json` | One JSON document: the submission record when it finishes; `{id,branch,ahead}` with `--no-wait`, and `{id,branch,ahead,pull_request}` for a pull request sluice queued at once; `{"conflict":null}` or `{"conflict":{paths,with}}` with `--check`; `{pull_request,branch,state}` for a pull request still waiting for its conditions, with its `head` and `draft` under `--status`, and `taken_in_by` and `queue` where another host takes the branch's pull requests in; under `--status`, with `sends`, the revision a submit from the worktree would send now; `{branch,submissions}` for several worktrees. |
 | `--timeout 9m` | `wt submit` only: submit, then wait at most that long, exit `5` when it runs out; run again, follow the submission already made. See "Who moves the queue". |
 
 ## Refused: a required task kept out of CI
@@ -129,10 +129,8 @@ or kept running for it.
   submits nothing. A new commit, or a submission blamed, in conflict or
   withdrawn, is submitted again.
 - `sluice step <branch>`: one round, asked of the host process, then
-  exit. A branch that takes pull requests is the forge's round job's, a
-  GitHub Actions workflow that runs `sluice job round`: it takes the pull
-  requests in, those opened by hand among them, and lands them; a host's
-  rounds only claim and run its tests.
+  exit. On a branch with pull requests, it takes the branch's open pull
+  requests in first, those opened by hand among them.
 
 ## Branches on GitHub
 
@@ -159,9 +157,7 @@ passed · landed as b7d2e94
   `--subject` retitles a pull request sluice opened, never one a person
   opened; a submit with none leaves the title as it is.
 - The pull request waits while it is a draft or misses a review or a check
-  the policy names, then the forge's round job takes it into the queue. A
-  submit takes nothing in and runs no round: it wakes the round job and
-  follows the pull request by sluice's check on it.
+  the policy names, then joins the queue.
 - A submit of new commits replaces its submission in the queue
   (`withdrew its submission 12`), and the new commits wait for their
   conditions.

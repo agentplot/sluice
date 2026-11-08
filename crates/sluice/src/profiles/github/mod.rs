@@ -9,7 +9,6 @@ pub mod app;
 pub mod check;
 pub mod fake;
 pub mod forge;
-pub mod init;
 pub mod kept;
 pub mod pulls;
 pub mod render;

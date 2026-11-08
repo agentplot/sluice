@@ -20,20 +20,6 @@ docker = true         # the integration tests start a database container
 [landing]
 subject = "chore(land): #{id} {from}"
 
-# The hosts that run main's checks sign their results, so main's queue is
-# kept on origin, where the forge's round job keeps it.
-[signers.hosts]
-ssh = ".config/sluice.hosts" # one line per host's key
-
-# The forge's round job, which takes main's pull requests in with every host
-# off: `sluice init actions` adds these two tables and writes its workflow.
-[signers.forge]
-github = { workflow = ".github/workflows/sluice.yml", ref = "refs/heads/main" }
-
-[pools.forge]
-github = { workflow = ".github/workflows/sluice.yml", ref = "refs/heads/main" }
-signer = "forge"                                                                # no runners: its jobs run rounds alone
-
 # Small, fast landings many times a day. feature/* is a placeholder:
 # name the pattern as the project names its branches.
 [branches."feature/*"]
@@ -47,7 +33,7 @@ required = ["#check-fast", "#check-tools"]
 parallel = 2
 batch = true                               # test the longest combination, bisect on failure
 timeout = "30m"
-trust = ["hosts"]                          # the hosts' signed results count
+trust = ["confined", "sandbox"]
 remote = "origin"                          # fetched every round, landed by a leased push
 
 [branches.main.pull_requests]

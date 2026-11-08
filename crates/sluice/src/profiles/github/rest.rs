@@ -122,20 +122,6 @@ fn made_id(v: &Value, what: &str) -> Result<u64> {
         .ok_or_else(|| anyhow!("GitHub made a {what} and gave it no id"))
 }
 
-/// `v` as a value in a URL's query: every byte but the unreserved ones,
-/// `/` and `:` percent-encoded, so a branch named with `&` or `#` asks
-/// for itself.
-fn query_value(v: &str) -> String {
-    v.bytes()
-        .map(|b| match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' | b':' => {
-                (b as char).to_string()
-            }
-            _ => format!("%{b:02X}"),
-        })
-        .collect()
-}
-
 fn text(v: &Value) -> String {
     v.as_str().unwrap_or_default().to_string()
 }
@@ -453,21 +439,6 @@ impl Forge for App {
         Ok(self.listed(repo, base)?.pulls)
     }
 
-    fn pull_from(&self, repo: &Repo, base: &str, head_ref: &str) -> Result<Option<Pull>> {
-        let head = query_value(&format!("{}:{head_ref}", repo.owner));
-        let path = Self::repo_path(
-            repo,
-            &format!("/pulls?state=open&head={head}&base={}", query_value(base)),
-        );
-        Ok(self
-            .all(repo, &path, Value::as_array)?
-            .iter()
-            .map(pull)
-            .collect::<Result<Vec<_>>>()?
-            .into_iter()
-            .find(|p| p.head_ref == head_ref && p.from_repo(repo)))
-    }
-
     fn listed(&self, repo: &Repo, base: &str) -> Result<Listed> {
         let path = Self::repo_path(repo, &format!("/pulls?state=open&base={base}"));
         let (items, changed) = self.pages(repo, &path, Value::as_array)?;
@@ -657,9 +628,12 @@ impl Forge for App {
             &Self::repo_path(repo, "/pulls"),
             &open_request(base, head_ref, title, body, draft).to_string(),
             pull,
-            // Settled by the request from its head alone, never the
-            // branch's list (request-intake-host; design D9).
-            || self.pull_from(repo, base, head_ref),
+            || {
+                let pulls = self.pulls(repo, base)?;
+                Ok(pulls
+                    .into_iter()
+                    .find(|p| p.head_ref == head_ref && p.from_repo(repo)))
+            },
         )
     }
 

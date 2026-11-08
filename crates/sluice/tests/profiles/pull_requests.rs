@@ -36,8 +36,7 @@ const CHECK: &str = "if test -e hang && ! test -e \"$(cat hang)\"; then \
 
 /// The policy's table for `bolt/*`, branches on GitHub sluice lands on
 /// that take no pull requests.
-const BOLTS: &str =
-    "\n[branches.\"bolt/*\"]\nremote = \"origin\"\ntimeout = \"1m\"\ntrust = [\"a\"]\n";
+const BOLTS: &str = "\n[branches.\"bolt/*\"]\nremote = \"origin\"\ntimeout = \"1m\"\n";
 
 /// `main` on GitHub, taking pull requests with `conditions`, the lines of
 /// its `pull_requests` table.
@@ -48,28 +47,7 @@ struct OnGitHub {
     state: Scratch,
     gh: github::GitHub,
     _files: Scratch,
-    /// The forge's round job, made at its first call (design D14).
-    job: std::cell::OnceCell<Job>,
 }
-
-/// The forge's round job of a branch (137, C.8; design D4, D6, D14): its
-/// host config naming the app alone, and what the workflow keeps in the
-/// forge's cache from one job to the next, the state folder and what the
-/// repository keeps of its remote, each job's repository made afresh as
-/// the workflow's empty one is.
-struct Job {
-    config: Scratch,
-    state: Scratch,
-    /// The repository's `.git/sluice-remote` as the last job left it.
-    remote: Scratch,
-}
-
-/// `[signers.forge]` and `[pools.forge]` with no runners, as `sluice init
-/// actions` adds them (design D13).
-const FORGE: &str = "\n[signers.forge]\n\
-                     github = { workflow = \".github/workflows/sluice.yml\", ref = \"refs/heads/main\" }\n\
-                     \n[pools.forge]\ngithub = { workflow = \".github/workflows/sluice.yml\" }\n\
-                     signer = \"forge\"\n";
 
 impl OnGitHub {
     fn new(name: &str, conditions: &str) -> OnGitHub {
@@ -103,8 +81,7 @@ impl OnGitHub {
         OnGitHub::checked_policy(name, conditions, timeout, lines, "")
     }
 
-    /// [`OnGitHub::checked`], with `extra` after its tables in the policy:
-    /// `main` the forge's, as [`OnGitHub::forge`] gives it (design D14).
+    /// [`OnGitHub::checked`], with `extra` after its tables in the policy.
     fn checked_policy(
         name: &str,
         conditions: &str,
@@ -112,150 +89,15 @@ impl OnGitHub {
         lines: &str,
         extra: &str,
     ) -> OnGitHub {
-        OnGitHub::forged(name, conditions, timeout, lines, extra)
-    }
-
-    /// `main` on GitHub, the forge's (137; design D14): its records on the
-    /// bare remote, the host signing as `a`, the only signer `main`
-    /// trusts, and `[signers.forge]` and `[pools.forge]` with no runners,
-    /// so the forge's round job keeps it and the host claims its runs.
-    fn forge(name: &str, conditions: &str) -> OnGitHub {
-        OnGitHub::forged(name, conditions, "1m", "", "")
-    }
-
-    /// [`OnGitHub::forge`] with [`OnGitHub::checked_policy`]'s arguments.
-    fn forged(name: &str, conditions: &str, timeout: &str, lines: &str, extra: &str) -> OnGitHub {
-        use ssh_key::{Algorithm, LineEnding, PrivateKey};
-        let key = PrivateKey::random(&mut rand_core::OsRng, Algorithm::Ed25519).unwrap();
-        let signer = format!("a {}", key.public_key().to_openssh().unwrap());
-        let g = OnGitHub::with(
+        OnGitHub::with(
             name,
             &format!(
                 "[tests]\nrunner = \"command\"\ncommand = \"sh check.sh\"\n\n\
-                 [signers.a]\nssh = \"{signer}\"\n{FORGE}\n\
-                 [branches.main]\nremote = \"origin\"\ntimeout = \"{timeout}\"\ntrust = [\"a\"]\n{lines}\n\
+                 [branches.main]\nremote = \"origin\"\ntimeout = \"{timeout}\"\n{lines}\n\
                  [branches.main.pull_requests]\n{conditions}\n{extra}"
             ),
             &[("check.sh", CHECK)],
-        );
-        let path = g.config.path().join("a.signing");
-        key.write_openssh_file(&path, LineEnding::LF).unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-        g.config_first(&format!(
-            "[signing]\nsigner = \"a\"\nkey = {:?}\n",
-            path.display().to_string()
-        ));
-        g
-    }
-
-    /// The round job, made at its first call: a host config of the app
-    /// alone (design D4).
-    fn the_job(&self) -> &Job {
-        self.job.get_or_init(|| {
-            let config = Scratch::new("round-job-config");
-            let dir = config.path().join("sluice");
-            std::fs::create_dir_all(&dir).unwrap();
-            let ours =
-                std::fs::read_to_string(self.config.path().join("sluice/config.toml")).unwrap();
-            std::fs::write(
-                dir.join("config.toml"),
-                &ours[ours.find("[forge]").unwrap()..],
-            )
-            .unwrap();
-            Job {
-                config,
-                state: Scratch::new("round-job-state"),
-                remote: Scratch::new("round-job-remote"),
-            }
-        })
-    }
-
-    /// `sluice job round` with `args` as the forge's round job runs it
-    /// (design D3, D6): in an empty repository whose `origin` is GitHub's,
-    /// `origin`'s branches fetched first as the workflow's step does, with
-    /// its config, and with what the last job kept in the forge's cache
-    /// restored before it and kept again after.
-    fn job_with(&self, args: &[&str]) -> Output {
-        let job = self.the_job();
-        let repo = Repo {
-            scratch: Scratch::new("round-job"),
-        };
-        repo.git(&["init", "-q", "-b", "main"]);
-        repo.git(&["config", "credential.helper", ""]);
-        repo.git(&["remote", "add", "origin", "https://github.com/o/r.git"]);
-        repo.git(&[
-            "config",
-            &format!("url.{}.insteadOf", self.bare.path().display()),
-            "https://github.com/o/r.git",
-        ]);
-        repo.git(&[
-            "fetch",
-            "-q",
-            "--no-tags",
-            "origin",
-            "+refs/heads/*:refs/remotes/origin/*",
-        ]);
-        let kept = repo.dir().join(".git/sluice-remote");
-        copy_dir(job.remote.path(), &kept);
-        let out = self
-            .command(env!("CARGO_BIN_EXE_sluice"), repo.dir())
-            .env("XDG_CONFIG_HOME", job.config.path())
-            .env("XDG_STATE_HOME", job.state.path())
-            .args(["job", "round"])
-            .args(args)
-            .output()
-            .unwrap();
-        let _ = std::fs::remove_dir_all(job.remote.path());
-        copy_dir(&kept, job.remote.path());
-        // A quarter of `discovery` passes over a round job: this host's
-        // next follow of each request reads what the job posted (136).
-        let follows = self.state.path().join("sluice/forge/follows/o/r/main.json");
-        if let Ok(bytes) = std::fs::read(&follows) {
-            let mut v: Value = serde_json::from_slice(&bytes).unwrap();
-            if let Some(rows) = v["requests"].as_object_mut() {
-                for row in rows.values_mut() {
-                    row["read_at"] = Value::Null;
-                }
-            }
-            std::fs::write(&follows, v.to_string()).unwrap();
-        }
-        out
-    }
-
-    /// One `sluice job round --branch main`, which must succeed: what it
-    /// said.
-    fn job(&self) -> String {
-        let out = self.job_with(&["--branch", "main"]);
-        assert!(out.status.success(), "{}", text(&out));
-        text(&out)
-    }
-
-    /// `main`'s records on GitHub, as any host reads them: its log, a
-    /// document a line.
-    fn remote_log(&self) -> Vec<Value> {
-        let out = support::git_command()
-            .arg("--git-dir")
-            .arg(self.bare.path())
-            .args(["show", "refs/sluice/state/main:log.jsonl"])
-            .output()
-            .unwrap();
-        String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .map(|l| serde_json::from_str(l).unwrap())
-            .collect()
-    }
-
-    /// `main`'s lead, as its records on GitHub name it.
-    fn lead(&self) -> Option<String> {
-        let out = support::git_command()
-            .arg("--git-dir")
-            .arg(self.bare.path())
-            .args(["show", "refs/sluice/state/main:branch.json"])
-            .output()
-            .unwrap();
-        let v: Value = serde_json::from_slice(&out.stdout).ok()?;
-        v["lead"].as_str().map(str::to_string)
+        )
     }
 
     /// `main` on GitHub under `policy`, its tree holding `files` beside it.
@@ -301,7 +143,6 @@ impl OnGitHub {
             state: Scratch::new(&format!("{name}-state")),
             gh,
             _files: files,
-            job: std::cell::OnceCell::new(),
         }
     }
 
@@ -338,45 +179,20 @@ impl OnGitHub {
     /// One round of `main`, its pull requests taken in first: what it
     /// said, warnings and all. The host's interval has passed since it
     /// last asked GitHub, as it has for a test that changes GitHub as a
-    /// person would and then steps. On a branch the forge keeps, the round
-    /// job's round, then this host's `sluice step main`, which claims and
-    /// runs the checks, then the round job's round again (design D14).
+    /// person would and then steps.
     fn round(&self) -> String {
         self.discovery_passes();
-        if self.job.get().is_none() && !self.forge_keeps() {
-            let out = self.sluice(&["step", "main"]);
-            assert!(out.status.success(), "{}", text(&out));
-            return text(&out);
-        }
-        let mut said = String::new();
-        let job = self.job_with(&["--branch", "main"]);
-        assert!(job.status.success(), "{}", text(&job));
-        said.push_str(&text(&job));
         let out = self.sluice(&["step", "main"]);
         assert!(out.status.success(), "{}", text(&out));
-        said.push_str(&text(&out));
-        let job = self.job_with(&["--branch", "main"]);
-        assert!(job.status.success(), "{}", text(&job));
-        said.push_str(&text(&job));
-        said
-    }
-
-    /// Whether the forge's round job keeps `main`: its policy names a
-    /// pool.
-    fn forge_keeps(&self) -> bool {
-        std::fs::read_to_string(self.repo.dir().join(".config/sluice.toml"))
-            .is_ok_and(|p| p.contains("[pools."))
+        text(&out)
     }
 
     /// The host's `[forge] discovery` has passed since it last asked
     /// GitHub for any branch's open pull requests (136): its next pass
-    /// asks; so has the round job's.
+    /// asks.
     fn discovery_passes(&self) {
-        let mut dirs = vec![self.state.path().join("sluice/forge/requests/o/r")];
-        if let Some(job) = self.job.get() {
-            dirs.push(job.state.path().join("sluice/forge/requests/o/r"));
-        }
-        for entry in dirs.iter().flat_map(std::fs::read_dir).flatten().flatten() {
+        let dir = self.state.path().join("sluice/forge/requests/o/r");
+        for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
             let path = entry.path();
             if path.extension().is_none_or(|e| e != "json") {
                 continue;
@@ -387,12 +203,8 @@ impl OnGitHub {
         }
     }
 
-    /// This host's log of `main`, a document a line: its records on
-    /// GitHub where the forge keeps it.
+    /// This host's log of `main`, a document a line.
     fn log(&self) -> Vec<Value> {
-        if self.forge_keeps() {
-            return self.remote_log();
-        }
         let path = self.repo.dir().join(".git/sluice/main/log.jsonl");
         std::fs::read_to_string(path)
             .unwrap_or_default()
@@ -479,11 +291,10 @@ impl OnGitHub {
             .find(|c| c.starts_with("<!-- sluice-report: main -->"))
     }
 
-    /// sluice's check named `name` on `head`, its latest run, which GitHub
-    /// shows: its status and title.
+    /// sluice's check named `name` on `head`: its status and title.
     fn check(&self, head: &str, name: &str) -> Option<(Status, String)> {
         let held = self.gh.forge.held().unwrap();
-        let p = held.posted.get(head)?.iter().rfind(|p| p.name == name)?;
+        let p = held.posted.get(head)?.iter().find(|p| p.name == name)?;
         Some((p.posting.status, p.posting.title.clone()))
     }
 
@@ -580,48 +391,12 @@ impl OnGitHub {
         git(&["rev-parse", "HEAD"])
     }
 
-    /// `wt submit main <args>` in `dir`. One that waits for its outcome
-    /// runs while the forge's round job and this host's step move `main`
-    /// beside it, as they would (design D14): no host takes its pull
-    /// request in.
     fn wt_submit(&self, dir: &Path, args: &[&str]) -> Output {
-        let waits = !args
-            .iter()
-            .any(|a| ["--no-wait", "--status", "--check", "--timeout"].contains(a));
-        let mut c = self.command("wt", dir);
-        c.args(["submit", "main"]).args(args);
-        if waits && self.forge_keeps() {
-            return self.driven(c);
-        }
-        c.output().unwrap()
-    }
-
-    /// `c`, run while the forge's round job and this host's step move
-    /// `main` beside it, until it ends, at most two minutes: its output.
-    fn driven(&self, mut c: Command) -> Output {
-        let mut child = c
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
-        let until = Instant::now() + Duration::from_secs(120);
-        loop {
-            if child.try_wait().unwrap().is_some() {
-                return child.wait_with_output().unwrap();
-            }
-            if Instant::now() >= until {
-                let _ = child.kill();
-                panic!("never ended: {}", text(&child.wait_with_output().unwrap()));
-            }
-            self.discovery_passes();
-            for out in [
-                self.job_with(&["--branch", "main"]),
-                self.sluice(&["step", "main"]),
-            ] {
-                assert!(out.status.success(), "{}", text(&out));
-            }
-            std::thread::sleep(Duration::from_millis(300));
-        }
+        self.command("wt", dir)
+            .args(["submit", "main"])
+            .args(args)
+            .output()
+            .unwrap()
     }
 
     /// The pull request from `head_ref`, as GitHub holds it now.
@@ -708,23 +483,6 @@ impl OnGitHub {
         sluice::reader::Driver::take(&readers, repository.to_str().unwrap())
             .unwrap()
             .expect("no driver of the repository yet")
-    }
-}
-
-/// `from`'s files copied into `to`, made where absent; nothing where
-/// `from` is absent.
-fn copy_dir(from: &Path, to: &Path) {
-    std::fs::create_dir_all(to).unwrap();
-    let Ok(entries) = std::fs::read_dir(from) else {
-        return;
-    };
-    for e in entries.flatten() {
-        let (src, dst) = (e.path(), to.join(e.file_name()));
-        if e.file_type().unwrap().is_dir() {
-            copy_dir(&src, &dst);
-        } else {
-            std::fs::copy(&src, &dst).unwrap();
-        }
     }
 }
 
@@ -986,7 +744,6 @@ fn a_withdrawn_submission_whose_work_landed_is_reported_landed() {
     let w = g.session("withdrawn-landed", &[("slow", "x\n")]);
     let out = g.wt_submit(&w, &["--no-wait"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
-    g.job();
     let pull = g.pull_from("unit/withdrawn-landed");
     let id = g.of(pull.number)[0]["id"].as_u64().unwrap();
     let out = g.sluice(&["withdraw", &id.to_string()]);
@@ -1009,8 +766,10 @@ fn a_withdrawn_submission_whose_work_landed_is_reported_landed() {
         .unwrap();
     let said = text(&out);
     assert_eq!(out.status.code(), Some(sluice::LANDED), "{said}");
-    // It follows the request, which GitHub shows merged (137).
-    assert!(said.contains("passed · landed"), "{said}");
+    assert!(
+        said.contains(&format!("landed as {}", &landing[..7])),
+        "{said}"
+    );
     assert!(!said.contains("closed without landing"), "{said}");
 }
 
@@ -1041,28 +800,22 @@ fn a_wait_follows_the_new_head_its_submit_withdrew_it_for() {
     let w = g.session("follow", &[("slow", "x\n")]);
     let out = g.wt_submit(&w, &["--no-wait"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
-    g.job();
     let n = g.pull_from("unit/follow").number;
     let first = g.of(n)[0]["id"].as_u64().unwrap();
     let new = g.commit_in(&w, &[("more.txt", "more\n")]);
     let out = g.wt_submit(&w, &["--no-wait"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
-    let mut wait = g.command(env!("CARGO_BIN_EXE_sluice"), &w);
-    wait.args(["wait", &first.to_string(), "--timeout", "60s", "--json"]);
-    let out = g.driven(wait);
+    let out = g
+        .command(env!("CARGO_BIN_EXE_sluice"), &w)
+        .args(["wait", &first.to_string(), "--timeout", "60s", "--json"])
+        .output()
+        .unwrap();
     assert_eq!(out.status.code(), Some(sluice::LANDED), "{}", text(&out));
-    // It follows the request, by GitHub and sluice's check (137).
     let doc: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(doc["state"], "landed", "{doc}");
-    assert_eq!(doc["pull_request"], n, "{doc}");
+    assert_eq!(doc["head"], new.as_str(), "{doc}");
+    assert_ne!(doc["id"], first, "{doc}");
     assert_eq!(g.of(n)[0]["state"], "withdrawn");
-    let landed: Vec<Value> = g
-        .of(n)
-        .into_iter()
-        .filter(|s| s["state"] == "landed")
-        .collect();
-    assert_eq!(landed.len(), 1, "{:?}", g.of(n));
-    assert_eq!(landed[0]["head"], new.as_str());
 }
 
 /// A blamed pull request whose author marks it a draft and then ready
@@ -1222,7 +975,6 @@ fn a_new_head_no_submit_pushed() {
     let w = g.session("held", &[("slow", "x\n")]);
     let out = g.wt_submit(&w, &["--no-wait"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
-    g.job();
     let n = g.pull_from("unit/held").number;
     assert_eq!(g.of(n).len(), 1, "queued: {:?}", g.subs());
     let main = g.main_on_github();
@@ -1249,7 +1001,6 @@ fn withdrawn_by_the_operator() {
     let w = g.session("pulled", &[("slow", "x\n")]);
     let out = g.wt_submit(&w, &["--no-wait"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
-    g.job();
     let pull = g.pull_from("unit/pulled");
     let id = g.of(pull.number)[0]["id"].as_u64().unwrap().to_string();
     let out = g.sluice(&["withdraw", &id, "--as", "operator"]);
@@ -1275,7 +1026,6 @@ fn held_then_marked_ready_by_a_person() {
     let w = g.session("readied", &[("slow", "x\n")]);
     let out = g.wt_submit(&w, &["--no-wait"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
-    g.job();
     let n = g.pull_from("unit/readied").number;
     let new = g.push_from(&w, &[("fix.txt", "a fix\n")]);
     assert_eq!(g.of_after(n, 2).len(), 1);
@@ -1300,7 +1050,6 @@ fn held_when_github_refuses_the_draft() {
     let w = g.session("refused", &[("slow", "x\n")]);
     let out = g.wt_submit(&w, &["--no-wait"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
-    g.job();
     let n = g.pull_from("unit/refused").number;
     g.gh.refuse_drafts(true);
     let new = g.push_from(&w, &[("fix.txt", "a fix\n")]);
@@ -1521,7 +1270,7 @@ fn a_failed_list_ends_intake_and_the_queue_still_lands() {
 fn a_repository_github_no_longer_finds_is_said_once_with_what_to_do() {
     let g = OnGitHub::new("pr-renamed", "");
     let (n, _) = g.by_hand("unit/renamed", &[("slow", Some("x\n"))], false);
-    g.job();
+    g.step();
     assert_eq!(g.of(n).len(), 1, "{:?}", g.subs());
     g.gh.trouble(
         "GET",
@@ -1539,17 +1288,25 @@ fn a_repository_github_no_longer_finds_is_said_once_with_what_to_do() {
          transferred, point the remote that names it at its new address",
         github::APP
     );
-    // No host takes main's pull requests in: the host's passes say once
-    // that main could not be read, and what to do (133; rule core.28).
+    let intake = "sluice: warning: taking in main's pull requests: ";
+    assert_eq!(stderr.matches(intake).count(), 1, "{}", text(&out));
+    let warned = &stderr[stderr.find(intake).unwrap()..];
     assert!(
-        !stderr.contains("taking in main's pull requests"),
+        warned.contains(&format!("{said}\n{todo}")),
         "{}",
         text(&out)
     );
     let passed = "main could not be read, passed by: ";
     assert_eq!(stdout.matches(passed).count(), 1, "{}", text(&out));
     assert_eq!(stdout.matches(&todo).count(), 1, "{}", text(&out));
-    assert!(stdout.contains(said), "{}", text(&out));
+    let refused: Vec<Value> = g
+        .log()
+        .into_iter()
+        .filter(|l| l["event"] == "read-refused")
+        .collect();
+    assert_eq!(refused.len(), 1, "{refused:?}");
+    assert_eq!(refused[0]["asked"], "refs/heads/main");
+    assert_eq!(refused[0]["said"], said);
 }
 
 // ---------------------------------------------------------------------------
@@ -1712,15 +1469,13 @@ impl OnGitHub {
 /// needing a review says it waits to be taken in on `b`, and for what.
 /// Once the second round has posted the first as under test and the
 /// forecast behind both, a round where neither moved posts nothing on
-/// either; the first's check runs until it is ended, so nothing lands
+/// either; the first's check takes five seconds, so nothing lands
 /// between them (D1; rule core.32).
 #[test]
 fn the_check_names_its_host_and_queue() {
     let g = OnGitHub::checked("pr-host-queue", "reviews = 1", "1m", "parallel = 1\n");
     g.named("b", "");
-    let pid = g.repo.dir().join(".git/hang.pid");
-    let hang = format!("{}\n", pid.display());
-    let (a, a_head) = g.by_hand("unit/ahead", &[("hang", Some(&hang))], false);
+    let (a, a_head) = g.by_hand("unit/ahead", &[("slow", Some("s\n"))], false);
     let (b, b_head) = g.by_hand("unit/behind", &[("b.txt", Some("b\n"))], false);
     let (_, c_head) = g.by_hand("unit/unreviewed", &[("c.txt", Some("c\n"))], false);
     for (n, head) in [(a, &a_head), (b, &b_head)] {
@@ -1733,13 +1488,13 @@ fn the_check_names_its_host_and_queue() {
     assert_eq!(status, Status::Queued);
     assert_eq!(title, format!("queued behind #{a}"));
     assert!(
-        summary.starts_with(&format!("Submission {behind} on pool/forge/round.\n\n")),
+        summary.starts_with(&format!("Submission {behind} on b.\n\n")),
         "{summary}"
     );
     assert_eq!(
         block(&summary),
         serde_json::json!({
-            "host": "pool/forge/round", "taken_in": true, "submission": behind, "state": "queued",
+            "host": "b", "taken_in": true, "submission": behind, "state": "queued",
             "ahead": [{ "submission": ahead, "pull_request": a }], "waits_for": [],
         })
     );
@@ -1747,13 +1502,13 @@ fn the_check_names_its_host_and_queue() {
     let (_, title, summary) = g.posted(&c_head).unwrap();
     assert_eq!(title, "waiting: needs 1 review");
     assert!(
-        summary.starts_with("Waiting to be taken in on pool/forge/round.\n\n"),
+        summary.starts_with("Waiting to be taken in on b.\n\n"),
         "{summary}"
     );
     assert_eq!(
         block(&summary),
         serde_json::json!({
-            "host": "pool/forge/round", "taken_in": false, "submission": null, "state": null,
+            "host": "b", "taken_in": false, "submission": null, "state": null,
             "ahead": [], "waits_for": ["1 review"],
         })
     );
@@ -1763,9 +1518,6 @@ fn the_check_names_its_host_and_queue() {
     g.step();
     assert_eq!(g.posts_on(&b_head), on_b, "{:?}", g.posted(&b_head));
     assert_eq!(g.posts_on(&c_head), on_c, "{:?}", g.posted(&c_head));
-    if let Ok(process) = std::fs::read_to_string(&pid) {
-        let _ = Command::new("kill").arg(process.trim()).status();
-    }
 }
 
 /// pull-request-status, "The queue ahead moves": once the submission ahead
@@ -1796,7 +1548,7 @@ fn the_queue_block_moves_with_the_queue_ahead() {
         "{title}"
     );
     assert!(
-        summary.starts_with(&format!("Submission {behind} on pool/forge/round.\n\n")),
+        summary.starts_with(&format!("Submission {behind} on b.\n\n")),
         "{summary}"
     );
     let after = block(&summary);
@@ -1949,7 +1701,6 @@ fn submit_opens_then_updates_a_pull_request() {
     let w = g.session("review", &[("r.txt", "r\n")]);
     let out = g.wt_submit(&w, &["--no-wait"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
-    g.job();
     let said = text(&out);
     let head = github::rev(g.bare.path(), "refs/heads/unit/review").unwrap();
     let pull = g.gh.forge.by_ref("unit/review").unwrap().unwrap();
@@ -1969,10 +1720,7 @@ fn submit_opens_then_updates_a_pull_request() {
         )),
         "{said}"
     );
-    assert!(
-        said.contains(&format!("#{} waits to be taken in", pull.number)),
-        "{said}"
-    );
+    assert!(said.contains("waiting: needs 1 review"), "{said}");
     assert!(g.of(pull.number).is_empty());
 
     let again = g.commit_in(&w, &[("r2.txt", "r2\n")]);
@@ -2344,7 +2092,6 @@ fn submitted_again_at_the_same_head_edits_nothing() {
     let w = g.session("same", &[("same.txt", "same\n")]);
     let out = g.wt_submit(&w, &["--no-wait"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
-    g.job();
     let n = g.pull_from("unit/same").number;
     let edits = || {
         let edit = format!("/repos/o/r/pulls/{n}");
@@ -2387,12 +2134,9 @@ fn submit_refuses_a_dirty_worktree() {
 fn submit_refuses_a_gate_requiring_a_task_kept_out_of_ci() {
     let g = OnGitHub::with(
         "pr-kept-out",
-        &format!(
-            "[tests]\nrunner = \"moon\"\n\n\
-             [branches.main]\nremote = \"origin\"\nrequired = [\"app:integration\"]\n\
-             trust = [\"a\"]\n\n\
-             [branches.main.pull_requests]\n\n[signers.a]\nssh = \"a ssh-ed25519 AAAA\"\n{FORGE}"
-        ),
+        "[tests]\nrunner = \"moon\"\n\n\
+         [branches.main]\nremote = \"origin\"\nrequired = [\"app:integration\"]\n\n\
+         [branches.main.pull_requests]\n",
         &[
             (
                 ".moon/workspace.yml",
@@ -2422,16 +2166,12 @@ fn submit_refuses_a_gate_requiring_a_task_kept_out_of_ci() {
     assert!(held.pulls.is_empty(), "{:?}", held.pulls);
 }
 
-/// pull-request-submit, "Waits through review" (137): an agent's waiting
-/// submit opens a pull request that needs a review, a reviewer approves
-/// it, and the round job takes it in and lands it; the submit prints
-/// waiting, then queued or testing, then landed, and exits 0, having run
-/// no round, and the worktree is removed on landing.
+/// A waiting submit follows its pull request through review: it prints
+/// waiting, then queued or testing, then landed, and exits 0; the agent's
+/// worktree is removed on landing.
 #[test]
-fn waits_through_review() {
+fn a_waiting_submit_follows_its_pull_request() {
     let g = OnGitHub::new("pr-wait", "reviews = 1");
-    // Read at a pace that sees each state the round job posts.
-    g.discovery("10s");
     let w = g.session("wait", &[("w.txt", "w\n")]);
     let mut child = g
         .command("wt", &w)
@@ -2460,34 +2200,30 @@ fn waits_through_review() {
         })
     })
     .collect();
-    let until = Instant::now() + Duration::from_secs(120);
-    let mut reviewed = false;
-    let status = loop {
-        if let Some(status) = child.try_wait().unwrap() {
-            break status;
+    let until = Instant::now() + Duration::from_secs(60);
+    let pull = loop {
+        if let Some(p) = g.gh.forge.by_ref("unit/wait").unwrap() {
+            if !p.head.is_empty() {
+                break p;
+            }
         }
+        assert!(Instant::now() < until, "no pull request opened");
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    // Reviewed once the submit has said it waits, however long the
+    // rounds take on a loaded host.
+    while !heard.lock().unwrap().contains("waiting: needs 1 review") {
         assert!(
             Instant::now() < until,
-            "never ended: {}",
+            "never said it waits: {}",
             heard.lock().unwrap()
         );
-        // Reviewed once the submit has said it waits.
-        if !reviewed && heard.lock().unwrap().contains("waiting: needs 1 review") {
-            let pull = g.pull_from("unit/wait");
-            g.gh.forge
-                .review(pull.number, "reviewer", "APPROVED", &pull.head)
-                .unwrap();
-            reviewed = true;
-        }
-        g.discovery_passes();
-        for out in [
-            g.job_with(&["--branch", "main"]),
-            g.sluice(&["step", "main"]),
-        ] {
-            assert!(out.status.success(), "{}", text(&out));
-        }
-        std::thread::sleep(Duration::from_millis(300));
-    };
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    g.gh.forge
+        .review(pull.number, "reviewer", "APPROVED", &pull.head)
+        .unwrap();
+    let status = child.wait().unwrap();
     for r in readers {
         r.join().unwrap();
     }
@@ -2498,11 +2234,16 @@ fn waits_through_review() {
         .find("queued")
         .or_else(|| said.find("testing"))
         .expect(&said);
-    let landed = said.find("passed · landed").expect(&said);
+    let landed = said.find("landed as").expect(&said);
     assert!(waiting < queued && queued < landed, "{said}");
+    // Every submission is named by its pull request's number.
+    assert!(
+        said.contains(&format!("testing main + #{} ·", pull.number)),
+        "{said}"
+    );
     assert!(!w.exists(), "the worktree is removed on landing: {said}");
-    let pull = g.gh.forge.by_ref("unit/wait").unwrap().unwrap();
-    // 51: the request's outcome was delivered to it.
+    // 51: the request's outcome was delivered to it, and the wait that
+    // reported it left that mark as it stood.
     let s = &g.of(pull.number)[0];
     assert_eq!(
         s["delivered_to"],
@@ -2519,7 +2260,6 @@ fn no_wait_then_status() {
     let w = g.session("later", &[("l.txt", "l\n")]);
     let out = g.wt_submit(&w, &["--no-wait"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
-    g.job();
     let out = g.wt_submit(&w, &["--status"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
     assert!(
@@ -2539,7 +2279,6 @@ fn status_names_the_head_waiting_for_a_review() {
     let w = g.session("headed", &[("h.txt", "h\n")]);
     let out = g.wt_submit(&w, &["--no-wait"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
-    g.job();
     let pull = g.pull_from("unit/headed");
     let out = g.wt_submit(&w, &["--status", "--json"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
@@ -2551,10 +2290,6 @@ fn status_names_the_head_waiting_for_a_review() {
             "pull_request": pull.number, "branch": "main",
             "state": "waiting: needs 1 review", "head": pull.head, "draft": false,
             "sends": pull.head,
-            "queue": {
-                "host": "pool/forge/round", "taken_in": false, "submission": null,
-                "state": null, "ahead": [], "waits_for": ["1 review"],
-            },
         })
     );
 }
@@ -2566,7 +2301,6 @@ fn status_names_a_draft() {
     let w = g.session("drafted", &[("d.txt", "d\n")]);
     let out = g.wt_submit(&w, &["--no-wait"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
-    g.job();
     let pull = g.pull_from("unit/drafted");
     g.gh.forge.set_draft(pull.number, true).unwrap();
     let out = g.wt_submit(&w, &["--status", "--json"]);
@@ -2588,7 +2322,6 @@ fn run_again_follows_a_pull_request_waiting_for_a_review() {
     let w = g.session("again", &[("a.txt", "a\n")]);
     let out = g.wt_submit(&w, &["--no-wait"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
-    g.job();
     let pull = g.pull_from("unit/again");
     let n = pull.number;
     let pushed = github::rev(g.bare.path(), "refs/heads/unit/again");
@@ -2612,10 +2345,6 @@ fn run_again_follows_a_pull_request_waiting_for_a_review() {
         doc,
         serde_json::json!({
             "pull_request": n, "branch": "main", "state": "waiting: needs 1 review",
-            "queue": {
-                "host": "pool/forge/round", "taken_in": false, "submission": null,
-                "state": null, "ahead": [], "waits_for": ["1 review"],
-            },
         })
     );
     let said = String::from_utf8_lossy(&out.stderr);
@@ -2641,7 +2370,6 @@ fn run_again_without_waiting_answers_with_a_pull_request() {
     let w = g.session("asked", &[("a.txt", "a\n")]);
     let out = g.wt_submit(&w, &["--no-wait"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
-    g.job();
     let n = g.pull_from("unit/asked").number;
     let pushed = github::rev(g.bare.path(), "refs/heads/unit/asked");
     let writes = || {
@@ -2696,107 +2424,96 @@ fn run_again_marks_a_draft_ready() {
     assert_eq!(subs[1]["head"], pull.head.as_str());
 }
 
-/// pull-request-submit, "No wait" and "No wait, in words" (137, C.5; D11
-/// of pull-requests-are-queued-on-the-forge): a submit that does not wait
-/// returns once the pull request is open, saying it waits to be taken in,
-/// writes no submission, and `--status` later reports its state.
+/// No wait, its conditions hold: the submit answers with the submission
+/// sluice took the pull request in as, from its checkout `pull/<n>` at the
+/// head pushed, with the pull request beside it; `sluice wait <id>`
+/// follows that submission to its landing.
 #[test]
-fn no_wait_answers_with_its_request() {
-    let g = OnGitHub::new("pr-no-wait-request", "");
-    let w = g.session("worded", &[("worded.txt", "w\n")]);
-    let out = g.wt_submit(&w, &["--no-wait"]);
-    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
-    let n = g.pull_from("unit/worded").number;
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let lines: Vec<&str> = stdout.lines().collect();
-    let opened = format!("pushed unit/worded · opened #{n}: unit/worded");
-    let at = lines.iter().position(|l| *l == opened).expect(&stdout);
-    assert_eq!(
-        lines.get(at + 1).copied(),
-        Some(format!("#{n} waits to be taken in").as_str()),
-        "{stdout}"
-    );
-    assert!(g.of(n).is_empty(), "no submission written: {:?}", g.subs());
-    g.job();
-    let out = g.wt_submit(&w, &["--status", "--json"]);
-    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
-    let doc: Value =
-        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
-    assert_eq!(doc["pull_request"], n, "{doc}");
-    assert!(
-        doc["state"]
-            .as_str()
-            .is_some_and(|s| s.starts_with("testing")),
-        "{doc}"
-    );
-    assert_eq!(doc["queue"]["host"], "pool/forge/round", "{doc}");
-}
-
-/// pull-request-submit, "No wait, its conditions hold" and "No wait,
-/// waiting for a review" (137; D11): under `--json` a submit that does
-/// not wait answers `pull_request`, `branch`, `state` and `queue`, `queue`
-/// `null` before the round job has posted on its head; once the round job
-/// has, the state and the block its check carries. Once taken in, `sluice
-/// wait main --json` follows it to `landed`.
-#[test]
-fn no_wait_in_one_document() {
-    let g = OnGitHub::new("pr-no-wait-doc", "");
+fn no_wait_answers_with_its_submission() {
+    let g = OnGitHub::new("pr-no-wait-id", "");
     let w = g.session("ready", &[("ready.txt", "ready\n")]);
     let out = g.wt_submit(&w, &["--no-wait", "--json"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
     let doc: Value =
         serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
     let n = g.pull_from("unit/ready").number;
-    assert_eq!(
-        doc,
-        serde_json::json!({
-            "pull_request": n, "branch": "main", "state": "waiting to be taken in", "queue": null,
-        })
-    );
-    g.job();
-    let mut wait = g.command(env!("CARGO_BIN_EXE_sluice"), &w);
-    wait.args(["wait", "main", "--json"]);
-    let out = g.driven(wait);
+    assert_eq!(doc["pull_request"], n, "{doc}");
+    assert_eq!(doc["branch"], "main", "{doc}");
+    assert_eq!(doc["ahead"], serde_json::json!([]), "{doc}");
+    let id = doc["id"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("{doc}"))
+        .to_string();
+    let out = g.sluice(&["status", &id, "--json"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let record: Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
+    assert_eq!(record["from"]["worktree"], format!("pull/{n}").as_str());
+    let pushed = github::rev(g.bare.path(), "refs/heads/unit/ready").unwrap();
+    assert_eq!(record["head"], pushed.as_str());
+    let out = g
+        .command(env!("CARGO_BIN_EXE_sluice"), &w)
+        .args(["wait", &id, "--json"])
+        .output()
+        .unwrap();
     assert_eq!(out.status.code(), Some(sluice::LANDED), "{}", text(&out));
     let doc: Value =
         serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
-    assert_eq!(doc["state"], "landed", "{doc}");
+    assert_eq!(doc["state"], "landed");
+}
 
+/// No wait, waiting for a review: the submit answers with the pull request
+/// and what it waits for, and nothing of it is queued.
+#[test]
+fn no_wait_waiting_for_a_review_answers_with_the_pull_request() {
     let g = OnGitHub::new("pr-no-wait-review", "reviews = 1");
     let w = g.session("unreviewed", &[("u.txt", "u\n")]);
-    let out = g.wt_submit(&w, &["--no-wait"]);
-    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
-    let n = g.pull_from("unit/unreviewed").number;
-    g.job();
     let out = g.wt_submit(&w, &["--no-wait", "--json"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
     let doc: Value =
         serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
-    assert_eq!(doc["pull_request"], n, "{doc}");
-    assert_eq!(doc["branch"], "main", "{doc}");
-    assert_eq!(doc["state"], "waiting: needs 1 review", "{doc}");
+    let n = g.pull_from("unit/unreviewed").number;
     assert_eq!(
-        doc["queue"]["waits_for"],
-        serde_json::json!(["1 review"]),
-        "{doc}"
+        doc,
+        serde_json::json!({
+            "pull_request": n, "branch": "main", "state": "waiting: needs 1 review",
+        })
     );
-    assert!(doc.get("id").is_none(), "{doc}");
     assert!(g.of(n).is_empty(), "{:?}", g.subs());
+}
+
+/// No wait, in words: after the line naming the pull request opened, the
+/// submission it was taken in as and what is queued ahead of it.
+#[test]
+fn no_wait_says_its_submission() {
+    let g = OnGitHub::new("pr-no-wait-words", "");
+    let w = g.session("worded", &[("worded.txt", "w\n")]);
+    let out = g.wt_submit(&w, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let n = g.pull_from("unit/worded").number;
+    let id = g.of(n)[0]["id"].as_u64().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+    let opened = format!("pushed unit/worded · opened #{n}: unit/worded");
+    let at = lines.iter().position(|l| *l == opened).expect(&stdout);
+    assert_eq!(
+        lines.get(at + 1).copied(),
+        Some(format!("submission {id} to main from #{n} · nothing queued ahead").as_str()),
+        "{stdout}"
+    );
 }
 
 /// A pull request sent back keeps the agent's worktree: the waiting
 /// submit exits 1 with the failure.
 /// ADR 0041: `sluice wait <branch>` follows this worktree's pull request,
 /// out of time with the document `--status` prints; `sluice wait <n>`
-/// follows the submission the round job took it in as to its landing,
-/// which the host process's passes may have recorded already (135, 137).
+/// takes the pull requests in before each round, and lands it.
 #[test]
 fn wait_follows_a_pull_request() {
     let g = OnGitHub::new("pr-wait-cmd", "reviews = 1");
     let w = g.session("waits", &[("v.txt", "v\n")]);
     let out = g.wt_submit(&w, &["--no-wait"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
-    g.job();
     let wait = |args: &[&str]| {
         g.command(env!("CARGO_BIN_EXE_sluice"), &w)
             .arg("wait")
@@ -2818,13 +2535,10 @@ fn wait_follows_a_pull_request() {
     g.step();
     let status: serde_json::Value =
         serde_json::from_slice(&g.sluice(&["status", "main", "--json"]).stdout).unwrap();
-    // The submission sluice's check on the request names, queued or landed.
-    let id = status["pull_requests"][0]["queue"]["submission"]
+    let id = status["submissions"][0]["id"]
         .as_u64()
         .unwrap_or_else(|| panic!("{status}"));
-    let mut by_id = g.command(env!("CARGO_BIN_EXE_sluice"), &w);
-    by_id.args(["wait", &id.to_string(), "--json"]);
-    let out = g.driven(by_id);
+    let out = wait(&[&id.to_string(), "--json"]);
     assert_eq!(out.status.code(), Some(sluice::LANDED), "{}", text(&out));
     let doc: serde_json::Value =
         serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
@@ -2840,29 +2554,23 @@ fn wait_follows_a_pull_requests_submission() {
     let w = g.session("taken", &[("slow", "x\n")]);
     let out = g.wt_submit(&w, &["--no-wait", "--json"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
-    g.job();
     let doc: Value =
         serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
-    assert!(doc.get("id").is_none(), "{doc}");
-    let n = g.pull_from("unit/taken").number;
-    let id = g.of(n)[0]["id"].as_u64().unwrap();
+    let id = doc["id"].as_u64().unwrap_or_else(|| panic!("{doc}"));
     let out = g
         .command(env!("CARGO_BIN_EXE_sluice"), &w)
         .args(["wait", "main", "--timeout", "2s", "--json"])
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(sluice::WAITING), "{}", text(&out));
-    let doc: Value =
+    let record: Value =
         serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
-    assert_eq!(doc["pull_request"], n, "{doc}");
-    assert_eq!(doc["branch"], "main", "{doc}");
+    assert_eq!(record["id"], id, "{record}");
     assert!(
-        doc["state"]
-            .as_str()
-            .is_some_and(|s| s.starts_with("queued") || s.starts_with("testing")),
-        "{doc}"
+        record["state"] == "queued" || record["state"] == "testing",
+        "{record}"
     );
-    assert_eq!(doc["queue"]["submission"], id, "{doc}");
+    assert!(record.get("pull_request").is_none(), "{record}");
 }
 
 /// 135: beside a live driver, `sluice wait <branch>` takes no pull request
@@ -2889,6 +2597,67 @@ fn a_wait_on_a_pull_request_beside_a_driver() {
         serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
     assert_eq!(doc["pull_request"], pull.number, "{doc}");
     assert!(g.of(pull.number).is_empty(), "{:?}", g.subs());
+}
+
+/// 135: a pull request's submit beside a live driver is the submit's own
+/// act: it opens the pull request, takes it in, and answers with its
+/// submission, as where no driver lives.
+#[test]
+fn a_pull_requests_submit_beside_a_driver() {
+    let g = OnGitHub::new("pr-submit-driver", "");
+    let w = g.session("submitted", &[("s.txt", "s\n")]);
+    let _driver = g.driver();
+    let out = g
+        .command(env!("CARGO_BIN_EXE_sluice"), &w)
+        .args(["submit", "main", "--no-wait", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let doc: Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
+    let n = g.pull_from("unit/submitted").number;
+    assert_eq!(doc["pull_request"], n, "{doc}");
+    let id = doc["id"].as_u64().unwrap_or_else(|| panic!("{doc}"));
+    let subs = g.of(n);
+    assert_eq!(subs.len(), 1, "{subs:?}");
+    assert_eq!(subs[0]["id"], id);
+    assert_eq!(subs[0]["state"], "queued");
+}
+
+/// 135: a pull request's waiting submit beside a live driver takes its
+/// request in at its first pass, and runs no round after: its submission
+/// stays queued while the driver lives.
+#[test]
+fn a_pull_requests_waiting_submit_beside_a_driver() {
+    let g = OnGitHub::new("pr-waiting-driver", "");
+    let w = g.session("waiting", &[("w.txt", "w\n")]);
+    let _driver = g.driver();
+    let mut child = g
+        .command(env!("CARGO_BIN_EXE_sluice"), &w)
+        .args(["submit", "main", "--json"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let until = Instant::now() + Duration::from_secs(60);
+    let n = loop {
+        if let Some(p) = g.gh.forge.by_ref("unit/waiting").unwrap() {
+            if !g.of(p.number).is_empty() {
+                break p.number;
+            }
+        }
+        assert!(Instant::now() < until, "never taken in");
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    // Two passes more of the submit's, each of which would land it.
+    std::thread::sleep(Duration::from_secs(7));
+    let alive = child.try_wait().unwrap().is_none();
+    child.kill().unwrap();
+    child.wait().unwrap();
+    assert!(alive, "the submit ended beside the driver");
+    let subs = g.of(n);
+    assert_eq!(subs.len(), 1, "{subs:?}");
+    assert_eq!(subs[0]["state"], "queued", "{subs:?}");
 }
 
 #[test]
@@ -2926,31 +2695,34 @@ fn a_landing_stands_when_its_release_then_fails() {
         "release",
         &[("release.sh", "echo release.sh takes only up\nexit 1\n")],
     );
-    let mut submit = g.command(env!("CARGO_BIN_EXE_sluice"), &w);
-    submit.args(["submit", "main"]);
-    let out = g.driven(submit);
+    let out = g
+        .command(env!("CARGO_BIN_EXE_sluice"), &w)
+        .args(["submit", "main"])
+        .output()
+        .unwrap();
     assert_eq!(out.status.code(), Some(sluice::LANDED), "{}", text(&out));
+    let n = g.gh.forge.by_ref("unit/release").unwrap().unwrap().number;
     let stdout = String::from_utf8_lossy(&out.stdout);
-    // The landing marks the request merged before the round job posts its
-    // check, so a wait reads `landed as …` or `landed`.
-    assert!(stdout.contains("passed · landed"), "{}", text(&out));
+    assert!(
+        stdout.contains(&format!("testing main + #{n} ·")),
+        "{stdout}"
+    );
+    let main = g.main_on_github();
+    assert!(
+        stdout.ends_with(&format!("passed · landed as {}\n", &main[..7])),
+        "{}",
+        text(&out)
+    );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(!stderr.contains("sluice: after the landing: "), "{stderr}");
-    // The host that ran the combination released its checkout, and the
-    // release's failure is held in main's records for it.
-    let held = g.remote_branch();
     assert!(
-        held["failed_releases"]
-            .as_array()
-            .is_some_and(|f| f.iter().any(|f| {
-                f["place"]
-                    .as_str()
-                    .is_some_and(|p| p.starts_with("sluice/try/main/"))
-                    && f["failed"]
-                        .as_str()
-                        .is_some_and(|w| w.contains("takes only up"))
-            })),
-        "{held}"
+        stdout
+            .lines()
+            .any(|l| l.starts_with("could not release sluice/try/main/")
+                && l.contains("the release command of ")
+                && l.contains("takes only up")),
+        "{}",
+        text(&out)
     );
 }
 
@@ -2962,9 +2734,11 @@ fn a_waiting_submit_reads_again_through_githubs_503() {
     let g = OnGitHub::new("pr-503", "");
     let w = g.session("unanswered", &[("u.txt", "u\n")]);
     g.gh.unavailable(2);
-    let mut submit = g.command(env!("CARGO_BIN_EXE_sluice"), &w);
-    submit.args(["submit", "main"]);
-    let out = g.driven(submit);
+    let out = g
+        .command(env!("CARGO_BIN_EXE_sluice"), &w)
+        .args(["submit", "main"])
+        .output()
+        .unwrap();
     assert_eq!(out.status.code(), Some(sluice::LANDED), "{}", text(&out));
     assert_eq!(g.gh.unavailable_left(), 0);
     let main = g.main_on_github();
@@ -2998,7 +2772,14 @@ fn blamed_then_submitted_again_on_the_same_head() {
     );
     assert!(!said.contains("nothing was queued or run again"), "{said}");
     assert!(
-        said.contains("Sent back as `failed: sh check.sh`."),
+        said.contains(&format!("testing main + #{n} · 1 tasks to run")),
+        "{said}"
+    );
+    assert!(said.contains("failed: sh check.sh"), "{said}");
+    assert!(
+        said.lines().last().is_some_and(
+            |l| l == "the agent working in unit/again fixes it there and submits again"
+        ),
         "{said}"
     );
     let subs = g.of(n);
@@ -3021,18 +2802,20 @@ fn timed_out_then_submitted_again_on_the_same_head() {
     let out = g.wt_submit(&w, &[]);
     let said = text(&out);
     assert_eq!(out.status.code(), Some(1), "{said}");
-    assert!(said.contains("Sent back as `failed: timed out`."), "{said}");
     assert!(
-        said.contains("The next `sluice submit main` from `unit/slowly`"),
+        said.contains(
+            "if the host was slow, the agent working in unit/slowly submits the same head again"
+        ),
         "{said}"
     );
+    assert!(!said.contains("draft"), "{said}");
     let n = g.pull_from("unit/slowly").number;
 
     let out = g.wt_submit(&w, &[]);
     let said = text(&out);
     assert_eq!(out.status.code(), Some(1), "{said}");
     assert!(!said.contains("nothing was queued or run again"), "{said}");
-    assert!(said.contains("marked ready for review"), "{said}");
+    assert!(said.contains(&format!("testing main + #{n} ·")), "{said}");
     assert!(said.contains("timed out"), "{said}");
     let subs = g.of(n);
     assert_eq!(subs.len(), 2, "{subs:?}");
@@ -3048,7 +2831,6 @@ fn a_new_head_submitted_while_queued() {
     let w = g.session("replaced", &[("slow", "x\n")]);
     let out = g.wt_submit(&w, &["--no-wait"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
-    g.job();
     let n = g.pull_from("unit/replaced").number;
     let first = g.of(n);
     assert_eq!(first.len(), 1, "{first:?}");
@@ -3213,7 +2995,7 @@ fn s56_a_refused_request_waits_for_its_submitter() {
     let said = text(&out);
     assert_eq!(out.status.code(), Some(0), "{said}");
     assert!(said.contains("marked ready for review"), "{said}");
-    assert!(said.contains("passed · landed"), "{said}");
+    assert!(said.contains("landed as"), "{said}");
     let subs = g.of(n);
     assert_eq!(subs.len(), 2, "{subs:?}");
     assert_eq!(subs[1]["head"], fixed.as_str());
@@ -3283,12 +3065,7 @@ impl OnGitHub {
             args.extend(["--worktree", w.to_str().unwrap()]);
         }
         args.extend(rest);
-        if rest.contains(&"--no-wait") || !self.forge_keeps() {
-            return self.sluice(&args);
-        }
-        let mut c = self.command(env!("CARGO_BIN_EXE_sluice"), self.repo.dir());
-        c.args(&args);
-        self.driven(c)
+        self.sluice(&args)
     }
 
     /// The open pull request from `unit/<name>`.
@@ -3413,19 +3190,22 @@ fn is_draft(g: &OnGitHub, n: u64) -> bool {
     g.gh.forge.pull(&github::repo(), n).unwrap().unwrap().draft
 }
 
-/// group-submit, "Three pull requests" (125, C.5; D11 of
-/// pull-requests-are-queued-on-the-forge): the act opens each request,
-/// marked one of the group, ready for review at its head, writes no
-/// submission on the host, says each waits to be taken in, and exits 0.
+/// Three pull requests, every condition holding: the act leaves each ready
+/// for review at its head, marked 1, 2 and 3 of 3 of one group, and queues
+/// a submission from each, from its checkout `pull/<n>` at that head, in
+/// the order given and in one write, each said after its pull request;
+/// they are tested as one combination and land.
 #[test]
-fn a_group_act_marks_its_requests_ready_and_queues_nothing_here() {
-    let g = OnGitHub::batched("pr-group-ready", "");
+fn a_group_submit_queues_three_pull_requests_in_order() {
+    let g = OnGitHub::batched("pr-group-three", "");
     let names = ["q1", "q2", "q3"];
     let ws = g.sessions(&names);
     let out = g.submit_group(&ws, &["--no-wait"]);
     let said = text(&out);
     assert_eq!(out.status.code(), Some(0), "{said}");
     let mut token = None;
+    let mut ns = Vec::new();
+    let mut ids = Vec::new();
     for (k, name) in names.iter().enumerate() {
         let pull = g.pull_of(name);
         assert!(pull.open && !pull.draft && pull.base == "main", "{pull:?}");
@@ -3434,52 +3214,47 @@ fn a_group_act_marks_its_requests_ready_and_queues_nothing_here() {
         let (t, rest) = group_mark(&pull.body).unwrap_or_else(|| panic!("{}", pull.body));
         assert_eq!(rest, format!("{}/3 head={head} -->", k + 1));
         assert_eq!(*token.get_or_insert(t.clone()), t, "one group");
-        assert!(g.of(pull.number).is_empty(), "{:?}", g.subs());
-        let opened = format!(
-            "pushed unit/{name} · opened #{}: unit/{name} · marked ready for review",
-            pull.number
+        let subs = g.of(pull.number);
+        assert_eq!(subs.len(), 1, "{:?}", g.subs());
+        assert_eq!(subs[0]["head"], head.as_str());
+        assert_eq!(
+            subs[0]["submitted"],
+            g.of(g.pull_of(names[0]).number)[0]["submitted"]
         );
-        assert!(said.contains(&opened), "{opened:?} in {said}");
-        assert!(
-            said.contains(&format!("#{} waits to be taken in", pull.number)),
-            "{said}"
-        );
+        ns.push(pull.number);
+        ids.push(subs[0]["id"].as_u64().unwrap());
     }
-    assert_eq!(g.wakes_of("main"), 1, "one wake for the act");
-}
-
-/// pull-request-intake, a group's pull requests (125, 137; D11): the round
-/// job takes a group the act marked ready in one pass and one write, in
-/// the order given, and the first combination formed holds all three.
-#[test]
-fn the_round_job_takes_a_group_in_one_write() {
-    let g = OnGitHub::batched("pr-group-one-write", "");
-    let names = ["q1", "q2", "q3"];
-    let ws = g.sessions(&names);
-    let out = g.submit_group(&ws, &["--no-wait"]);
-    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
-    g.job();
-    let ns: Vec<u64> = names.iter().map(|n| g.pull_of(n).number).collect();
-    let ids: Vec<u64> = ns
-        .iter()
-        .map(|n| {
-            let subs = g.of(*n);
-            assert_eq!(subs.len(), 1, "{:?}", g.subs());
-            subs[0]["id"].as_u64().unwrap()
-        })
-        .collect();
     assert!(
         ids.windows(2).all(|w| w[0] < w[1]),
         "in the order given: {ids:?}"
     );
-    let submitted: Vec<Value> = ns
-        .iter()
-        .map(|n| g.of(*n)[0]["submitted"].clone())
-        .collect();
-    assert!(
-        submitted.windows(2).all(|w| w[0] == w[1]),
-        "one write: {submitted:?}"
-    );
+    let lines: Vec<&str> = said.lines().collect();
+    for (k, name) in names.iter().enumerate() {
+        let opened = format!(
+            "pushed unit/{name} · opened #{}: unit/{name} · marked ready for review",
+            ns[k]
+        );
+        let at = lines
+            .iter()
+            .position(|l| *l == opened)
+            .unwrap_or_else(|| panic!("{opened:?} in {said}"));
+        let ahead = match k {
+            0 => "nothing queued ahead".to_string(),
+            _ => format!(
+                "{k} queued ahead ({})",
+                ns[..k]
+                    .iter()
+                    .map(|n| format!("#{n}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        };
+        assert_eq!(
+            lines.get(at + 1).copied(),
+            Some(format!("submission {} to main from #{} · {ahead}", ids[k], ns[k]).as_str()),
+            "{said}"
+        );
+    }
     g.step_until("landed", |g| {
         ns.iter()
             .all(|n| g.of(*n).first().is_some_and(|s| s["state"] == "landed"))
@@ -3493,11 +3268,10 @@ fn the_round_job_takes_a_group_in_one_write() {
     }
 }
 
-/// group-submit (125; D11): under `--json` with `--no-wait`, the act
-/// answers with each pull request beside its worktree, where it stands
-/// and the queue its check carries, and no submission.
+/// Under `--json` with `--no-wait`, the act answers with each submission
+/// beside its worktree and pull request, and what is queued ahead of it.
 #[test]
-fn a_group_submit_answers_with_each_pull_request_in_json() {
+fn a_group_submit_answers_with_each_submission_in_json() {
     let g = OnGitHub::new("pr-group-json", "");
     let names = ["j1", "j2"];
     let ws = g.sessions(&names);
@@ -3506,15 +3280,17 @@ fn a_group_submit_answers_with_each_pull_request_in_json() {
     let doc: Value =
         serde_json::from_slice(&out.stdout).unwrap_or_else(|_| panic!("{}", text(&out)));
     assert_eq!(doc["branch"], "main", "{doc}");
-    let items = doc["pull_requests"].as_array().expect("pull_requests");
+    let items = doc["submissions"].as_array().expect("submissions");
     assert_eq!(items.len(), 2, "{doc}");
+    let mut ahead = Vec::new();
     for ((item, w), name) in items.iter().zip(&ws).zip(names) {
         let n = g.pull_of(name).number;
-        assert_eq!(item["pull_request"], n, "{doc}");
+        let id = g.of(n)[0]["id"].as_u64().unwrap();
+        assert_eq!(item["id"], id, "{doc}");
         assert_eq!(item["worktree"], w.to_str().unwrap(), "{doc}");
-        assert_eq!(item["state"], "waiting to be taken in", "{doc}");
-        assert_eq!(item["queue"], Value::Null, "{doc}");
-        assert!(item.get("id").is_none(), "{doc}");
+        assert_eq!(item["pull_request"], n, "{doc}");
+        assert_eq!(item["ahead"], serde_json::json!(ahead), "{doc}");
+        ahead.push(id);
     }
 }
 
@@ -3525,7 +3301,7 @@ fn a_group_submit_answers_with_each_pull_request_in_json() {
 /// each is a draft at its head, marked one of the group, and no round
 /// takes any of them.
 #[test]
-fn a_group_short_of_a_review_is_refused() {
+fn a_group_submit_one_short_of_a_review_is_refused() {
     let g = OnGitHub::new("pr-group-short", "reviews = 1");
     let names = ["s1", "s2", "s3"];
     let ws = g.sessions(&names);
@@ -3637,7 +3413,6 @@ fn a_group_submit_refused_then_reviewed_is_taken() {
     }
     let out = g.submit_group(&ws, &["--no-wait"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
-    g.job();
     let subs: Vec<Value> = ns
         .iter()
         .map(|n| {
@@ -3671,7 +3446,6 @@ fn a_group_submit_takes_a_pull_request_held_as_a_draft() {
     let w3 = g.session("k3", &[("k3.txt", "x\n")]);
     let out = g.submit_group(&[w1, w3], &["--no-wait"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
-    g.job();
     let p1 = g.pull_of("k1");
     assert!(!p1.draft && p1.head == fixed, "{p1:?}");
     let again: Vec<Value> = g
@@ -3714,7 +3488,6 @@ fn a_group_submit_leaves_a_forks_pull_request_alone() {
     let before = g.gh.forge.pull(&github::repo(), fork).unwrap().unwrap();
     let out = g.submit_group(&ws, &["--no-wait"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
-    g.job();
     assert_eq!(
         g.gh.forge.pull(&github::repo(), fork).unwrap().unwrap(),
         before
@@ -3759,8 +3532,6 @@ fn a_group_submit_with_a_dirty_worktree_pushes_nothing() {
 #[test]
 fn a_waiting_group_submit_follows_each_pull_request() {
     let g = OnGitHub::new("pr-group-wait", "");
-    // Read at a pace that sees each state the round job posts.
-    g.discovery("10s");
     let names = ["w1", "w2", "w3"];
     let ws = g.sessions(&names);
     let out = g.submit_group(&ws, &[]);
@@ -3798,7 +3569,7 @@ fn a_waiting_group_submit_follows_each_pull_request() {
         assert!(
             lines[*i..end]
                 .iter()
-                .any(|l| l.starts_with("passed · landed")),
+                .any(|l| l.starts_with("passed · landed as ")),
             "{said}"
         );
     }
@@ -4070,7 +3841,6 @@ fn a_bolts_landing_worktree_submits_the_bolt_as_github_holds_it() {
 
     let out = g.wt_submit(&w, &["--no-wait"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
-    g.job();
     let said = text(&out);
     assert_eq!(
         g.bolt_on_github(),
@@ -4198,7 +3968,6 @@ fn a_submit_by_name_opens_the_request_from_the_branch() {
 
     let out = g.submit_by_name("bolt/x", &["--no-wait", "--json"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
-    g.job();
     let doc: Value =
         serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
     let pull = g.pull_from("bolt/x");
@@ -4214,9 +3983,10 @@ fn a_submit_by_name_opens_the_request_from_the_branch() {
     assert_eq!(doc["pull_request"], pull.number, "{doc}");
     assert_eq!(doc["branch"], "main", "{doc}");
     assert!(doc.get("copy").is_none(), "{doc}");
-    assert!(doc.get("id").is_none(), "{doc}");
+    let id = doc["id"].as_u64().unwrap_or_else(|| panic!("{doc}"));
     let subs = g.of(pull.number);
     assert_eq!(subs.len(), 1, "{subs:?}");
+    assert_eq!(subs[0]["id"], id);
     assert_eq!(subs[0]["head"], remote.as_str());
     assert_eq!(subs[0]["from"]["head"], "bolt/x");
     assert_eq!(subs[0]["from"]["path"], Value::Null);
@@ -4256,12 +4026,10 @@ fn a_request_by_name_is_collected_by_no_worktree() {
         .git(&["push", "-q", "origin", "bolt/x:refs/heads/bolt/x"]);
     let out = g.submit_by_name("bolt/x", &["--no-wait", "--json"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
-    g.job();
     let doc: Value =
         serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
-    assert!(doc.get("id").is_none(), "{doc}");
+    let id = doc["id"].as_u64().unwrap_or_else(|| panic!("{doc}"));
     let n = g.pull_from("bolt/x").number;
-    let id = g.of(n)[0]["id"].as_u64().unwrap();
 
     for (method, path) in [
         ("POST", "/repos/o/r/check-runs"),
@@ -4274,10 +4042,7 @@ fn a_request_by_name_is_collected_by_no_worktree() {
     let until = Instant::now() + Duration::from_secs(60);
     while g.of(n).iter().all(|s| s["state"] != "failed") {
         assert!(Instant::now() < until, "never failed: {:?}", g.subs());
-        // GitHub refuses each post, so a round job may fail its round:
-        // the next goes on.
         g.discovery_passes();
-        g.job_with(&["--branch", "main"]);
         g.sluice(&["step", "main"]);
         std::thread::sleep(Duration::from_millis(200));
     }
@@ -4316,20 +4081,8 @@ impl OnGitHub {
     /// installation is spent for `minutes` more, as another process on the
     /// host found: until when.
     fn spent_for(&self, minutes: i64) -> chrono::DateTime<chrono::Utc> {
-        self.spent_in(self.state.path(), minutes)
-    }
-
-    /// [`OnGitHub::spent_for`], as the round job's state keeps it.
-    fn spent_for_the_job(&self, minutes: i64) -> chrono::DateTime<chrono::Utc> {
-        let state = self.the_job().state.path().to_path_buf();
-        self.spent_in(&state, minutes)
-    }
-
-    /// The allowance spent for `minutes`, as the host state under `state`
-    /// keeps it.
-    fn spent_in(&self, state: &Path, minutes: i64) -> chrono::DateTime<chrono::Utc> {
         let until = chrono::Utc::now() + chrono::TimeDelta::minutes(minutes);
-        let dir = state.join("sluice/forge/pauses");
+        let dir = self.state.path().join("sluice/forge/pauses");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join(format!(
@@ -4372,9 +4125,11 @@ fn a_waiting_submit_waits_out_the_pause() {
     let g = OnGitHub::new("pr-spent-submit", "");
     let w = g.session("paused", &[("p.txt", "p\n")]);
     let until = g.spent_for(20);
-    let mut submit = g.command(env!("CARGO_BIN_EXE_sluice"), &w);
-    submit.args(["submit", "main"]);
-    let out = g.driven(submit);
+    let out = g
+        .command(env!("CARGO_BIN_EXE_sluice"), &w)
+        .args(["submit", "main"])
+        .output()
+        .unwrap();
     assert_eq!(out.status.code(), Some(sluice::LANDED), "{}", text(&out));
     let stderr = String::from_utf8_lossy(&out.stderr);
     let said = format!(
@@ -4431,18 +4186,17 @@ fn a_submit_that_does_not_wait_fails_at_once_on_the_pause() {
 }
 
 /// The forge-allowance spec's "A landing during the pause" and "Said
-/// once": the round job under a pause lands a combination that passed,
+/// once": `sluice run` under a pause lands a combination that passed,
 /// calls nothing of the installation's allowance, and says the pause once.
 #[test]
 fn a_round_lands_through_the_pause_and_says_it_once() {
     let g = OnGitHub::new("pr-spent-run", "");
     let (n, head) = g.by_hand("unit/through", &[("t.txt", Some("t\n"))], false);
-    g.job();
+    g.step();
     assert_eq!(g.of(n).len(), 1, "{:?}", g.subs());
-    g.host_runs_the_checks();
-    let until = g.spent_for_the_job(20);
+    let until = g.spent_for(20);
     let before = g.repo_calls();
-    let out = g.job_with(&["--branch", "main"]);
+    let out = g.sluice(&["run", "--rounds", "6"]);
     assert!(out.status.success(), "{}", text(&out));
     let stdout = String::from_utf8_lossy(&out.stdout);
     let said = format!(
@@ -4500,15 +4254,9 @@ impl OnGitHub {
         self.step();
     }
 
-    /// How many times main's open pull requests were asked for: the list
-    /// of the branch's, not a host's ask for its own request by its head.
+    /// How many times main's open pull requests were asked for.
     fn lists(&self) -> usize {
-        self.gh.calls("GET", "/repos/o/r/pulls?state=open&base=")
-    }
-
-    /// How many times a host asked for its own request by its head.
-    fn by_head(&self) -> usize {
-        self.gh.calls("GET", "/repos/o/r/pulls?state=open&head=")
+        self.gh.calls("GET", "/repos/o/r/pulls?")
     }
 
     /// How many times pull request `n` itself was read.
@@ -4547,35 +4295,48 @@ impl OnGitHub {
     }
 }
 
-/// forge-reads, "Nothing moved" (136, 137): twenty passes of a host's
-/// `sluice run` over a minute ask GitHub nothing of main's open pull
-/// requests, which only the round job takes in; the next round job asks
-/// once, reading the one waiting for a review again by the one query, and
-/// posts nothing new.
+/// forge-reads, "Nothing moved" and "A restart asks nothing new": twenty
+/// passes of `sluice run` over a minute ask for main's open pull requests
+/// once, and a step started again then asks nothing; the one waiting for a
+/// review is read again only at that asking, by the one query.
 #[test]
 fn nothing_moved_asks_once_a_minute() {
     let g = OnGitHub::new("pr-discovery", "reviews = 1");
     let (n, head) = g.by_hand("unit/review", &[("r.txt", Some("r\n"))], false);
-    g.job();
+    g.settle();
     g.on_main();
+    g.discovery_passes();
     let (lists, beside, queries) = (g.lists(), g.beside_reads(n, &head), g.gh.queries());
-    let posts = g.posts();
     let out = g.skipping(g.repo.dir(), &["run", "--rounds", "20"]);
     assert!(out.status.success(), "{}", text(&out));
-    assert_eq!(g.lists(), lists, "{}", text(&out));
-    assert_eq!(g.gh.queries(), queries, "{}", text(&out));
-    g.job();
-    assert_eq!(g.lists(), lists + 1);
+    assert_eq!(g.lists(), lists + 1, "{}", text(&out));
     assert_eq!(g.gh.queries(), queries + 1, "its reviews, at the asking");
     assert_eq!(g.beside_reads(n, &head), beside, "nothing read alone");
-    assert_eq!(g.posted(&head).unwrap().1, "waiting: needs 1 review");
+    assert_eq!(
+        g.posted(&head).unwrap().1,
+        "waiting: needs 1 review",
+        "{}",
+        text(&out)
+    );
+    let posts = g.posts();
+    for _ in 0..3 {
+        let out = g.sluice(&["step", "main"]);
+        assert!(out.status.success(), "{}", text(&out));
+    }
+    assert_eq!(
+        g.lists(),
+        lists + 1,
+        "a restart asks nothing within the minute"
+    );
+    assert_eq!(g.gh.queries(), queries + 1);
+    assert_eq!(g.beside_reads(n, &head), beside);
     assert_eq!(g.posts(), posts);
 }
 
-/// reader-tick, "A branch the forge keeps, nothing to claim": none open
-/// and the host's interval a minute, six passes of `sluice run` within it
-/// start git no more than one pass and the remote's one fetch a tick, and
-/// ask GitHub nothing after the first (129, 136, 137).
+/// reader-tick, "A branch that takes pull requests between discoveries":
+/// none open and the host's interval a minute, six passes of `sluice run`
+/// within it start git exactly as often as one, and ask GitHub nothing
+/// after the first (129, 136).
 #[test]
 fn passes_between_discoveries_start_no_git_and_ask_github_nothing() {
     let g = OnGitHub::new("pr-idle-ticks", "");
@@ -4598,24 +4359,14 @@ fn passes_between_discoveries_start_no_git_and_ask_github_nothing() {
             .collect();
         (git.starts()[starts..].to_vec(), asked)
     };
+    // The driver's first start pushes the host's intake mark, which its
+    // next start, within a third of the lease, renews never (137).
     run("1");
     let lists = g.lists();
     let (one, asked_one) = run("1");
     let (six, asked_six) = run("6");
-    // main's records are on its remote: each pass after the first starts
-    // the remote's one fetch a tick brings them by, and nothing else
-    // (129; rule core.31).
-    let more: Vec<&String> = six.iter().filter(|c| !one.contains(c)).collect();
-    assert!(six.len() <= one.len() + 5, "one: {one:?}; six: {six:?}");
-    assert!(
-        more.iter().all(|c| c.contains("refs/sluice/state/")),
-        "one: {one:?}; six: {six:?}"
-    );
-    assert_eq!(
-        g.lists(),
-        lists,
-        "a host asks nothing of the forge's branch"
-    );
+    assert_eq!(six.len(), one.len(), "one: {one:?}; six: {six:?}");
+    assert_eq!(g.lists(), lists + 2, "asked at each run's first pass alone");
     for call in &asked_six {
         assert!(
             asked_one.contains(call),
@@ -4626,9 +4377,9 @@ fn passes_between_discoveries_start_no_git_and_ask_github_nothing() {
 }
 
 /// forge-reads, "The host sets the interval": under `discovery = "2m"`,
-/// forty passes of a host's `sluice run` over two minutes ask nothing of
-/// main's pull requests, which only the round job takes in (137). Too
-/// short a `discovery` is refused, naming it and ten seconds.
+/// forty passes over two minutes less three seconds ask once; the next
+/// pass, two minutes after, asks again. Too short a `discovery` is
+/// refused, naming it and ten seconds.
 #[test]
 fn the_host_sets_the_interval() {
     let g = OnGitHub::new("pr-discovery-2m", "reviews = 1");
@@ -4637,7 +4388,11 @@ fn the_host_sets_the_interval() {
     g.on_main();
     let out = g.skipping(g.repo.dir(), &["run", "--rounds", "40"]);
     assert!(out.status.success(), "{}", text(&out));
-    assert_eq!(g.lists(), 0, "{}", text(&out));
+    assert_eq!(g.lists(), 1, "{}", text(&out));
+    g.discovery_passes();
+    let out = g.skipping(g.repo.dir(), &["run", "--rounds", "41"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(g.lists(), 3, "asked at once, and two minutes on");
 
     let short = OnGitHub::new("pr-discovery-5s", "");
     short.discovery("5s");
@@ -4650,14 +4405,14 @@ fn the_host_sets_the_interval() {
     );
 }
 
-/// forge-reads, "A submit on the host" (111, 136, 137): `sluice submit main
-/// --no-wait` opens a pull request and takes nothing in, asking GitHub for
-/// its own request by its head and for no list of main's; the round job
-/// it wakes takes it in at its first asking.
+/// forge-reads, "A submit on the host asks at once": seconds after main's
+/// last asking, `sluice submit main --no-wait` opens a pull request, and
+/// its own pass asks for main's pull requests and takes it in.
 #[test]
 fn a_submit_on_the_host_asks_at_once() {
     let g = OnGitHub::new("pr-discovery-submit", "");
-    let (asked, by_head) = (g.lists(), g.by_head());
+    g.step();
+    let asked = g.lists();
     let w = g.session("prompt", &[("p.txt", "p\n")]);
     let out = g
         .command(env!("CARGO_BIN_EXE_sluice"), &w)
@@ -4667,39 +4422,41 @@ fn a_submit_on_the_host_asks_at_once() {
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
     let n = g.pull_from("unit/prompt").number;
     assert!(
-        text(&out).contains(&format!("#{n} waits to be taken in")),
-        "{}",
+        text(&out).contains(&format!("from #{n}")),
+        "taken in: {}",
         text(&out)
     );
-    assert!(g.of(n).is_empty(), "{:?}", g.subs());
-    assert_eq!(g.lists(), asked, "no list of main's: {}", text(&out));
-    assert_eq!(g.by_head(), by_head + 1, "its own request, by its head");
-    assert_eq!(g.wakes_of("main"), 1);
-    g.job();
     assert_eq!(g.of(n).len(), 1, "{:?}", g.subs());
+    // The open's own list and the pass's.
+    assert_eq!(g.lists(), asked + 2);
 }
 
-/// forge-reads, "A landing asks at once": the round job that lands a
-/// submission asks for main's pull requests again in its next round, and
-/// a round job after it, nothing having moved, asks once.
+/// forge-reads, "A landing asks at once": the pass after a round lands a
+/// submission asks for main's pull requests, and once nothing moves again
+/// the next asks nothing.
 #[test]
 fn a_landing_asks_at_once() {
     let g = OnGitHub::new("pr-discovery-landing", "");
     let (n, _) = g.by_hand("unit/lands", &[("l.txt", Some("l\n"))], false);
-    g.job();
-    g.host_runs_the_checks();
+    let until = Instant::now() + Duration::from_secs(60);
+    while g.of(n).first().is_none_or(|s| s["state"] != "landed") {
+        assert!(Instant::now() < until, "never landed: {:?}", g.subs());
+        let out = g.sluice(&["step", "main"]);
+        assert!(out.status.success(), "{}", text(&out));
+    }
     let asked = g.lists();
-    let said = g.job();
-    assert_eq!(g.of(n)[0]["state"], "landed", "{said}");
-    assert_eq!(g.lists(), asked + 2, "its first asking, and the landing's");
-    g.job();
-    assert_eq!(g.lists(), asked + 3, "then nothing moved");
+    let out = g.sluice(&["step", "main"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(g.lists(), asked + 1, "the landing asks");
+    let out = g.sluice(&["step", "main"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(g.lists(), asked + 1, "then nothing moved");
 }
 
 /// forge-reads, "A waiting pull request that stands" and "Nothing new to
 /// say": a pull request taken into the queue, asked for three times more
-/// by round jobs with nothing moved, has nothing beside its list entry
-/// read again, and its check is neither read back nor posted again.
+/// with nothing moved, has nothing beside its list entry read again, and
+/// its check is neither read back nor posted again.
 #[test]
 fn a_queued_pull_request_that_stands_is_read_by_the_list_alone() {
     let g = OnGitHub::new("pr-discovery-stands", "reviews = 1");
@@ -4711,14 +4468,27 @@ fn a_queued_pull_request_that_stands_is_read_by_the_list_alone() {
     g.gh.forge
         .review(n, "reviewer", "APPROVED", &pull.head)
         .unwrap();
-    g.job();
-    assert_eq!(g.of(n).len(), 1, "taken in: {:?}", g.subs());
+    let status = |g: &OnGitHub| {
+        g.discovery_passes();
+        let out = g
+            .command(env!("CARGO_BIN_EXE_sluice"), &w)
+            .args(["submit", "main", "--status"])
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+        text(&out)
+    };
+    let said = status(&g);
+    assert_eq!(g.of(n).len(), 1, "taken in: {said}");
+    assert!(said.starts_with("queued"), "{said}");
     let (lists, beside) = (g.lists(), g.beside_reads(n, &pull.head));
     let (read_back, posts) = (g.posted_reads(&pull.head), g.posts());
     for _ in 0..3 {
-        g.job();
+        let said = status(&g);
+        assert!(said.starts_with("queued"), "{said}");
     }
-    assert_eq!(g.lists(), lists + 3, "each round job asks once");
+    // Each finds its pull request in the list, and asks.
+    assert_eq!(g.lists(), lists + 6);
     assert_eq!(
         g.beside_reads(n, &pull.head),
         beside,
@@ -4732,37 +4502,41 @@ fn a_queued_pull_request_that_stands_is_read_by_the_list_alone() {
     assert_eq!(g.posts(), posts, "nor posted again");
 }
 
-/// forge-reads, "The state moves": the round job takes the pull request
-/// in, its submission goes from queued to testing as the round forms its
-/// combination, and its check is posted saying testing, with no read of
-/// GitHub's copy first.
+/// forge-reads, "The state moves": the pull request's submission goes
+/// from queued to testing, and its check is posted once, saying testing,
+/// with no read of GitHub's copy first.
 #[test]
 fn the_state_moves_and_is_posted_unread() {
     let g = OnGitHub::new("pr-discovery-moves", "");
     let (n, head) = g.by_hand("unit/moves", &[("slow", Some("x\n"))], false);
-    g.job();
+    g.discovery_passes();
+    let out = g.sluice(&["step", "main"]);
+    assert!(out.status.success(), "{}", text(&out));
     assert_eq!(g.of(n).len(), 1, "{:?}", g.subs());
+    let (read_back, posts) = (g.posted_reads(&head), g.posts());
+    // The round started its test: the records moved, and the next pass
+    // asks and shows it.
+    let out = g.sluice(&["step", "main"]);
+    assert!(out.status.success(), "{}", text(&out));
     let (status, title, _) = g.posted(&head).unwrap();
     assert_eq!(status, Status::InProgress, "{title}");
     assert!(title.starts_with("testing main + #"), "{title}");
-    assert_eq!(g.posted_reads(&head), 0);
+    assert_eq!(g.posts(), posts + 1);
+    assert_eq!(g.posted_reads(&head), read_back);
 }
 
-/// forge-reads, "A draft": each round job's asking reads a draft from the
-/// list alone.
+/// forge-reads, "A draft": each asking reads a draft from the list alone.
 #[test]
 fn a_draft_is_read_from_the_list_alone() {
     let g = OnGitHub::new(
         "pr-discovery-draft",
         "reviews = 1\nchecks = [\"qa/approved\"]",
     );
-    g.job();
-    let lists = g.lists();
     let (n, head) = g.by_hand("unit/drafty", &[("d.txt", Some("d\n"))], true);
     for _ in 0..3 {
-        g.job();
+        g.step();
     }
-    assert_eq!(g.lists(), lists + 3);
+    assert_eq!(g.lists(), 3);
     assert_eq!(g.beside_reads(n, &head), 0);
     assert_eq!(g.posted(&head).unwrap().1, "waiting: a draft");
 }
@@ -4776,7 +4550,7 @@ fn a_draft_is_read_from_the_list_alone() {
 fn a_pull_request_waiting_on_a_check_is_read_at_each_asking() {
     let g = OnGitHub::new("pr-discovery-qa", "checks = [\"qa/approved\"]");
     let (n, head) = g.by_hand("unit/qa", &[("q.txt", Some("q\n"))], false);
-    g.job();
+    g.step();
     assert!(g.of(n).is_empty(), "{:?}", g.subs());
     let checks = |g: &OnGitHub| {
         g.gh.calls(
@@ -4790,7 +4564,7 @@ fn a_pull_request_waiting_on_a_check_is_read_at_each_asking() {
         .check(&head, "qa/approved", Standing::Passed)
         .unwrap();
     assert_eq!(g.pull_from("unit/qa").updated_at, updated);
-    g.job();
+    g.step();
     assert_eq!(g.gh.queries(), queries + 1);
     assert_eq!(checks(&g), before, "nothing read alone");
     assert_eq!(g.of(n).len(), 1, "{:?}", g.subs());
@@ -4806,11 +4580,11 @@ fn a_new_head_is_read_again() {
         "reviews = 1\nchecks = [\"qa/approved\"]",
     );
     let (n, old) = g.by_hand("unit/heads", &[("h.txt", Some("h\n"))], false);
-    g.job();
+    g.step();
     let reviews = g.gh.calls("GET", &format!("/repos/o/r/pulls/{n}/reviews"));
     let queries = g.gh.queries();
     let new = g.push_more("unit/heads", "h2.txt");
-    g.job();
+    g.step();
     assert_eq!(g.gh.queries(), queries + 1);
     assert_eq!(
         g.gh.calls("GET", &format!("/repos/o/r/pulls/{n}/reviews")),
@@ -4838,15 +4612,22 @@ fn a_wait_reads_its_pull_request_once_in_a_quarter_of_the_interval() {
     let n = g.pull_from("unit/followed").number;
     g.settle();
     let before = g.pull_reads(n);
-    let (lists, by_head) = (g.lists(), g.by_head());
+    let lists = g.lists();
     let out = g.skipping(&w, &["wait", "main", "--timeout", "57s"]);
     assert_eq!(out.status.code(), Some(sluice::WAITING), "{}", text(&out));
     let reads = g.pull_reads(n) - before;
     assert!((1..=4).contains(&reads), "{reads} reads: {}", text(&out));
-    // No list of main's: only the wait's finding of its request by its
-    // head (137).
-    assert_eq!(g.lists(), lists, "{}", text(&out));
-    assert_eq!(g.by_head(), by_head + 1, "{}", text(&out));
+    // Its own asking found nothing due: only the wait's finding of it.
+    assert_eq!(g.lists(), lists + 1, "{}", text(&out));
+}
+
+/// Another host over `main`'s remote and GitHub: its own clone, config and
+/// state, its name among its peers given (137).
+struct Other<'a> {
+    g: &'a OnGitHub,
+    repo: Repo,
+    config: Scratch,
+    state: Scratch,
 }
 
 impl OnGitHub {
@@ -4863,16 +4644,644 @@ impl OnGitHub {
     fn named(&self, name: &str, lines: &str) {
         self.config_first(&format!("[peers]\nname = \"{name}\"\n{lines}"));
     }
+
+    /// Another host, called `name` among its peers with `lines` more in its
+    /// `[peers]` table, and `config` first in its config, over the same
+    /// remote and GitHub.
+    fn other(&self, name: &str, lines: &str, config: &str) -> Other<'_> {
+        let repo = Repo::clone_of(self.bare.path(), &format!("{name}-host"));
+        repo.git(&["remote", "set-url", "origin", "https://github.com/o/r.git"]);
+        repo.git(&[
+            "config",
+            &format!("url.{}.insteadOf", self.bare.path().display()),
+            "https://github.com/o/r.git",
+        ]);
+        let theirs = Scratch::new(&format!("{name}-host-config"));
+        let dir = theirs.path().join("sluice");
+        std::fs::create_dir_all(&dir).unwrap();
+        let ours = std::fs::read_to_string(self.config.path().join("sluice/config.toml")).unwrap();
+        // This host's [forge] table, its key among them, and nothing of its
+        // [peers] or [signing] tables.
+        let forge = &ours[ours.find("[runs]").unwrap()..];
+        std::fs::write(
+            dir.join("config.toml"),
+            format!("{config}\n[peers]\nname = \"{name}\"\n{lines}\n{forge}"),
+        )
+        .unwrap();
+        Other {
+            g: self,
+            repo,
+            config: theirs,
+            state: Scratch::new(&format!("{name}-host-state")),
+        }
+    }
+
+    /// Record each push of an intake mark to the remote, its new value or
+    /// zeros for a removal, in `intake.log` beside it.
+    fn record_marks(&self) {
+        let log = self.bare.path().join("intake.log");
+        let hook = self.bare.path().join("hooks/post-receive");
+        std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
+        std::fs::write(
+            &hook,
+            format!(
+                "#!/bin/sh\nwhile read old new ref; do\n  case \"$ref\" in\n    \
+                 refs/sluice/intake/*) echo \"$new\" >> {:?};;\n  esac\ndone\n",
+                log.display().to_string()
+            ),
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// Each intake mark pushed to the remote since [`OnGitHub::record_marks`],
+    /// what it says, or `null` for a removal.
+    fn marks_pushed(&self) -> Vec<Value> {
+        let log = std::fs::read_to_string(self.bare.path().join("intake.log")).unwrap_or_default();
+        log.lines()
+            .map(|oid| match oid.trim_matches('0') {
+                "" => Value::Null,
+                _ => self.said(oid),
+            })
+            .collect()
+    }
+
+    /// What the mark commit `oid` on the remote says.
+    fn said(&self, oid: &str) -> Value {
+        let out = support::git_command()
+            .arg("--git-dir")
+            .arg(self.bare.path())
+            .args(["log", "-1", "--format=%B", oid])
+            .output()
+            .unwrap();
+        serde_json::from_slice(String::from_utf8_lossy(&out.stdout).trim().as_bytes()).unwrap()
+    }
+
+    /// main's intake mark on the remote: its commit and what it says.
+    fn mark(&self) -> Option<(String, Value)> {
+        let oid = github::rev(self.bare.path(), "refs/sluice/intake/main")?;
+        let said = self.said(&oid);
+        Some((oid, said))
+    }
+
+    /// Push a mark naming `host` and `holder` to the remote, as another
+    /// host would, where none stands; its commit.
+    fn push_mark(&self, host: &str, holder: &str) -> String {
+        let tree = self
+            .repo
+            .git(&["hash-object", "-t", "tree", "-w", "/dev/null"]);
+        let said = format!("{{\"host\":\"{host}\",\"holder\":\"{holder}\",\"sluice\":\"0.0.0\"}}");
+        let commit = self.repo.git(&["commit-tree", &tree, "-m", &said]);
+        self.repo.git(&[
+            "push",
+            "-q",
+            "origin",
+            &format!("{commit}:refs/sluice/intake/main"),
+        ]);
+        commit
+    }
 }
 
-/// request-intake-host, "A worktree's submission stays": `main` is the
-/// forge's and its round job keeps it, and host A has a submission to
-/// `bolt/x` from one of its worktrees, which its rounds advance as before.
+impl Other<'_> {
+    fn command(&self, program: &str, dir: &Path) -> Command {
+        let bin = Path::new(env!("CARGO_BIN_EXE_sluice")).parent().unwrap();
+        let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+        let mut c = Command::new(program);
+        support::isolated(&mut c)
+            .current_dir(dir)
+            .env("PATH", path)
+            .env("XDG_CONFIG_HOME", self.config.path())
+            .env("XDG_STATE_HOME", self.state.path())
+            .env("SLUICE_FORGE_API", self.g.gh.url())
+            .env_remove("SLUICE_AGENT")
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .stdin(Stdio::null());
+        c
+    }
+
+    fn sluice(&self, args: &[&str]) -> Output {
+        self.command(env!("CARGO_BIN_EXE_sluice"), self.repo.dir())
+            .args(args)
+            .output()
+            .unwrap()
+    }
+
+    /// `sluice <args>` in `dir`, its pauses skipped and its clock moved on
+    /// by each.
+    fn skipping(&self, dir: &Path, args: &[&str]) -> Output {
+        self.command(env!("CARGO_BIN_EXE_sluice"), dir)
+            .env("SLUICE_ROUND_SLEEP", "record")
+            .args(args)
+            .output()
+            .unwrap()
+    }
+
+    /// `sluice run` of `rounds` passes, its HEAD on `main` so it serves the
+    /// branches the policy turns pull requests on for.
+    fn run(&self, rounds: &str) -> String {
+        self.repo.git(&["symbolic-ref", "HEAD", "refs/heads/main"]);
+        let out = self.skipping(self.repo.dir(), &["run", "--rounds", rounds]);
+        assert!(out.status.success(), "{}", text(&out));
+        text(&out)
+    }
+
+    /// This host's `[forge] discovery` has passed since it last asked
+    /// GitHub for main's open pull requests (136).
+    fn discovery_passes(&self) {
+        let path = self
+            .state
+            .path()
+            .join("sluice/forge/requests/o/r/main.json");
+        if let Ok(bytes) = std::fs::read(&path) {
+            let mut v: Value = serde_json::from_slice(&bytes).unwrap();
+            v["asked"] = Value::Null;
+            std::fs::write(&path, v.to_string()).unwrap();
+        }
+    }
+
+    /// The submissions from pull request `n` in this host's records.
+    fn of(&self, n: u64) -> Vec<Value> {
+        let out = self.sluice(&["status", "main", "--json", "--all"]);
+        assert!(out.status.success(), "{}", text(&out));
+        let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+        let place = format!("pull/{n}");
+        v["submissions"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|s| s["from"]["worktree"] == place.as_str())
+            .collect()
+    }
+
+    /// A worktree on the remote's branch `name`, as its session would have.
+    fn worktree_of(&self, name: &str) -> PathBuf {
+        let dir = self
+            .repo
+            .dir()
+            .with_extension(format!("s-{}", name.replace('/', "-")));
+        let _ = std::fs::remove_dir_all(&dir);
+        self.repo.git(&[
+            "fetch",
+            "-q",
+            "origin",
+            &format!("{name}:refs/remotes/origin/{name}"),
+        ]);
+        self.repo.git(&[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            name,
+            dir.to_str().unwrap(),
+            &format!("origin/{name}"),
+        ]);
+        dir
+    }
+}
+
+/// request-intake-host, "Records on each host": host A's `sluice run`
+/// holds main's intake mark, and host B's `sluice run` asks GitHub nothing
+/// about main's open pull requests and takes nothing in.
+#[test]
+fn records_on_each_host_one_host_asks() {
+    let g = OnGitHub::new("intake-each", "");
+    g.named("a", "");
+    let (n, _) = g.by_hand("unit/each", &[("e.txt", Some("e\n"))], false);
+    g.on_main();
+    let out = g.skipping(g.repo.dir(), &["run", "--rounds", "1"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(g.mark().unwrap().1["host"], "a");
+    let b = g.other("b", "", "");
+    let lists = g.lists();
+    let said = b.run("5");
+    assert_eq!(g.lists(), lists, "{said}");
+    assert!(b.of(n).is_empty(), "{said}");
+}
+
+/// request-intake-host, "Records on the remote": another host keeps main,
+/// its lease not passed by this host's observation, and a `sluice wait` on
+/// this host asks GitHub nothing about main's open pull requests and runs
+/// no round of main.
+#[test]
+fn records_on_the_remote_only_the_lead_asks() {
+    use ssh_key::{Algorithm, LineEnding, PrivateKey};
+    let keys = [
+        PrivateKey::random(&mut rand_core::OsRng, Algorithm::Ed25519).unwrap(),
+        PrivateKey::random(&mut rand_core::OsRng, Algorithm::Ed25519).unwrap(),
+    ];
+    let line = |p: &str, k: &PrivateKey| format!("{p} {}", k.public_key().to_openssh().unwrap());
+    let g = OnGitHub::with(
+        "intake-signed",
+        &format!(
+            "[tests]\nrunner = \"command\"\ncommand = \"sh check.sh\"\n\n\
+             [signers.a]\nssh = \"{}\"\n\n[signers.b]\nssh = \"{}\"\n\n\
+             [branches.main]\nremote = \"origin\"\ntimeout = \"1m\"\ntrust = [\"a\", \"b\"]\n\n\
+             [branches.main.pull_requests]\n",
+            line("a", &keys[0]),
+            line("b", &keys[1])
+        ),
+        &[("check.sh", CHECK)],
+    );
+    let signing = |name: &str, key: &PrivateKey, dir: &Path| {
+        let path = dir.join(format!("{name}.signing"));
+        key.write_openssh_file(&path, LineEnding::LF).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        format!(
+            "[signing]\nsigner = \"{name}\"\nkey = {:?}\n",
+            path.display().to_string()
+        )
+    };
+    g.config_first(&signing("a", &keys[0], g.config.path()));
+    g.named("a", "");
+    // Slow, so the submission is still under test when B waits on it.
+    let (n, _) = g.by_hand("unit/signed", &[("slow", Some("s\n"))], false);
+    g.step();
+    let id = g.of(n)[0]["id"].as_u64().unwrap().to_string();
+    let keys_dir = Scratch::new("intake-signed-b-key");
+    let b = g.other("b", "", &signing("b", &keys[1], keys_dir.path()));
+    let lists = g.lists();
+    let out = b.skipping(b.repo.dir(), &["wait", &id, "--timeout", "30s"]);
+    assert_eq!(out.status.code(), Some(sluice::WAITING), "{}", text(&out));
+    assert_eq!(g.lists(), lists, "{}", text(&out));
+}
+
+/// request-intake-host, "A live driver keeps it": host A's `sluice run`
+/// holds the mark, and host B's `sluice run` passing main within the lease
+/// leaves it A's.
+#[test]
+fn a_live_driver_keeps_the_mark() {
+    let g = OnGitHub::new("intake-kept", "");
+    g.named("a", "");
+    g.on_main();
+    let out = g.skipping(g.repo.dir(), &["run", "--rounds", "1"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let (held, said) = g.mark().unwrap();
+    assert_eq!(
+        said,
+        serde_json::json!({"host": "a", "holder": "driver", "sluice": said["sluice"]})
+    );
+    let b = g.other("b", "", "");
+    let out = b.run("20");
+    assert_eq!(g.mark().unwrap().0, held, "{out}");
+}
+
+/// request-intake-host, "Two takers at once": waits on hosts A and B,
+/// where no `sluice run` lives, each push the mark leased on its absence;
+/// one host holds it at a time, and the other takes nothing in.
+#[test]
+fn two_takers_at_once_one_holds() {
+    let g = OnGitHub::new("intake-two", "reviews = 1");
+    g.named("a", "");
+    g.record_marks();
+    let (n, _) = g.by_hand("unit/two", &[("t.txt", Some("t\n"))], false);
+    let b = g.other("b", "", "");
+    let wa = g.repo.dir().with_extension("s-two");
+    g.repo
+        .git(&["worktree", "add", "-q", wa.to_str().unwrap(), "unit/two"]);
+    let wb = b.worktree_of("unit/two");
+    let wait = |c: &mut Command| {
+        c.args(["wait", "main", "--timeout", "4s"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap()
+    };
+    let pa = wait(&mut g.command(env!("CARGO_BIN_EXE_sluice"), &wa));
+    let pb = wait(&mut b.command(env!("CARGO_BIN_EXE_sluice"), &wb));
+    let (oa, ob) = (
+        pa.wait_with_output().unwrap(),
+        pb.wait_with_output().unwrap(),
+    );
+    let shown = format!("{}\n{}", text(&oa), text(&ob));
+    // One host holds it at a time: a push by another host only once the
+    // holder let it go. The wait that ends first drops it, and the other,
+    // still waiting, may then push its own where none stands.
+    let pushed = g.marks_pushed();
+    assert!(pushed.iter().any(|m| !m.is_null()), "{shown}");
+    let mut holder: Option<&str> = None;
+    for m in &pushed {
+        if m.is_null() {
+            holder = None;
+            continue;
+        }
+        let host = m["host"].as_str().unwrap();
+        assert!(
+            holder.is_none_or(|h| h == host),
+            "one host held it at a time: {pushed:?}\n{shown}"
+        );
+        assert_eq!(m["holder"], "wait", "{pushed:?}");
+        holder = Some(host);
+    }
+    // Waiting on a review, nothing is submitted; the one that held it read
+    // the request, and the other asked nothing of the list but its own
+    // finding of its request.
+    assert!(g.of(n).is_empty() && b.of(n).is_empty());
+    assert_eq!(g.mark(), None, "let go when each wait ended: {shown}");
+}
+
+/// request-intake-host, "A driver shows itself": main has no mark, and
+/// host A's `sluice run` pushes one naming A and a driver, and takes main's
+/// pull requests in.
+#[test]
+fn a_driver_shows_itself() {
+    let g = OnGitHub::new("intake-driver", "");
+    g.named("a", "");
+    let (n, _) = g.by_hand("unit/shown", &[("s.txt", Some("s\n"))], false);
+    g.on_main();
+    let out = g.skipping(g.repo.dir(), &["run", "--rounds", "1"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let (_, said) = g.mark().unwrap();
+    assert_eq!(
+        (&said["host"], &said["holder"]),
+        (&"a".into(), &"driver".into())
+    );
+    assert_eq!(g.of(n).len(), 1, "{}", text(&out));
+}
+
+/// request-intake-host, "Two drivers see each other": host A's `sluice
+/// run` holds the mark, and host B's, starting, pushes none and takes
+/// nothing in.
+#[test]
+fn two_drivers_see_each_other() {
+    let g = OnGitHub::new("intake-drivers", "");
+    g.named("a", "");
+    g.on_main();
+    let out = g.skipping(g.repo.dir(), &["run", "--rounds", "1"]);
+    assert!(out.status.success(), "{}", text(&out));
+    g.record_marks();
+    let (n, _) = g.by_hand("unit/drivers", &[("d.txt", Some("d\n"))], false);
+    let b = g.other("b", "", "");
+    let said = b.run("3");
+    assert!(g.marks_pushed().is_empty(), "{said}");
+    assert!(b.of(n).is_empty(), "{said}");
+}
+
+/// request-intake-host, "A wait shows itself": main has no mark, and a
+/// wait on host B, where no `sluice run` lives, pushes the mark naming B
+/// and a wait and takes main's pull requests in; "A wait lets go": once it
+/// ends, the mark is gone.
+#[test]
+fn a_wait_shows_itself_and_lets_go() {
+    let g = OnGitHub::new("intake-wait", "");
+    g.named("a", "");
+    g.record_marks();
+    let (n, _) = g.by_hand("unit/waits", &[("w.txt", Some("w\n"))], false);
+    let b = g.other("b", "", "");
+    let w = b.worktree_of("unit/waits");
+    let out = b.skipping(&w, &["wait", "main", "--timeout", "1m"]);
+    let pushed = g.marks_pushed();
+    assert!(
+        matches!(pushed.first(), Some(m) if m["host"] == "b" && m["holder"] == "wait"),
+        "{pushed:?}\n{}",
+        text(&out)
+    );
+    assert!(!b.of(n).is_empty(), "{}", text(&out));
+    assert_eq!(pushed.last(), Some(&Value::Null), "let go: {pushed:?}");
+    assert_eq!(g.mark(), None);
+}
+
+/// request-intake-host, "Waits and steps alone keep no mark": host A
+/// reaches main by a wait and steps alone; once the wait ends no mark
+/// stands, and its steps take main's pull requests in and push none.
+#[test]
+fn waits_and_steps_alone_keep_no_mark() {
+    let g = OnGitHub::new("intake-alone", "");
+    g.named("a", "");
+    let w = g.session("alone", &[("a.txt", "a\n")]);
+    let out = g.wt_submit(&w, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let out = g.skipping(&w, &["wait", "main", "--timeout", "30s"]);
+    assert!(out.status.code().is_some(), "{}", text(&out));
+    assert_eq!(g.mark(), None, "{}", text(&out));
+    g.record_marks();
+    let (n, _) = g.by_hand("unit/stepped", &[("s.txt", Some("s\n"))], false);
+    g.step();
+    assert_eq!(g.of(n).len(), 1);
+    assert!(g.marks_pushed().is_empty());
+    assert_eq!(g.mark(), None);
+}
+
+/// request-intake-host, "A driver takes from a wait": a wait on host A
+/// holds the mark, and host B's `sluice run` replaces it at once; A's next
+/// pass takes nothing in.
+#[test]
+fn a_driver_takes_from_a_wait() {
+    let g = OnGitHub::new("intake-take", "");
+    g.named("a", "");
+    g.push_mark("a", "wait");
+    let b = g.other("b", "", "");
+    b.run("1");
+    let (_, said) = g.mark().unwrap();
+    assert_eq!(
+        (&said["host"], &said["holder"]),
+        (&"b".into(), &"driver".into())
+    );
+    let (n, _) = g.by_hand("unit/taken", &[("t.txt", Some("t\n"))], false);
+    let lists = g.lists();
+    g.step();
+    assert!(g.of(n).is_empty());
+    assert_eq!(g.lists(), lists, "A asked GitHub nothing of main's list");
+}
+
+/// request-intake-host, "A host that stopped": the host that held the mark
+/// stopped, and host B, having seen it unchanged for its lease, takes it
+/// and takes main's pull requests in.
+#[test]
+fn a_host_that_stopped_loses_the_mark() {
+    let g = OnGitHub::new("intake-lapsed", "");
+    g.named("a", "");
+    let stopped = g.push_mark("a", "driver");
+    let (n, _) = g.by_hand("unit/lapsed", &[("l.txt", Some("l\n"))], false);
+    let b = g.other("b", "lease = \"30s\"\nalive = \"10s\"", "");
+    let said = b.run("3");
+    assert_eq!(g.mark().unwrap().0, stopped, "within the lease: {said}");
+    assert!(b.of(n).is_empty());
+    let said = b.run("12");
+    let (_, mark) = g.mark().unwrap();
+    assert_eq!(mark["host"], "b", "{said}");
+    assert!(!b.of(n).is_empty(), "{said}");
+}
+
+/// Host A, called `a`, testing `pull/<n>` with a check that goes on until
+/// it is ended, when host B's `sluice run` takes main's mark and the
+/// request in: the request's number, its submission's id on A, the run's
+/// process, and the place and combination A's log says it is tested in.
+fn handed_mid_test(g: &OnGitHub) -> (u64, u64, String, String, String) {
+    let (n, id, process, place, combination, _) = handing_mid_test(g);
+    (n, id, process, place, combination)
+}
+
+/// [`handed_mid_test`], with host B.
+fn handing_mid_test(g: &OnGitHub) -> (u64, u64, String, String, String, Other<'_>) {
+    g.named("a", "");
+    let pid = g.repo.dir().join(".git/hang.pid");
+    let hang = format!("{}\n", pid.display());
+    let (n, _) = g.by_hand("unit/handed", &[("hang", Some(&hang))], false);
+    g.step();
+    let id = g.of(n)[0]["id"].as_u64().expect("taken in");
+    let until = Instant::now() + Duration::from_secs(60);
+    while !pid.exists() {
+        assert!(Instant::now() < until, "the check never started");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let process = std::fs::read_to_string(&pid).unwrap().trim().to_string();
+    assert!(alive(&process));
+    let testing = g
+        .log()
+        .into_iter()
+        .find(|l| l["event"] == "testing" && l["submissions"][0] == id)
+        .expect("A tests it");
+    let place = testing["place"].as_str().unwrap().to_string();
+    let combination = testing["combination"].as_str().unwrap().to_string();
+    let b = g.other("b", "", "");
+    b.run("1");
+    assert_eq!(g.mark().unwrap().1["host"], "b");
+    assert!(!b.of(n).is_empty(), "B takes it in");
+    (n, id, process, place, combination, b)
+}
+
+/// Whether the process `pid` is there.
+fn alive(pid: &str) -> bool {
+    Command::new("kill")
+        .args(["-0", pid])
+        .stderr(Stdio::null())
+        .status()
+        .unwrap()
+        .success()
+}
+
+/// Host A's pass after B took main's mark ended A's run of `pull/<n>` and
+/// released its checkout, and read nothing of the run (the
+/// obsolete-combinations spec).
+fn ended_by_the_hand_over(g: &OnGitHub, process: &str, place: &str, combination: &str) {
+    let until = Instant::now() + Duration::from_secs(10);
+    while alive(process) {
+        assert!(Instant::now() < until, "A's run goes on");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let log = g.log();
+    assert!(
+        log.iter()
+            .any(|l| l["event"] == "released" && l["place"] == place),
+        "{log:?}"
+    );
+    assert!(
+        !log.iter()
+            .any(|l| l["event"] == "result" && l["combination"] == combination),
+        "{log:?}"
+    );
+}
+
+/// request-intake-host, "Handed over" and "Handed over mid-test by a
+/// driver": host A has `pull/<n>` under test in its records and host B's
+/// `sluice run` takes main's mark; A's next pass withdraws it naming B,
+/// ends its run and releases its checkout, reading no result of it, and B
+/// takes it in.
+#[test]
+fn handed_over() {
+    let g = OnGitHub::new("intake-handed", "");
+    let (n, _, process, place, combination) = handed_mid_test(&g);
+    let posts = g.posts();
+    g.step();
+    let a = g.of(n);
+    assert_eq!(a[0]["state"], "withdrawn", "{a:?}");
+    assert_eq!(a[0]["withdrawn"]["by"], "b takes main's pull requests in");
+    assert_eq!(a[0]["withdrawn"]["handed_over_to"], "b");
+    assert_eq!(g.posts(), posts, "A posts nothing");
+    ended_by_the_hand_over(&g, &process, &place, &combination);
+}
+
+/// request-intake-host, "Handed over mid-test by a wait": host A, with no
+/// driver, is testing `pull/<n>` when B takes main's mark; a wait on A
+/// withdraws it, ends its run and releases its checkout, and runs no round
+/// for `main`, which would read main moved since A last read it. The
+/// request carries the submission's work on B, so the wait follows the
+/// request and is never told it was withdrawn (122, 137).
+#[test]
+fn handed_over_by_a_wait() {
+    let g = OnGitHub::new("intake-handed-wait", "");
+    let (n, id, process, place, combination) = handed_mid_test(&g);
+    let moved = g
+        .repo
+        .branch("elsewhere", "main", &[("e.txt", Some("e\n"))]);
+    g.repo
+        .git(&["push", "-q", "origin", &format!("{moved}:refs/heads/main")]);
+    let posts = g.posts();
+    let out = g.sluice(&["wait", &id.to_string(), "--timeout", "2s", "--json"]);
+    assert_eq!(out.status.code(), Some(sluice::WAITING), "{}", text(&out));
+    let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(doc["pull_request"], n, "{doc}");
+    let a = g.of(n);
+    assert_eq!(a[0]["withdrawn"]["by"], "b takes main's pull requests in");
+    assert_eq!(a[0]["withdrawn"]["handed_over_to"], "b");
+    assert_eq!(g.posts(), posts, "A posts nothing");
+    ended_by_the_hand_over(&g, &process, &place, &combination);
+    let log = g.log();
+    assert!(!log.iter().any(|l| l["event"] == "moved"), "{log:?}");
+}
+
+/// request-intake-host, "A landing is not handed over": host A's
+/// `pull/<n>` submission is landing when B takes the mark; A's landing
+/// finishes, and nothing of it is withdrawn.
+#[test]
+fn a_landing_is_not_handed_over() {
+    let g = OnGitHub::new("intake-landing", "");
+    g.named("a", "");
+    // The remote refuses main's pushes while `refuse` exists beside it, so
+    // A's landing is left for its next step to settle (122).
+    let refuse = g.bare.path().join("refuse");
+    let hook = g.bare.path().join("hooks/pre-receive");
+    std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
+    std::fs::write(
+        &hook,
+        format!(
+            "#!/bin/sh\nwhile read old new ref; do\n  \
+             if [ \"$ref\" = refs/heads/main ] && [ -e {:?} ]; then exit 1; fi\ndone\n",
+            refuse.display().to_string()
+        ),
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let (n, _) = g.by_hand("unit/landing", &[("l.txt", Some("l\n"))], false);
+    std::fs::write(&refuse, "").unwrap();
+    let until = Instant::now() + Duration::from_secs(60);
+    let step = || {
+        g.discovery_passes();
+        g.sluice(&["step", "main"])
+    };
+    while !g.of(n).first().is_some_and(|s| s["state"] == "landing") {
+        assert!(Instant::now() < until, "never landing: {:?}", g.of(n));
+        step();
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let b = g.other("b", "", "");
+    b.run("1");
+    assert_eq!(g.mark().unwrap().1["host"], "b");
+    std::fs::remove_file(&refuse).unwrap();
+    while !g.of(n).first().is_some_and(|s| s["state"] == "landed") {
+        assert!(Instant::now() < until, "never landed: {:?}", g.of(n));
+        step();
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let a = g.of(n);
+    assert_eq!(a[0]["state"], "landed", "{a:?}");
+}
+
+/// request-intake-host, "A worktree's submission stays": host A, without
+/// the mark, has a submission to `bolt/x` from one of its worktrees, and
+/// its rounds advance it as before.
 #[test]
 fn a_worktrees_submission_stays() {
     let g = OnGitHub::with_bolt("intake-bolt");
     g.named("a", "");
-    g.job();
+    let b = g.other("b", "", "");
+    b.run("1");
+    assert_eq!(g.mark().unwrap().1["host"], "b");
     let w = g.session("bolted", &[("b.txt", "b\n")]);
     let out = g
         .command(env!("CARGO_BIN_EXE_sluice"), &w)
@@ -4896,30 +5305,30 @@ fn a_worktrees_submission_stays() {
 }
 
 /// request-intake-host, "Read at its pace": a wait on host A follows its
-/// pull request, which the round job takes in, for a minute with `discovery` at
+/// pull request, which host B takes in, for a minute with `discovery` at
 /// sixty seconds; it reads the request and its check from GitHub no more
 /// than four times each, and runs no intake and no round.
 #[test]
-fn a_wait_reads_at_its_pace() {
+fn a_wait_across_hosts_reads_at_its_pace() {
     let g = OnGitHub::new("intake-pace", "reviews = 1");
     g.named("a", "");
+    let b = g.other("b", "", "");
+    b.run("1");
     let w = g.session("paced", &[("p.txt", "p\n")]);
     let out = g.wt_submit(&w, &["--no-wait"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
     let pull = g.pull_from("unit/paced");
-    let (before, checks, lists, by_head) = (
+    let (before, checks, lists) = (
         g.pull_reads(pull.number),
         g.posted_reads(&pull.head),
         g.lists(),
-        g.by_head(),
     );
     let out = g.skipping(&w, &["wait", "main", "--timeout", "57s"]);
     assert_eq!(out.status.code(), Some(sluice::WAITING), "{}", text(&out));
     let reads = g.pull_reads(pull.number) - before;
     assert!((1..=4).contains(&reads), "{reads} reads: {}", text(&out));
     assert!(g.posted_reads(&pull.head) - checks <= 4, "{}", text(&out));
-    assert_eq!(g.lists(), lists, "no list of main's");
-    assert_eq!(g.by_head(), by_head + 1, "its finding of its request alone");
+    assert_eq!(g.lists(), lists + 1, "its finding of its request alone");
     assert!(g.of(pull.number).is_empty(), "no intake, no round");
 }
 
@@ -4935,19 +5344,21 @@ impl OnGitHub {
     }
 }
 
-/// request-intake-host, "Submitted here" (137; D9): `wt submit main
-/// --no-wait` on host A opens a pull request into `main`, the forge's; A's
-/// follows name it at its head, and A's next step asks GitHub nothing of
-/// main's open pull requests and takes nothing in.
+/// request-intake-host, "Submitted here, taken in there": host B's `sluice
+/// run` holds main's intake mark, and `wt submit main --no-wait` on host A
+/// opens a pull request; A's follows name it at its head, and A's next
+/// round asks GitHub nothing of main's open pull requests.
 #[test]
-fn submitted_here_is_followed() {
+fn submitted_here_taken_in_there() {
     let g = OnGitHub::new("follows-submitted", "");
     g.named("a", "");
+    let b = g.other("b", "", "");
+    b.run("1");
+    assert_eq!(g.mark().unwrap().1["host"], "b");
     let w = g.session("there", &[("t.txt", "t\n")]);
-    let lists = g.lists();
     let out = g.wt_submit(&w, &["--no-wait"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
-    assert_eq!(g.lists(), lists, "A's submit asks nothing of the list");
+    let lists = g.lists();
     let pull = g.pull_from("unit/there");
     let follows = g.follows();
     let row = &follows[pull.number.to_string()];
@@ -4957,21 +5368,38 @@ fn submitted_here_is_followed() {
         (&"unit/there".into(), &true.into(), &false.into()),
         "{follows}"
     );
-    let out = g.sluice(&["step", "main"]);
-    assert!(out.status.success(), "{}", text(&out));
+    g.step();
     assert_eq!(g.lists(), lists, "A's round asks nothing of the list");
     assert!(g.of(pull.number).is_empty(), "A took nothing in");
     assert!(g.follows()[pull.number.to_string()].is_object());
 }
 
+/// request-intake-host, "Handed over": host A has `pull/<n>` in its queue
+/// and host B's `sluice run` takes main's mark; A's next pass withdraws its
+/// submission, and A's follows name the request at the head it withdrew.
+#[test]
+fn handed_over_is_followed() {
+    let g = OnGitHub::new("follows-handed", "");
+    let (n, _, process, place, combination) = handed_mid_test(&g);
+    assert!(g.follows()[n.to_string()].is_null(), "taken in here");
+    g.step();
+    let a = g.of(n);
+    assert_eq!(a[0]["state"], "withdrawn", "{a:?}");
+    let follows = g.follows();
+    assert_eq!(follows[n.to_string()]["head"], a[0]["head"], "{follows}");
+    ended_by_the_hand_over(&g, &process, &place, &combination);
+}
+
 /// request-intake-host, "Merged": host A follows the pull request its
-/// waiting submit opened, the round job lands it, and A's submit reads it merged:
+/// waiting submit opened, host B lands it, and A's submit reads it merged:
 /// it says it landed, and A's follows name it no longer.
 #[test]
 fn a_merged_request_leaves_the_follows() {
     let g = OnGitHub::new("follows-merged", "");
     g.discovery("10s");
     g.named("a", "");
+    let b = g.other("b", "", "");
+    b.run("1");
     let w = g.session("merged", &[("m.txt", "m\n")]);
     let mut submit = g
         .command(env!("CARGO_BIN_EXE_sluice"), &w)
@@ -4999,13 +5427,10 @@ fn a_merged_request_leaves_the_follows() {
         }
         std::thread::sleep(Duration::from_millis(200));
     };
-    while !g.of(n).first().is_some_and(|s| s["state"] == "landed") {
-        assert!(
-            Instant::now() < until,
-            "the round job never landed it: {:?}",
-            g.of(n)
-        );
-        g.round();
+    while !b.of(n).first().is_some_and(|s| s["state"] == "landed") {
+        assert!(Instant::now() < until, "B never landed it: {:?}", b.of(n));
+        b.discovery_passes();
+        b.run("2");
     }
     while submit.try_wait().unwrap().is_none() {
         if Instant::now() >= until {
@@ -5021,13 +5446,15 @@ fn a_merged_request_leaves_the_follows() {
 }
 
 /// request-intake-host, "Two waits and a status": host A follows its pull
-/// request, which the round job takes in, with `discovery` at sixty seconds; two
+/// request, which host B takes in, with `discovery` at sixty seconds; two
 /// waits on it for a minute, and statuses of main beside them, read it and
 /// its check from GitHub no more than four times each in all.
 #[test]
 fn two_waits_and_a_status_read_at_one_pace() {
     let g = OnGitHub::new("follows-pace", "reviews = 1");
     g.named("a", "");
+    let b = g.other("b", "", "");
+    b.run("1");
     let w = g.session("paced", &[("p.txt", "p\n")]);
     let out = g.wt_submit(&w, &["--no-wait"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
@@ -5062,14 +5489,16 @@ fn two_waits_and_a_status_read_at_one_pace() {
     assert!(g.of(pull.number).is_empty(), "no intake, no round");
 }
 
-/// request-intake-host, "Landed by the round job": a waiting `sluice submit
-/// main` on host A opened its pull request, the round job takes main's pull
+/// request-intake-host, "Landed on another host": a waiting `sluice submit
+/// main` on host A opened its pull request, host B takes main's pull
 /// requests in and lands it, and A's submit exits 0, reporting it landed.
 #[test]
-fn landed_by_the_round_job() {
+fn landed_on_another_host() {
     let g = OnGitHub::new("intake-landed", "");
     g.discovery("10s");
     g.named("a", "");
+    let b = g.other("b", "", "");
+    b.run("1");
     let w = g.session("landed", &[("l.txt", "l\n")]);
     let mut submit = g
         .command(env!("CARGO_BIN_EXE_sluice"), &w)
@@ -5090,13 +5519,10 @@ fn landed_by_the_round_job() {
         std::thread::sleep(Duration::from_millis(200));
     }
     let n = g.pull_from("unit/landed").number;
-    while !g.of(n).first().is_some_and(|s| s["state"] == "landed") {
-        assert!(
-            Instant::now() < until,
-            "the round job never landed it: {:?}",
-            g.of(n)
-        );
-        g.round();
+    while !b.of(n).first().is_some_and(|s| s["state"] == "landed") {
+        assert!(Instant::now() < until, "B never landed it: {:?}", b.of(n));
+        b.discovery_passes();
+        b.run("2");
     }
     while submit.try_wait().unwrap().is_none() {
         if Instant::now() >= until {
@@ -5107,47 +5533,47 @@ fn landed_by_the_round_job() {
     }
     let out = submit.wait_with_output().unwrap();
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
-    // the round job's landing marks the request merged before the round job's round posts its
+    // B's landing marks the request merged before B's round posts its
     // check, so A reads `landed as …`, the check's title, or `landed`
     // where it read the request between the two (this change's sluice
     // exec main, cli:tools, 2026-11-05): either reports it landed.
     assert!(text(&out).contains("passed · landed"), "{}", text(&out));
+    assert!(g.of(n).is_empty(), "A took nothing in");
 }
 
-/// request-intake-host, "Blamed by the round job": the round job's round blames the
+/// request-intake-host, "Blamed on another host": B's round blames the
 /// pull request, sluice's check on its head concludes as a failure naming
 /// the blamed check, and A's wait exits as a failed submission does,
 /// naming what the check names.
 #[test]
-fn blamed_by_the_round_job() {
+fn blamed_on_another_host() {
     let g = OnGitHub::new("intake-blamed", "");
     g.named("a", "");
+    let b = g.other("b", "", "");
+    b.run("1");
     let w = g.session("blamed", &[("broken", "b\n")]);
     let out = g.wt_submit(&w, &["--no-wait"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
     let pull = g.pull_from("unit/blamed");
     let until = Instant::now() + Duration::from_secs(60);
-    while !g
+    while !b
         .of(pull.number)
         .first()
         .is_some_and(|s| s["state"] == "failed")
     {
         assert!(
             Instant::now() < until,
-            "the round job never blamed it: {:?}",
-            g.of(pull.number)
+            "B never blamed it: {:?}",
+            b.of(pull.number)
         );
-        g.round();
+        b.discovery_passes();
+        b.run("2");
     }
     let out = g.skipping(&w, &["wait", "main", "--timeout", "1m"]);
     assert_eq!(out.status.code(), Some(sluice::FAILED), "{}", text(&out));
-    // An agent's request, held for its next submit: its check says what
-    // sent it back (record 0101).
-    let (_, title, summary) = g.posted(&pull.head).unwrap();
-    assert_eq!(title, "waiting: the next submit");
-    let why = "Sent back as `failed: sh check.sh`.";
-    assert!(summary.contains(why), "{summary}");
-    assert!(text(&out).contains(why), "{}", text(&out));
+    let said = g.posted(&pull.head).unwrap().1;
+    assert!(said.starts_with("failed: "), "{said}");
+    assert!(text(&out).contains(&said), "{}", text(&out));
 }
 
 impl OnGitHub {
@@ -5179,7 +5605,7 @@ impl OnGitHub {
     }
 }
 
-/// request-intake-host, "GitHub keeps a run completed": the round job's `sluice
+/// request-intake-host, "GitHub keeps a run completed": host B's `sluice
 /// run` holds main's mark, and GitHub shows sluice's run on the head of
 /// host A's pull request completed as a failure from an earlier blame,
 /// while its block now reads it taken in and under test. A's wait reads
@@ -5188,6 +5614,8 @@ impl OnGitHub {
 fn a_run_github_keeps_completed_reads_by_its_block() {
     let g = OnGitHub::new("fields-completed", "");
     g.named("a", "");
+    let b = g.other("b", "", "");
+    b.run("1");
     let w = g.session("kept", &[("k.txt", "k\n")]);
     let out = g.wt_submit(&w, &["--no-wait"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
@@ -5212,9 +5640,10 @@ fn a_run_github_keeps_completed_reads_by_its_block() {
     assert_eq!(out.status.code(), Some(sluice::WAITING), "{}", text(&out));
     assert!(text(&out).contains(&testing), "{}", text(&out));
     assert!(g.follows()[n.to_string()].is_object(), "{}", g.follows());
+    assert!(g.of(n).is_empty(), "A took nothing in");
 }
 
-/// request-intake-host, "An older sluice's check": the round job's older sluice
+/// request-intake-host, "An older sluice's check": host B's older sluice
 /// posted the check on the head of host A's pull request with no block,
 /// titled `failed: app:test`, and A's wait reads it sent back by its
 /// words, as it did before checks carried their fields (D6).
@@ -5222,6 +5651,8 @@ fn a_run_github_keeps_completed_reads_by_its_block() {
 fn an_older_sluices_check_reads_by_its_words() {
     let g = OnGitHub::new("fields-older", "");
     g.named("a", "");
+    let b = g.other("b", "", "");
+    b.run("1");
     let w = g.session("older", &[("o.txt", "o\n")]);
     let out = g.wt_submit(&w, &["--no-wait"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
@@ -5244,11 +5675,15 @@ fn an_older_sluices_check_reads_by_its_words() {
 // ---------------------------------------------------------------------------
 
 impl OnGitHub {
-    /// This host, called `a`, opened a pull request from its session
-    /// `name` by `wt submit --no-wait`, which the forge's round job takes
-    /// in: the session's worktree, and the pull request.
-    fn opened_here(&self, name: &str) -> (PathBuf, sluice::profiles::github::forge::Pull) {
+    /// Host B's `sluice run` holds main's intake mark, and this host, called
+    /// `a`, opened a pull request from its session `name` by `wt submit
+    /// --no-wait`: the session's worktree, and the pull request.
+    fn opened_here_held_by_b(
+        &self,
+        name: &str,
+    ) -> (PathBuf, sluice::profiles::github::forge::Pull) {
         self.named("a", "");
+        self.other("b", "", "").run("1");
         let file = format!("{name}.txt");
         let w = self.session(name, &[(file.as_str(), "x\n")]);
         let out = self.wt_submit(&w, &["--no-wait"]);
@@ -5257,18 +5692,18 @@ impl OnGitHub {
     }
 }
 
-/// sluice's check on a pull request's head as the round job posts it while
-/// it holds the request as `submission`, next on main.
+/// sluice's check on a pull request's head as host B posts it while B
+/// holds the request as `submission`, next on main.
 fn queued_on_b(submission: u64) -> Posting {
     let block = serde_json::json!({
-        "host": "pool/forge/round", "taken_in": true, "submission": submission, "state": "queued",
+        "host": "b", "taken_in": true, "submission": submission, "state": "queued",
         "ahead": [], "waits_for": [],
     });
     Posting {
         status: Status::Queued,
         title: "queued: next on main".into(),
         summary: format!(
-            "Submission {submission} on pool/forge/round.\n\n\
+            "Submission {submission} on b.\n\n\
              In main's queue; it lands once its combination passes.\n\n\
              <!-- sluice:queue {block} -->"
         ),
@@ -5277,8 +5712,8 @@ fn queued_on_b(submission: u64) -> Posting {
 }
 
 impl OnGitHub {
-    /// sluice's check on `head`, pull request `n`'s, as the round job posts it
-    /// while the round job holds the request as `submission`; host A's next follow of
+    /// sluice's check on `head`, pull request `n`'s, as host B posts it
+    /// while B holds the request as `submission`; host A's next follow of
     /// it reads it.
     fn held_there(&self, n: u64, head: &str, submission: u64) {
         let p = queued_on_b(submission);
@@ -5293,32 +5728,38 @@ fn last_document(out: &Output) -> Value {
     serde_json::from_str(last).unwrap_or_else(|e| panic!("{e}: {}", text(out)))
 }
 
-/// submission-wait, "Out of time, queued": the round job holds host A's
-/// pull request as submission 1406, and A's `sluice wait main --timeout 2s
-/// --json` in its worktree exits 5, naming the request and the queue the
-/// round job's check carries, its host `pool/forge/round`.
+/// submission-wait, "Out of time, queued on the other host": host B's
+/// `sluice run` holds main's mark and holds host A's pull request as
+/// submission 1406, and A's `sluice wait main --timeout 2s --json` in its
+/// worktree exits 5, naming the request, the mark's host and holder, and
+/// the queue B's check carries.
 #[test]
-fn out_of_time_queued() {
+fn out_of_time_queued_on_the_other_host() {
     let g = OnGitHub::new("wait-there-timeout", "");
-    let (w, pull) = g.opened_here("timeout");
+    let (w, pull) = g.opened_here_held_by_b("timeout");
     g.held_there(pull.number, &pull.head, 1406);
     let out = g.skipping(&w, &["wait", "main", "--timeout", "2s", "--json"]);
     assert_eq!(out.status.code(), Some(sluice::WAITING), "{}", text(&out));
     let doc = last_document(&out);
     assert_eq!(doc["pull_request"], pull.number, "{doc}");
+    assert_eq!(
+        doc["taken_in_by"],
+        serde_json::json!({ "host": "b", "holder": "driver" }),
+        "{doc}"
+    );
     assert_eq!(doc["queue"]["submission"], 1406, "{doc}");
-    assert_eq!(doc["queue"]["host"], "pool/forge/round", "{doc}");
+    assert_eq!(doc["queue"]["host"], "b", "{doc}");
     assert!(g.of(pull.number).is_empty(), "A took nothing in");
 }
 
 /// submission-wait, "The status a submit reads": the same, and `sluice
 /// submit main --status --json` in that worktree gives the request's head,
-/// its draft mark and the check's queue beside the request, its branch and
-/// its state.
+/// its draft mark, the mark's host and the check's queue beside the
+/// request, its branch and its state.
 #[test]
-fn the_status_a_submit_reads() {
+fn the_status_a_submit_reads_across_hosts() {
     let g = OnGitHub::new("wait-there-status", "");
-    let (w, pull) = g.opened_here("status");
+    let (w, pull) = g.opened_here_held_by_b("status");
     g.held_there(pull.number, &pull.head, 1406);
     let out = g.skipping(&w, &["submit", "main", "--status", "--json"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
@@ -5338,9 +5779,14 @@ fn the_status_a_submit_reads() {
         "{doc}"
     );
     assert_eq!(
+        doc["taken_in_by"],
+        serde_json::json!({ "host": "b", "holder": "driver" }),
+        "{doc}"
+    );
+    assert_eq!(
         doc["queue"],
         serde_json::json!({
-            "host": "pool/forge/round", "taken_in": true, "submission": 1406, "state": "queued",
+            "host": "b", "taken_in": true, "submission": 1406, "state": "queued",
             "ahead": [], "waits_for": [],
         }),
         "{doc}"
@@ -5348,17 +5794,17 @@ fn the_status_a_submit_reads() {
 }
 
 /// submission-wait, "Its words": `sluice wait main` on host A follows its
-/// pull request while the round job holds it as submission 1406, with `discovery`
+/// pull request while host B holds it as submission 1406, with `discovery`
 /// at ten seconds, so each pass reads it again. It says once that the
 /// request is submission 1406 on `b`, taken in by `b`'s `sluice run`, and
-/// not again over the reads that find the same; once the round job holds it as 1407,
+/// not again over the reads that find the same; once B holds it as 1407,
 /// it says so, once. The check's own first line, which says the same, is
 /// not said beside it.
 #[test]
-fn a_waits_words() {
+fn a_waits_words_across_hosts() {
     let g = OnGitHub::new("wait-there-words", "");
     g.discovery("10s");
-    let (w, pull) = g.opened_here("words");
+    let (w, pull) = g.opened_here_held_by_b("words");
     let n = pull.number;
     g.held_there(n, &pull.head, 1406);
     let said = Scratch::new("wait-there-words-said");
@@ -5381,7 +5827,7 @@ fn a_waits_words() {
             std::thread::sleep(Duration::from_millis(200));
         }
     };
-    let first = format!("#{n} is submission 1406 on pool/forge/round");
+    let first = format!("#{n} is submission 1406 on b, taken in by b's sluice run");
     said_once(&first);
     // Two passes more, each reading the request and its check again.
     std::thread::sleep(Duration::from_secs(7));
@@ -5396,35 +5842,34 @@ fn a_waits_words() {
             &queued_on_b(1407),
         )
         .unwrap();
-    let next = format!("#{n} is submission 1407 on pool/forge/round");
+    let next = format!("#{n} is submission 1407 on b, taken in by b's sluice run");
     said_once(&next);
     let _ = wait.kill();
     let _ = wait.wait();
     let shown = shown();
     assert_eq!(shown.matches(&first).count(), 1, "{shown}");
     assert_eq!(shown.matches(&next).count(), 1, "{shown}");
-    assert!(
-        !shown.contains("Submission 1406 on pool/forge/round."),
-        "{shown}"
-    );
+    assert!(!shown.contains("Submission 1406 on b."), "{shown}");
     assert!(shown.contains("queued: next on main"), "{shown}");
 }
 
-/// submission-wait, "Not yet taken in": the round job's check on the head
-/// of host A's pull request says it needs one review; A's `sluice wait
-/// main --timeout 2s --json` exits 5, its queue not taken in and waiting
-/// for the review. Without `--json`, it says once that the request waits
-/// to be taken in.
+/// submission-wait, "Not yet taken in": a wait on host B holds main's
+/// mark, and B's check on the head of host A's pull request says it needs
+/// one review; A's `sluice wait main --timeout 2s --json` exits 5, its
+/// queue not taken in and waiting for the review, and its mark held by a
+/// wait on B. Without `--json`, it says once that the request waits to be
+/// taken in by a wait on B.
 #[test]
-fn not_yet_taken_in() {
+fn not_yet_taken_in_across_hosts() {
     let g = OnGitHub::new("wait-there-untaken", "reviews = 1");
     g.named("a", "");
+    g.push_mark("b", "wait");
     let w = g.session("untaken", &[("u.txt", "u\n")]);
     let out = g.wt_submit(&w, &["--no-wait"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
     let pull = g.pull_from("unit/untaken");
     let block = serde_json::json!({
-        "host": "pool/forge/round", "taken_in": false, "submission": null, "state": null,
+        "host": "b", "taken_in": false, "submission": null, "state": null,
         "ahead": [], "waits_for": ["1 review"],
     });
     g.posted_elsewhere(
@@ -5433,7 +5878,7 @@ fn not_yet_taken_in() {
         Status::Queued,
         "waiting: needs 1 review",
         &format!(
-            "Waiting to be taken in on pool/forge/round.\n\n\
+            "Waiting to be taken in on b.\n\n\
              Needs 1 review on this commit before sluice takes it.\n\n\
              <!-- sluice:queue {block} -->"
         ),
@@ -5448,9 +5893,14 @@ fn not_yet_taken_in() {
         serde_json::json!(["1 review"]),
         "{doc}"
     );
+    assert_eq!(
+        doc["taken_in_by"],
+        serde_json::json!({ "host": "b", "holder": "wait" }),
+        "{doc}"
+    );
     let out = g.skipping(&w, &["wait", "main", "--timeout", "2s"]);
     assert_eq!(out.status.code(), Some(sluice::WAITING), "{}", text(&out));
-    let line = format!("#{} waits to be taken in", pull.number);
+    let line = format!("#{} waits to be taken in by a wait on b", pull.number);
     assert_eq!(text(&out).matches(&line).count(), 1, "{}", text(&out));
 }
 
@@ -5486,18 +5936,19 @@ fn row_of(doc: &Value, n: u64) -> &Value {
     &rows[0]
 }
 
-/// request-intake-host, "Queued there": the round job holds host A's pull
-/// request as submission 1406 behind `#10`'s 1405. `sluice status main
-/// --json` on A gives a row for the request whose queue names 1406, queued,
-/// behind 1405 and `#10`, and no `taken_in_by`; its words name the round
-/// job and the submission there.
+/// request-intake-host, "Queued on the other host": host B's `sluice run`
+/// holds main's mark and holds host A's pull request as submission 1406
+/// behind `#10`'s 1405. `sluice status main --json` on A gives the mark's
+/// host and holder, and a row for the request whose queue names 1406,
+/// queued, behind 1405 and `#10`; its words name B's run and the
+/// submission there.
 #[test]
-fn queued_by_the_round_job() {
+fn queued_on_the_other_host() {
     let g = OnGitHub::new("status-there-queued", "");
-    let (_w, pull) = g.opened_here("queued");
+    let (_w, pull) = g.opened_here_held_by_b("queued");
     let n = pull.number;
     let block = serde_json::json!({
-        "host": "pool/forge/round", "taken_in": true, "submission": 1406, "state": "queued",
+        "host": "b", "taken_in": true, "submission": 1406, "state": "queued",
         "ahead": [{ "submission": 1405, "pull_request": 10 }], "waits_for": [],
     });
     g.posted_elsewhere(
@@ -5506,13 +5957,17 @@ fn queued_by_the_round_job() {
         Status::Queued,
         "queued behind #10",
         &format!(
-            "Submission 1406 on pool/forge/round.\n\n\
+            "Submission 1406 on b.\n\n\
              In main's queue; it lands once its combination passes.\n\n\
              <!-- sluice:queue {block} -->"
         ),
     );
     let doc = g.status_document();
-    assert!(!doc.to_string().contains("taken_in_by"), "{doc}");
+    assert_eq!(
+        doc["taken_in_by"],
+        serde_json::json!({ "host": "b", "holder": "driver" }),
+        "{doc}"
+    );
     let row = row_of(&doc, n);
     assert_eq!(row["queue"], block, "{doc}");
     assert_eq!(
@@ -5531,29 +5986,34 @@ fn queued_by_the_round_job() {
     );
     assert!(row["read_at"].is_string(), "{doc}");
     let said = g.status_words();
-    assert!(said.contains("pull requests this host follows:"), "{said}");
+    assert!(
+        said.contains("pull requests b takes in, by its sluice run:"),
+        "{said}"
+    );
     let line = format!(
-        "#{n} {} · submission 1406 on pool/forge/round · queued behind #10",
+        "#{n} {} · submission 1406 there · queued behind #10",
         pull.title
     );
     assert!(said.contains(&line), "{said}");
     assert!(g.of(n).is_empty(), "A took nothing in");
 }
 
-/// pull-request-status, "Waiting for a review": the round job's check on
-/// host A's pull request says it needs one review. `sluice status main` on
-/// A says the request waits to be taken in, needing 1 review.
+/// request-intake-host, "Waiting for a review there": a wait on host B
+/// holds main's mark, and B's check on host A's pull request says it needs
+/// one review. `sluice status main` on A names B and a wait, and says the
+/// request waits to be taken in, needing 1 review.
 #[test]
 fn waiting_for_a_review_there() {
     let g = OnGitHub::new("status-there-review", "reviews = 1");
     g.named("a", "");
+    g.push_mark("b", "wait");
     let w = g.session("review", &[("r.txt", "r\n")]);
     let out = g.wt_submit(&w, &["--no-wait"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
     let pull = g.pull_from("unit/review");
     let n = pull.number;
     let block = serde_json::json!({
-        "host": "pool/forge/round", "taken_in": false, "submission": null, "state": null,
+        "host": "b", "taken_in": false, "submission": null, "state": null,
         "ahead": [], "waits_for": ["1 review"],
     });
     g.posted_elsewhere(
@@ -5562,33 +6022,41 @@ fn waiting_for_a_review_there() {
         Status::Queued,
         "waiting: needs 1 review",
         &format!(
-            "Waiting to be taken in on pool/forge/round.\n\n\
+            "Waiting to be taken in on b.\n\n\
              Needs 1 review on this commit before sluice takes it.\n\n\
              <!-- sluice:queue {block} -->"
         ),
     );
     let said = g.status_words();
-    assert!(said.contains("pull requests this host follows:"), "{said}");
+    assert!(
+        said.contains("pull requests b takes in, by a wait on b:"),
+        "{said}"
+    );
     let line = format!(
-        "#{n} {} · waiting to be taken in: needs 1 review",
+        "#{n} {} · waiting to be taken in by b: needs 1 review",
         pull.title
     );
     assert!(said.contains(&line), "{said}");
     let doc = g.status_document();
+    assert_eq!(
+        doc["taken_in_by"],
+        serde_json::json!({ "host": "b", "holder": "wait" }),
+        "{doc}"
+    );
     let row = row_of(&doc, n);
     assert_eq!(row["queue"], block, "{doc}");
     assert_eq!(row["state"], "waiting: needs 1 review", "{doc}");
 }
 
-/// request-intake-host, "No check on its head yet": host A's submit has
-/// just pushed a new head to its pull request, on which no `sluice` check
-/// stands. `sluice status main --json` on A gives the request at its new
-/// head with a `queue` of `null`, and its words say it waits to be taken
-/// in.
+/// request-intake-host, "No check on its head yet": host B's `sluice run`
+/// holds main's mark, and host A's submit has just pushed a new head to
+/// its pull request, on which no `sluice` check stands. `sluice status
+/// main --json` on A gives the request at its new head with a `queue` of
+/// `null`, and its words say it waits to be taken in by B.
 #[test]
 fn no_check_on_its_head_yet() {
     let g = OnGitHub::new("status-there-new-head", "");
-    let (w, pull) = g.opened_here("fresh");
+    let (w, pull) = g.opened_here_held_by_b("fresh");
     let n = pull.number;
     g.held_there(n, &pull.head, 1406);
     g.commit_in(&w, &[("more.txt", "more\n")]);
@@ -5600,20 +6068,60 @@ fn no_check_on_its_head_yet() {
     let row = row_of(&doc, n);
     assert_eq!(row["head"], head.as_str(), "{doc}");
     assert_eq!(row["queue"], Value::Null, "{doc}");
-    assert_eq!(row["state"], "waiting to be taken in", "{doc}");
+    assert_eq!(row["state"], "waiting", "{doc}");
     let said = g.status_words();
-    let line = format!("#{n} {} · waiting to be taken in", pull.title);
+    let line = format!("#{n} {} · waiting to be taken in by b", pull.title);
+    assert!(said.contains(&line), "{said}");
+}
+
+/// request-intake-host, "The mark and the check name different hosts":
+/// host C's `sluice run` holds main's mark, while sluice's check on host
+/// A's pull request, posted by host B, still names submission 1406 there.
+/// `sluice status main --json` on A gives `taken_in_by` naming C and the
+/// request's queue naming B and 1406, and its words say both.
+#[test]
+fn the_mark_and_the_check_name_different_hosts() {
+    let g = OnGitHub::new("status-there-two-hosts", "");
+    g.named("a", "");
+    g.other("c", "", "").run("1");
+    let w = g.session("moved", &[("m.txt", "m\n")]);
+    let out = g.wt_submit(&w, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let pull = g.pull_from("unit/moved");
+    let n = pull.number;
+    g.held_there(n, &pull.head, 1406);
+    let doc = g.status_document();
+    assert_eq!(
+        doc["taken_in_by"],
+        serde_json::json!({ "host": "c", "holder": "driver" }),
+        "{doc}"
+    );
+    let row = row_of(&doc, n);
+    assert_eq!(
+        (&row["queue"]["host"], &row["queue"]["submission"]),
+        (&"b".into(), &1406.into()),
+        "{doc}"
+    );
+    let said = g.status_words();
+    assert!(
+        said.contains("pull requests c takes in, by its sluice run:"),
+        "{said}"
+    );
+    let line = format!(
+        "#{n} {} · submission 1406 on b · queued: next on main",
+        pull.title
+    );
     assert!(said.contains(&line), "{said}");
 }
 
 /// request-intake-host, "Merged", read by status: host A follows its pull
-/// request, which the round job holds, and GitHub marks it merged. A's `sluice
+/// request, which host B holds, and GitHub marks it merged. A's `sluice
 /// status main` says it landed, once: A's follows name it no longer, and
 /// the next status shows no row for it.
 #[test]
 fn a_status_says_a_merged_request_landed_once() {
     let g = OnGitHub::new("status-there-merged", "");
-    let (_w, pull) = g.opened_here("merged");
+    let (_w, pull) = g.opened_here_held_by_b("merged");
     let n = pull.number;
     g.held_there(n, &pull.head, 1406);
     g.gh.forge.merge(n).unwrap();
@@ -5642,27 +6150,32 @@ fn main_of(doc: &Value) -> &Value {
         .unwrap_or_else(|| panic!("{doc}"))
 }
 
-/// overview, "A one-shot overview": the round job holds host A's pull
-/// request as submission 1406, and `sluice overview --json` on A, which
-/// follows it, gives main no `taken_in_by` and a row for the request whose
-/// queue names 1406, read from GitHub as status reads it, with its
-/// `read_at`; its words list the same row under main.
+/// overview, "A one-shot overview": host B's `sluice run` holds main's
+/// mark and holds host A's pull request as submission 1406, and `sluice
+/// overview --json` on A, which follows it, gives main `taken_in_by`
+/// naming B and a row for the request whose queue names 1406, read from
+/// GitHub as status reads it, with its `read_at`; its words list the same
+/// row under main.
 #[test]
-fn a_one_shot_overview_lists_followed_requests() {
+fn a_one_shot_overview_lists_requests_taken_in_elsewhere() {
     let g = OnGitHub::new("overview-there", "");
-    let (_w, pull) = g.opened_here("listed");
+    let (_w, pull) = g.opened_here_held_by_b("listed");
     let n = pull.number;
     g.held_there(n, &pull.head, 1406);
     let out = g.sluice(&["overview", "--json"]);
     assert!(out.status.success(), "{}", text(&out));
     let doc: Value =
         serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
-    assert!(!doc.to_string().contains("taken_in_by"), "{doc}");
     let main = main_of(&doc);
+    assert_eq!(
+        main["taken_in_by"],
+        serde_json::json!({ "host": "b", "holder": "driver" }),
+        "{doc}"
+    );
     let row = row_of(main, n);
     assert_eq!(
         (&row["queue"]["host"], &row["queue"]["submission"]),
-        (&"pool/forge/round".into(), &1406.into()),
+        (&"b".into(), &1406.into()),
         "{doc}"
     );
     assert_eq!(
@@ -5685,8 +6198,8 @@ fn a_one_shot_overview_lists_followed_requests() {
         .skip_while(|l| !l.starts_with("main "))
         .collect();
     let rows = format!(
-        "\n  pull requests this host follows:\n    \
-         #{n} {} · submission 1406 on pool/forge/round · queued: next on main",
+        "\n  pull requests b takes in, by its sluice run:\n    \
+         #{n} {} · submission 1406 there · queued: next on main",
         pull.title
     );
     assert!(under.join("\n").contains(&rows), "{said}");
@@ -5695,14 +6208,14 @@ fn a_one_shot_overview_lists_followed_requests() {
 
 /// overview, "A watch reads none of them itself": `sluice overview --json
 /// --watch` is host A's reader while A follows its pull request, which
-/// the round job holds, and nothing else on A runs. Its documents carry the
+/// host B holds, and nothing else on A runs. Its documents carry the
 /// request's row as A last kept it, and carry it again once what A keeps
 /// of it moves; and A reads neither the request nor its check from GitHub
 /// meanwhile, though the kept row is due to be read again (core.31).
 #[test]
 fn a_watch_reads_no_followed_request_itself() {
     let g = OnGitHub::new("overview-watch-there", "");
-    let (_w, pull) = g.opened_here("watched");
+    let (_w, pull) = g.opened_here_held_by_b("watched");
     let n = pull.number;
     g.held_there(n, &pull.head, 1406);
     // A status reads it from GitHub, so A keeps its check; then the row is
@@ -5770,20 +6283,21 @@ fn a_watch_reads_no_followed_request_itself() {
     assert!(g.of(n).is_empty(), "A took nothing in");
 }
 
-/// The round job takes main's pull requests in and has blamed the pull request a
+/// Host B takes main's pull requests in and has blamed the pull request a
 /// `wt submit` on host A opened from a session's worktree with `changes`,
 /// a `broken` among them, and marked it a draft, its check saying
 /// `waiting: the next submit` while the double keeps that check completed
-/// and failed, as GitHub kept switchboard-kit #268's (record 0096). The
-/// worktree, and the pull request as it was opened; a second later than
-/// the round job's leaving, so a ready mark made next reads as since it
-/// (120).
-fn held_by_the_round_job(
-    g: &OnGitHub,
+/// and failed, as GitHub kept switchboard-kit #268's (record 0096). Host
+/// B, the worktree, and the pull request as it was opened; a second later
+/// than B's leaving, so a ready mark made next reads as since it (120).
+fn held_on_b<'g>(
+    g: &'g OnGitHub,
     name: &str,
     changes: &[(&str, &str)],
-) -> (PathBuf, sluice::profiles::github::forge::Pull) {
+) -> (Other<'g>, PathBuf, sluice::profiles::github::forge::Pull) {
     g.named("a", "");
+    let b = g.other("b", "", "");
+    b.run("1");
     let w = g.session(name, changes);
     let out = g.wt_submit(&w, &["--no-wait"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
@@ -5794,43 +6308,48 @@ fn held_by_the_round_job(
             && g.posted(&pull.head)
                 .is_some_and(|p| p.1 == "waiting: the next submit")
     };
-    // A pass at a time: one run of a round moves no clock on, so the round
-    // job records the submission's leaving at the time the double stamps
-    // marks by.
+    // A pass at a time: one run of a round moves no clock on, so B records
+    // the submission's leaving at the time the double stamps marks by.
     while !held() {
         assert!(
             Instant::now() < until,
-            "the round job never held it: {:?}, {:?}",
-            g.of(pull.number),
+            "B never held it: {:?}, {:?}",
+            b.of(pull.number),
             g.posted(&pull.head)
         );
-        g.round();
+        b.discovery_passes();
+        b.run("1");
     }
-    assert_eq!(g.of(pull.number)[0]["state"], "failed");
+    assert_eq!(b.of(pull.number)[0]["state"], "failed");
     assert_eq!(
         g.posted(&pull.head).unwrap().0,
         Status::Failure,
         "the double keeps the check failed"
     );
     // The ready mark later than the leaving, to the second GitHub and the
-    // records keep, as the round job reads a ready mark since (120).
+    // records keep, as B reads a ready mark since (120).
     std::thread::sleep(Duration::from_millis(1100));
     // A quarter of `discovery` has passed since A's submit last read the
-    // request, as the round job's blame takes on a host, so A's next follow reads what
-    // the round job's check says now (136; record 0095 D4).
+    // request, as B's blame takes on a host, so A's next follow reads what
+    // B's check says now (136; record 0095 D4).
     g.follow_due(pull.number);
-    (w, pull)
+    (b, w, pull)
 }
 
-/// [`held_by_the_round_job`], then a `sluice submit main --no-wait --json` on A has
-/// marked the pull request ready for review at the same head. The round job, the
+/// [`held_on_b`], then a `sluice submit main --no-wait --json` on A has
+/// marked the pull request ready for review at the same head. Host B, the
 /// worktree, the pull request as it was opened, and the submit's document.
-fn held_by_the_round_job_then_marked_ready(
-    g: &OnGitHub,
+fn held_on_b_then_marked_ready<'g>(
+    g: &'g OnGitHub,
     name: &str,
     changes: &[(&str, &str)],
-) -> (PathBuf, sluice::profiles::github::forge::Pull, Value) {
-    let (w, pull) = held_by_the_round_job(g, name, changes);
+) -> (
+    Other<'g>,
+    PathBuf,
+    sluice::profiles::github::forge::Pull,
+    Value,
+) {
+    let (b, w, pull) = held_on_b(g, name, changes);
     let out = g
         .command(env!("CARGO_BIN_EXE_sluice"), &w)
         .args(["submit", "main", "--no-wait", "--json"])
@@ -5841,32 +6360,33 @@ fn held_by_the_round_job_then_marked_ready(
         serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
     let ready = g.pull_from(&format!("unit/{name}"));
     assert!(!ready.draft && ready.head == pull.head, "{ready:?}");
-    (w, pull, doc)
+    (b, w, pull, doc)
 }
 
-/// request-intake-host, "Held, then marked ready": the round job blamed `#n` and
+/// request-intake-host, "Held, then marked ready": B blamed `#n` and
 /// marked it a draft, its check saying `waiting: the next submit`, and a
-/// submit on A marked it ready at the same head; before the round job's next pass, a
-/// wait on A reads it waiting to be taken in, not sent back, though GitHub
-/// keeps the check failed (120, 137, C.5; record 0096).
+/// submit on A marked it ready at the same head; before B's next pass, a
+/// wait on A reads it waiting to be taken in by B, not sent back, though
+/// GitHub keeps the check failed (120, 137, C.5; record 0096).
 #[test]
 fn held_then_marked_ready_waits_to_be_taken_in() {
     let g = OnGitHub::new("intake-held-ready", "");
-    let (w, pull, doc) = held_by_the_round_job_then_marked_ready(&g, "held", &[("broken", "b\n")]);
+    let (b, w, pull, doc) = held_on_b_then_marked_ready(&g, "held", &[("broken", "b\n")]);
     assert_eq!(doc["pull_request"], pull.number, "{doc}");
-    assert_eq!(doc["state"], "waiting to be taken in", "{doc}");
+    assert_eq!(doc["state"], "waiting to be taken in by b", "{doc}");
     let out = g.skipping(&w, &["wait", "main", "--timeout", "5s", "--json"]);
     assert_eq!(out.status.code(), Some(sluice::WAITING), "{}", text(&out));
     let doc: Value =
         serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
     assert_eq!(doc["pull_request"], pull.number, "{doc}");
-    assert_eq!(doc["state"], "waiting to be taken in", "{doc}");
-    assert_eq!(g.of(pull.number).len(), 1, "B has not taken it in again");
+    assert_eq!(doc["state"], "waiting to be taken in by b", "{doc}");
+    assert_eq!(b.of(pull.number).len(), 1, "B has not taken it in again");
+    assert!(g.of(pull.number).is_empty(), "A took nothing in");
 }
 
 /// request-intake-host, "Taken in again while GitHub keeps the check
 /// failed": after a submit on A marked `#n` ready, main's check is mended,
-/// and the round job takes `#n` in again at the same head and lands it, its check
+/// and B takes `#n` in again at the same head and lands it, its check
 /// saying `queued: …`, then `testing …`, while the double keeps that check
 /// completed and failed; a wait on A says each as it changes and exits 0
 /// at the landing (137; record 0096).
@@ -5874,7 +6394,7 @@ fn held_then_marked_ready_waits_to_be_taken_in() {
 fn taken_in_again_while_github_keeps_the_check_failed() {
     let g = OnGitHub::new("intake-taken-again", "");
     g.discovery("10s");
-    let (w, pull, _) = held_by_the_round_job_then_marked_ready(&g, "again", &[("broken", "b\n")]);
+    let (b, w, pull, _) = held_on_b_then_marked_ready(&g, "again", &[("broken", "b\n")]);
     let n = pull.number;
     // main's check mended: `broken` no longer fails it, and it takes five
     // seconds, so A's wait reads it under test.
@@ -5893,31 +6413,26 @@ fn taken_in_again_while_github_keeps_the_check_failed() {
         .unwrap();
     let words = || std::fs::read_to_string(&said).unwrap_or_default();
     let until = Instant::now() + Duration::from_secs(90);
-    // The round job passes again once A's wait has said what its check says
-    // now, or where its last pass changed nothing, so the wait reads each
-    // state it posts; the check held for the next submit, A says it waits
-    // to be taken in.
+    // B passes again once A's wait has said what B's check says now, or
+    // where B's last pass changed nothing, so the wait reads each state B
+    // posts; the check held for the next submit, A says waiting for B.
     let shown = |title: &str| match title {
-        "waiting: the next submit" => format!("#{n} waits to be taken in"),
+        "waiting: the next submit" => "waiting to be taken in by b".to_string(),
         t => t.to_string(),
     };
     let mut last = String::new();
     while wait.try_wait().unwrap().is_none() {
         if Instant::now() >= until {
             let _ = wait.kill();
-            panic!(
-                "A's wait never ended: {}\n{:?}\n{:?}",
-                words(),
-                g.of(n),
-                g.posted(&pull.head)
-            );
+            panic!("A's wait never ended: {}", words());
         }
         let (status, now, _) = g.posted(&pull.head).unwrap();
         if !now.starts_with("landed") {
             assert_eq!(status, Status::Failure, "the double keeps the check failed");
         }
         if now == last || words().contains(&shown(&now)) {
-            g.round();
+            b.discovery_passes();
+            b.run("1");
             last = now;
         }
         std::thread::sleep(Duration::from_millis(200));
@@ -5935,26 +6450,32 @@ fn taken_in_again_while_github_keeps_the_check_failed() {
             .unwrap_or_else(|| panic!("never said {what:?}: {said}"))
     };
     assert!(
-        at(&format!("#{n} waits to be taken in")) < at("testing main + #"),
+        at("waiting to be taken in by b") < at("queued: next on main"),
+        "{said}"
+    );
+    assert!(
+        at("queued: next on main") < at("testing main + #"),
         "{said}"
     );
     assert!(at("testing main + #") < at("passed · landed"), "{said}");
     assert!(!said.contains("failed: "), "{said}");
-    let subs = g.of(n);
+    let subs = b.of(n);
     assert_eq!(subs.len(), 2, "{subs:?}");
     assert_eq!(subs[1]["head"], pull.head.as_str());
     assert_eq!(subs[1]["state"], "landed", "{subs:?}");
+    assert!(g.of(n).is_empty(), "A took nothing in");
 }
 
-/// pull-request-submit, "Sent back by the round job": the round job blamed
-/// `#n` and marked it a draft; `wt submit main --status --json` on A exits
-/// 0 and prints it sent back, with sluice's check's title and summary on
-/// its head, its head, its draft mark and `sends`; in words, the check's
-/// title (124, 137; record 0096).
+/// pull-request-submit, "Sent back on another host": B blamed `#n` and
+/// marked it a draft; `wt submit main --status --json` on A exits 0 and
+/// prints it sent back, with sluice's check's title and summary on its
+/// head, its head, its draft mark and `sends`, as `--status` answers where
+/// the host takes the request in; in words, the check's title (124, 137;
+/// record 0096).
 #[test]
-fn status_of_a_request_the_round_job_sent_back() {
+fn status_of_a_request_another_host_sent_back() {
     let g = OnGitHub::new("intake-status-sent-back", "");
-    let (w, pull) = held_by_the_round_job(&g, "statused", &[("broken", "b\n")]);
+    let (_b, w, pull) = held_on_b(&g, "statused", &[("broken", "b\n")]);
     let out = g.wt_submit(&w, &["--status", "--json"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
     let doc: Value =
@@ -5985,29 +6506,31 @@ fn status_of_a_request_the_round_job_sent_back() {
         "{}",
         text(&out)
     );
+    assert!(g.of(pull.number).is_empty(), "A took nothing in");
 }
 
-/// worktrunk-submit, "Sent back as a draft by the round job", then "Run
-/// again before the round job takes it in again": the round job blamed
-/// `#n` and marked it a draft, its check saying `waiting: the next submit`
-/// while the double keeps that check failed; `wt submit main --no-wait
-/// --json` on A, nothing committed since, marks it ready at that head and
-/// answers that it waits to be taken in; run again under a time limit, it
-/// pushes and marks nothing, follows `#n`, and exits 5 saying the same;
-/// and the round job's next pass takes `#n` in again at that head (67,
-/// 120, 137, C.5; record 0096).
+/// worktrunk-submit, "Sent back as a draft on another host", then "Run
+/// again before the other host takes it in again": the across twin of
+/// [`run_again_marks_a_draft_ready`]. B blamed `#n` and marked it a draft,
+/// its check saying `waiting: the next submit` while the double keeps that
+/// check failed; `wt submit main --no-wait --json` on A, nothing committed
+/// since, marks it ready at that head and answers that it waits for B; run
+/// again under a time limit, it pushes and marks nothing, follows `#n`, and
+/// exits 5 saying the same; and B's next pass takes `#n` in again at that
+/// head (67, 120, 137, C.5; record 0096).
 #[test]
-fn run_again_marks_ready_a_draft_the_round_job_sent_back() {
+fn run_again_marks_ready_a_draft_another_host_sent_back() {
     let g = OnGitHub::new("intake-again-draft", "");
-    let (w, pull) = held_by_the_round_job(&g, "redrafted", &[("broken", "b\n")]);
+    let (b, w, pull) = held_on_b(&g, "redrafted", &[("broken", "b\n")]);
     let n = pull.number;
-    // Beside its state, the queue the round job's check carries, its
-    // submission of it failed and held for the next submit (record 0095
-    // D5).
+    // Beside its state, the mark's host and holder and the queue B's check
+    // carries, B's submission of it failed and held for the next submit
+    // (record 0095 D5).
     let waiting = serde_json::json!({
-        "pull_request": n, "branch": "main", "state": "waiting to be taken in",
+        "pull_request": n, "branch": "main", "state": "waiting to be taken in by b",
+        "taken_in_by": { "host": "b", "holder": "driver" },
         "queue": {
-            "host": "pool/forge/round", "taken_in": true, "submission": g.of(n)[0]["id"],
+            "host": "b", "taken_in": true, "submission": b.of(n)[0]["id"],
             "state": "failed", "ahead": [], "waits_for": ["the next submit"],
         },
     });
@@ -6051,17 +6574,19 @@ fn run_again_marks_ready_a_draft_the_round_job_sent_back() {
         pushed
     );
     assert!(!g.pull_from("unit/redrafted").draft);
+    assert!(g.of(n).is_empty(), "A took nothing in");
 
     let until = Instant::now() + Duration::from_secs(60);
-    while g.of(n).len() < 2 {
+    while b.of(n).len() < 2 {
         assert!(
             Instant::now() < until,
-            "the round job never took it again: {:?}",
-            g.of(n)
+            "B never took it again: {:?}",
+            b.of(n)
         );
-        g.round();
+        b.discovery_passes();
+        b.run("1");
     }
-    let subs = g.of(n);
+    let subs = b.of(n);
     assert_eq!(subs[1]["head"], pull.head.as_str(), "{subs:?}");
 }
 
@@ -6076,20 +6601,19 @@ fn mutations(g: &OnGitHub, mutation: &str) -> usize {
         .count()
 }
 
-/// pull-request-submit, "Sent back, not a draft", and worktrunk-submit,
-/// "Run again before the round job takes it in again": the round job
-/// blamed `#n`, which a person opened from `unit/review` and which it
-/// therefore left out of draft, its check saying `failed: …`; `sluice
-/// submit main --no-wait` on host A from a worktree on `unit/review`,
-/// nothing committed since, marks it a draft and then ready for review at
-/// that head, and answers that it waits to be taken in, exiting 0, though
-/// the check still says `failed: …`; `--status` says the same, so `wt
-/// submit` run again marks nothing; and the round job's next pass takes it
-/// in again (120, 137, C.5; record 0096).
+/// pull-request-submit, "Sent back, not a draft": host B blamed `#n`,
+/// which a person opened from `unit/review` and which B therefore left out
+/// of draft, its check saying `failed: …`; `sluice submit main --no-wait`
+/// on host A from a worktree on `unit/review`, nothing committed since,
+/// marks it a draft and then ready for review at that head, though A's
+/// records hold no submission of it, and B's next pass takes it in again
+/// (120, 137, C.5; record 0096).
 #[test]
-fn a_submit_marks_ready_a_request_the_round_job_sent_back_not_a_draft() {
+fn a_submit_marks_ready_a_request_another_host_sent_back_not_a_draft() {
     let g = OnGitHub::new("intake-sent-back-ready", "");
     g.named("a", "");
+    let b = g.other("b", "", "");
+    b.run("1");
     let w = g.session("review", &[("broken", "b\n")]);
     g.repo
         .git(&["push", "-q", "origin", "unit/review:refs/heads/unit/review"]);
@@ -6100,24 +6624,25 @@ fn a_submit_marks_ready_a_request_the_round_job_sent_back_not_a_draft() {
             .unwrap();
     let until = Instant::now() + Duration::from_secs(60);
     let blamed = || {
-        g.of(n).first().is_some_and(|s| s["state"] == "failed")
+        b.of(n).first().is_some_and(|s| s["state"] == "failed")
             && g.posted(&head).is_some_and(|p| p.1.starts_with("failed: "))
     };
     while !blamed() {
         assert!(
             Instant::now() < until,
-            "the round job never blamed it: {:?}, {:?}",
-            g.of(n),
+            "B never blamed it: {:?}, {:?}",
+            b.of(n),
             g.posted(&head)
         );
-        g.round();
+        b.discovery_passes();
+        b.run("1");
     }
     assert!(
         !g.pull_from("unit/review").draft,
-        "the round job leaves a request opened by hand out of draft"
+        "B leaves a request opened by hand out of draft"
     );
-    // The marks later than the round job's leaving, to the second GitHub and the
-    // records keep, as the round job reads a ready mark since (120).
+    // The marks later than B's leaving, to the second GitHub and the
+    // records keep, as B reads a ready mark since (120).
     std::thread::sleep(Duration::from_millis(1100));
     let drafted = mutations(&g, "convertPullRequestToDraft");
     let readied = mutations(&g, "markPullRequestReadyForReview");
@@ -6145,77 +6670,57 @@ fn a_submit_marks_ready_a_request_the_round_job_sent_back_not_a_draft() {
     );
     let ready = g.pull_from("unit/review");
     assert!(!ready.draft && ready.head == head, "{ready:?}");
-    // Taken again: it waits to be taken in, whatever the check it was
-    // sent back by still says, and exits 0.
-    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
-    assert!(
-        text(&out).contains(&format!("#{n} waits to be taken in")),
-        "{}",
-        text(&out)
-    );
-    assert!(
-        g.posted(&head).is_some_and(|p| p.1.starts_with("failed: ")),
-        "{:?}",
-        g.posted(&head)
-    );
-    let out = g
-        .command(env!("CARGO_BIN_EXE_sluice"), &w)
-        .args(["submit", "main", "--status", "--json"])
-        .output()
-        .unwrap();
-    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
-    let doc: Value =
-        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
-    assert_eq!(doc["state"], "waiting to be taken in", "{doc}");
-    let marks = (
-        mutations(&g, "convertPullRequestToDraft"),
-        mutations(&g, "markPullRequestReadyForReview"),
-    );
-    let out = g.wt_submit(&w, &["--no-wait"]);
-    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
-    assert_eq!(
-        (
-            mutations(&g, "convertPullRequestToDraft"),
-            mutations(&g, "markPullRequestReadyForReview"),
-        ),
-        marks,
-        "run again, it marks nothing: {}",
-        text(&out)
-    );
-    while g.of(n).len() < 2 {
+    assert!(g.of(n).is_empty(), "A took nothing in");
+    while b.of(n).len() < 2 {
         assert!(
             Instant::now() < until,
-            "the round job never took it again: {:?}",
-            g.of(n)
+            "B never took it again: {:?}",
+            b.of(n)
         );
-        g.round();
+        b.discovery_passes();
+        b.run("1");
     }
-    let subs = g.of(n);
+    let subs = b.of(n);
     assert_eq!(subs[1]["head"], head.as_str(), "{subs:?}");
 }
 
-/// pull-request-submit, "Still queued": the round job has `#n`
+/// pull-request-submit, "Still queued on the other host": host B has `#n`
 /// queued, its check saying `queued: next on main`; `sluice submit main
 /// --no-wait` on host A, nothing committed since, marks it no draft, even
-/// for a moment, and the round job's submission of it stays in the round job's queue, which a
+/// for a moment, and B's submission of it stays in B's queue, which a
 /// draft mark would withdraw (C.5; record 0096).
 #[test]
-fn a_submit_leaves_a_request_queued_by_the_round_job() {
+fn a_submit_leaves_a_request_queued_on_another_host() {
     let g = OnGitHub::new("intake-still-queued", "");
     g.named("a", "");
+    let b = g.other("b", "", "");
+    b.run("1");
     let w = g.session("queued", &[("q.txt", "q\n")]);
     let out = g.wt_submit(&w, &["--no-wait"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
     let pull = g.pull_from("unit/queued");
     let n = pull.number;
-    // In the round job's queue, its combination formed, and no host has
-    // run it yet.
-    g.job();
-    let id = g.of(n)[0]["id"].clone();
+    let until = Instant::now() + Duration::from_secs(60);
+    while !g
+        .posted(&pull.head)
+        .is_some_and(|p| p.1 == "queued: next on main")
+    {
+        assert!(
+            Instant::now() < until,
+            "B never queued it: {:?}, {:?}",
+            b.of(n),
+            g.posted(&pull.head)
+        );
+        b.discovery_passes();
+        b.run("1");
+    }
+    // In B's queue: the pass that took it in may have formed its
+    // combination, which B's check says at its next pass.
+    let id = b.of(n)[0]["id"].clone();
     assert!(
-        matches!(g.of(n)[0]["state"].as_str(), Some("queued" | "testing")),
+        matches!(b.of(n)[0]["state"].as_str(), Some("queued" | "testing")),
         "{:?}",
-        g.of(n)
+        b.of(n)
     );
     let drafted = mutations(&g, "convertPullRequestToDraft");
     let out = g
@@ -6232,13 +6737,525 @@ fn a_submit_leaves_a_request_queued_by_the_round_job() {
         text(&out)
     );
     assert!(!g.pull_from("unit/queued").draft);
-    // The round job's next round reads no draft mark, so withdraws
-    // nothing (C.5): its one submission of `#n` goes on.
-    g.job();
-    let subs = g.of(n);
+    assert!(g.of(n).is_empty(), "A took nothing in");
+    // B's next pass reads no draft mark, so withdraws nothing (C.5): its
+    // one submission of `#n` goes on.
+    b.discovery_passes();
+    b.run("1");
+    let subs = b.of(n);
     assert_eq!(subs.len(), 1, "{subs:?}");
     assert_eq!(subs[0]["id"], id, "{subs:?}");
     assert_ne!(subs[0]["state"], "withdrawn", "{subs:?}");
+}
+
+/// request-intake-host, "A wait lets go", stopped by Ctrl-C: a wait on
+/// host B, where no `sluice run` lives, holds main's mark, and once Ctrl-C
+/// stops it the mark is gone from the remote.
+#[test]
+fn a_wait_stopped_by_ctrl_c_lets_go() {
+    let g = OnGitHub::new("intake-ctrl-c", "reviews = 1");
+    g.named("a", "");
+    g.by_hand("unit/stopped", &[("s.txt", Some("s\n"))], false);
+    let b = g.other("b", "", "");
+    let w = b.worktree_of("unit/stopped");
+    let wait = b
+        .command(env!("CARGO_BIN_EXE_sluice"), &w)
+        .args(["wait", "main", "--timeout", "2m"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let until = Instant::now() + Duration::from_secs(60);
+    while g.mark().is_none() {
+        assert!(Instant::now() < until, "never held");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert_eq!(g.mark().unwrap().1["host"], "b");
+    let sent = Command::new("kill")
+        .args(["-INT", &wait.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(sent.success());
+    let out = wait.wait_with_output().unwrap();
+    assert_eq!(out.status.code(), Some(sluice::STOPPED), "{}", text(&out));
+    assert_eq!(g.mark(), None, "{}", text(&out));
+}
+
+impl OnGitHub {
+    /// Host A, called `a`: its `sluice run` pushes main's intake mark and
+    /// takes `pull/<n>` in, testing it with a check that goes on until it
+    /// is ended. The request's number, its submission's id, and the run's
+    /// process.
+    fn testing_under_its_mark(&self, name: &str) -> (u64, u64, String) {
+        self.named("a", "");
+        let pid = self.repo.dir().join(".git/hang.pid");
+        let hang = format!("{}\n", pid.display());
+        let (n, _) = self.by_hand(name, &[("hang", Some(&hang))], false);
+        self.on_main();
+        let out = self.skipping(self.repo.dir(), &["run", "--rounds", "1"]);
+        assert!(out.status.success(), "{}", text(&out));
+        assert_eq!(self.mark().unwrap().1["host"], "a", "{}", text(&out));
+        let id = self.of(n)[0]["id"].as_u64().expect("taken in");
+        let until = Instant::now() + Duration::from_secs(60);
+        while !pid.exists() {
+            assert!(Instant::now() < until, "the check never started");
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        let process = std::fs::read_to_string(&pid).unwrap().trim().to_string();
+        (n, id, process)
+    }
+
+    /// This host last pushed main's intake mark longer ago than a third of
+    /// its lease, and its next pass is due: that pass renews it (137).
+    fn renewal_due(&self) {
+        let path = self.state.path().join("sluice/forge/intake/o/r/main.json");
+        let mut v: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        v["renewed"] = "2000-01-01T00:00:00Z".into();
+        std::fs::write(&path, v.to_string()).unwrap();
+        self.discovery_passes();
+    }
+
+    /// The next fetch here that brings main's intake mark has another
+    /// process of this host move the mark on the remote before this pass
+    /// pushes it: `"drop"` lets it go, as a wait of the host does when it
+    /// ends, and `"renew"` pushes a mark of this host's driver's over it.
+    /// The mark this repository last read is forgotten, so that the fetch
+    /// brings it again.
+    fn moved_under_the_next_push(&self, how: &str) {
+        let armed = self.repo.dir().join(".git/armed");
+        std::fs::write(&armed, "").unwrap();
+        let bare = format!("{:?}", self.bare.path().display().to_string());
+        let act = match how {
+            "drop" => format!("git --git-dir={bare} update-ref -d refs/sluice/intake/main"),
+            _ => format!(
+                "t=$(git --git-dir={bare} mktree </dev/null)\n      \
+                 c=$(git -c user.name=s -c user.email=s@s --git-dir={bare} commit-tree \"$t\" \
+                 -m '{{\"host\":\"a\",\"holder\":\"driver\",\"sluice\":\"0.0.0\"}}')\n      \
+                 git --git-dir={bare} update-ref refs/sluice/intake/main \"$c\""
+            ),
+        };
+        let hook = self.repo.dir().join(".git/hooks/reference-transaction");
+        std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
+        std::fs::write(
+            &hook,
+            format!(
+                "#!/bin/sh\n[ \"$1\" = committed ] || exit 0\n\
+                 while read old new ref; do\n  \
+                 if [ \"$ref\" = refs/sluice-fetched/origin/intake/main ] && \
+                 [ \"$new\" != 0000000000000000000000000000000000000000 ] && [ -e {armed:?} ]; then\n    \
+                 rm -f {armed:?}\n      {act}\n  fi\ndone\nexit 0\n",
+                armed = armed.display().to_string()
+            ),
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        self.repo
+            .git(&["update-ref", "-d", "refs/sluice-fetched/origin/intake/main"]);
+    }
+}
+
+/// Whether `log` says submission `id` was withdrawn.
+fn withdrawn_in(log: &[Value], id: u64) -> bool {
+    log.iter()
+        .any(|l| l["event"] == "withdrawn" && l["id"] == id)
+}
+
+/// End the check process `pid` where it still runs.
+fn end(pid: &str) {
+    let _ = Command::new("kill")
+        .args(["-9", pid])
+        .stderr(Stdio::null())
+        .status();
+}
+
+/// request-intake-host, "A mark let go under a renewal": host A's `sluice
+/// run` holds main's mark and is testing `pull/<n>`; another process of A
+/// lets the mark go between the pass's fetch and its renewal, so the
+/// renewal is refused at its lease and the remote holds no mark. A pushes
+/// it again leased on its absence, holds it, and withdraws nothing: no
+/// host but A takes main's pull requests in (137; rule core.33; the
+/// chuck-herdr-alpha hand-over to "another host" of 2026-11-06).
+#[test]
+fn a_mark_let_go_under_a_renewal_is_pushed_again() {
+    let g = OnGitHub::new("intake-again", "");
+    let (n, id, process) = g.testing_under_its_mark("unit/again");
+    g.renewal_due();
+    g.moved_under_the_next_push("drop");
+    let out = g.skipping(g.repo.dir(), &["run", "--rounds", "1"]);
+    end(&process);
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(
+        !g.repo.dir().join(".git/armed").exists(),
+        "the mark was let go under the renewal"
+    );
+    let log = g.log();
+    assert!(!withdrawn_in(&log, id), "{log:?}\n{}", text(&out));
+    assert_ne!(g.of(n)[0]["state"], "withdrawn");
+    let (_, mark) = g.mark().expect("pushed again");
+    assert_eq!(
+        (&mark["host"], &mark["holder"]),
+        (&"a".into(), &"driver".into())
+    );
+}
+
+/// request-intake-host, "A mark this host moved under a renewal": host A's
+/// `sluice run` holds main's mark and is testing `pull/<n>`; another
+/// process of A pushes A's own mark over it between the pass's fetch and
+/// its renewal, so the renewal is refused at its lease. The mark names A:
+/// A holds it, and hands nothing over to itself (137; rule core.33).
+#[test]
+fn a_mark_this_host_moved_under_a_renewal_stays_its_own() {
+    let g = OnGitHub::new("intake-own", "");
+    let (n, id, process) = g.testing_under_its_mark("unit/own");
+    g.renewal_due();
+    g.moved_under_the_next_push("renew");
+    let out = g.skipping(g.repo.dir(), &["run", "--rounds", "1"]);
+    end(&process);
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(!g.repo.dir().join(".git/armed").exists());
+    let log = g.log();
+    assert!(!withdrawn_in(&log, id), "{log:?}\n{}", text(&out));
+    assert_ne!(g.of(n)[0]["state"], "withdrawn");
+    assert_eq!(g.mark().unwrap().1["host"], "a");
+}
+
+/// request-intake-host, "A host's waits hold its mark together": two waits
+/// on host B, where no `sluice run` lives, read main's pull requests; the
+/// first pushed the mark. When the first ends the mark stays, since the
+/// second still holds it; when the second ends, though it never pushed
+/// the mark, it lets it go (137).
+#[test]
+fn a_hosts_waits_hold_its_mark_together() {
+    let g = OnGitHub::new("intake-together", "reviews = 1");
+    g.named("a", "");
+    g.record_marks();
+    g.by_hand("unit/together", &[("t.txt", Some("t\n"))], false);
+    let b = g.other("b", "", "");
+    let w = b.worktree_of("unit/together");
+    let wait = |timeout: &str| {
+        b.command(env!("CARGO_BIN_EXE_sluice"), &w)
+            .args(["wait", "main", "--timeout", timeout])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap()
+    };
+    let first = wait("10s");
+    let until = Instant::now() + Duration::from_secs(60);
+    while g.mark().is_none() {
+        assert!(Instant::now() < until, "never held");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert_eq!(g.mark().unwrap().1["host"], "b");
+    let second = wait("2m");
+    let waits = b.state.path().join("sluice/forge/intake/o/r/main.waits");
+    let holds = || {
+        std::fs::read_dir(&waits)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|e| e.path().extension().is_some_and(|x| x == "hold"))
+            .count()
+    };
+    while holds() < 2 {
+        assert!(Instant::now() < until, "the second wait never held it");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let out = first.wait_with_output().unwrap();
+    assert_eq!(out.status.code(), Some(sluice::WAITING), "{}", text(&out));
+    assert_eq!(
+        g.mark().map(|m| m.1["host"].clone()),
+        Some("b".into()),
+        "the second wait holds it still: {}",
+        text(&out)
+    );
+    assert!(
+        !g.marks_pushed().contains(&Value::Null),
+        "{:?}",
+        g.marks_pushed()
+    );
+    let sent = Command::new("kill")
+        .args(["-INT", &second.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(sent.success());
+    let out = second.wait_with_output().unwrap();
+    assert_eq!(out.status.code(), Some(sluice::STOPPED), "{}", text(&out));
+    assert_eq!(
+        g.mark(),
+        None,
+        "the host's last wait let it go: {}",
+        text(&out)
+    );
+    assert_eq!(holds(), 0);
+}
+
+/// request-intake-host, "A request that landed elsewhere is not handed
+/// over": host A is testing `pull/<n>` when host B's `sluice run` takes
+/// main's mark and the request in, and lands it. A's next pass finds B
+/// holding the mark and main holding the request's head: A withdraws
+/// nothing, and its round lands its submission as the commit that landed
+/// the work (122, 137; rule core.48).
+#[test]
+fn a_request_that_landed_elsewhere_is_not_handed_over() {
+    let g = OnGitHub::new("intake-landed-over", "");
+    let (n, id, process, _, _, b) = handing_mid_test(&g);
+    let until = Instant::now() + Duration::from_secs(60);
+    while !b.of(n).first().is_some_and(|s| s["state"] == "landed") {
+        assert!(Instant::now() < until, "B never landed it: {:?}", b.of(n));
+        b.discovery_passes();
+        b.run("2");
+    }
+    g.step();
+    end(&process);
+    let log = g.log();
+    assert!(!withdrawn_in(&log, id), "{log:?}");
+    let a = g.of(n);
+    assert_eq!(a[0]["state"], "landed", "{a:?}");
+    assert_eq!(a[0]["landed_elsewhere"], true, "{a:?}");
+}
+
+// ---------------------------------------------------------------------------
+// request-intake-host: a withdrawal for a hand-over holds no request, which
+// the holder of the mark takes in again at the head it holds, the host that
+// withdrew it included (120, 137; record 0088 as amended; rule core.33)
+// ---------------------------------------------------------------------------
+
+/// A pull request a submit opened on host A, handed over to host B.
+struct HandedOver {
+    /// The request's number.
+    n: u64,
+    /// A's submission of it, withdrawn for the hand-over.
+    id: u64,
+    /// Its head.
+    head: String,
+    /// The session's worktree it was submitted from.
+    worktree: PathBuf,
+    /// How many ready marks GitHub's timeline held of it at the hand-over.
+    readied: usize,
+}
+
+/// Host A, called `a`, has the pull request the session's submit opened
+/// from `unit/<name>` under test with a check that goes on until it is
+/// ended, when another host's `sluice run` takes main's mark: `b`'s, as
+/// that run would push it. A's next pass hands the request over to B,
+/// naming B in its withdrawal's record and log line, and ends the check.
+fn handed_over_mid_test(g: &OnGitHub, name: &str) -> HandedOver {
+    g.named("a", "");
+    let pid = g.repo.dir().join(format!(".git/{name}.pid"));
+    let worktree = g.session(name, &[("hang", &format!("{}\n", pid.display()))]);
+    let out = g.wt_submit(&worktree, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let pull = g.pull_from(&format!("unit/{name}"));
+    let n = pull.number;
+    g.step();
+    let id = g.of(n)[0]["id"].as_u64().expect("taken in");
+    let until = Instant::now() + Duration::from_secs(60);
+    while !pid.exists() {
+        assert!(Instant::now() < until, "the check never started");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let process = std::fs::read_to_string(&pid).unwrap().trim().to_string();
+    g.push_mark("b", "driver");
+    g.step();
+    let a = g.of(n);
+    assert_eq!(a[0]["state"], "withdrawn", "{a:?}");
+    assert_eq!(a[0]["withdrawn"]["by"], "b takes main's pull requests in");
+    assert_eq!(a[0]["withdrawn"]["handed_over_to"], "b", "{a:?}");
+    let line = g
+        .log()
+        .into_iter()
+        .find(|l| l["event"] == "withdrawn" && l["id"] == id)
+        .expect("the log says it");
+    assert_eq!(line["handed_over_to"], "b", "{line}");
+    let until = Instant::now() + Duration::from_secs(10);
+    while alive(&process) {
+        assert!(Instant::now() < until, "A's run goes on");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    HandedOver {
+        n,
+        id,
+        head: pull.head,
+        worktree,
+        readied: readied(g, n),
+    }
+}
+
+/// How many ready marks GitHub's timeline holds of pull request `n`: a
+/// draft sluice makes and takes back leaves one more.
+fn readied(g: &OnGitHub, n: u64) -> usize {
+    g.gh.forge.readied(&github::repo(), n).unwrap().len()
+}
+
+/// main's intake mark comes back to host A, its `sluice run` returning
+/// once the host that held it stopped: the mark names A's driver.
+fn mark_comes_back(g: &OnGitHub) {
+    github::delete_ref(g.bare.path(), "refs/sluice/intake/main");
+    g.push_mark("a", "driver");
+}
+
+/// request-intake-host, "The mark comes back": host A handed the pull
+/// request a session's submit opened over to B, and main's mark comes back
+/// to A. A takes it in again at the head it holds, as its conditions hold,
+/// and lands it; nothing marks it a draft, and it waits for no act of its
+/// submitter's (120, 137; agentplot/sluice pull 171, whose #345 deneb
+/// withdrew at the hand-over of 2026-10-30 and took in again as #347).
+#[test]
+fn the_mark_comes_back_and_its_request_is_taken_in_again() {
+    let g = OnGitHub::new("intake-comes-back", "");
+    let h = handed_over_mid_test(&g, "back");
+    mark_comes_back(&g);
+    g.step();
+    let a = g.of(h.n);
+    assert_eq!(a.len(), 2, "{a:?}");
+    assert_eq!(a[1]["head"], h.head.as_str(), "{a:?}");
+    assert_ne!(a[1]["state"], "withdrawn", "{a:?}");
+    assert!(a[1]["id"].as_u64().unwrap() > h.id);
+    assert!(!g.pull_from("unit/back").draft);
+    assert_eq!(readied(&g, h.n), h.readied, "never a draft and back");
+    g.step_until("landed", |g| g.of(h.n)[1]["state"] == "landed");
+    assert!(!g.pull_from("unit/back").draft);
+    assert_eq!(readied(&g, h.n), h.readied);
+}
+
+/// request-intake-host, "An older hand-over comes back": as "The mark
+/// comes back", with A's withdrawal written as sluice 0.60.0 to 0.70.2
+/// wrote one, naming no host in its record, in its words alone. It reads
+/// as that sluice read it: the request is taken in again, never a draft
+/// (120; record 0088 as amended, design D2).
+#[test]
+fn an_older_hand_overs_request_is_taken_in_again() {
+    let g = OnGitHub::new("intake-older-back", "");
+    let h = handed_over_mid_test(&g, "older");
+    assert!(written_as_before(&g, h.id) > 0, "its record was found");
+    let a = g.of(h.n);
+    assert_eq!(a[0]["withdrawn"]["handed_over_to"], Value::Null, "{a:?}");
+    mark_comes_back(&g);
+    g.step();
+    let a = g.of(h.n);
+    assert_eq!(a.len(), 2, "{a:?}");
+    assert_eq!(a[1]["head"], h.head.as_str(), "{a:?}");
+    assert_ne!(a[1]["state"], "withdrawn", "{a:?}");
+    assert!(!g.pull_from("unit/older").draft);
+    assert_eq!(readied(&g, h.n), h.readied);
+}
+
+/// Rewrite host A's records of submission `id`'s withdrawal as a sluice
+/// before record 0088's amendment wrote them, the host it handed over to
+/// named nowhere: its record, wherever it is kept, and its log line. How
+/// many records named it.
+fn written_as_before(g: &OnGitHub, id: u64) -> usize {
+    let dir = g.repo.dir().join(".git/sluice/main");
+    let mut named = 0;
+    for path in [
+        dir.join(format!("submissions/{id}.json")),
+        dir.join(format!(".finished/{id}.json")),
+    ] {
+        let Ok(bytes) = std::fs::read(&path) else {
+            continue;
+        };
+        let mut v: Value = serde_json::from_slice(&bytes).unwrap();
+        if v["withdrawn"]
+            .as_object_mut()
+            .and_then(|w| w.remove("handed_over_to"))
+            .is_some()
+        {
+            named += 1;
+        }
+        std::fs::write(&path, serde_json::to_vec_pretty(&v).unwrap()).unwrap();
+    }
+    let log = dir.join("log.jsonl");
+    let lines: Vec<String> = std::fs::read_to_string(&log)
+        .unwrap()
+        .lines()
+        .map(|l| {
+            let mut v: Value = serde_json::from_str(l).unwrap();
+            if v["event"] == "withdrawn" && v["id"] == id {
+                v.as_object_mut().unwrap().remove("handed_over_to");
+            }
+            v.to_string()
+        })
+        .collect();
+    std::fs::write(&log, lines.join("\n") + "\n").unwrap();
+    named
+}
+
+/// request-intake-host, "A submit after a hand-over": host A handed the
+/// pull request a session's submit opened over to B, and its agent submits
+/// again from its worktree, with no new commits. The withdrawal is no
+/// leaving, so the submit marks it no draft and ready again, as it does
+/// after a blame (120: nothing marks it a draft for a hand-over).
+#[test]
+fn a_submit_after_a_hand_over_marks_no_draft() {
+    let g = OnGitHub::new("intake-resubmit", "");
+    let h = handed_over_mid_test(&g, "again");
+    let out = g.wt_submit(&h.worktree, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert!(
+        !text(&out).contains("marked ready for review"),
+        "{}",
+        text(&out)
+    );
+    assert!(!g.pull_from("unit/again").draft);
+    assert_eq!(readied(&g, h.n), h.readied, "never a draft and back");
+}
+
+/// request-intake-host, "A wait on a hand-over says where it went": host A
+/// handed the pull request a session's submit opened over to B; a wait on
+/// A's submission follows its pull request, saying it was handed over to
+/// B, and is never told it was withdrawn, and A's status of it says so
+/// (122, 137; rule core.48).
+#[test]
+fn a_wait_on_a_hand_over_says_where_it_went() {
+    let g = OnGitHub::new("intake-wait-says", "");
+    let h = handed_over_mid_test(&g, "said");
+    let id = h.id.to_string();
+    let out = g.sluice(&["wait", &id, "--timeout", "2s"]);
+    assert_eq!(out.status.code(), Some(sluice::WAITING), "{}", text(&out));
+    let said = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        said.contains(&format!(
+            "#{id} handed over to b: its pull request #{} carries its work, so this wait \
+             follows it",
+            h.n
+        )),
+        "{said}"
+    );
+    let out = g.sluice(&["status", &id]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(text(&out).contains("handed over to b"), "{}", text(&out));
+}
+
+/// request-intake-host, "A request closed is still withdrawn": host A
+/// handed the pull request a session's submit opened over to B, main's
+/// mark came back and A took it in again; a person closes it. It is
+/// withdrawn, and opened again it waits for its submitter's act as a
+/// draft, as any request closed does where its submission was (120, C.5).
+#[test]
+fn a_request_closed_after_it_came_back_is_still_held() {
+    let g = OnGitHub::new("intake-closed-back", "");
+    let h = handed_over_mid_test(&g, "closed");
+    mark_comes_back(&g);
+    g.step();
+    assert_eq!(g.of(h.n).len(), 2);
+    g.gh.forge.close(h.n).unwrap();
+    g.step();
+    let a = g.of(h.n);
+    assert_eq!(a[1]["state"], "withdrawn", "{a:?}");
+    assert_eq!(a[1]["withdrawn"]["handed_over_to"], Value::Null, "{a:?}");
+    g.gh.forge
+        .change(|held| {
+            let p = held.pulls.iter_mut().find(|p| p.number == h.n).unwrap();
+            p.open = true;
+            p.updated_at = Some(chrono::Utc::now());
+            Ok(())
+        })
+        .unwrap();
+    let a = g.of_after(h.n, 2);
+    assert_eq!(a.len(), 2, "never taken in again: {a:?}");
+    assert!(g.pull_from("unit/closed").draft);
 }
 
 // ---------------------------------------------------------------------------
@@ -6254,9 +7271,6 @@ fn a_submit_leaves_a_request_queued_by_the_round_job() {
 #[test]
 fn three_pull_requests_one_query() {
     let g = OnGitHub::new("pr-one-query", "reviews = 1\nchecks = [\"qa/approved\"]");
-    // The round job keeps main already, so each round job below is one
-    // round: its first, which asks.
-    g.job();
     let opened: Vec<(u64, String)> = ["a", "b", "c"]
         .iter()
         .map(|x| {
@@ -6267,7 +7281,7 @@ fn three_pull_requests_one_query() {
             )
         })
         .collect();
-    g.job();
+    g.step();
     assert_eq!(g.gh.queries(), 1);
     for (n, head) in &opened {
         assert_eq!(g.beside_reads(*n, head), 0, "#{n} read alone");
@@ -6285,21 +7299,18 @@ fn three_pull_requests_one_query() {
 #[test]
 fn the_querys_reviews_count_as_before() {
     let g = OnGitHub::new("pr-one-query-reviews", "reviews = 2");
-    // The round job keeps main already, so each round job below is one
-    // round: its first, which asks.
-    g.job();
     let (n, old) = g.by_hand("unit/counted", &[("c.txt", Some("c\n"))], false);
     g.gh.forge.review(n, "ann", "APPROVED", &old).unwrap();
     let head = g.push_more("unit/counted", "c2.txt");
     g.gh.forge.review(n, "bob", "APPROVED", &head).unwrap();
-    g.job();
+    g.step();
     assert_eq!(g.gh.queries(), 1);
     assert_eq!(g.beside_reads(n, &head), 0);
     assert_eq!(g.posted(&head).unwrap().1, "waiting: needs 1 review");
     // A second approval on the head: the list changes, and the next
     // asking submits it.
     g.gh.forge.review(n, "cat", "APPROVED", &head).unwrap();
-    g.job();
+    g.step();
     assert_eq!(g.gh.queries(), 2);
     assert_eq!(g.of(n).len(), 1, "{:?}", g.subs());
 }
@@ -6310,13 +7321,10 @@ fn the_querys_reviews_count_as_before() {
 #[test]
 fn a_refused_query_falls_back_to_the_reads_per_pull_request() {
     let g = OnGitHub::new("pr-one-query-refused", "reviews = 1");
-    // The round job keeps main already, so each round job below is one
-    // round: its first, which asks.
-    g.job();
     let (one, one_head) = g.by_hand("unit/refused-one", &[("1.txt", Some("1\n"))], false);
     let (two, two_head) = g.by_hand("unit/refused-two", &[("2.txt", Some("2\n"))], false);
     g.gh.refuse_query(true);
-    let said = g.job();
+    let said = g.round();
     let warning = "GitHub refused the query that reads them whole, so each is read alone this pass";
     assert_eq!(said.matches(warning).count(), 1, "{said}");
     assert!(
@@ -6337,541 +7345,12 @@ fn a_refused_query_falls_back_to_the_reads_per_pull_request() {
     g.gh.forge
         .review(one, "reviewer", "APPROVED", &one_head)
         .unwrap();
-    let said = g.job();
+    let said = g.round();
     assert!(!said.contains(warning), "{said}");
-    // The asking, and its next round's once it took `one` in, the other
-    // still waiting on its review (136).
-    assert_eq!(g.gh.queries(), 3);
+    assert_eq!(g.gh.queries(), 2);
     assert_eq!(
         g.gh.calls("GET", &format!("/repos/o/r/pulls/{one}/reviews")),
         1
     );
     assert_eq!(g.of(one).len(), 1, "{:?}", g.subs());
-}
-
-// ---------------------------------------------------------------------------
-// forge-rounds
-// ---------------------------------------------------------------------------
-
-impl OnGitHub {
-    /// Rounds of `main` on this host, which claims and runs its checks,
-    /// until `main`'s records on GitHub hold what a run observed, at most
-    /// a minute.
-    fn host_runs_the_checks(&self) {
-        let until = Instant::now() + Duration::from_secs(60);
-        while !self.remote_log().iter().any(|l| l["event"] == "ran") {
-            assert!(Instant::now() < until, "never ran: {:?}", self.remote_log());
-            let out = self.sluice(&["step", "main"]);
-            assert!(out.status.success(), "{}", text(&out));
-            std::thread::sleep(Duration::from_millis(200));
-        }
-    }
-}
-
-/// forge-rounds, "Every host off" (72, 75, 137; C.8; design D1, D2): a
-/// pull request a person opened is taken in by the round job with no
-/// host's sluice running, its combination formed and its check posted;
-/// once a host's step has claimed and passed its run, the next round job
-/// lands it and GitHub marks it merged.
-#[test]
-fn a_round_job_takes_a_request_in_with_every_host_off() {
-    let g = OnGitHub::forge("rj-off", "");
-    let (n, head) = g.by_hand("unit/off", &[("o.txt", Some("o\n"))], false);
-    let said = g.job();
-    let subs = g.of(n);
-    assert_eq!(subs.len(), 1, "{said}\n{subs:?}");
-    assert_eq!(subs[0]["head"], head.as_str(), "{said}");
-    assert_eq!(subs[0]["state"], "testing", "{said}\n{subs:?}");
-    assert_eq!(g.lead().as_deref(), Some("pool/forge/round"), "{said}");
-    let (status, title, _) = g.posted(&head).expect("sluice's check on its head");
-    assert_eq!(status, Status::InProgress, "{title}");
-    assert!(title.starts_with("testing main + "), "{title}");
-    // No host has run anything yet.
-    assert!(
-        !g.remote_log().iter().any(|l| l["event"] == "claimed"),
-        "{:?}",
-        g.remote_log()
-    );
-    g.host_runs_the_checks();
-    let said = g.job();
-    assert_eq!(g.of(n)[0]["state"], "landed", "{said}");
-    let landed = g.main_on_github();
-    assert_eq!(
-        github::rev(g.bare.path(), &format!("{landed}^2")).unwrap(),
-        head
-    );
-    let pull = g.gh.forge.pull(&github::repo(), n).unwrap().unwrap();
-    assert!(!pull.open, "GitHub shows it merged");
-    assert_eq!(g.lead().as_deref(), Some("pool/forge/round"));
-}
-
-/// forge-rounds, "It ends while a run goes on elsewhere" (136, 137;
-/// design D2): with the only open combination's run held by host `a`, the
-/// round job ends after one round, and `a`'s result, once recorded, is
-/// landed by the next round job.
-#[test]
-fn a_round_job_ends_while_a_run_goes_on_elsewhere() {
-    let g = OnGitHub::forge("rj-ends", "");
-    let (n, _) = g.by_hand("unit/ends", &[("slow", Some("s\n"))], false);
-    g.job();
-    let out = g.sluice(&["step", "main"]);
-    assert!(out.status.success(), "{}", text(&out));
-    assert!(
-        g.remote_log().iter().any(|l| l["event"] == "claimed"),
-        "{}",
-        text(&out)
-    );
-    let started = Instant::now();
-    let said = g.job();
-    assert!(said.contains("main: 1 round as pool/forge/round"), "{said}");
-    assert!(started.elapsed() < Duration::from_secs(5), "{said}");
-    assert_eq!(g.of(n)[0]["state"], "testing", "{said}");
-    g.host_runs_the_checks();
-    let said = g.job();
-    assert_eq!(g.of(n)[0]["state"], "landed", "{said}");
-}
-
-/// forge-rounds, "The schedule wakes each branch" (111, 137; design D2):
-/// `sluice job round` with no branch dispatches one round of the pool's
-/// workflow for each branch the forge keeps, and none for a branch that
-/// takes no pull requests.
-#[test]
-fn the_schedule_wakes_each_branch_the_forge_keeps() {
-    let g = OnGitHub::forged(
-        "rj-schedule",
-        "",
-        "1m",
-        "",
-        "\n[branches.\"release/*\"]\nremote = \"origin\"\ntimeout = \"1m\"\ntrust = [\"a\"]\n\
-         \n[branches.\"release/*\".pull_requests]\n\
-         \n[branches.\"bolt/*\"]\nremote = \"origin\"\ntimeout = \"1m\"\ntrust = [\"a\"]\n",
-    );
-    for b in ["release/1", "bolt/x"] {
-        g.repo.git(&["branch", b, "main"]);
-        g.repo
-            .git(&["push", "-q", "origin", &format!("{b}:refs/heads/{b}")]);
-    }
-    let out = g.job_with(&[]);
-    assert!(out.status.success(), "{}", text(&out));
-    let woken: Vec<(String, String, String)> =
-        g.gh.dispatches()
-            .into_iter()
-            .map(|(workflow, inputs)| {
-                (
-                    workflow,
-                    inputs["mode"].as_str().unwrap_or_default().to_string(),
-                    inputs["branch"].as_str().unwrap_or_default().to_string(),
-                )
-            })
-            .collect();
-    let round = |b: &str| ("sluice.yml".to_string(), "round".to_string(), b.to_string());
-    assert_eq!(woken, [round("main"), round("release/1")], "{}", text(&out));
-}
-
-/// forge-rounds, "The schedule wakes each branch" (137, core.27; design
-/// D2): `hotfix/1`'s own revision takes pull requests with its records on
-/// `origin`, which `main`'s policy does not name; `sluice job round` with
-/// no branch reads each branch's policy at its revision, and wakes
-/// `hotfix/1`'s round job beside `main`'s.
-#[test]
-fn the_schedule_reads_each_branchs_own_policy() {
-    let g = OnGitHub::forge("rj-own-policy", "");
-    g.repo.git(&["checkout", "-q", "-b", "hotfix/1", "main"]);
-    let policy = std::fs::read_to_string(g.repo.dir().join(".config/sluice.toml")).unwrap();
-    g.repo.write(
-        ".config/sluice.toml",
-        &format!(
-            "{policy}\n[branches.\"hotfix/1\"]\nremote = \"origin\"\ntimeout = \"1m\"\n\
-             trust = [\"a\"]\n\n[branches.\"hotfix/1\".pull_requests]\n"
-        ),
-    );
-    g.repo
-        .git(&["commit", "-q", "-am", "hotfix/1 takes pull requests"]);
-    g.repo
-        .git(&["push", "-q", "origin", "hotfix/1:refs/heads/hotfix/1"]);
-    g.repo.git(&["checkout", "-q", "main"]);
-    let out = g.job_with(&[]);
-    assert!(out.status.success(), "{}", text(&out));
-    assert_eq!(g.wakes_of("main"), 1, "{}", text(&out));
-    assert_eq!(g.wakes_of("hotfix/1"), 1, "{}", text(&out));
-}
-
-/// forge-rounds, "A branch the forge does not keep" (137; design D2):
-/// `sluice job round --branch bolt/x`, which takes no pull requests,
-/// exits 2 naming why and writes nothing.
-#[test]
-fn a_branch_the_forge_does_not_keep_is_refused_its_round_job() {
-    let g = OnGitHub::forged(
-        "rj-refused",
-        "",
-        "1m",
-        "",
-        "\n[branches.\"bolt/*\"]\nremote = \"origin\"\ntimeout = \"1m\"\ntrust = [\"a\"]\n",
-    );
-    g.repo.git(&["branch", "bolt/x", "main"]);
-    g.repo
-        .git(&["push", "-q", "origin", "bolt/x:refs/heads/bolt/x"]);
-    let out = g.job_with(&["--branch", "bolt/x"]);
-    assert_eq!(out.status.code(), Some(2), "{}", text(&out));
-    assert!(
-        text(&out).contains("bolt/x takes no pull requests and is not the forge's to keep"),
-        "{}",
-        text(&out)
-    );
-    assert_eq!(
-        github::rev(g.bare.path(), "refs/sluice/state/bolt/x"),
-        None,
-        "{}",
-        text(&out)
-    );
-    assert!(g.gh.dispatches().is_empty());
-}
-
-/// forge-rounds, "A host claims and never leads", and peer-lead, "A
-/// branch the forge keeps" (73, 75, 137; design D1): the round job last
-/// wrote `main`'s records longer ago than the host's lease, and the
-/// host's step claims and runs the open combination's run, `main`'s
-/// records still naming the round job as their lead.
-#[test]
-fn a_host_claims_and_never_leads() {
-    let g = OnGitHub::forge("rj-claims", "");
-    g.named("a", "lease = \"2s\"\nalive = \"1s\"\n");
-    let (n, _) = g.by_hand("unit/claims", &[("c.txt", Some("c\n"))], false);
-    g.job();
-    assert_eq!(g.lead().as_deref(), Some("pool/forge/round"));
-    let out = g.sluice(&["step", "main"]);
-    assert!(out.status.success(), "{}", text(&out));
-    std::thread::sleep(Duration::from_secs(3));
-    g.host_runs_the_checks();
-    let log = g.remote_log();
-    assert!(
-        log.iter()
-            .any(|l| l["event"] == "claimed" && l["host"] == "a"),
-        "{log:?}"
-    );
-    assert!(
-        log.iter()
-            .filter(|l| l["event"] == "took")
-            .all(|l| l["by"] == "pool/forge/round"),
-        "{log:?}"
-    );
-    assert_eq!(g.lead().as_deref(), Some("pool/forge/round"));
-    assert_eq!(g.of(n)[0]["state"], "testing");
-}
-
-impl OnGitHub {
-    /// The rounds of the pool's workflow GitHub took for `branch`.
-    fn wakes_of(&self, branch: &str) -> usize {
-        self.gh
-            .dispatches()
-            .iter()
-            .filter(|(w, i)| w == "sluice.yml" && i["mode"] == "round" && i["branch"] == branch)
-            .count()
-    }
-}
-
-/// forge-rounds, "A submit wakes it" (111, 136; design D5): a submit that
-/// opens a pull request into a branch the forge keeps dispatches one
-/// round of the pool's workflow for it.
-#[test]
-fn a_submit_wakes_the_round_job() {
-    let g = OnGitHub::forge("rj-submit-wakes", "");
-    let dir = g.session("wakes", &[("w.txt", "w\n")]);
-    let out = g.wt_submit(&dir, &["--no-wait"]);
-    assert!(out.status.success(), "{}", text(&out));
-    assert_eq!(
-        g.gh.dispatches()
-            .iter()
-            .map(|(w, i)| (w.as_str(), i["mode"].clone(), i["branch"].clone()))
-            .collect::<Vec<_>>(),
-        [("sluice.yml", "round".into(), "main".into())],
-        "{}",
-        text(&out)
-    );
-    assert_eq!(g.gh.dispatched_on(), ["main"], "the default branch");
-}
-
-/// forge-rounds, "A submit wakes it" (design D4, D5): on a repository
-/// whose default branch on GitHub is `trunk`, and whose pool names no
-/// `ref`, a submit's wake starts the round job on `trunk`, which holds the
-/// workflow, to run `main`'s rounds; GitHub refuses a run started on a
-/// branch it lacks.
-#[test]
-fn a_wake_starts_the_round_job_on_the_default_branch() {
-    let g = OnGitHub::forge("rj-default-branch", "");
-    g.repo
-        .git(&["push", "-q", "origin", "main:refs/heads/trunk"]);
-    let ok = support::git_command()
-        .arg("--git-dir")
-        .arg(g.bare.path())
-        .args(["symbolic-ref", "HEAD", "refs/heads/trunk"])
-        .status()
-        .unwrap();
-    assert!(ok.success());
-    let dir = g.session("trunked", &[("t.txt", "t\n")]);
-    let out = g.wt_submit(&dir, &["--no-wait"]);
-    assert!(out.status.success(), "{}", text(&out));
-    assert!(!text(&out).contains("not woken"), "{}", text(&out));
-    assert_eq!(g.wakes_of("main"), 1, "{}", text(&out));
-    assert_eq!(g.gh.dispatched_on(), ["trunk"], "{}", text(&out));
-}
-
-/// forge-rounds, "A recorded result wakes it" (111; design D5): the host
-/// whose step records the result of a run of `main`'s combination
-/// dispatches one round of `main`.
-#[test]
-fn a_recorded_result_wakes_the_round_job() {
-    let g = OnGitHub::forge("rj-result-wakes", "");
-    g.by_hand("unit/result", &[("r.txt", Some("r\n"))], false);
-    g.job();
-    let before = g.wakes_of("main");
-    g.host_runs_the_checks();
-    assert_eq!(g.wakes_of("main"), before + 1, "{:?}", g.remote_log());
-}
-
-/// forge-rounds, "A lost wake" (59, 111; design D5): GitHub refuses the
-/// dispatch after a submit; the submit warns that the round job was not
-/// woken and exits as it would have, and the next `sluice job round` with
-/// no branch wakes `main`'s round.
-#[test]
-fn a_lost_wake_is_a_warning() {
-    let g = OnGitHub::forge("rj-lost-wake", "");
-    g.gh.trouble(
-        "POST",
-        "/repos/o/r/actions/workflows/",
-        1,
-        github::Trouble::Status(403),
-    );
-    let dir = g.session("lost", &[("l.txt", "l\n")]);
-    let out = g.wt_submit(&dir, &["--no-wait"]);
-    assert!(out.status.success(), "{}", text(&out));
-    assert!(
-        text(&out).contains("main's round job was not woken"),
-        "{}",
-        text(&out)
-    );
-    assert_eq!(g.wakes_of("main"), 0);
-    let out = g.job_with(&[]);
-    assert!(out.status.success(), "{}", text(&out));
-    assert_eq!(g.wakes_of("main"), 1, "{}", text(&out));
-}
-
-/// forge-rounds, "A job after a job" (73, 136; design D6; rule core.32):
-/// two round jobs of `main` run one after the other with what the first
-/// kept in the forge's cache, nothing on GitHub changed between them; the
-/// second's list of `main`'s open pull requests is sent with what GitHub
-/// answered the first, and GitHub answers it unchanged.
-#[test]
-fn a_job_after_a_job_asks_conditionally() {
-    let g = OnGitHub::forge("rj-conditional", "reviews = 1");
-    g.by_hand("unit/waits", &[("w.txt", Some("w\n"))], false);
-    g.job();
-    let lists = |status: u16| g.gh.answered("GET", "/repos/o/r/pulls?", status);
-    let (fresh, unchanged) = (lists(200), lists(304));
-    assert!(fresh >= 1);
-    let said = g.job();
-    assert_eq!(lists(200), fresh, "{said}");
-    assert!(lists(304) > unchanged, "{said}");
-}
-
-// ---------------------------------------------------------------------------
-// request-intake-host, reader-tick and obsolete-combinations: no host takes a
-// branch's pull requests in (137; record 0101; rule core.33)
-// ---------------------------------------------------------------------------
-
-impl OnGitHub {
-    /// `main`'s live records on GitHub, as any host reads them.
-    fn remote_branch(&self) -> Value {
-        let out = support::git_command()
-            .arg("--git-dir")
-            .arg(self.bare.path())
-            .args(["show", "refs/sluice/state/main:branch.json"])
-            .output()
-            .unwrap();
-        serde_json::from_slice(&out.stdout).unwrap_or(Value::Null)
-    }
-
-    /// Whether GitHub holds any intake mark.
-    fn any_intake_mark(&self) -> bool {
-        let out = support::git_command()
-            .arg("--git-dir")
-            .arg(self.bare.path())
-            .args(["for-each-ref", "refs/sluice/intake/"])
-            .output()
-            .unwrap();
-        !out.stdout.is_empty()
-    }
-}
-
-/// request-intake-host, "A host's step" (137; rule core.33): `main` is the
-/// forge's, a pull request into it is ready with every condition holding,
-/// and host `a`'s `sluice step main` asks GitHub nothing about `main`'s
-/// open pull requests, writes no submission and pushes nothing under
-/// `refs/sluice/intake/`.
-#[test]
-fn no_host_takes_a_branchs_requests_in() {
-    let g = OnGitHub::forge("no-host-takes", "");
-    g.named("a", "");
-    let (n, _) = g.by_hand("unit/ready", &[("r.txt", Some("r\n"))], false);
-    let lists = g.lists();
-    let out = g.sluice(&["step", "main"]);
-    assert!(out.status.success(), "{}", text(&out));
-    assert_eq!(g.lists(), lists, "{}", text(&out));
-    assert!(g.of(n).is_empty(), "{}", text(&out));
-    assert!(!g.any_intake_mark());
-    g.job();
-    assert_eq!(g.of(n).len(), 1, "taken in by the round job");
-}
-
-/// request-intake-host, "A wait" (137; rule core.33): an agent's `sluice
-/// wait main` on host `a` follows its pull request for a minute, asking
-/// GitHub nothing of `main`'s open pull requests, its own found by its
-/// head alone, and the pull request is taken in only by a round job.
-#[test]
-fn a_wait_takes_nothing_in() {
-    let g = OnGitHub::forge("a-wait-takes-nothing", "");
-    g.named("a", "");
-    let w = g.session("waits", &[("w.txt", "w\n")]);
-    let lists = g.lists();
-    let out = g.wt_submit(&w, &["--no-wait"]);
-    assert!(out.status.success(), "{}", text(&out));
-    assert_eq!(g.lists(), lists, "the submit lists nothing: {}", text(&out));
-    let pull = g.pull_from("unit/waits");
-    let by_head = g.by_head();
-    let out = g.skipping(&w, &["wait", "main", "--timeout", "57s"]);
-    assert_eq!(out.status.code(), Some(sluice::WAITING), "{}", text(&out));
-    assert_eq!(g.lists(), lists, "nothing of main's list: {}", text(&out));
-    assert_eq!(g.by_head(), by_head + 1, "its finding of its request alone");
-    assert!(g.of(pull.number).is_empty(), "{}", text(&out));
-    assert!(!g.any_intake_mark());
-    g.job();
-    assert_eq!(g.of(pull.number).len(), 1, "taken in by the round job");
-}
-
-/// reader-tick, "A branch the forge keeps, nothing to claim" (129, 136,
-/// 137): a pull request into `main` waits for a review and no combination
-/// is open, and a minute of the host's ticks asks GitHub nothing about
-/// `main`'s open pull requests.
-#[test]
-fn a_hosts_tick_asks_github_nothing_for_a_branch_the_forge_keeps() {
-    let g = OnGitHub::forge("tick-forge", "reviews = 1");
-    g.named("a", "");
-    let (n, _) = g.by_hand("unit/review", &[("r.txt", Some("r\n"))], false);
-    g.job();
-    assert!(g.of(n).is_empty());
-    let lists = g.lists();
-    g.on_main();
-    let out = g.skipping(g.repo.dir(), &["run", "--rounds", "20"]);
-    assert!(out.status.success(), "{}", text(&out));
-    assert_eq!(g.lists(), lists, "{}", text(&out));
-}
-
-/// obsolete-combinations, "A pull request closed while under test" (5,
-/// 21, 67): `pull/<n>`'s combination is under test on `main`, the forge's,
-/// a person closes it, and the round job's next round withdraws `pull/<n>`
-/// and leaves no combination with it in `main`'s records.
-#[test]
-fn a_request_closed_under_test_leaves_no_combination() {
-    let g = OnGitHub::forge("closed-under-test", "");
-    let (n, _) = g.by_hand("unit/closed", &[("c.txt", Some("c\n"))], false);
-    g.job();
-    let id = g.of(n)[0]["id"].as_u64().unwrap();
-    assert!(
-        g.remote_branch()["candidates"]
-            .as_array()
-            .is_some_and(|c| !c.is_empty()),
-        "{}",
-        g.remote_branch()
-    );
-    g.gh.forge.close(n).unwrap();
-    g.discovery_passes();
-    let said = g.job();
-    assert_eq!(g.of(n)[0]["state"], "withdrawn", "{said}");
-    let held = g.remote_branch();
-    let holds_it = held["candidates"].as_array().is_some_and(|c| {
-        c.iter().any(|x| {
-            x["submissions"]
-                .as_array()
-                .is_some_and(|s| s.iter().any(|i| i.as_u64() == Some(id)))
-        })
-    });
-    assert!(!holds_it, "{held}");
-}
-
-/// pull-request-intake, "Pull requests need the branch's records on its
-/// remote" (137 as amended 2026-11-07; D8 of
-/// pull-requests-are-queued-on-the-forge): `main` takes pull requests and
-/// the policy names no `[signers]`, so nothing would take them in. A
-/// status of `main` shows it refused, naming `[signers]` and `sluice init
-/// actions`; a submit to `main` exits 2 with those words, pushing and
-/// opening nothing; and `bolt/x`, beside it, lands as before.
-#[test]
-fn a_branch_nothing_would_take_in_is_refused_alone() {
-    let g = OnGitHub::with(
-        "pr-refused-alone",
-        "[tests]\nrunner = \"command\"\ncommand = \"sh check.sh\"\n\n\
-         [branches.main]\nremote = \"origin\"\ntimeout = \"1m\"\n\n\
-         [branches.main.pull_requests]\n\n\
-         [branches.\"bolt/*\"]\nremote = \"origin\"\ntimeout = \"1m\"\n",
-        &[("check.sh", CHECK)],
-    );
-    g.repo.git(&["branch", "bolt/x", "main"]);
-    g.repo
-        .git(&["push", "-q", "origin", "bolt/x:refs/heads/bolt/x"]);
-    let out = g.sluice(&["status", "main"]);
-    let said = text(&out);
-    assert!(
-        said.contains("main takes pull requests")
-            && said.contains("[signers]")
-            && said.contains("sluice init actions"),
-        "{said}"
-    );
-    let w = g.session("refused", &[("r.txt", "r\n")]);
-    let out = g
-        .command(env!("CARGO_BIN_EXE_sluice"), &w)
-        .args(["submit", "main", "--no-wait"])
-        .output()
-        .unwrap();
-    let said = text(&out);
-    assert_eq!(out.status.code(), Some(2), "{said}");
-    assert!(
-        said.contains("[signers]") && said.contains("sluice init actions"),
-        "{said}"
-    );
-    assert_eq!(github::rev(g.bare.path(), "refs/heads/unit/refused"), None);
-    assert!(g.gh.forge.held().unwrap().pulls.is_empty());
-    let before = g.bolt_on_github();
-    let after = g.land_on_bolt("beside", &[("b.txt", "b\n")]);
-    assert_ne!(after, before, "bolt/x lands as before");
-}
-
-/// git's packing pass under a fetch of sluice's own, as `git fetch` runs
-/// `pack-refs` in its maintenance before it detaches: on a branch whose
-/// records are on its remote, the protection lets through the prune of a
-/// branch git has just packed reading no records, so it waits on no fetch
-/// lock the fetch that packs holds (124; rule core.29; ADR 0086).
-#[test]
-fn packing_under_sluices_own_fetch_waits_on_nothing() {
-    let g = OnGitHub::new("pr-pack-fetching", "");
-    // A round, so this host reads `main`'s records from its remote.
-    g.step();
-    let git = g.repo.dir().join(".git");
-    assert!(git.join("refs/heads/main").exists());
-    let tip = g.repo.rev("main");
-    // Held as sluice's fetch holds it while git runs.
-    let lock = std::fs::File::create(git.join("sluice-fetch.lock")).unwrap();
-    lock.lock().unwrap();
-    let mut packing = g.command("git", g.repo.dir());
-    packing.args(["pack-refs", "--all", "--prune"]);
-    let (tx, rx) = std::sync::mpsc::channel();
-    let packs = std::thread::spawn(move || tx.send(packing.output().unwrap()).unwrap());
-    let out = rx.recv_timeout(Duration::from_secs(30));
-    drop(lock);
-    let out = out.unwrap_or_else(|_| {
-        packs.join().unwrap();
-        panic!("pack-refs waited on sluice's fetch lock")
-    });
-    assert!(out.status.success(), "{}", text(&out));
-    assert!(!git.join("refs/heads/main").exists());
-    assert_eq!(g.repo.rev("main"), tip);
 }

@@ -10,16 +10,14 @@ no host is, so a submission lands with every host of its submitter off
 ## ADDED Requirements
 
 ### Requirement: sluice init actions writes the workflows
-`sluice init actions` SHALL write, beside the round job `forge-rounds`
-writes, the run and sign jobs of `.github/workflows/sluice.yml` and
-`.github/workflows/sluice-pr.yml`, give the policy's GitHub pool a
-runner for each system the policy names, and change nothing it would
-overwrite unless asked. It SHALL print what the operator must still do
-on GitHub.
+`sluice init actions` SHALL write the workflows the policy's GitHub pool
+names into `.github/workflows/`, add the pool and its signer to the
+policy when absent, and change nothing it would overwrite unless asked.
+It SHALL print what the operator must still do on GitHub.
 
-#### Scenario: A pool that runs rounds alone
-- **WHEN** `sluice init actions` runs in a repository whose `[pools.forge]` names no runners
-- **THEN** it writes the run and sign jobs and `sluice-pr.yml`, gives `[pools.forge]` a runner for each system the policy names, and prints the permissions the sign job needs
+#### Scenario: A repository with no pool
+- **WHEN** `sluice init actions` runs in a repository whose policy has no pool
+- **THEN** it writes the workflow, adds `[signers.forge]` and `[pools.forge]` to `.config/sluice.toml`, and prints the app permissions and environment to set
 
 #### Scenario: A workflow already there
 - **WHEN** the workflow file exists and differs from what sluice would write
@@ -49,14 +47,19 @@ a later job of the same workflow that runs no code of the combination.
 - **WHEN** a check run on the pool tries to request the job's identity token
 - **THEN** the request fails, and only the signing job's identity signs the run's results
 
-### Requirement: The pool runs what the round job opens when no host can
-A run of a branch the forge keeps that no standing executor has room
-for SHALL be started on the pool by the round job that opened it, so a
-submission lands with every host off (107, 111; `forge-rounds`).
+### Requirement: A job advances a branch when no host does
+A job of the pool SHALL take a branch and run rounds when it is woken by
+a dispatch, by a finished run, or by the workflow's schedule, under the
+same lease as any host, one per branch at a time. A job SHALL stop
+leading before the pool's time limit for it.
 
 #### Scenario: Every host is off
 - **WHEN** a submission is written to `main` and no host is running sluice
 - **THEN** a round job takes `main`, opens the combination, starts its runs on the pool, and lands it
+
+#### Scenario: The schedule as a backstop
+- **WHEN** the dispatch after a submission is lost
+- **THEN** the next scheduled run of the workflow takes `main` and advances it
 
 ### Requirement: The app's key reaches only jobs of the branch's own workflow
 The app's key SHALL be given only to jobs of the workflow on the
