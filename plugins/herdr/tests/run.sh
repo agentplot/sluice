@@ -713,9 +713,15 @@ printf '%s\n' "$testing95" >"$FAKE/watch-work.jsonl"
 touch "$FAKE/hold"
 sock=$HERDR_SOCKET_PATH
 # Its ticks are long, so only the new server's startup has it look here.
-SLUICE_HERDR_TICK=60 sh "$plugin/bin/watch.sh" --ticks 60 2>/dev/null &
+PATH="$here/fake-logged:$PATH" SLUICE_HERDR_TICK=60 sh "$plugin/bin/watch.sh" --ticks 60 2>/dev/null &
 a=$!
 within 15 'grep -q "pane report-metadata p1 .*--token sluice=#95 testing" "$FAKE/herdr-calls"' || fail "the first server's pane got no token"
+# The server stops once the watcher is still, as a server that stops after
+# it was told its tokens finds it. A tokens.sh keeps what it set after its
+# calls, and the start's tick may run more than one: replaced while one
+# still goes, the new server's registration would be told the old one's
+# tokens were set.
+settled || fail "the watcher did not settle"
 theirs=$(sources_of "$a")
 # The server stops and another starts at its path, with a socket of its
 # own, and runs the plugin's startup.
