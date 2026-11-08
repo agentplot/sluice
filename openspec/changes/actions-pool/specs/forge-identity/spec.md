@@ -2,17 +2,15 @@
 
 ### Requirement: forge check verifies the setup
 `sluice forge check [<branch>]` SHALL report, for the branch's remote,
-whether the key reads, a token mints, the app is installed on the
-repository with permission to write contents, workflows, checks and
-pull requests, and the branch's rules on the forge let only the app
-bypass them. For a branch the forge keeps, it SHALL also report whether
-the branch holds the round job `sluice init actions` would write at
-this version, whether the app may dispatch it, and whether the `sluice`
-environment exists and admits only that branch. For a policy whose
-GitHub pool names runners, it SHALL also report whether the workflow's
-run and sign jobs are as `sluice init actions` would write them and
-whether the forge signer names that workflow. It SHALL exit non-zero
-when any of these fails, naming which.
+whether the key reads, a token mints, the app is installed with
+permission to write contents, workflows, checks and pull requests, and
+the branch's rules on the forge let only the app bypass them; for a
+branch the forge keeps, whether the default branch holds the round job
+at this version, the app may dispatch it, and the `sluice` environment
+admits the default branch alone; and for a policy whose GitHub pool
+names runners, whether the workflow's run and sign jobs are as
+`sluice init actions` would write them and the forge signer names that
+workflow. It SHALL exit non-zero naming each that fails.
 
 #### Scenario: A ruleset that lets the operator through
 - **WHEN** the ruleset on `main` lists the operator's account as a bypass beside the app
@@ -41,3 +39,7 @@ when any of these fails, naming which.
 #### Scenario: An environment any branch may use
 - **WHEN** `main` is the forge's and the `sluice` environment has no branch rule
 - **THEN** `sluice forge check main` exits non-zero and names the environment
+
+#### Scenario: Another branch the forge keeps
+- **WHEN** `release/1` is the forge's, `main` is the default branch and holds the round job, and the `sluice` environment admits `main` alone
+- **THEN** `sluice forge check release/1` reads the round job on `main`, passes the environment, and names neither as failing

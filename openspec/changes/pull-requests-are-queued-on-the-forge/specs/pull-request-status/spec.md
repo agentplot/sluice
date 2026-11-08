@@ -25,12 +25,12 @@ C.5).
 ### Requirement: sluice's check carries the pull request's queue as fields
 Every `sluice` check SHALL end its summary with one hidden block,
 `<!-- sluice:queue {…} -->`, whose JSON has `host`, the instance that
-keeps the branch; `taken_in`; `submission` and `state`, the
-submission's number and its record's state, or `null` while not taken
-in; `ahead`, each submission ahead of it in queue order as
-`{"submission", "pull_request"}`; and `waits_for`, what it lacks before
-it is taken in, or taken in again. A changed field SHALL be posted, and
-an unchanged block posts nothing (137, C.5; rule core.32).
+keeps the branch; `taken_in`; `submission` and `state`, its
+submission's number and state, `null` while not taken in; `ahead`, the
+submissions ahead in queue order as `{"submission", "pull_request"}`;
+and `waits_for`, what it lacks to be taken in, or taken in again. A
+changed field SHALL be posted; an unchanged block posts nothing (137,
+C.5; rule core.32).
 
 #### Scenario: A queued submission's block
 - **WHEN** the round job holds `#12` as submission 1406, queued behind `#10`'s submission 1405

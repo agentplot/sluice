@@ -1,34 +1,5 @@
 ## MODIFIED Requirements
 
-### Requirement: A branch turns pull requests on in its policy
-A branch's policy SHALL accept a `[branches."<pattern>".pull_requests]`
-table with `reviews`, a count of approving reviews, default 0, and
-`checks`, a list of check names, default empty. The table SHALL be
-refused on a branch with no `remote`. On a branch whose records each
-host keeps, the policy naming no `[signers]`, or in a policy that names
-no pool, the table SHALL refuse that branch alone, naming `[signers]`
-or `[pools]` and `sluice init actions`, since nothing would take its
-requests in; every other branch of the policy SHALL read as before, and
-a submit to the refused branch SHALL open and push nothing (56, 137 as
-amended 2026-11-07, S64). The conditions SHALL be read from the
-branch's revision.
-
-#### Scenario: Pull requests need a remote
-- **WHEN** a branch's policy has a `pull_requests` table and no `remote`
-- **THEN** the policy is refused with a message naming the branch and `remote`
-
-#### Scenario: Pull requests need the branch's records on its remote
-- **WHEN** `main` names `remote = "origin"` and a `pull_requests` table, the policy names no `[signers]`, and `bolt/x` names `remote = "origin"` and no `pull_requests`
-- **THEN** `sluice status main` shows `main` refused, naming `[signers]` and `sluice init actions`; `wt submit main` exits 2 with those words and nothing is pushed or opened; and `sluice step bolt/x` lands a submission to `bolt/x`
-
-#### Scenario: Pull requests need a pool
-- **WHEN** `main` takes pull requests, the policy names `[signers.box]` and no pool
-- **THEN** `main` is refused, naming `[pools]` and `sluice init actions`
-
-#### Scenario: A pull request cannot loosen its own conditions
-- **WHEN** a pull request changes `.config/sluice.toml` to lower `reviews`
-- **THEN** its conditions are still the ones on the branch's revision
-
 ### Requirement: A pull request is submitted when it is ready
 The forge's round job of a branch, at each asking of its open pull
 requests, SHALL submit every open pull request into the branch, from a
@@ -78,6 +49,23 @@ only until it is first submitted at that head.
 - **THEN** the others are not submitted and say they wait for it, until a new submit names them again
 
 ## ADDED Requirements
+
+### Requirement: A pull request table nothing would take in refuses its branch alone
+On a branch whose records each host keeps, the policy naming no
+`[signers]`, or in a policy that names no pool, a `pull_requests` table
+SHALL refuse that branch alone, naming `[signers]` or `[pools]` and
+`sluice init actions`, since nothing would take its requests in; every
+other branch of the policy SHALL read as before, and a submit to the
+refused branch SHALL open and push nothing (56, 137 as amended
+2026-11-07, S64).
+
+#### Scenario: Pull requests need the branch's records on its remote
+- **WHEN** `main` names `remote = "origin"` and a `pull_requests` table, the policy names no `[signers]`, and `bolt/x` names `remote = "origin"` and no `pull_requests`
+- **THEN** `sluice status main` shows `main` refused, naming `[signers]` and `sluice init actions`; `wt submit main` exits 2 with those words and nothing is pushed or opened; and `sluice step bolt/x` lands a submission to `bolt/x`
+
+#### Scenario: Pull requests need a pool
+- **WHEN** `main` takes pull requests, the policy names `[signers.box]` and no pool
+- **THEN** `main` is refused, naming `[pools]` and `sluice init actions`
 
 ### Requirement: A pull request a submit opened returns only on its submitter's act
 A pull request a submit opened or updated is one whose description

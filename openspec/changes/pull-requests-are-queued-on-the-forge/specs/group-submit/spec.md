@@ -23,13 +23,13 @@ checks the branch's policy names, on the head it pushed (125, C.5).
 ### Requirement: Under pull requests the act marks them all ready when every condition holds
 
 When every pull request meets its conditions, the act SHALL mark each
-ready for review at its head as one submit does, one sluice marked a
-draft when it was sent back included, SHALL write no submission, and
-SHALL wake the branch's round job once, which takes the group in one
-pass and one write, in the order given (125, 137). It SHALL answer
-naming every pull request with what it waits for, and under `--json`
-with `--no-wait` each item of `pull_requests` SHALL hold
-`pull_request`, `worktree`, `state` and `queue`.
+ready for review at its head as one submit does, a draft sluice marked
+on sending it back included, SHALL write no submission, and SHALL wake
+the branch's round job once, which takes the group in, in the order
+given, in one write (125, 137). It SHALL name every pull request and
+what it waits for; under `--json` with `--no-wait`, each item of
+`pull_requests` SHALL hold `pull_request`, `worktree`, `state` and
+`queue`.
 
 #### Scenario: Refused, reviewed, submitted again
 

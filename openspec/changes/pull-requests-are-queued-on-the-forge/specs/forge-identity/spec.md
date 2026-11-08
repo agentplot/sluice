@@ -2,15 +2,13 @@
 
 ### Requirement: forge check verifies the setup
 `sluice forge check [<branch>]` SHALL report, for the branch's remote,
-whether the key reads, a token mints, the app is installed on the
-repository with permission to write contents, workflows, checks and
-pull requests, and the branch's rules on the forge let only the app
-bypass them. For a branch the forge keeps, it SHALL also report whether
-the repository's default branch, on which the round job of every
-branch the forge keeps runs, holds the round job `sluice init actions`
-would write at this version, whether the app may dispatch it, and
-whether the `sluice` environment exists and admits only the default
-branch. It SHALL exit non-zero when any of these fails, naming which.
+whether the key reads, a token mints, the app is installed with
+permission to write contents, workflows, checks and pull requests, and
+the branch's rules on the forge let only the app bypass them; for a
+branch the forge keeps, whether the default branch holds the round job
+at this version, the app may dispatch it, and the `sluice` environment
+admits the default branch alone. It SHALL exit non-zero naming each
+that fails.
 
 #### Scenario: A ruleset that lets the operator through
 - **WHEN** the ruleset on `main` lists the operator's account as a bypass beside the app

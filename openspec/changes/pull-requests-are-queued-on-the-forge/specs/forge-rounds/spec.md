@@ -1,3 +1,13 @@
+# forge-rounds
+
+## Purpose
+
+How the forge keeps a branch that takes pull requests: a GitHub
+Actions workflow, the round job, takes the branch's requests in and
+runs its rounds with every host off, woken by a submit, a recorded
+result or its schedule, while the hosts whose results the branch
+trusts run its checks (137, C.8; rule core.33; record 0101).
+
 ## ADDED Requirements
 
 ### Requirement: The forge's round job keeps a branch that takes pull requests
