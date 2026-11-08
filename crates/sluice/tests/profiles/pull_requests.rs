@@ -756,16 +756,17 @@ fn a_withdrawn_submission_whose_work_landed_is_reported_landed() {
     assert!(!said.contains("closed without landing"), "{said}");
 }
 
-/// 122; record 0100 D5: beside a live driver, whose tick is the only fetch
-/// of `main`, `sluice wait main` follows a pull request this host took in;
-/// another queue then lands it, and GitHub reads it closed, with no fetch
-/// of `main` on this host since the wait began. The wait reads the closed
-/// request against `main` as a round reads it, from its remote: it says
-/// landed as the commit that landed it and exits 0, never closed without
-/// landing.
+/// 122, 135; record 0100 D5: `sluice wait main` follows a pull request
+/// this host took in, beside sluice's host process, which holds the
+/// repository's reader once work is in play, so no driver can; another
+/// queue then lands it, and GitHub reads it closed. The wait says landed
+/// as the commit that landed it and exits 0, never closed without
+/// landing. The host process's pass at each of the wait's ticks fetches
+/// `main`, so here the host's copy holds the landing whether or not the
+/// closed request is read against `main` from its remote.
 #[test]
-fn a_wait_beside_a_driver_reads_a_request_another_queue_landed_from_the_branch() {
-    let g = OnGitHub::new("pr-closed-beside-driver", "");
+fn a_wait_beside_the_host_process_reads_a_request_another_queue_landed_from_the_branch() {
+    let g = OnGitHub::new("pr-closed-beside-host-process", "");
     // The wait reads the request again every quarter of it.
     g.discovery("10s");
     let w = g.session("beside", &[("slow", "x\n")]);
@@ -773,7 +774,6 @@ fn a_wait_beside_a_driver_reads_a_request_another_queue_landed_from_the_branch()
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
     let pull = g.pull_from("unit/beside");
     assert_eq!(g.of(pull.number).len(), 1, "{:?}", g.subs());
-    let _driver = g.driver();
     let mut child = g
         .command(env!("CARGO_BIN_EXE_sluice"), &w)
         .args(["wait", "main", "--timeout", "60s"])
