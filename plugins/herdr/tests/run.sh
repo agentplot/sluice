@@ -2313,19 +2313,28 @@ touch "$FAKE/hold"
 SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 60 2>"$t/log" &
 w=$!
 within 15 'grep -q "pane report-metadata p1 .*--token sluice=3 ahead · clean" "$FAKE/herdr-calls"' || fail "no token: $(calls)"
-# The start's tick and the next have read the panes.
+# The start's tick and the next have read the panes. A pass lists the
+# panes and then sets the token, so the window opens as a minute's pass
+# ends, the next four ticks away, and is read as it stood when it closed,
+# a pass that has listed the panes and not yet set the token left out as
+# still going: a window cut by the clock alone may hold half a pass at
+# either end, however the watcher behaves.
 sleep 2
+: >"$FAKE/herdr-calls"
+within 15 'grep -q "pane report-metadata p1 .*--ttl-ms 120000 --token sluice=3 ahead · clean" "$FAKE/herdr-calls"' || fail "no minute's pass: $(calls)"
 : >"$FAKE/herdr-calls"
 began=$(date +%s)
 sleep 10
+cp "$FAKE/herdr-calls" "$t/window"
 took=$(($(date +%s) - began))
-sets=$(grep -c 'pane report-metadata p1 .*--ttl-ms 120000 --token sluice=3 ahead · clean' "$FAKE/herdr-calls")
-lists=$(grep -c ': pane list$' "$FAKE/herdr-calls")
-# A minute is four ticks: two or three in ten seconds, never one a tick.
-[ "$sets" -ge 1 ] || fail "the token was not set again in ${took}s: $(calls)"
+sets=$(grep -c 'pane report-metadata p1 .*--ttl-ms 120000 --token sluice=3 ahead · clean' "$t/window")
+lists=$(grep -c ': pane list$' "$t/window")
+tail -n 1 "$t/window" | grep -q ': pane list$' && lists=$((lists - 1))
+# A minute is four ticks: one or two in ten seconds, never one a tick.
+[ "$sets" -ge 1 ] || fail "the token was not set again in ${took}s: $(cat "$t/window")"
 [ "$lists" -le $((took / 4 + 1)) ] || fail "the panes were listed $lists times in ${took}s"
 # Each pass lists the panes once and sets each token shown.
-[ "$lists" = "$sets" ] || fail "$lists pane lists for $sets tokens set: $(calls)"
+[ "$lists" = "$sets" ] || fail "$lists pane lists for $sets tokens set: $(cat "$t/window")"
 grep -q -e 'tab list' -e 'workspace list' "$FAKE/herdr-calls" && fail "tabs or workspaces were listed: $(calls)"
 grep -q 'p1 .*--clear-token' "$FAKE/herdr-calls" && fail "the token was cleared"
 rm -f "$FAKE/hold"
