@@ -1372,6 +1372,14 @@ pub fn run(
                 writeln!(out, "sluice submit: {why}")?;
                 return Ok(USAGE);
             }
+            // 137 as amended 2026-11-07: a branch whose pull requests
+            // nothing would take in is refused before anything is pushed or
+            // opened (D8 of pull-requests-are-queued-on-the-forge).
+            if let Some(refused) = no_intake(&s, &branch)? {
+                let next = ["sluice init actions".to_string()];
+                told::tell(out, json, Kind::Refused, &refused.to_string(), &next)?;
+                return Ok(CONFLICT);
+            }
             if worktree.len() > 1 {
                 let req = GroupRequest {
                     branch,
@@ -3962,6 +3970,21 @@ fn delivering<'s, 'a>(
             ));
             None
         }
+    }
+}
+
+/// 137 as amended 2026-11-07: the refusal of `branch`, where its pull
+/// request table is one nothing would take in, read at its revision.
+fn no_intake(s: &Sluice<'_>, branch: &str) -> Result<Option<sluice_core::policy::NoIntake>> {
+    match takes_pulls(s, branch) {
+        Ok(_) => Ok(None),
+        Err(e) => match e
+            .chain()
+            .find_map(|c| c.downcast_ref::<sluice_core::policy::NoIntake>())
+        {
+            Some(refused) => Ok(Some(refused.clone())),
+            None => Err(e),
+        },
     }
 }
 

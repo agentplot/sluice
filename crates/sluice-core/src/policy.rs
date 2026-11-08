@@ -173,7 +173,56 @@ pub struct Rules {
     /// `pool/<pool>/round`, and no host (D1 of
     /// pull-requests-are-queued-on-the-forge). `None` for any other branch.
     pub round_job: Option<String>,
+    /// 137 as amended 2026-11-07: why nothing would take in the pull
+    /// requests this table turns on, which refuses its branch alone (D8 of
+    /// pull-requests-are-queued-on-the-forge). `None` for any other.
+    pub unkept: Option<Unkept>,
 }
+
+/// 137 as amended 2026-11-07: why a branch that takes pull requests would
+/// have nothing to take them in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Unkept {
+    /// Its records are each host's: the policy names no `[signers]`.
+    RecordsEachHosts,
+    /// The policy names no pool whose round job would keep it.
+    NoPool,
+}
+
+/// 137 as amended 2026-11-07; D8 of pull-requests-are-queued-on-the-forge:
+/// the refusal of a branch whose pull request table nothing would take
+/// in, which refuses that branch alone, as a `[[checkout.cache]]` does (56,
+/// S64).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NoIntake {
+    pub branch: String,
+    pub remote: String,
+    pub why: Unkept,
+}
+
+impl std::fmt::Display for NoIntake {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let NoIntake { branch, remote, .. } = self;
+        let lead = format!(
+            "{branch} takes pull requests, which only the forge's round job takes in, and no \
+             pull request is opened for it while"
+        );
+        match self.why {
+            Unkept::RecordsEachHosts => write!(
+                f,
+                "{lead} its records are each host's: name [signers] so they are kept on \
+                 {remote}, and add the round job with `sluice init actions` (137)"
+            ),
+            Unkept::NoPool => write!(
+                f,
+                "{lead} the policy names no pool to keep it: add the round job's [pools] with \
+                 `sluice init actions` (137)"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for NoIntake {}
 
 /// C.7 `pull_requests`: what a pull request into the branch meets before
 /// its driver submits it (27). Read from the branch's revision (56), so a
@@ -259,6 +308,7 @@ impl Default for Rules {
             remote: None,
             pull_requests: None,
             round_job: None,
+            unkept: None,
         }
     }
 }
@@ -609,6 +659,11 @@ impl Policy {
                 (Some(_), Some(pool)) if signed => Some(format!("pool/{}/round", pool.name)),
                 _ => None,
             };
+            let unkept = match (&pull_requests, signed, pools.is_empty()) {
+                (Some(_), false, _) => Some(Unkept::RecordsEachHosts),
+                (Some(_), true, true) => Some(Unkept::NoPool),
+                _ => None,
+            };
             let claims = if signed {
                 trust
                     .iter()
@@ -645,6 +700,7 @@ impl Policy {
                     remote: r.remote,
                     pull_requests,
                     round_job,
+                    unkept,
                 },
             ));
         }
@@ -748,8 +804,32 @@ impl Policy {
     /// The gate for `branch`: an exact name before any pattern, then the
     /// pattern with the most literal characters. `None` when no table
     /// names the branch, which is then not sluice's to land on.
+    ///
+    /// A table that turns pull requests on that nothing would take in
+    /// refuses `branch` alone, every other branch reading as before (137
+    /// as amended 2026-11-07; [`NoIntake`]).
     pub fn rules_for(&self, branch: &str) -> Result<Option<&Rules>> {
-        Ok(self.table_for(branch)?.map(|i| &self.branches[i].1))
+        let Some(rules) = self.table_for(branch)?.map(|i| &self.branches[i].1) else {
+            return Ok(None);
+        };
+        if let Some(why) = rules.unkept {
+            return Err(NoIntake {
+                branch: branch.to_string(),
+                remote: rules.remote.clone().unwrap_or_default(),
+                why,
+            }
+            .into());
+        }
+        Ok(Some(rules))
+    }
+
+    /// The remote `branch`'s table names, read as routing reads it (124;
+    /// rule core.27): whatever else the table holds, a table that refuses
+    /// the branch among them.
+    pub fn remote_of(&self, branch: &str) -> Result<Option<String>> {
+        Ok(self
+            .table_for(branch)?
+            .and_then(|i| self.branches[i].1.remote.clone()))
     }
 
     /// Which of the `[branches]` tables, in the order written, gives
@@ -1163,10 +1243,9 @@ hold = "5m"
     }
 
     /// sluice's own policy reads, and gates as section 9 says: bolt
-    /// branches on the fast tier from any run or the cache, `main` on
-    /// every tier from sandboxed or confined runs only, deepest first,
-    /// landed on `origin`, taking its work as pull requests that wait on
-    /// nothing beyond the gate.
+    /// branches on the fast tier from any run or the cache, landed on
+    /// `origin`; `main`, which takes pull requests with its records on each
+    /// host, refused alone until it names `[signers]` and the round job.
     #[test]
     fn sluices_own_policy_reads() {
         let p = Policy::parse(include_str!("../../../.config/sluice.toml")).unwrap();
@@ -1176,12 +1255,18 @@ hold = "5m"
         let bolt = p.rules_for("bolt/x").unwrap().unwrap();
         assert_eq!(bolt.required, ["#check-fast"]);
         assert!(bolt.satisfiable_by("sandbox") && !bolt.trusts("cache"));
-        let main = p.rules_for("main").unwrap().unwrap();
-        assert_eq!(main.required, ["#check-fast", "#check-tools", "#check-e2e"]);
-        assert!(main.batch && main.satisfiable_by("sandbox") && !main.trusts("cache"));
-        assert_eq!(main.remote.as_deref(), Some("origin"));
+        // 137 as amended 2026-11-07: main takes pull requests and its
+        // records are each host's, so main alone is refused, naming what it
+        // needs, until the planner's chore moves it (D8).
+        let e = format!("{:#}", p.rules_for("main").unwrap_err());
+        assert!(
+            e.contains("main takes pull requests")
+                && e.contains("[signers]")
+                && e.contains("sluice init actions"),
+            "{e}"
+        );
+        assert_eq!(p.remote_of("main").unwrap().as_deref(), Some("origin"));
         assert_eq!(bolt.remote.as_deref(), Some("origin"));
-        assert_eq!(main.pull_requests, Some(PullRequests::default()));
         assert_eq!(bolt.pull_requests, None);
         assert!(p.rules_for("unit/x").unwrap().is_none());
     }
@@ -1273,15 +1358,21 @@ hold = "5m"
         assert!(Policy::parse("[branches.main]\nremote = [\"origin\"]\n").is_err());
     }
 
+    /// The tables a branch that takes pull requests needs beside its own:
+    /// its hosts' signer, and the forge's round job (137).
+    const KEPT: &str = "[signers.box]\nssh = \"box ssh-ed25519 AAAA\"\n\
+                        [signers.forge]\ngithub = { workflow = \"w.yml\", ref = \"refs/heads/main\" }\n\
+                        [pools.forge]\ngithub = { workflow = \"w.yml\" }\nsigner = \"forge\"\n";
+
     /// C.7: a branch may turn pull requests on, with the conditions a pull
     /// request meets before it is submitted; only on a remote.
     #[test]
     fn reads_a_branchs_pull_requests() {
-        let p = Policy::parse(
-            "[branches.main]\nremote = \"origin\"\n\
+        let p = Policy::parse(&format!(
+            "{KEPT}[branches.main]\nremote = \"origin\"\n\
              [branches.main.pull_requests]\nreviews = 1\nchecks = [\"qa/approved\"]\n\
-             [branches.\"bolt/*\"]\n",
-        )
+             [branches.\"bolt/*\"]\n"
+        ))
         .unwrap();
         assert_eq!(
             p.rules_for("main").unwrap().unwrap().pull_requests,
@@ -1292,9 +1383,9 @@ hold = "5m"
             })
         );
         // ADR 0044: a failed check's output posted only as asked.
-        let asked = Policy::parse(
-            "[branches.main]\nremote = \"origin\"\n[branches.main.pull_requests]\nlog_lines = 40\n",
-        )
+        let asked = Policy::parse(&format!(
+            "{KEPT}[branches.main]\nremote = \"origin\"\n[branches.main.pull_requests]\nlog_lines = 40\n",
+        ))
         .unwrap();
         assert_eq!(
             asked
@@ -1316,9 +1407,10 @@ hold = "5m"
         // Absent: work is submitted straight from a session's place.
         assert_eq!(p.rules_for("bolt/x").unwrap().unwrap().pull_requests, None);
         // An empty table takes every pull request out of draft.
-        let p =
-            Policy::parse("[branches.main]\nremote = \"origin\"\n[branches.main.pull_requests]\n")
-                .unwrap();
+        let p = Policy::parse(&format!(
+            "{KEPT}[branches.main]\nremote = \"origin\"\n[branches.main.pull_requests]\n"
+        ))
+        .unwrap();
         assert_eq!(
             p.rules_for("main").unwrap().unwrap().pull_requests,
             Some(PullRequests::default())
@@ -1336,6 +1428,65 @@ hold = "5m"
             "[branches.main]\nremote = \"origin\"\n[branches.main.pull_requests]\nlabels = [\"x\"]\n"
         )
         .is_err());
+    }
+
+    /// pull-request-intake, "Pull requests need the branch's records on
+    /// its remote" (137 as amended 2026-11-07; D8): a pull request table on
+    /// a branch whose records each host keeps refuses that branch alone,
+    /// naming `[signers]` and `sluice init actions`; `bolt/x` reads as
+    /// before.
+    #[test]
+    fn pull_requests_need_the_branchs_records_on_its_remote() {
+        let p = Policy::parse(
+            "[branches.main]\nremote = \"origin\"\n[branches.main.pull_requests]\n\
+             [branches.\"bolt/*\"]\nremote = \"origin\"\n",
+        )
+        .unwrap();
+        let e = p.rules_for("main").unwrap_err();
+        let refused = e
+            .downcast_ref::<NoIntake>()
+            .expect("a refusal of main alone");
+        assert_eq!(refused.why, Unkept::RecordsEachHosts);
+        let e = format!("{e:#}");
+        assert!(
+            e.starts_with("main takes pull requests")
+                && e.contains("records are each host's")
+                && e.contains("[signers]")
+                && e.contains("kept on origin")
+                && e.contains("sluice init actions")
+                && e.contains("no pull request is opened"),
+            "{e}"
+        );
+        assert!(p.rules_for("bolt/x").unwrap().is_some());
+        assert_eq!(p.remote_of("main").unwrap().as_deref(), Some("origin"));
+    }
+
+    /// pull-request-intake, "Pull requests need a pool" (137; D8): a
+    /// branch that takes pull requests in a policy naming signers and no
+    /// pool is refused alone, naming `[pools]` and `sluice init actions`.
+    #[test]
+    fn pull_requests_need_a_pool() {
+        let p = Policy::parse(
+            "[signers.box]\nssh = \"box ssh-ed25519 AAAA\"\n\
+             [branches.main]\nremote = \"origin\"\ntrust = [\"box\"]\n[branches.main.pull_requests]\n\
+             [branches.\"bolt/*\"]\nremote = \"origin\"\ntrust = [\"box\"]\n",
+        )
+        .unwrap();
+        let e = p.rules_for("main").unwrap_err();
+        assert_eq!(e.downcast_ref::<NoIntake>().unwrap().why, Unkept::NoPool);
+        let e = format!("{e:#}");
+        assert!(
+            e.contains("[pools]") && e.contains("sluice init actions"),
+            "{e}"
+        );
+        assert!(p.rules_for("bolt/x").unwrap().is_some());
+        let kept = Policy::parse(&format!(
+            "{KEPT}[branches.main]\nremote = \"origin\"\ntrust = [\"box\"]\n\
+             [branches.main.pull_requests]\n"
+        ))
+        .unwrap();
+        let main = kept.rules_for("main").unwrap().unwrap();
+        assert_eq!(main.round_job.as_deref(), Some("pool/forge/round"));
     }
 
     #[test]
