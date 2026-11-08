@@ -27,15 +27,29 @@ fn main() {
         return;
     }
     // 135: sluice's host process holds every repository on the host, and
-    // is bound to none.
+    // is bound to none. Its rounds are the host's, so its telemetry is
+    // theirs (ADR 0014).
     if let Some(Command::Host) = &cli.command {
-        match sluice::host_process::run() {
-            Ok(code) => std::process::exit(code),
-            Err(e) => {
-                eprintln!("sluice host: {e:#}");
-                std::process::exit(3);
+        let telemetry = match cli.otel {
+            true => {
+                match Telemetry::start(&cli.otel_service_name, cli.otel_logs, cli.otel_logs_limit) {
+                    Ok(t) => Some(t),
+                    Err(e) => {
+                        eprintln!("sluice: warning: telemetry off: {e:#}");
+                        None
+                    }
+                }
             }
+            false => None,
+        };
+        let code = sluice::host_process::run().unwrap_or_else(|e| {
+            eprintln!("sluice host: {e:#}");
+            3
+        });
+        if let Some(t) = telemetry {
+            t.finish();
         }
+        std::process::exit(code);
     }
     // git's credential helper needs no repository: what it gives is in
     // its environment.
