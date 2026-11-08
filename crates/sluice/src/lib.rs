@@ -521,6 +521,12 @@ pub enum Command {
         #[command(subcommand)]
         command: ForgeCommand,
     },
+    /// What the forge's jobs run (137, C.8).
+    #[command(after_help = "Examples:\n  $ sluice job round --branch main\n  $ sluice job round")]
+    Job {
+        #[command(subcommand)]
+        command: JobCommand,
+    },
     /// Run by sluice's own git calls as their credential helper:
     /// `credential get`, git's credential protocol on stdin.
     #[command(hide = true)]
@@ -835,6 +841,12 @@ pub trait PullRequests {
     /// 137: let go of the intake marks this process holds as a wait.
     fn let_go(&self) {}
 
+    /// 137, C.8: from now, take branches' pull requests in as the instance
+    /// `name`, the round job of a branch the forge keeps, asking for them
+    /// at its first intake whenever the host last asked (design D1, D2 of
+    /// pull-requests-are-queued-on-the-forge).
+    fn serve_as(&self, _name: &str) {}
+
     /// Open the pull request from `head`'s branch into `branch`, or update
     /// the one open, and mark it ready; `subject`, the submitter's line
     /// saying what lands, titles it, and the branch where none is given.
@@ -960,6 +972,153 @@ impl PullRequests for () {
     }
 }
 
+/// How long a round job runs its rounds at most, short of the job's own
+/// limit: what it leaves is a lead gone quiet, which the next job takes
+/// on (73; design D2 of pull-requests-are-queued-on-the-forge).
+const JOB_LIMIT: chrono::TimeDelta = chrono::TimeDelta::minutes(50);
+
+/// 137, C.8, design D2: why `branch` at `tip` is not the forge's to keep,
+/// where it is not: the words a round job refused for it says.
+fn not_the_forges(rules: Option<&sluice_core::policy::Rules>, branch: &str) -> Option<String> {
+    let rules = match rules {
+        None => {
+            return Some(format!(
+                "{branch} has no gate in its policy, and is not the forge's to keep"
+            ))
+        }
+        Some(r) if r.round_job.is_some() => return None,
+        Some(r) => r,
+    };
+    Some(if rules.pull_requests.is_none() {
+        format!("{branch} takes no pull requests and is not the forge's to keep")
+    } else if !rules.signed {
+        format!(
+            "{branch} takes pull requests, and its records are each host's: name [signers] so \
+             they are kept on its remote, and add the round job with `sluice init actions` (137)"
+        )
+    } else {
+        format!(
+            "{branch} takes pull requests, and its policy names no pool whose round job keeps \
+             it: add [pools.forge] with `sluice init actions` (137)"
+        )
+    })
+}
+
+/// `sluice job round --branch <branch>` (137, C.8; design D2): `branch`'s
+/// rounds as its round job, the instance `pool/<pool>/round`, each a step
+/// as `sluice step` runs one (rule core.14), its pull requests asked for
+/// at the first and again each `discovery`, until a round finds nothing
+/// its to do now, the branch's records as it left them, or 50 minutes
+/// have passed. A branch the forge does not keep exits 2 naming why,
+/// writing nothing.
+fn job_round(
+    s: &Sluice<'_>,
+    seams: Seams<'_>,
+    host: &dyn exec::Host,
+    pulls: &dyn PullRequests,
+    clock: &dyn Clock,
+    branch: &str,
+    out: &mut dyn Write,
+) -> Result<i32> {
+    let Some(tip) = seams.branch.read(branch)? else {
+        writeln!(out, "sluice job round: {branch} does not exist")?;
+        return Ok(CONFLICT);
+    };
+    let rules = match s.rules_at(branch, &tip) {
+        Ok(r) => r,
+        Err(e) => {
+            writeln!(out, "sluice job round: {e:#}")?;
+            return Ok(CONFLICT);
+        }
+    };
+    if let Some(why) = not_the_forges(rules.as_ref(), branch) {
+        writeln!(out, "sluice job round: {why}")?;
+        return Ok(CONFLICT);
+    }
+    let job = rules
+        .and_then(|r| r.round_job)
+        .expect("a branch the forge keeps names its round job");
+    // Design D1: the round job leads under the pool's one name, and signs
+    // nothing: it claims no run.
+    let s = Sluice::new(seams, clock).as_peer(sluice_core::Peer {
+        name: job.clone(),
+        signer: None,
+        ..host.peer()
+    });
+    pulls.serve_as(&job);
+    let start = clock.now();
+    let mut rounds = 0;
+    // The records as the remote holds them now, so a round finds work by
+    // what it wrote, not by what another instance wrote since the last
+    // job (75).
+    let mut before = seams.state.read(branch)?.version;
+    let ended = loop {
+        intake(pulls, seams, clock, branch, Taker::Step, false, out);
+        let round = s.round(branch)?;
+        rounds += 1;
+        exec::tell_abandoned(out, false, &round.released)?;
+        preview::tell_dropped(out, false, &round.previews)?;
+        exec::tell_releases(out, false, &round.releases)?;
+        if let Some(hold) = &round.held {
+            writeln!(out, "{}", held_line(branch, hold))?;
+        }
+        let after = seams.state.read_held(branch)?.version;
+        if after == before {
+            break "nothing more is its to do now";
+        }
+        before = after;
+        if clock.now() - start >= JOB_LIMIT {
+            break "its 50 minutes have passed; the next round job goes on";
+        }
+        if INTERRUPTED.load(Ordering::SeqCst) {
+            return Ok(STOPPED);
+        }
+    };
+    let n = if rounds == 1 { "round" } else { "rounds" };
+    writeln!(out, "{branch}: {rounds} {n} as {job}; {ended}")?;
+    Ok(0)
+}
+
+/// `sluice job round` with no branch (111, 137; design D2): one round job
+/// woken for each branch the forge keeps among those the host holds, its
+/// own and its remotes' as last fetched, each read at its revision. A
+/// wake that fails is a warning: the schedule's next run wakes it again
+/// (59).
+fn job_wakes(
+    s: &Sluice<'_>,
+    seams: Seams<'_>,
+    pulls: &dyn PullRequests,
+    out: &mut dyn Write,
+) -> Result<i32> {
+    for branch in pulls.branches(seams)? {
+        let Some(tip) = seams.branch.held(&branch)? else {
+            continue;
+        };
+        let rules = match s.rules_at(&branch, &tip) {
+            Ok(Some(r)) if r.round_job.is_some() => r,
+            Ok(_) => continue,
+            Err(e) => {
+                telemetry::warn(&format!("sluice: warning: {e:#}"));
+                continue;
+            }
+        };
+        let Some(pool) = s.policy_at(&tip)?.and_then(|p| p.pools.into_iter().next()) else {
+            continue;
+        };
+        match seams
+            .tests
+            .wake(&pool.kind, &branch, rules.remote.as_deref())
+        {
+            Ok(()) => writeln!(out, "{branch}: its round job woken")?,
+            Err(e) => telemetry::warn(&format!(
+                "sluice: warning: {branch}'s round job was not woken: {e:#}; the schedule's \
+                 next run wakes it"
+            )),
+        }
+    }
+    Ok(0)
+}
+
 /// Take in `branch`'s pull requests before its round. One that cannot be
 /// read is said and the round goes on, landing what is queued; a failure
 /// that stands is said once, as a round's is, until intake reads again or
@@ -1066,6 +1225,19 @@ pub enum ForgeCommand {
         /// One JSON document on stdout.
         #[arg(long)]
         json: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum JobCommand {
+    /// The round job of a branch the forge keeps: its rounds, its pull
+    /// requests taken in, until nothing is its to do now; with no branch,
+    /// one round job woken for each branch the forge keeps.
+    #[command(after_help = "Examples:\n  $ sluice job round --branch main\n  $ sluice job round")]
+    Round {
+        /// The branch whose rounds to run.
+        #[arg(long)]
+        branch: Option<String>,
     },
 }
 
@@ -1450,6 +1622,12 @@ pub fn run(
             await_submission(&s, &waiting, sub, None, out)
         }
         Command::Inbox { worktree, json } => inbox(&s, &worktree, json, out),
+        Command::Job {
+            command: JobCommand::Round { branch },
+        } => match branch {
+            Some(branch) => job_round(&s, seams, host, pulls, clock, &branch, out),
+            None => job_wakes(&s, seams, pulls, out),
+        },
         Command::Step { branch, json } => {
             intake(pulls, seams, clock, &branch, Taker::Step, json, out);
             let round = s.round(&branch)?;

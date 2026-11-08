@@ -221,7 +221,7 @@ fn retry(cli: &Cli) -> Policy {
             ..
         }) => Policy::waiting(None),
         Some(Command::Submit { no_wait: true, .. }) => Policy::command().unpaused(),
-        Some(Command::Run { .. } | Command::Step { .. }) => Policy::round(),
+        Some(Command::Run { .. } | Command::Step { .. } | Command::Job { .. }) => Policy::round(),
         _ => Policy::command(),
     };
     match std::env::var(RETRY_SLEEP_VAR).as_deref() {

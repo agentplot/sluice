@@ -321,8 +321,12 @@ pub struct Pulls {
     /// revision: the policy, no policy file, or the words it was refused
     /// with.
     default_policy: RefCell<Option<(Rev, std::result::Result<Option<Policy>, String>)>>,
-    /// This host as its peers name it, and its lease (72, 73, 137).
-    peer: sluice_core::Peer,
+    /// This host as its peers name it, and its lease (72, 73, 137); the
+    /// round job's instance once it serves as one (design D1).
+    peer: RefCell<sluice_core::Peer>,
+    /// 137, design D2: whether the next intake asks for the open requests
+    /// whenever the host last asked, as a round job's first does.
+    first: std::cell::Cell<bool>,
     /// 137: this process's hold among its host's waits on each branch's
     /// intake mark, by branch, with the branch's remote: let go when the
     /// wait ends, the host's last wait letting the mark go.
@@ -434,7 +438,8 @@ impl Pulls {
             seen: RefCell::default(),
             policies: sluice_core::Policies::default(),
             default_policy: RefCell::default(),
-            peer,
+            peer: RefCell::new(peer),
+            first: std::cell::Cell::new(false),
             holds: RefCell::default(),
             away: RefCell::default(),
             kept_across: RefCell::default(),
@@ -567,7 +572,8 @@ impl Pulls {
         holder: Option<Holder>,
         now: DateTime<Utc>,
     ) -> Result<Option<Taking>> {
-        let lease = chrono::TimeDelta::from_std(self.peer.lease).unwrap_or(chrono::TimeDelta::MAX);
+        let lease =
+            chrono::TimeDelta::from_std(self.peer.borrow().lease).unwrap_or(chrono::TimeDelta::MAX);
         let seen = self.kept.observed(&t.repo, branch);
         let Some((rev, mark)) = pushed.intake_mark(branch)? else {
             return match holder {
@@ -576,7 +582,7 @@ impl Pulls {
                 Some(h) => self.put_mark(t, pushed, branch, None, h, now),
             };
         };
-        if mark.host == self.peer.name {
+        if mark.host == self.peer.borrow().name {
             let Some(h) = holder else {
                 return Ok(Some(Taking::Here));
             };
@@ -625,7 +631,7 @@ impl Pulls {
         now: DateTime<Utc>,
     ) -> Result<Option<Taking>> {
         let mark = Mark {
-            host: self.peer.name.clone(),
+            host: self.peer.borrow().name.clone(),
             holder,
             sluice: crate::VERSION.to_string(),
         };
@@ -722,7 +728,7 @@ impl Pulls {
                 }
                 let pushed = self.pushed(&remote)?;
                 if let Some((rev, mark)) = pushed.intake_mark(&branch)? {
-                    if mark.host == self.peer.name && mark.holder == Holder::Wait {
+                    if mark.host == self.peer.borrow().name && mark.holder == Holder::Wait {
                         pushed.drop_intake_mark(&branch, &rev)?;
                     }
                 }
@@ -921,7 +927,8 @@ impl Pulls {
         let kept = self.kept.readings(&held.repo, branch);
         let records = s.seams().state.read_held(branch)?;
         let version = records.version;
-        let due = kept.asked.is_none_or(|a| now - a >= self.discovery)
+        let due = self.first.replace(false)
+            || kept.asked.is_none_or(|a| now - a >= self.discovery)
             || self.kept.moved_since(&held.repo, branch, kept.asked);
         // Whether the branch as held, and its records, stand as at the last
         // asking.
@@ -1326,7 +1333,7 @@ impl Pulls {
         // D1: its queue on this host, as sluice's check on its head
         // carries it, from its submission at that head, if any.
         let at = latest.filter(|e| e.head.0 == p.head);
-        let queue = || queue_at(&self.peer.name, at, status);
+        let queue = || queue_at(&self.peer.borrow().name, at, status);
         // A submit's pull request whose submission left the queue without
         // landing waits for its submitter's act, a submit or a person's
         // ready mark, at or after the second it left: whatever its head,
@@ -1458,7 +1465,7 @@ impl Pulls {
                         })
                         .collect();
                     let queue = Queue {
-                        host: self.peer.name.clone(),
+                        host: self.peer.borrow().name.clone(),
                         taken_in: true,
                         submission: Some(a.id),
                         state: Some(State::Queued.word().to_string()),
@@ -3124,6 +3131,9 @@ impl crate::PullRequests for Pulls {
             return Ok(Vec::new());
         };
         let mut names = local.branch_names()?;
+        // 137: a round job's repository holds its branches as its remote's
+        // tracking branches alone.
+        names.extend(local.remote_branch_names()?);
         names.extend(
             policy
                 .branches
@@ -3158,7 +3168,7 @@ impl crate::PullRequests for Pulls {
         };
         let s = Sluice::new(once(seams, &memo), clock)
             .keeping(&self.policies)
-            .as_peer(self.peer.clone());
+            .as_peer(self.peer.borrow().clone());
         self.take_in(&s, clock, branch, taker)
             .with_context(|| format!("taking in {branch}'s pull requests"))
     }
@@ -3169,6 +3179,11 @@ impl crate::PullRequests for Pulls {
 
     fn let_go(&self) {
         self.let_go_marks();
+    }
+
+    fn serve_as(&self, name: &str) {
+        self.peer.borrow_mut().name = name.to_string();
+        self.first.set(true);
     }
 
     fn open(
@@ -3714,7 +3729,7 @@ impl Pulls {
         }
         self.taken_in_by(&t.remote, branch)
             .map(|by| by.host)
-            .filter(|host| *host != self.peer.name)
+            .filter(|host| *host != self.peer.borrow().name)
     }
 
     /// 125: every head read before anything is pushed, and a refusal for
@@ -4037,7 +4052,7 @@ impl Pulls {
         let outcome = Outcome::decided(&n.decided);
         // D1: decided, so out of the queue, with nothing ahead of it.
         let queue = Queue {
-            host: self.peer.name.clone(),
+            host: self.peer.borrow().name.clone(),
             taken_in: true,
             submission: Some(n.submission),
             state: Some(outcome.state().word().to_string()),

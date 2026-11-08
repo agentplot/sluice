@@ -47,7 +47,26 @@ struct OnGitHub {
     state: Scratch,
     gh: github::GitHub,
     _files: Scratch,
+    /// The forge's round job, made at its first call (design D14).
+    job: std::cell::OnceCell<Job>,
 }
+
+/// The forge's round job of a branch (137, C.8; design D4, D6, D14): a
+/// repository of its own, as the workflow's empty one with `origin`'s
+/// branches fetched, its host config naming the app alone, and a state
+/// folder kept from one job to the next.
+struct Job {
+    repo: Repo,
+    config: Scratch,
+    state: Scratch,
+}
+
+/// `[signers.forge]` and `[pools.forge]` with no runners, as `sluice init
+/// actions` adds them (design D13).
+const FORGE: &str = "\n[signers.forge]\n\
+                     github = { workflow = \".github/workflows/sluice.yml\", ref = \"refs/heads/main\" }\n\
+                     \n[pools.forge]\ngithub = { workflow = \".github/workflows/sluice.yml\" }\n\
+                     signer = \"forge\"\n";
 
 impl OnGitHub {
     fn new(name: &str, conditions: &str) -> OnGitHub {
@@ -100,6 +119,131 @@ impl OnGitHub {
         )
     }
 
+    /// `main` on GitHub, the forge's (137; design D14): its records on the
+    /// bare remote, the host signing as `a`, the only signer `main`
+    /// trusts, and `[signers.forge]` and `[pools.forge]` with no runners,
+    /// so the forge's round job keeps it and the host claims its runs.
+    fn forge(name: &str, conditions: &str) -> OnGitHub {
+        OnGitHub::forged(name, conditions, "1m", "", "")
+    }
+
+    /// [`OnGitHub::forge`] with [`OnGitHub::checked_policy`]'s arguments.
+    fn forged(name: &str, conditions: &str, timeout: &str, lines: &str, extra: &str) -> OnGitHub {
+        use ssh_key::{Algorithm, LineEnding, PrivateKey};
+        let key = PrivateKey::random(&mut rand_core::OsRng, Algorithm::Ed25519).unwrap();
+        let signer = format!("a {}", key.public_key().to_openssh().unwrap());
+        let g = OnGitHub::with(
+            name,
+            &format!(
+                "[tests]\nrunner = \"command\"\ncommand = \"sh check.sh\"\n\n\
+                 [signers.a]\nssh = \"{signer}\"\n{FORGE}\n\
+                 [branches.main]\nremote = \"origin\"\ntimeout = \"{timeout}\"\ntrust = [\"a\"]\n{lines}\n\
+                 [branches.main.pull_requests]\n{conditions}\n{extra}"
+            ),
+            &[("check.sh", CHECK)],
+        );
+        let path = g.config.path().join("a.signing");
+        key.write_openssh_file(&path, LineEnding::LF).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        g.config_first(&format!(
+            "[signing]\nsigner = \"a\"\nkey = {:?}\n",
+            path.display().to_string()
+        ));
+        g
+    }
+
+    /// The round job, made at its first call: an empty repository whose
+    /// `origin` is GitHub's, and a host config of the app alone (design
+    /// D3, D4).
+    fn the_job(&self) -> &Job {
+        self.job.get_or_init(|| {
+            let repo = Repo {
+                scratch: Scratch::new("round-job"),
+            };
+            repo.git(&["init", "-q", "-b", "main"]);
+            repo.git(&["config", "credential.helper", ""]);
+            repo.git(&["remote", "add", "origin", "https://github.com/o/r.git"]);
+            repo.git(&[
+                "config",
+                &format!("url.{}.insteadOf", self.bare.path().display()),
+                "https://github.com/o/r.git",
+            ]);
+            let config = Scratch::new("round-job-config");
+            let dir = config.path().join("sluice");
+            std::fs::create_dir_all(&dir).unwrap();
+            let ours =
+                std::fs::read_to_string(self.config.path().join("sluice/config.toml")).unwrap();
+            std::fs::write(
+                dir.join("config.toml"),
+                &ours[ours.find("[forge]").unwrap()..],
+            )
+            .unwrap();
+            Job {
+                repo,
+                config,
+                state: Scratch::new("round-job-state"),
+            }
+        })
+    }
+
+    /// `sluice job round` with `args` as the forge's round job runs it: in
+    /// its own repository, `origin`'s branches fetched first as the
+    /// workflow's step does, with its config and the state the last job
+    /// kept (design D3, D6).
+    fn job_with(&self, args: &[&str]) -> Output {
+        let job = self.the_job();
+        job.repo.git(&[
+            "fetch",
+            "-q",
+            "--no-tags",
+            "origin",
+            "+refs/heads/*:refs/remotes/origin/*",
+        ]);
+        self.command(env!("CARGO_BIN_EXE_sluice"), job.repo.dir())
+            .env("XDG_CONFIG_HOME", job.config.path())
+            .env("XDG_STATE_HOME", job.state.path())
+            .args(["job", "round"])
+            .args(args)
+            .output()
+            .unwrap()
+    }
+
+    /// One `sluice job round --branch main`, which must succeed: what it
+    /// said.
+    fn job(&self) -> String {
+        let out = self.job_with(&["--branch", "main"]);
+        assert!(out.status.success(), "{}", text(&out));
+        text(&out)
+    }
+
+    /// `main`'s records on GitHub, as any host reads them: its log, a
+    /// document a line.
+    fn remote_log(&self) -> Vec<Value> {
+        let out = support::git_command()
+            .arg("--git-dir")
+            .arg(self.bare.path())
+            .args(["show", "refs/sluice/state/main:log.jsonl"])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect()
+    }
+
+    /// `main`'s lead, as its records on GitHub name it.
+    fn lead(&self) -> Option<String> {
+        let out = support::git_command()
+            .arg("--git-dir")
+            .arg(self.bare.path())
+            .args(["show", "refs/sluice/state/main:branch.json"])
+            .output()
+            .unwrap();
+        let v: Value = serde_json::from_slice(&out.stdout).ok()?;
+        v["lead"].as_str().map(str::to_string)
+    }
+
     /// `main` on GitHub under `policy`, its tree holding `files` beside it.
     fn with(name: &str, policy: &str, files: &[(&str, &str)]) -> OnGitHub {
         let repo = Repo::new(name);
@@ -143,6 +287,7 @@ impl OnGitHub {
             state: Scratch::new(&format!("{name}-state")),
             gh,
             _files: files,
+            job: std::cell::OnceCell::new(),
         }
     }
 
@@ -7353,4 +7498,186 @@ fn a_refused_query_falls_back_to_the_reads_per_pull_request() {
         1
     );
     assert_eq!(g.of(one).len(), 1, "{:?}", g.subs());
+}
+
+// ---------------------------------------------------------------------------
+// forge-rounds
+// ---------------------------------------------------------------------------
+
+impl OnGitHub {
+    /// Rounds of `main` on this host, which claims and runs its checks,
+    /// until `main`'s records on GitHub hold what a run observed, at most
+    /// a minute.
+    fn host_runs_the_checks(&self) {
+        let until = Instant::now() + Duration::from_secs(60);
+        while !self.remote_log().iter().any(|l| l["event"] == "ran") {
+            assert!(Instant::now() < until, "never ran: {:?}", self.remote_log());
+            let out = self.sluice(&["step", "main"]);
+            assert!(out.status.success(), "{}", text(&out));
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    }
+}
+
+/// forge-rounds, "Every host off" (72, 75, 137; C.8; design D1, D2): a
+/// pull request a person opened is taken in by the round job with no
+/// host's sluice running, its combination formed and its check posted;
+/// once a host's step has claimed and passed its run, the next round job
+/// lands it and GitHub marks it merged.
+#[test]
+fn a_round_job_takes_a_request_in_with_every_host_off() {
+    let g = OnGitHub::forge("rj-off", "");
+    let (n, head) = g.by_hand("unit/off", &[("o.txt", Some("o\n"))], false);
+    let said = g.job();
+    let subs = g.of(n);
+    assert_eq!(subs.len(), 1, "{said}\n{subs:?}");
+    assert_eq!(subs[0]["head"], head.as_str(), "{said}");
+    assert_eq!(subs[0]["state"], "testing", "{said}\n{subs:?}");
+    assert_eq!(g.lead().as_deref(), Some("pool/forge/round"), "{said}");
+    let (status, title, _) = g.posted(&head).expect("sluice's check on its head");
+    assert_eq!(status, Status::InProgress, "{title}");
+    assert!(title.starts_with("testing main + "), "{title}");
+    // No host has run anything yet.
+    assert!(
+        !g.remote_log().iter().any(|l| l["event"] == "claimed"),
+        "{:?}",
+        g.remote_log()
+    );
+    g.host_runs_the_checks();
+    let said = g.job();
+    assert_eq!(g.of(n)[0]["state"], "landed", "{said}");
+    let landed = g.main_on_github();
+    assert_eq!(
+        github::rev(g.bare.path(), &format!("{landed}^2")).unwrap(),
+        head
+    );
+    let pull = g.gh.forge.pull(&github::repo(), n).unwrap().unwrap();
+    assert!(!pull.open, "GitHub shows it merged");
+    assert_eq!(g.lead().as_deref(), Some("pool/forge/round"));
+}
+
+/// forge-rounds, "It ends while a run goes on elsewhere" (136, 137;
+/// design D2): with the only open combination's run held by host `a`, the
+/// round job ends after one round, and `a`'s result, once recorded, is
+/// landed by the next round job.
+#[test]
+fn a_round_job_ends_while_a_run_goes_on_elsewhere() {
+    let g = OnGitHub::forge("rj-ends", "");
+    let (n, _) = g.by_hand("unit/ends", &[("slow", Some("s\n"))], false);
+    g.job();
+    let out = g.sluice(&["step", "main"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(
+        g.remote_log().iter().any(|l| l["event"] == "claimed"),
+        "{}",
+        text(&out)
+    );
+    let started = Instant::now();
+    let said = g.job();
+    assert!(said.contains("main: 1 round as pool/forge/round"), "{said}");
+    assert!(started.elapsed() < Duration::from_secs(5), "{said}");
+    assert_eq!(g.of(n)[0]["state"], "testing", "{said}");
+    g.host_runs_the_checks();
+    let said = g.job();
+    assert_eq!(g.of(n)[0]["state"], "landed", "{said}");
+}
+
+/// forge-rounds, "The schedule wakes each branch" (111, 137; design D2):
+/// `sluice job round` with no branch dispatches one round of the pool's
+/// workflow for each branch the forge keeps, and none for a branch that
+/// takes no pull requests.
+#[test]
+fn the_schedule_wakes_each_branch_the_forge_keeps() {
+    let g = OnGitHub::forged(
+        "rj-schedule",
+        "",
+        "1m",
+        "",
+        "\n[branches.\"release/*\"]\nremote = \"origin\"\ntimeout = \"1m\"\ntrust = [\"a\"]\n\
+         \n[branches.\"release/*\".pull_requests]\n\
+         \n[branches.\"bolt/*\"]\nremote = \"origin\"\ntimeout = \"1m\"\ntrust = [\"a\"]\n",
+    );
+    for b in ["release/1", "bolt/x"] {
+        g.repo.git(&["branch", b, "main"]);
+        g.repo
+            .git(&["push", "-q", "origin", &format!("{b}:refs/heads/{b}")]);
+    }
+    let out = g.job_with(&[]);
+    assert!(out.status.success(), "{}", text(&out));
+    let woken: Vec<(String, String, String)> =
+        g.gh.dispatches()
+            .into_iter()
+            .map(|(workflow, inputs)| {
+                (
+                    workflow,
+                    inputs["mode"].as_str().unwrap_or_default().to_string(),
+                    inputs["branch"].as_str().unwrap_or_default().to_string(),
+                )
+            })
+            .collect();
+    let round = |b: &str| ("sluice.yml".to_string(), "round".to_string(), b.to_string());
+    assert_eq!(woken, [round("main"), round("release/1")], "{}", text(&out));
+}
+
+/// forge-rounds, "A branch the forge does not keep" (137; design D2):
+/// `sluice job round --branch bolt/x`, which takes no pull requests,
+/// exits 2 naming why and writes nothing.
+#[test]
+fn a_branch_the_forge_does_not_keep_is_refused_its_round_job() {
+    let g = OnGitHub::forged(
+        "rj-refused",
+        "",
+        "1m",
+        "",
+        "\n[branches.\"bolt/*\"]\nremote = \"origin\"\ntimeout = \"1m\"\ntrust = [\"a\"]\n",
+    );
+    g.repo.git(&["branch", "bolt/x", "main"]);
+    g.repo
+        .git(&["push", "-q", "origin", "bolt/x:refs/heads/bolt/x"]);
+    let out = g.job_with(&["--branch", "bolt/x"]);
+    assert_eq!(out.status.code(), Some(2), "{}", text(&out));
+    assert!(
+        text(&out).contains("bolt/x takes no pull requests and is not the forge's to keep"),
+        "{}",
+        text(&out)
+    );
+    assert_eq!(
+        github::rev(g.bare.path(), "refs/sluice/state/bolt/x"),
+        None,
+        "{}",
+        text(&out)
+    );
+    assert!(g.gh.dispatches().is_empty());
+}
+
+/// forge-rounds, "A host claims and never leads", and peer-lead, "A
+/// branch the forge keeps" (73, 75, 137; design D1): the round job last
+/// wrote `main`'s records longer ago than the host's lease, and the
+/// host's step claims and runs the open combination's run, `main`'s
+/// records still naming the round job as their lead.
+#[test]
+fn a_host_claims_and_never_leads() {
+    let g = OnGitHub::forge("rj-claims", "");
+    g.named("a", "lease = \"2s\"\nalive = \"1s\"\n");
+    let (n, _) = g.by_hand("unit/claims", &[("c.txt", Some("c\n"))], false);
+    g.job();
+    assert_eq!(g.lead().as_deref(), Some("pool/forge/round"));
+    let out = g.sluice(&["step", "main"]);
+    assert!(out.status.success(), "{}", text(&out));
+    std::thread::sleep(Duration::from_secs(3));
+    g.host_runs_the_checks();
+    let log = g.remote_log();
+    assert!(
+        log.iter()
+            .any(|l| l["event"] == "claimed" && l["host"] == "a"),
+        "{log:?}"
+    );
+    assert!(
+        log.iter()
+            .filter(|l| l["event"] == "took")
+            .all(|l| l["by"] == "pool/forge/round"),
+        "{log:?}"
+    );
+    assert_eq!(g.lead().as_deref(), Some("pool/forge/round"));
+    assert_eq!(g.of(n)[0]["state"], "testing");
 }
