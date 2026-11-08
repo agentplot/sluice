@@ -32,6 +32,13 @@ use crate::retry;
 
 /// The profiles the walkthrough's setup names, for the repository holding
 /// a directory.
+/// The variables a multiplexer's pane names its session by, as the
+/// driver profile reads them (51): what nothing started outside a pane
+/// carries, sluice's host process among it (135; design D3).
+pub fn session_variables() -> [&'static str; 2] {
+    [worktrunk::herdr::PANE, worktrunk::herdr::SOCKET]
+}
+
 pub struct Bound {
     pub checkout: places::Places,
     pub tests: checks::Checks,

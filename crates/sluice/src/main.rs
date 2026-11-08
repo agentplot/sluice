@@ -26,6 +26,17 @@ fn main() {
         }
         return;
     }
+    // 135: sluice's host process holds every repository on the host, and
+    // is bound to none.
+    if let Some(Command::Host) = &cli.command {
+        match sluice::host_process::run() {
+            Ok(code) => std::process::exit(code),
+            Err(e) => {
+                eprintln!("sluice host: {e:#}");
+                std::process::exit(3);
+            }
+        }
+    }
     // git's credential helper needs no repository: what it gives is in
     // its environment.
     if let Some(Command::Credential { operation }) = &cli.command {

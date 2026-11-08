@@ -37,6 +37,7 @@ chrono = { version = "0.4", default-features = false, features = [
 ] }
 clap = { version = "4", features = ["derive", "env"] }
 nix = { version = "0.31", default-features = false, features = [
+  "fs",
   "signal",
   "process",
   "hostname",

@@ -229,6 +229,24 @@ impl Driver {
     }
 }
 
+impl Driver {
+    /// The driver of `repository` among the readers in `dir` where its
+    /// lock is free now, tried once: sluice's host process, whose repository
+    /// task tries it again at its next pass (135; design D7).
+    pub fn try_take(dir: &Path, repository: &str) -> Result<Option<Driver>> {
+        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+        let path = driver_file(dir, repository);
+        let lock = File::create(&path).with_context(|| format!("creating {}", path.display()))?;
+        match lock.try_lock() {
+            Ok(()) => Ok(Some(Driver { _lock: lock })),
+            Err(TryLockError::WouldBlock) => Ok(None),
+            Err(TryLockError::Error(e)) => {
+                Err(e).with_context(|| format!("locking {}", path.display()))
+            }
+        }
+    }
+}
+
 /// Whether a driver of `repository` lives on the host: a process holds
 /// its lock among the readers in `dir`. A probe, its shared lock dropped at
 /// once; one that fails reads as no driver, so a wait runs rounds rather
@@ -466,7 +484,7 @@ fn write_whole(tmp: &Path, path: &Path, bytes: &[u8]) -> Result<()> {
 /// Whether `version` is older than `own`, both as release numbers: three
 /// numbers, dot-separated, compared in order. Anything else is no version,
 /// which is never older, nor has any older than it.
-fn older(version: &str, own: &str) -> bool {
+pub(crate) fn older(version: &str, own: &str) -> bool {
     matches!((release(version), release(own)), (Some(v), Some(o)) if v < o)
 }
 
