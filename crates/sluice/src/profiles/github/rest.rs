@@ -657,12 +657,9 @@ impl Forge for App {
             &Self::repo_path(repo, "/pulls"),
             &open_request(base, head_ref, title, body, draft).to_string(),
             pull,
-            || {
-                let pulls = self.pulls(repo, base)?;
-                Ok(pulls
-                    .into_iter()
-                    .find(|p| p.head_ref == head_ref && p.from_repo(repo)))
-            },
+            // Settled by the request from its head alone, never the
+            // branch's list (request-intake-host; design D9).
+            || self.pull_from(repo, base, head_ref),
         )
     }
 
