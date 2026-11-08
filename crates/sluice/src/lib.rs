@@ -3041,8 +3041,14 @@ fn decided(
     Ok(match carried(s, waiting, read, out)? {
         Carried::Entry(e) => Next::Follow(e),
         Carried::Request(n) => Next::End(Waited::Request(own.clone(), n)),
-        Carried::Outcome(o) if o.id == own.id => Next::End(Waited::Decided(o, None, None)),
-        Carried::Outcome(o) => {
+        Carried::Outcome(o, _) if o.id == own.id => Next::End(Waited::Decided(o, None, None)),
+        // What carried its work ended as its request closed: the request.
+        Carried::Outcome(_, Some(n)) => {
+            let by = CarriedBy::Request(n, RequestEnd::Closed);
+            let end = own_end(s, own.clone(), Some(&by))?;
+            Next::End(Waited::Decided(end, Some(by), None))
+        }
+        Carried::Outcome(o, None) => {
             let by = CarriedBy::Entry(o);
             let end = own_end(s, own.clone(), Some(&by))?;
             Next::End(Waited::Decided(end, Some(by), None))
@@ -3052,8 +3058,9 @@ fn decided(
 
 /// What a wait does with a submission it read decided.
 enum Carried {
-    /// Its outcome, to report.
-    Outcome(Submission),
+    /// Its outcome, to report, with the number of its pull request where
+    /// that was read closed, which ended its work (record 0100 D2).
+    Outcome(Submission, Option<u64>),
     /// A later submission from its place that carries its work, to follow
     /// in its stead (67).
     Entry(Submission),
@@ -3076,7 +3083,7 @@ fn carried(
     out: &mut dyn Write,
 ) -> Result<Carried> {
     if sub.state != State::Withdrawn {
-        return Ok(Carried::Outcome(sub));
+        return Ok(Carried::Outcome(sub, None));
     }
     let branch = s.seams().branch;
     // What cannot be read leaves the outcome as the records hold it, and
@@ -3097,7 +3104,7 @@ fn carried(
             landed.state = State::Landed;
             landed.landed_as = Some(to);
             landed.landed_elsewhere = true;
-            return Ok(Carried::Outcome(landed));
+            return Ok(Carried::Outcome(landed, None));
         }
         Ok(None) => {}
         Err(e) => unread(&sub.branch, e),
@@ -3130,15 +3137,16 @@ fn carried(
         waiting.pulls,
         waiting.pulls.and_then(|p| p.request_of(&sub.from.worktree)),
     ) else {
-        return Ok(Carried::Outcome(sub));
+        return Ok(Carried::Outcome(sub, None));
     };
     let followed = match pulls.follow(s.seams(), waiting.clock, &sub.branch, n) {
         Ok(f) => f,
         Err(e) => {
             unread(&format!("pull request #{n}"), e);
-            return Ok(Carried::Outcome(sub));
+            return Ok(Carried::Outcome(sub, None));
         }
     };
+    let closed = matches!(followed, Followed::Closed).then_some(n);
     // Its request open on the head it had carries on only where another
     // host takes it in: a withdrawal by its submitter, its planner or the
     // operator rests it there (120).
@@ -3169,7 +3177,7 @@ fn carried(
             follows(format!("its pull request #{n}"), out)?;
             Carried::Request(n)
         }
-        None => Carried::Outcome(sub),
+        None => Carried::Outcome(sub, closed),
     })
 }
 
