@@ -20,24 +20,18 @@
 //! - `requests/<owner>/<repo>/<base>.moved`: touched by a submit on the
 //!   host that opened, updated or marked ready a request into the branch;
 //!   newer than the last asking, it asks at once.
-//! - `follows/<owner>/<repo>/<base>.json`: on a host that does not take
-//!   the branch's pull requests in, each it follows ([`Follows`]): one a
-//!   submit on the host opened, updated or marked ready, one its hand-over
-//!   withdrew, or one a wait or status on it followed, by number, with when
-//!   GitHub was last read for it, what that read found of it and sluice's
-//!   check on its head; changed under the exclusive lock of the `.lock`
-//!   beside it, so that every process of the host reads a request once in
-//!   a quarter of the interval between them (137, design D3, D4).
-//! - `intake/<owner>/<repo>/<base>.json`: the branch's intake mark as
-//!   this host last saw it on the remote ([`Observed`]): its commit, when
-//!   this host first saw that commit there, and when this host last
-//!   pushed it, so that a host takes another's mark only once it stood
-//!   unchanged for the lease by its own observation, and renews its own
-//!   only when a third of the lease has passed (73, 137).
-//! - `intake/<owner>/<repo>/<base>.waits/<pid>.hold`: each wait on the
-//!   host that reads the branch's pull requests, its file locked while it
-//!   lives, made and let go under the `.lock` beside them; the host's waits
-//!   hold its mark together, and the last of them to end lets it go (137).
+//! - `follows/<owner>/<repo>/<base>.json`: each pull request the host
+//!   follows ([`Follows`]): one a submit on the host opened, updated or
+//!   marked ready, or one a wait or status on it followed, by number, with
+//!   when GitHub was last read for it, what that read found of it, sluice's
+//!   check on its head and the check a submit here took it again from;
+//!   changed under the exclusive lock of the `.lock` beside it, so that
+//!   every process of the host reads a request once in a quarter of the
+//!   interval between them (137, design D9).
+//!
+//! An older sluice's `intake/` directory, its intake marks as seen and its
+//! waits' holds, is neither read nor written, and may be removed (design
+//! D12).
 //!
 //! Each file is written whole to a file of its own and renamed over the
 //! last, so a reader finds a whole one or the one before; a file that does
@@ -56,7 +50,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::app::Repo;
-use super::forge::Posted;
+use super::forge::{Posted, Posting};
 
 /// How long an answer no call used is kept.
 const UNUSED: Duration = Duration::from_secs(24 * 60 * 60);
@@ -163,6 +157,12 @@ pub struct Follow {
     pub from: String,
     /// sluice's check on `head`, as last read; `None` where none stood.
     pub check: Option<Posted>,
+    /// sluice's check on `head` as a submit on this host found it when it
+    /// took the request again, sent back or held: while the check there
+    /// still says that, it says nothing of the request since, which waits
+    /// to be taken in (120, C.5; record 0096).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub taken_again: Option<Posting>,
 }
 
 /// The host's `forge/` directory.
@@ -548,7 +548,7 @@ mod tests {
         let check = Posted {
             id: 9,
             name: "sluice".into(),
-            posting: super::super::forge::Posting {
+            posting: Posting {
                 status: super::super::forge::Status::Queued,
                 title: "queued: next on bolt/x".into(),
                 summary: "Submission 4 on b.".into(),
@@ -564,6 +564,7 @@ mod tests {
             title: "Add the thing".into(),
             from: "unit/thing".into(),
             check: Some(check),
+            taken_again: None,
         };
         let kept_now = kept
             .change_follows(&repo, "bolt/x", |f| {

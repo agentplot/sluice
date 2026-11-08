@@ -4498,9 +4498,15 @@ impl OnGitHub {
         self.step();
     }
 
-    /// How many times main's open pull requests were asked for.
+    /// How many times main's open pull requests were asked for: the list
+    /// of the branch's, not a host's ask for its own request by its head.
     fn lists(&self) -> usize {
-        self.gh.calls("GET", "/repos/o/r/pulls?")
+        self.gh.calls("GET", "/repos/o/r/pulls?state=open&base=")
+    }
+
+    /// How many times a host asked for its own request by its head.
+    fn by_head(&self) -> usize {
+        self.gh.calls("GET", "/repos/o/r/pulls?state=open&head=")
     }
 
     /// How many times pull request `n` itself was read.
@@ -4643,13 +4649,13 @@ fn the_host_sets_the_interval() {
 }
 
 /// forge-reads, "A submit on the host" (111, 136, 137): `sluice submit main
-/// --no-wait` opens a pull request and takes nothing in, asking GitHub
-/// only its own list; the round job it wakes takes it in at its first
-/// asking.
+/// --no-wait` opens a pull request and takes nothing in, asking GitHub for
+/// its own request by its head and for no list of main's; the round job
+/// it wakes takes it in at its first asking.
 #[test]
 fn a_submit_on_the_host_asks_at_once() {
     let g = OnGitHub::new("pr-discovery-submit", "");
-    let asked = g.lists();
+    let (asked, by_head) = (g.lists(), g.by_head());
     let w = g.session("prompt", &[("p.txt", "p\n")]);
     let out = g
         .command(env!("CARGO_BIN_EXE_sluice"), &w)
@@ -4664,7 +4670,8 @@ fn a_submit_on_the_host_asks_at_once() {
         text(&out)
     );
     assert!(g.of(n).is_empty(), "{:?}", g.subs());
-    assert_eq!(g.lists(), asked + 1, "the open's own list");
+    assert_eq!(g.lists(), asked, "no list of main's: {}", text(&out));
+    assert_eq!(g.by_head(), by_head + 1, "its own request, by its head");
     assert_eq!(g.wakes_of("main"), 1);
     g.job();
     assert_eq!(g.of(n).len(), 1, "{:?}", g.subs());
@@ -4829,13 +4836,15 @@ fn a_wait_reads_its_pull_request_once_in_a_quarter_of_the_interval() {
     let n = g.pull_from("unit/followed").number;
     g.settle();
     let before = g.pull_reads(n);
-    let lists = g.lists();
+    let (lists, by_head) = (g.lists(), g.by_head());
     let out = g.skipping(&w, &["wait", "main", "--timeout", "57s"]);
     assert_eq!(out.status.code(), Some(sluice::WAITING), "{}", text(&out));
     let reads = g.pull_reads(n) - before;
     assert!((1..=4).contains(&reads), "{reads} reads: {}", text(&out));
-    // Its own asking found nothing due: only the wait's finding of it.
-    assert_eq!(g.lists(), lists + 1, "{}", text(&out));
+    // No list of main's: only the wait's finding of its request by its
+    // head (137).
+    assert_eq!(g.lists(), lists, "{}", text(&out));
+    assert_eq!(g.by_head(), by_head + 1, "{}", text(&out));
 }
 
 impl OnGitHub {
@@ -4896,17 +4905,19 @@ fn a_wait_reads_at_its_pace() {
     let out = g.wt_submit(&w, &["--no-wait"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
     let pull = g.pull_from("unit/paced");
-    let (before, checks, lists) = (
+    let (before, checks, lists, by_head) = (
         g.pull_reads(pull.number),
         g.posted_reads(&pull.head),
         g.lists(),
+        g.by_head(),
     );
     let out = g.skipping(&w, &["wait", "main", "--timeout", "57s"]);
     assert_eq!(out.status.code(), Some(sluice::WAITING), "{}", text(&out));
     let reads = g.pull_reads(pull.number) - before;
     assert!((1..=4).contains(&reads), "{reads} reads: {}", text(&out));
     assert!(g.posted_reads(&pull.head) - checks <= 4, "{}", text(&out));
-    assert_eq!(g.lists(), lists + 1, "its finding of its request alone");
+    assert_eq!(g.lists(), lists, "no list of main's");
+    assert_eq!(g.by_head(), by_head + 1, "its finding of its request alone");
     assert!(g.of(pull.number).is_empty(), "no intake, no round");
 }
 
@@ -4931,9 +4942,10 @@ fn submitted_here_is_followed() {
     let g = OnGitHub::new("follows-submitted", "");
     g.named("a", "");
     let w = g.session("there", &[("t.txt", "t\n")]);
+    let lists = g.lists();
     let out = g.wt_submit(&w, &["--no-wait"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
-    let lists = g.lists();
+    assert_eq!(g.lists(), lists, "A's submit asks nothing of the list");
     let pull = g.pull_from("unit/there");
     let follows = g.follows();
     let row = &follows[pull.number.to_string()];
@@ -4986,7 +4998,11 @@ fn a_merged_request_leaves_the_follows() {
         std::thread::sleep(Duration::from_millis(200));
     };
     while !g.of(n).first().is_some_and(|s| s["state"] == "landed") {
-        assert!(Instant::now() < until, "B never landed it: {:?}", g.of(n));
+        assert!(
+            Instant::now() < until,
+            "the round job never landed it: {:?}",
+            g.of(n)
+        );
         g.round();
     }
     while submit.try_wait().unwrap().is_none() {
@@ -5044,7 +5060,7 @@ fn two_waits_and_a_status_read_at_one_pace() {
     assert!(g.of(pull.number).is_empty(), "no intake, no round");
 }
 
-/// request-intake-host, "Landed on another host": a waiting `sluice submit
+/// request-intake-host, "Landed by the round job": a waiting `sluice submit
 /// main` on host A opened its pull request, the round job takes main's pull
 /// requests in and lands it, and A's submit exits 0, reporting it landed.
 #[test]
@@ -5073,7 +5089,11 @@ fn landed_by_the_round_job() {
     }
     let n = g.pull_from("unit/landed").number;
     while !g.of(n).first().is_some_and(|s| s["state"] == "landed") {
-        assert!(Instant::now() < until, "B never landed it: {:?}", g.of(n));
+        assert!(
+            Instant::now() < until,
+            "the round job never landed it: {:?}",
+            g.of(n)
+        );
         g.round();
     }
     while submit.try_wait().unwrap().is_none() {
@@ -5092,7 +5112,7 @@ fn landed_by_the_round_job() {
     assert!(text(&out).contains("passed · landed"), "{}", text(&out));
 }
 
-/// request-intake-host, "Blamed on another host": the round job's round blames the
+/// request-intake-host, "Blamed by the round job": the round job's round blames the
 /// pull request, sluice's check on its head concludes as a failure naming
 /// the blamed check, and A's wait exits as a failed submission does,
 /// naming what the check names.
@@ -5112,7 +5132,7 @@ fn blamed_by_the_round_job() {
     {
         assert!(
             Instant::now() < until,
-            "B never blamed it: {:?}",
+            "the round job never blamed it: {:?}",
             g.of(pull.number)
         );
         g.round();
@@ -5235,8 +5255,8 @@ impl OnGitHub {
     }
 }
 
-/// sluice's check on a pull request's head as the round job posts it while B
-/// holds the request as `submission`, next on main.
+/// sluice's check on a pull request's head as the round job posts it while
+/// it holds the request as `submission`, next on main.
 fn queued_on_b(submission: u64) -> Posting {
     let block = serde_json::json!({
         "host": "pool/forge/round", "taken_in": true, "submission": submission, "state": "queued",
@@ -5271,11 +5291,10 @@ fn last_document(out: &Output) -> Value {
     serde_json::from_str(last).unwrap_or_else(|e| panic!("{e}: {}", text(out)))
 }
 
-/// submission-wait, "Out of time, queued on the other host": the round job's
-/// `sluice run` holds main's mark and holds host A's pull request as
-/// submission 1406, and A's `sluice wait main --timeout 2s --json` in its
-/// worktree exits 5, naming the request, the mark's host and holder, and
-/// the queue the round job's check carries.
+/// submission-wait, "Out of time, queued": the round job holds host A's
+/// pull request as submission 1406, and A's `sluice wait main --timeout 2s
+/// --json` in its worktree exits 5, naming the request and the queue the
+/// round job's check carries, its host `pool/forge/round`.
 #[test]
 fn out_of_time_queued() {
     let g = OnGitHub::new("wait-there-timeout", "");
@@ -5292,8 +5311,8 @@ fn out_of_time_queued() {
 
 /// submission-wait, "The status a submit reads": the same, and `sluice
 /// submit main --status --json` in that worktree gives the request's head,
-/// its draft mark, the mark's host and the check's queue beside the
-/// request, its branch and its state.
+/// its draft mark and the check's queue beside the request, its branch and
+/// its state.
 #[test]
 fn the_status_a_submit_reads() {
     let g = OnGitHub::new("wait-there-status", "");
@@ -5389,12 +5408,11 @@ fn a_waits_words() {
     assert!(shown.contains("queued: next on main"), "{shown}");
 }
 
-/// submission-wait, "Not yet taken in": a wait on the round job holds main's
-/// mark, and the round job's check on the head of host A's pull request says it needs
-/// one review; A's `sluice wait main --timeout 2s --json` exits 5, its
-/// queue not taken in and waiting for the review, and its mark held by a
-/// wait on B. Without `--json`, it says once that the request waits to be
-/// taken in by a wait on B.
+/// submission-wait, "Not yet taken in": the round job's check on the head
+/// of host A's pull request says it needs one review; A's `sluice wait
+/// main --timeout 2s --json` exits 5, its queue not taken in and waiting
+/// for the review. Without `--json`, it says once that the request waits
+/// to be taken in.
 #[test]
 fn not_yet_taken_in() {
     let g = OnGitHub::new("wait-there-untaken", "reviews = 1");
@@ -5466,12 +5484,11 @@ fn row_of(doc: &Value, n: u64) -> &Value {
     &rows[0]
 }
 
-/// request-intake-host, "Queued on the other host": the round job
-/// holds main's mark and holds host A's pull request as submission 1406
-/// behind `#10`'s 1405. `sluice status main --json` on A gives the mark's
-/// host and holder, and a row for the request whose queue names 1406,
-/// queued, behind 1405 and `#10`; its words name the round job's run and the
-/// submission there.
+/// request-intake-host, "Queued there": the round job holds host A's pull
+/// request as submission 1406 behind `#10`'s 1405. `sluice status main
+/// --json` on A gives a row for the request whose queue names 1406, queued,
+/// behind 1405 and `#10`, and no `taken_in_by`; its words name the round
+/// job and the submission there.
 #[test]
 fn queued_by_the_round_job() {
     let g = OnGitHub::new("status-there-queued", "");
@@ -5493,6 +5510,7 @@ fn queued_by_the_round_job() {
         ),
     );
     let doc = g.status_document();
+    assert!(!doc.to_string().contains("taken_in_by"), "{doc}");
     let row = row_of(&doc, n);
     assert_eq!(row["queue"], block, "{doc}");
     assert_eq!(
@@ -5520,10 +5538,9 @@ fn queued_by_the_round_job() {
     assert!(g.of(n).is_empty(), "A took nothing in");
 }
 
-/// request-intake-host, "Waiting for a review there": a wait on the round job
-/// holds main's mark, and the round job's check on host A's pull request says it needs
-/// one review. `sluice status main` on A names B and a wait, and says the
-/// request waits to be taken in, needing 1 review.
+/// pull-request-status, "Waiting for a review": the round job's check on
+/// host A's pull request says it needs one review. `sluice status main` on
+/// A says the request waits to be taken in, needing 1 review.
 #[test]
 fn waiting_for_a_review_there() {
     let g = OnGitHub::new("status-there-review", "reviews = 1");
@@ -5561,11 +5578,11 @@ fn waiting_for_a_review_there() {
     assert_eq!(row["state"], "waiting: needs 1 review", "{doc}");
 }
 
-/// request-intake-host, "No check on its head yet": the round job
-/// holds main's mark, and host A's submit has just pushed a new head to
-/// its pull request, on which no `sluice` check stands. `sluice status
-/// main --json` on A gives the request at its new head with a `queue` of
-/// `null`, and its words say it waits to be taken in by B.
+/// request-intake-host, "No check on its head yet": host A's submit has
+/// just pushed a new head to its pull request, on which no `sluice` check
+/// stands. `sluice status main --json` on A gives the request at its new
+/// head with a `queue` of `null`, and its words say it waits to be taken
+/// in.
 #[test]
 fn no_check_on_its_head_yet() {
     let g = OnGitHub::new("status-there-new-head", "");
@@ -5623,12 +5640,11 @@ fn main_of(doc: &Value) -> &Value {
         .unwrap_or_else(|| panic!("{doc}"))
 }
 
-/// overview, "A one-shot overview": the round job holds main's
-/// mark and holds host A's pull request as submission 1406, and `sluice
-/// overview --json` on A, which follows it, gives main `taken_in_by`
-/// naming B and a row for the request whose queue names 1406, read from
-/// GitHub as status reads it, with its `read_at`; its words list the same
-/// row under main.
+/// overview, "A one-shot overview": the round job holds host A's pull
+/// request as submission 1406, and `sluice overview --json` on A, which
+/// follows it, gives main no `taken_in_by` and a row for the request whose
+/// queue names 1406, read from GitHub as status reads it, with its
+/// `read_at`; its words list the same row under main.
 #[test]
 fn a_one_shot_overview_lists_followed_requests() {
     let g = OnGitHub::new("overview-there", "");
@@ -5639,6 +5655,7 @@ fn a_one_shot_overview_lists_followed_requests() {
     assert!(out.status.success(), "{}", text(&out));
     let doc: Value =
         serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
+    assert!(!doc.to_string().contains("taken_in_by"), "{doc}");
     let main = main_of(&doc);
     let row = row_of(main, n);
     assert_eq!(
@@ -5755,9 +5772,10 @@ fn a_watch_reads_no_followed_request_itself() {
 /// `wt submit` on host A opened from a session's worktree with `changes`,
 /// a `broken` among them, and marked it a draft, its check saying
 /// `waiting: the next submit` while the double keeps that check completed
-/// and failed, as GitHub kept switchboard-kit #268's (record 0096). Host
-/// B, the worktree, and the pull request as it was opened; a second later
-/// than the round job's leaving, so a ready mark made next reads as since it (120).
+/// and failed, as GitHub kept switchboard-kit #268's (record 0096). The
+/// worktree, and the pull request as it was opened; a second later than
+/// the round job's leaving, so a ready mark made next reads as since it
+/// (120).
 fn held_by_the_round_job(
     g: &OnGitHub,
     name: &str,
@@ -5774,12 +5792,13 @@ fn held_by_the_round_job(
             && g.posted(&pull.head)
                 .is_some_and(|p| p.1 == "waiting: the next submit")
     };
-    // A pass at a time: one run of a round moves no clock on, so B records
-    // the submission's leaving at the time the double stamps marks by.
+    // A pass at a time: one run of a round moves no clock on, so the round
+    // job records the submission's leaving at the time the double stamps
+    // marks by.
     while !held() {
         assert!(
             Instant::now() < until,
-            "B never held it: {:?}, {:?}",
+            "the round job never held it: {:?}, {:?}",
             g.of(pull.number),
             g.posted(&pull.head)
         );
@@ -5792,7 +5811,7 @@ fn held_by_the_round_job(
         "the double keeps the check failed"
     );
     // The ready mark later than the leaving, to the second GitHub and the
-    // records keep, as B reads a ready mark since (120).
+    // records keep, as the round job reads a ready mark since (120).
     std::thread::sleep(Duration::from_millis(1100));
     // A quarter of `discovery` has passed since A's submit last read the
     // request, as the round job's blame takes on a host, so A's next follow reads what
@@ -5826,8 +5845,8 @@ fn held_by_the_round_job_then_marked_ready(
 /// request-intake-host, "Held, then marked ready": the round job blamed `#n` and
 /// marked it a draft, its check saying `waiting: the next submit`, and a
 /// submit on A marked it ready at the same head; before the round job's next pass, a
-/// wait on A reads it waiting to be taken in by B, not sent back, though
-/// GitHub keeps the check failed (120, 137, C.5; record 0096).
+/// wait on A reads it waiting to be taken in, not sent back, though GitHub
+/// keeps the check failed (120, 137, C.5; record 0096).
 #[test]
 fn held_then_marked_ready_waits_to_be_taken_in() {
     let g = OnGitHub::new("intake-held-ready", "");
@@ -5872,9 +5891,10 @@ fn taken_in_again_while_github_keeps_the_check_failed() {
         .unwrap();
     let words = || std::fs::read_to_string(&said).unwrap_or_default();
     let until = Instant::now() + Duration::from_secs(90);
-    // B passes again once A's wait has said what the round job's check says now, or
-    // where the round job's last pass changed nothing, so the wait reads each state B
-    // posts; the check held for the next submit, A says waiting for B.
+    // The round job passes again once A's wait has said what its check says
+    // now, or where its last pass changed nothing, so the wait reads each
+    // state it posts; the check held for the next submit, A says it waits
+    // to be taken in.
     let shown = |title: &str| match title {
         "waiting: the next submit" => format!("#{n} waits to be taken in"),
         t => t.to_string(),
@@ -5924,12 +5944,11 @@ fn taken_in_again_while_github_keeps_the_check_failed() {
     assert_eq!(subs[1]["state"], "landed", "{subs:?}");
 }
 
-/// pull-request-submit, "Sent back on another host": the round job blamed `#n` and
-/// marked it a draft; `wt submit main --status --json` on A exits 0 and
-/// prints it sent back, with sluice's check's title and summary on its
-/// head, its head, its draft mark and `sends`, as `--status` answers where
-/// the host takes the request in; in words, the check's title (124, 137;
-/// record 0096).
+/// pull-request-submit, "Sent back by the round job": the round job blamed
+/// `#n` and marked it a draft; `wt submit main --status --json` on A exits
+/// 0 and prints it sent back, with sluice's check's title and summary on
+/// its head, its head, its draft mark and `sends`; in words, the check's
+/// title (124, 137; record 0096).
 #[test]
 fn status_of_a_request_the_round_job_sent_back() {
     let g = OnGitHub::new("intake-status-sent-back", "");
@@ -5966,15 +5985,15 @@ fn status_of_a_request_the_round_job_sent_back() {
     );
 }
 
-/// worktrunk-submit, "Sent back as a draft on another host", then "Run
-/// again before the other host takes it in again": the across twin of
-/// [`run_again_marks_a_draft_ready`]. the round job blamed `#n` and marked it a draft,
-/// its check saying `waiting: the next submit` while the double keeps that
-/// check failed; `wt submit main --no-wait --json` on A, nothing committed
-/// since, marks it ready at that head and answers that it waits for B; run
-/// again under a time limit, it pushes and marks nothing, follows `#n`, and
-/// exits 5 saying the same; and the round job's next pass takes `#n` in again at that
-/// head (67, 120, 137, C.5; record 0096).
+/// worktrunk-submit, "Sent back as a draft by the round job", then "Run
+/// again before the round job takes it in again": the round job blamed
+/// `#n` and marked it a draft, its check saying `waiting: the next submit`
+/// while the double keeps that check failed; `wt submit main --no-wait
+/// --json` on A, nothing committed since, marks it ready at that head and
+/// answers that it waits to be taken in; run again under a time limit, it
+/// pushes and marks nothing, follows `#n`, and exits 5 saying the same;
+/// and the round job's next pass takes `#n` in again at that head (67,
+/// 120, 137, C.5; record 0096).
 #[test]
 fn run_again_marks_ready_a_draft_the_round_job_sent_back() {
     let g = OnGitHub::new("intake-again-draft", "");
@@ -6035,7 +6054,7 @@ fn run_again_marks_ready_a_draft_the_round_job_sent_back() {
     while g.of(n).len() < 2 {
         assert!(
             Instant::now() < until,
-            "B never took it again: {:?}",
+            "the round job never took it again: {:?}",
             g.of(n)
         );
         g.round();
@@ -6055,13 +6074,16 @@ fn mutations(g: &OnGitHub, mutation: &str) -> usize {
         .count()
 }
 
-/// pull-request-submit, "Sent back, not a draft": the round job blamed `#n`,
-/// which a person opened from `unit/review` and which B therefore left out
-/// of draft, its check saying `failed: …`; `sluice submit main --no-wait`
-/// on host A from a worktree on `unit/review`, nothing committed since,
-/// marks it a draft and then ready for review at that head, though A's
-/// records hold no submission of it, and the round job's next pass takes it in again
-/// (120, 137, C.5; record 0096).
+/// pull-request-submit, "Sent back, not a draft", and worktrunk-submit,
+/// "Run again before the round job takes it in again": the round job
+/// blamed `#n`, which a person opened from `unit/review` and which it
+/// therefore left out of draft, its check saying `failed: …`; `sluice
+/// submit main --no-wait` on host A from a worktree on `unit/review`,
+/// nothing committed since, marks it a draft and then ready for review at
+/// that head, and answers that it waits to be taken in, exiting 0, though
+/// the check still says `failed: …`; `--status` says the same, so `wt
+/// submit` run again marks nothing; and the round job's next pass takes it
+/// in again (120, 137, C.5; record 0096).
 #[test]
 fn a_submit_marks_ready_a_request_the_round_job_sent_back_not_a_draft() {
     let g = OnGitHub::new("intake-sent-back-ready", "");
@@ -6082,7 +6104,7 @@ fn a_submit_marks_ready_a_request_the_round_job_sent_back_not_a_draft() {
     while !blamed() {
         assert!(
             Instant::now() < until,
-            "B never blamed it: {:?}, {:?}",
+            "the round job never blamed it: {:?}, {:?}",
             g.of(n),
             g.posted(&head)
         );
@@ -6090,10 +6112,10 @@ fn a_submit_marks_ready_a_request_the_round_job_sent_back_not_a_draft() {
     }
     assert!(
         !g.pull_from("unit/review").draft,
-        "B leaves a request opened by hand out of draft"
+        "the round job leaves a request opened by hand out of draft"
     );
     // The marks later than the round job's leaving, to the second GitHub and the
-    // records keep, as B reads a ready mark since (120).
+    // records keep, as the round job reads a ready mark since (120).
     std::thread::sleep(Duration::from_millis(1100));
     let drafted = mutations(&g, "convertPullRequestToDraft");
     let readied = mutations(&g, "markPullRequestReadyForReview");
@@ -6121,10 +6143,47 @@ fn a_submit_marks_ready_a_request_the_round_job_sent_back_not_a_draft() {
     );
     let ready = g.pull_from("unit/review");
     assert!(!ready.draft && ready.head == head, "{ready:?}");
+    // Taken again: it waits to be taken in, whatever the check it was
+    // sent back by still says, and exits 0.
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert!(
+        text(&out).contains(&format!("#{n} waits to be taken in")),
+        "{}",
+        text(&out)
+    );
+    assert!(
+        g.posted(&head).is_some_and(|p| p.1.starts_with("failed: ")),
+        "{:?}",
+        g.posted(&head)
+    );
+    let out = g
+        .command(env!("CARGO_BIN_EXE_sluice"), &w)
+        .args(["submit", "main", "--status", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let doc: Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
+    assert_eq!(doc["state"], "waiting to be taken in", "{doc}");
+    let marks = (
+        mutations(&g, "convertPullRequestToDraft"),
+        mutations(&g, "markPullRequestReadyForReview"),
+    );
+    let out = g.wt_submit(&w, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert_eq!(
+        (
+            mutations(&g, "convertPullRequestToDraft"),
+            mutations(&g, "markPullRequestReadyForReview"),
+        ),
+        marks,
+        "run again, it marks nothing: {}",
+        text(&out)
+    );
     while g.of(n).len() < 2 {
         assert!(
             Instant::now() < until,
-            "B never took it again: {:?}",
+            "the round job never took it again: {:?}",
             g.of(n)
         );
         g.round();
@@ -6133,7 +6192,7 @@ fn a_submit_marks_ready_a_request_the_round_job_sent_back_not_a_draft() {
     assert_eq!(subs[1]["head"], head.as_str(), "{subs:?}");
 }
 
-/// pull-request-submit, "Still queued on the other host": the round job has `#n`
+/// pull-request-submit, "Still queued": the round job has `#n`
 /// queued, its check saying `queued: next on main`; `sluice submit main
 /// --no-wait` on host A, nothing committed since, marks it no draft, even
 /// for a moment, and the round job's submission of it stays in the round job's queue, which a
@@ -6179,12 +6238,6 @@ fn a_submit_leaves_a_request_queued_by_the_round_job() {
     assert_eq!(subs[0]["id"], id, "{subs:?}");
     assert_ne!(subs[0]["state"], "withdrawn", "{subs:?}");
 }
-
-// ---------------------------------------------------------------------------
-// request-intake-host: a withdrawal for a hand-over holds no request, which
-// the holder of the mark takes in again at the head it holds, the host that
-// withdrew it included (120, 137; record 0088 as amended; rule core.33)
-// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // forge-reads: one query reads a branch's open pull requests whole, and a
@@ -6413,6 +6466,34 @@ fn the_schedule_wakes_each_branch_the_forge_keeps() {
     assert_eq!(woken, [round("main"), round("release/1")], "{}", text(&out));
 }
 
+/// forge-rounds, "The schedule wakes each branch" (137, core.27; design
+/// D2): `hotfix/1`'s own revision takes pull requests with its records on
+/// `origin`, which `main`'s policy does not name; `sluice job round` with
+/// no branch reads each branch's policy at its revision, and wakes
+/// `hotfix/1`'s round job beside `main`'s.
+#[test]
+fn the_schedule_reads_each_branchs_own_policy() {
+    let g = OnGitHub::forge("rj-own-policy", "");
+    g.repo.git(&["checkout", "-q", "-b", "hotfix/1", "main"]);
+    let policy = std::fs::read_to_string(g.repo.dir().join(".config/sluice.toml")).unwrap();
+    g.repo.write(
+        ".config/sluice.toml",
+        &format!(
+            "{policy}\n[branches.\"hotfix/1\"]\nremote = \"origin\"\ntimeout = \"1m\"\n\
+             trust = [\"a\"]\n\n[branches.\"hotfix/1\".pull_requests]\n"
+        ),
+    );
+    g.repo
+        .git(&["commit", "-q", "-am", "hotfix/1 takes pull requests"]);
+    g.repo
+        .git(&["push", "-q", "origin", "hotfix/1:refs/heads/hotfix/1"]);
+    g.repo.git(&["checkout", "-q", "main"]);
+    let out = g.job_with(&[]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(g.wakes_of("main"), 1, "{}", text(&out));
+    assert_eq!(g.wakes_of("hotfix/1"), 1, "{}", text(&out));
+}
+
 /// forge-rounds, "A branch the forge does not keep" (137; design D2):
 /// `sluice job round --branch bolt/x`, which takes no pull requests,
 /// exits 2 naming why and writes nothing.
@@ -6505,6 +6586,32 @@ fn a_submit_wakes_the_round_job() {
         "{}",
         text(&out)
     );
+    assert_eq!(g.gh.dispatched_on(), ["main"], "the default branch");
+}
+
+/// forge-rounds, "A submit wakes it" (design D4, D5): on a repository
+/// whose default branch on GitHub is `trunk`, and whose pool names no
+/// `ref`, a submit's wake starts the round job on `trunk`, which holds the
+/// workflow, to run `main`'s rounds; GitHub refuses a run started on a
+/// branch it lacks.
+#[test]
+fn a_wake_starts_the_round_job_on_the_default_branch() {
+    let g = OnGitHub::forge("rj-default-branch", "");
+    g.repo
+        .git(&["push", "-q", "origin", "main:refs/heads/trunk"]);
+    let ok = support::git_command()
+        .arg("--git-dir")
+        .arg(g.bare.path())
+        .args(["symbolic-ref", "HEAD", "refs/heads/trunk"])
+        .status()
+        .unwrap();
+    assert!(ok.success());
+    let dir = g.session("trunked", &[("t.txt", "t\n")]);
+    let out = g.wt_submit(&dir, &["--no-wait"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(!text(&out).contains("not woken"), "{}", text(&out));
+    assert_eq!(g.wakes_of("main"), 1, "{}", text(&out));
+    assert_eq!(g.gh.dispatched_on(), ["trunk"], "{}", text(&out));
 }
 
 /// forge-rounds, "A recorded result wakes it" (111; design D5): the host
@@ -6597,7 +6704,8 @@ impl OnGitHub {
 /// request-intake-host, "A host's step" (137; rule core.33): `main` is the
 /// forge's, a pull request into it is ready with every condition holding,
 /// and host `a`'s `sluice step main` asks GitHub nothing about `main`'s
-/// open pull requests, writes no submission and pushes no intake mark.
+/// open pull requests, writes no submission and pushes nothing under
+/// `refs/sluice/intake/`.
 #[test]
 fn no_host_takes_a_branchs_requests_in() {
     let g = OnGitHub::forge("no-host-takes", "");
@@ -6615,20 +6723,23 @@ fn no_host_takes_a_branchs_requests_in() {
 
 /// request-intake-host, "A wait" (137; rule core.33): an agent's `sluice
 /// wait main` on host `a` follows its pull request for a minute, asking
-/// GitHub nothing of `main`'s open pull requests beyond finding its own,
-/// and the pull request is taken in only by a round job.
+/// GitHub nothing of `main`'s open pull requests, its own found by its
+/// head alone, and the pull request is taken in only by a round job.
 #[test]
 fn a_wait_takes_nothing_in() {
     let g = OnGitHub::forge("a-wait-takes-nothing", "");
     g.named("a", "");
     let w = g.session("waits", &[("w.txt", "w\n")]);
+    let lists = g.lists();
     let out = g.wt_submit(&w, &["--no-wait"]);
     assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(g.lists(), lists, "the submit lists nothing: {}", text(&out));
     let pull = g.pull_from("unit/waits");
-    let lists = g.lists();
+    let by_head = g.by_head();
     let out = g.skipping(&w, &["wait", "main", "--timeout", "57s"]);
     assert_eq!(out.status.code(), Some(sluice::WAITING), "{}", text(&out));
-    assert_eq!(g.lists(), lists + 1, "its finding of its request alone");
+    assert_eq!(g.lists(), lists, "nothing of main's list: {}", text(&out));
+    assert_eq!(g.by_head(), by_head + 1, "its finding of its request alone");
     assert!(g.of(pull.number).is_empty(), "{}", text(&out));
     assert!(!g.any_intake_mark());
     g.job();

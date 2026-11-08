@@ -26,8 +26,8 @@ use crate::{
     INTERRUPTED, STOPPED,
 };
 
-/// 137, design D5: how the overview reads the pull requests into each
-/// branch this host follows and another host takes in.
+/// 137, design D9: how the overview reads the pull requests into each
+/// branch this host follows, which the round job takes in.
 #[derive(Clone, Copy)]
 pub enum Follows<'a> {
     /// As `sluice status` reads them, each one due asked of GitHub at the
@@ -63,8 +63,8 @@ fn document_held(
 ) -> Result<(Vec<BranchView>, serde_json::Value)> {
     let branches = s.overview(host.default_branch()?.as_ref())?;
     let mut views = serde_json::to_value(&branches)?;
-    // 137, design D5: each branch with pull requests the host follows and
-    // another host takes in carries them, as `sluice status` gives them; one
+    // 137, design D9: each branch with pull requests the host follows
+    // carries them, as `sluice status` gives them; one
     // this host has no records of is listed with its empty queue, as status
     // shows it, after the others.
     for (branch, a) in followed(s, clock, follows, &branches) {
@@ -113,8 +113,8 @@ fn document_held(
     Ok((branches, doc))
 }
 
-/// 137, design D5: each branch's pull requests the host follows and
-/// another host takes in, by branch, read as `follows` says: the overview's
+/// 137, design D9: each branch's pull requests the host follows, by
+/// branch, read as `follows` says: the overview's
 /// branches and every branch the default branch's policy takes pull
 /// requests on. A one-shot read that fails is warned of, as `sluice status`
 /// warns of it, and its branch shown without them; a reader's tick shows
@@ -472,9 +472,8 @@ fn write_overview(
     Ok(())
 }
 
-/// 137, design D5: the pull requests into `branch` the host follows and
-/// another host takes in, as the document carries them; `None` where it
-/// carries none.
+/// 137, design D9: the pull requests into `branch` the host follows, as
+/// the document carries them; `None` where it carries none.
 fn across_in(doc: &serde_json::Value, branch: &str) -> Option<Across> {
     let view = doc["branches"]
         .as_array()?
@@ -485,8 +484,8 @@ fn across_in(doc: &serde_json::Value, branch: &str) -> Option<Across> {
     })
 }
 
-/// 137, design D5: under `branch`, the pull requests the host follows and
-/// another host takes in, as `sluice status <branch>` words them.
+/// 137, design D9: under `branch`, the pull requests the host follows, as
+/// `sluice status <branch>` words them.
 fn write_across(doc: &serde_json::Value, branch: &str, out: &mut dyn Write) -> Result<()> {
     if let Some(a) = across_in(doc, branch) {
         writeln!(out, "  {}", a.heading(branch))?;

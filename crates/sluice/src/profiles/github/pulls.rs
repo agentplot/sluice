@@ -19,17 +19,13 @@
 //! its head, its last change on GitHub, its draft mark or its entry moved,
 //! or, out of draft and still short of its conditions, at each asking.
 //!
-//! One host at a time takes a branch's pull requests in (137; rule
-//! core.33): where its records are on its remote, the instance that keeps
-//! the branch; where each host keeps its own, the holder of its intake
-//! mark, `refs/sluice/intake/<branch>` on its remote, or, where none
-//! stands, the host that finds none. `sluice run` pushes the mark when it
-//! starts and renews it when a third of the lease has passed, never at each
-//! pass; a wait on a host where `sluice run` does not live pushes it the
-//! same way where none stands, and lets it go when it ends; a step pushes
-//! none. A host that does not take the branch's pull requests in asks
-//! GitHub nothing about them, and withdraws its own submissions of them,
-//! naming the host that does, which takes each in again.
+//! Only the forge's round job of a branch takes its pull requests in, the
+//! instance `pool/<pool>/round` that keeps the branch's records on its
+//! remote (137; rule core.33). No host takes them in: a host's pass, step,
+//! wait and submit ask GitHub nothing of a branch's open pull requests. A
+//! host's submit opens or updates its request, marks it ready and wakes
+//! the round job; every host follows the requests it submitted by GitHub
+//! and sluice's check on their heads, finding its own by its head alone.
 //!
 //! The driver's `session("pull/<n>")` fetches `refs/pull/<n>/head`; its
 //! `notify` posts the outcome and, when a pull request is sent back,
@@ -321,7 +317,7 @@ pub struct Pulls {
     first: std::cell::Cell<bool>,
     /// 137, design D5: what this process's reader's documents last carried
     /// of the pull requests into each branch the host follows, by branch,
-    /// read again only once the kept file or the mark moved.
+    /// read again only once the kept file moved.
     kept_across: RefCell<BTreeMap<String, KeptAcross>>,
 }
 
@@ -1753,7 +1749,24 @@ fn known(head: &str, draft: bool, title: &str, from: &str) -> Follow {
         title: title.to_string(),
         from: from.to_string(),
         check: None,
+        taken_again: None,
     }
+}
+
+/// Whether sluice's check on `f`'s head is still the check a submit on
+/// this host took the request again from, sent back or held, which says
+/// nothing of it since (120, C.5; record 0096).
+fn taken_again(f: &Follow) -> bool {
+    match (&f.taken_again, &f.check) {
+        (Some(t), Some(c)) => same_words(t, &c.posting),
+        _ => false,
+    }
+}
+
+/// Whether two postings of sluice's check say the same, whatever GitHub
+/// kept of their status (record 0096).
+fn same_words(a: &Posting, b: &Posting) -> bool {
+    a.title == b.title && a.summary == b.summary
 }
 
 /// A combination's name in a pull request's words: `main + #38 + #41`.
@@ -1832,10 +1845,11 @@ fn removal(log: &[sluice_core::records::LogLine], id: u64) -> Option<DateTime<Ut
         .map(|t| t.with_timezone(&Utc))
 }
 
-/// 120, 137: whether `e` was withdrawn by its host's hand-over of its
-/// branch's pull requests to another host, which holds no request: its
+/// 120, 137: whether `e` was withdrawn by an older sluice's hand-over of
+/// its branch's pull requests to another host, which holds no request: its
 /// withdrawal's record names the host it handed over to (record 0088 as
-/// amended, design D1).
+/// amended). No sluice writes one now; one written stays readable (26;
+/// design D12).
 fn handed_over(e: &Submission) -> bool {
     let Some(w) = e.withdrawn.as_ref().filter(|_| e.state == State::Withdrawn) else {
         return false;
@@ -1908,9 +1922,9 @@ fn withdrawer(by: &str) -> String {
 }
 
 /// Out of the queue without landing: withdrawn, blamed or conflicting;
-/// never withdrawn for a hand-over of intake, which is none of these and
-/// holds no request: whichever host holds the mark takes it in again as
-/// its conditions hold, the host that withdrew it included (120, 137).
+/// never withdrawn by an older sluice's hand-over of intake, which is none
+/// of these and holds no request: the round job takes it in again as its
+/// conditions hold (120, 137; design D12).
 fn left_unlanded(e: &Submission) -> bool {
     matches!(e.state, State::Withdrawn | State::Failed | State::Conflict) && !handed_over(e)
 }
@@ -2848,6 +2862,17 @@ impl crate::PullRequests for Pulls {
         Ok(out)
     }
 
+    fn held_branches(&self) -> Result<Vec<String>> {
+        let local = self.local()?;
+        let mut names = local.branch_names()?;
+        // 137: a round job's repository holds its branches as its remote's
+        // tracking branches alone.
+        names.extend(local.remote_branch_names()?);
+        names.sort();
+        names.dedup();
+        Ok(names)
+    }
+
     fn intake(&self, seams: Seams<'_>, clock: &dyn Clock, branch: &str) -> Result<bool> {
         let memo = ReadOnce {
             branch: seams.branch,
@@ -2925,12 +2950,9 @@ impl crate::PullRequests for Pulls {
             return Ok(None);
         };
         let forge = self.forge(branch)?;
-        let head_ref = &session.from.worktree;
-        if let Some(p) = forge
-            .pulls(&t.repo, branch)?
-            .into_iter()
-            .find(|p| &p.head_ref == head_ref && p.from_repo(&t.repo))
-        {
+        // 137: asked for by its head alone, never by the branch's open pull
+        // requests, which only the round job asks for (rule core.33).
+        if let Some(p) = forge.pull_from(&t.repo, branch, &session.from.worktree)? {
             return Ok(Some(p.number));
         }
         // Landed and closed: its entry has the head this worktree submits.
@@ -2968,11 +2990,14 @@ impl crate::PullRequests for Pulls {
 /// or in conflict sent back. Held for the next submit is sent back while
 /// the pull request is a draft, which only a ready mark ends, the next
 /// submit's or a person's; once one has, the request has had its
-/// submitter's act and waits to be taken in again (120, C.5). Anything
-/// else is open as the check says, with the queue it carries and its
-/// words beneath, the first line, which says the same as the queue, left
-/// out (design D5); no check is open and waiting to be taken in.
-fn as_its_check_says(posting: Option<Posting>, head: &str, draft: bool) -> Followed {
+/// submitter's act and waits to be taken in again (120, C.5). One sent
+/// back or held that a submit on this host took again at this head,
+/// `again`, waits to be taken in as well, until the check says more
+/// (record 0096). Anything else is open as the check says, with the queue
+/// it carries and its words beneath, the first line, which says the same
+/// as the queue, left out (design D5); no check is open and waiting to be
+/// taken in.
+fn as_its_check_says(posting: Option<Posting>, head: &str, draft: bool, again: bool) -> Followed {
     let open = |title: String, lines: Vec<String>, queue: Option<Queue>| Followed::Open {
         title,
         lines,
@@ -2995,6 +3020,9 @@ fn as_its_check_says(posting: Option<Posting>, head: &str, draft: bool) -> Follo
     };
     match told(Some(&posting)) {
         Told::Landed => landed_as_it_says(Some(posting), head, draft),
+        Told::SentBack { .. } | Told::Held if again && !draft => {
+            open(crate::WAITING_TO_BE_TAKEN_IN.into(), Vec::new(), queue)
+        }
         Told::SentBack { conflict } => sent_back(conflict, posting),
         Told::Held if draft => {
             let conflict = queue.as_ref().and_then(|q| q.state.as_deref()) == Some("conflict");
@@ -3023,10 +3051,10 @@ fn across_of(rows: Vec<AcrossRow>) -> Option<Across> {
     })
 }
 
-/// 137: a pull request at `head` landed, while another host takes its
-/// branch's pull requests in: titled and summed up as `posting`, sluice's
-/// check on its head, says, where it says it landed, and `landed` with no
-/// summary otherwise (124; record 0096).
+/// 137: a pull request at `head` landed, as the round job that keeps its
+/// branch landed it: titled and summed up as `posting`, sluice's check on
+/// its head, says, where it says it landed, and `landed` with no summary
+/// otherwise (124; record 0096).
 fn landed_as_it_says(posting: Option<Posting>, head: &str, draft: bool) -> Followed {
     let (title, summary) = posting
         .filter(|p| p.title.starts_with("landed"))
@@ -3049,23 +3077,22 @@ fn landed_as_it_says(posting: Option<Posting>, head: &str, draft: bool) -> Follo
 /// 0096).
 fn sent_back_or_held(posting: Option<Posting>, head: &str) -> bool {
     matches!(
-        as_its_check_says(posting, head, true),
+        as_its_check_says(posting, head, true, false),
         Followed::SentBack { .. }
     )
 }
 
 impl Pulls {
-    /// 137: where pull request `n` into `branch` stands while `host`
-    /// takes its pull requests in: by GitHub's word and sluice's check on
-    /// its head, which that host posts, as the host's kept follows hold
-    /// them, read again only once a quarter of the host's interval has
-    /// passed since any process of the host read them (136; design D4).
-    /// Merged is landed, and closed and not merged is closed; otherwise it
-    /// is as [`as_its_check_says`] reads the check, never as the conclusion
-    /// GitHub keeps for it (record 0096). A request said to be landed or
-    /// closed is followed no longer (design D3). One still open names the
-    /// host the intake mark names, as the branch's last fetch brought it
-    /// (design D2).
+    /// 137: where pull request `n` into `branch` stands: by GitHub's word
+    /// and sluice's check on its head, which the round job that keeps the
+    /// branch posts, as the host's kept follows hold them, read again only
+    /// once a quarter of the host's interval has passed since any process
+    /// of the host read them (136; design D9). Merged is landed, and closed
+    /// and not merged is closed; otherwise it is as [`as_its_check_says`]
+    /// reads the check, never as the conclusion GitHub keeps for it, and as
+    /// waiting to be taken in while the check is still the one a submit on
+    /// this host took it again from (record 0096). A request said to be
+    /// landed or closed is followed no longer.
     fn follow_across(
         &self,
         forge: &dyn Forge,
@@ -3078,11 +3105,12 @@ impl Pulls {
         let Some(f) = self.read_followed(forge, repo, branch, n, now)? else {
             return Ok(Followed::Closed);
         };
+        let again = taken_again(&f);
         let posting = f.check.map(|p| p.posting);
         let followed = if f.merged {
             landed_as_it_says(posting, &f.head, f.draft)
         } else {
-            match as_its_check_says(posting, &f.head, f.draft) {
+            match as_its_check_says(posting, &f.head, f.draft, again) {
                 landed @ Followed::Landed { .. } => landed,
                 _ if !f.open => Followed::Closed,
                 other => other,
@@ -3157,13 +3185,24 @@ impl Pulls {
                 return Err(e);
             }
         };
-        self.kept
-            .change_follows(repo, branch, |follows| match &read {
-                Some(f) => {
+        // What a submit here took it again from is carried while its head
+        // and its check's words stand, and dropped once either moves.
+        let read = self
+            .kept
+            .change_follows(repo, branch, |follows| match read {
+                Some(mut f) => {
+                    f.taken_again = follows
+                        .requests
+                        .get(&n)
+                        .filter(|was| was.head == f.head)
+                        .and_then(|was| was.taken_again.clone())
+                        .filter(|t| f.check.as_ref().is_some_and(|c| same_words(t, &c.posting)));
                     follows.requests.insert(n, f.clone());
+                    Some(f)
                 }
                 None => {
                     follows.requests.remove(&n);
+                    None
                 }
             })?;
         Ok(read)
@@ -3180,6 +3219,9 @@ impl Pulls {
                     Some(f) if f.head == k.head => {
                         f.open = true;
                         f.draft = k.draft;
+                        if k.taken_again.is_some() {
+                            f.taken_again = k.taken_again;
+                        }
                         if !k.title.is_empty() {
                             f.title = k.title;
                         }
@@ -3221,7 +3263,8 @@ impl Pulls {
                 gone.push(n);
                 crate::ACROSS_CLOSED.to_string()
             } else {
-                match as_its_check_says(f.check.clone().map(|p| p.posting), &f.head, f.draft) {
+                let again = taken_again(&f);
+                match as_its_check_says(posting.cloned(), &f.head, f.draft, again) {
                     Followed::SentBack { title, .. } | Followed::Open { title, .. } => title,
                     _ => crate::WAITING_TO_BE_TAKEN_IN.to_string(),
                 }
@@ -3347,13 +3390,14 @@ impl Pulls {
                 None => s.submitted_head(session),
             })
             .collect::<Result<Vec<_>>>()?;
-        let open = forge.pulls(&t.repo, branch)?;
         let n = read.len();
         let token = group_token(clock.now(), &submitted[0].head);
         let mut opened = Vec::new();
         // Each request as the act leaves it, and when its last submission
-        // left the queue, for the group's taking.
+        // left the queue, for the group's taking; and the check each was
+        // taken again from, where it was.
         let mut acted = Vec::new();
+        let mut taken_from = Vec::new();
         for (k, (((_, session, _), submitted), &subject)) in
             read.iter().zip(&submitted).zip(subjects).enumerate()
         {
@@ -3372,9 +3416,10 @@ impl Pulls {
                 }
                 Ok(())
             };
-            let existing = open
-                .iter()
-                .find(|p| p.head_ref == head_ref && p.from_repo(&t.repo));
+            // 137: each head's own request, asked for by its head alone,
+            // never by the branch's open pull requests (rule core.33).
+            let existing = forge.pull_from(&t.repo, branch, &head_ref)?;
+            let existing = existing.as_ref();
             // C.5: the description of the head submitted, its commits'
             // messages as many as GitHub holds; the head is in the
             // repository's objects before it is pushed.
@@ -3454,17 +3499,38 @@ impl Pulls {
             // record 0096). A check that says anything else leaves the
             // request as it is, never a draft even for a moment, since a
             // draft mark withdraws what the other host queued (C.5).
+            let mut was = None;
             let sent_back = match existing {
                 Some(p) if n == 1 && !p.draft && left.is_none() => {
-                    let posted = forge.posted(&t.repo, &p.head)?;
-                    sent_back_or_held(posted.map(|p| p.posting), &p.head)
+                    let posted = forge.posted(&t.repo, &p.head)?.map(|p| p.posting);
+                    let sent = sent_back_or_held(posted.clone(), &p.head);
+                    if sent {
+                        was = posted;
+                    }
+                    sent
                 }
                 _ => false,
             };
-            if n == 1 && (pull.draft || left.is_some() || sent_back) {
+            let readied = n == 1 && (pull.draft || left.is_some() || sent_back);
+            if readied {
                 mark_ready(forge, &t.repo, number, pull.draft, left)?;
                 said.push_str(" · marked ready for review");
             }
+            // 120, C.5: taken again at the head it stood at, the check that
+            // sent it back or held it says nothing of it since, so it waits
+            // to be taken in until the round job's check there says more;
+            // read once on the submitter's own act where not read above
+            // (record 0096).
+            let taken_again = match existing {
+                Some(p) if readied && p.head == head.0 => match was {
+                    Some(w) => Some(w),
+                    None => forge
+                        .posted(&t.repo, &p.head)?
+                        .map(|c| c.posting)
+                        .filter(|c| sent_back_or_held(Some(c.clone()), &p.head)),
+                },
+                _ => None,
+            };
             opened.push(Opened {
                 number,
                 said,
@@ -3477,16 +3543,21 @@ impl Pulls {
                 },
                 left,
             ));
+            taken_from.push(taken_again);
         }
         // 137, design D3, D9: the host follows each request the act
         // opened, updated or marked ready, whoever keeps the branch.
         {
             let follows = acted
                 .iter()
-                .map(|(p, _)| {
+                .zip(taken_from)
+                .map(|((p, _), taken_again)| {
                     (
                         p.number,
-                        known(&p.head, n > 1 && p.draft, &p.title, &p.head_ref),
+                        Follow {
+                            taken_again,
+                            ..known(&p.head, n > 1 && p.draft, &p.title, &p.head_ref)
+                        },
                     )
                 })
                 .collect();
@@ -3633,8 +3704,9 @@ impl Pulls {
 
 /// The file name of `branch`'s intake lock, before `.lock`: each `/`
 /// written `__`, and one too long for a file name shortened. A branch
-/// never holds `~`, which git forbids in a ref, so the mark is in no
-/// kept name; 250 bytes and `.lock` are the 255 a file name may hold.
+/// never holds `~`, which git forbids in a ref, so the shortening's mark
+/// is in no kept name; 250 bytes and `.lock` are the 255 a file name may
+/// hold.
 fn lock_name(branch: &str) -> String {
     crate::runs::shortened(branch, branch.replace('/', "__"), "~", 250)
 }
@@ -3748,21 +3820,44 @@ mod tests {
             ..view
         };
         post(&formed);
-        // Record 0096 (D3): GitHub keeps a completed run completed, so a
-        // check that waits again is read by its title, as any host reads
-        // it now; what sluice sent for each is queued.
+        // Record 0101: GitHub keeps a completed run completed, so a check
+        // of one required test that completed and waits again is posted
+        // as a new run, which GitHub shows in its place; the run still in
+        // progress is patched. Each check's newest run is queued.
         let held = forge.held().unwrap();
         let per_check: Vec<&Posted> = held.posted["head"]
             .iter()
             .filter(|p| p.name != SLUICE_CHECK)
             .collect();
-        assert_eq!(per_check.len(), 3);
-        assert!(per_check.iter().all(|p| p.posting.title == "formed again"));
-        assert!(per_check.iter().all(|p| held
-            .posts
-            .iter()
-            .rfind(|(rev, name, _)| rev == "head" && *name == p.name)
-            .is_some_and(|(_, _, sent)| sent.status == Status::Queued)));
+        assert_eq!(
+            per_check.len(),
+            5,
+            "the two completed runs stand beside the two posted anew"
+        );
+        for name in [
+            "sluice / cli:build (linux-x64)",
+            "sluice / cli:build (linux-arm64)",
+            "sluice / cli:build (macos-arm64)",
+        ] {
+            let shown = per_check
+                .iter()
+                .filter(|p| p.name == name)
+                .max_by_key(|p| p.id)
+                .unwrap();
+            assert_eq!(
+                (shown.posting.status, shown.posting.title.as_str()),
+                (Status::Queued, "formed again"),
+                "{name}"
+            );
+        }
+        assert_eq!(
+            per_check
+                .iter()
+                .filter(|p| p.name == "sluice / cli:build (macos-arm64)")
+                .count(),
+            1,
+            "the run in progress is patched"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -4733,6 +4828,7 @@ mod tests {
             posting.clone(),
             "h",
             draft,
+            false,
         ) {
             Followed::SentBack {
                 conflict,
@@ -4829,6 +4925,7 @@ mod tests {
             Some(queued("main", &[], on_b(Some("queued"))).posting),
             "h",
             false,
+            false,
         ) {
             Followed::Open { lines, queue, .. } => {
                 assert_eq!(
@@ -4838,6 +4935,42 @@ mod tests {
                 assert_eq!(queue.map(|q| q.submission), Some(Some(12)));
             }
             _ => panic!("not open"),
+        }
+        // Taken again at its head by a submit on this host: the check that
+        // sent it back or held it says nothing since, so it waits to be
+        // taken in, with the queue the check carries, while it is no draft
+        // (record 0096).
+        for (shown, draft, waits) in [
+            (
+                outcome_shown("main", &blamed, &names, on_b(Some("failed"))),
+                false,
+                true,
+            ),
+            (
+                outcome_shown("main", &conflict, &names, on_b(Some("conflict"))),
+                false,
+                true,
+            ),
+            (held.clone(), false, true),
+            (
+                outcome_shown("main", &blamed, &names, on_b(Some("failed"))),
+                true,
+                false,
+            ),
+            (queued("main", &[], on_b(Some("queued"))), false, false),
+        ] {
+            let title = shown.posting.title.clone();
+            match as_its_check_says(Some(shown.posting), "h", draft, true) {
+                Followed::Open {
+                    title: t, queue, ..
+                } if waits => {
+                    assert_eq!(t, crate::WAITING_TO_BE_TAKEN_IN, "{title}");
+                    assert_eq!(queue.map(|q| q.submission), Some(Some(12)), "{title}");
+                }
+                Followed::SentBack { .. } if !waits && draft => {}
+                Followed::Open { title: t, .. } if !waits => assert_eq!(t, title),
+                _ => panic!("{title}, draft {draft}: read otherwise"),
+            }
         }
     }
 

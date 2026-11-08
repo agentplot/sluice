@@ -98,7 +98,9 @@ pub fn actions(dir: &Path, force: bool, out: &mut dyn Write) -> Result<i32> {
 
     // The policy's signer and pool, where absent.
     let mut added = String::new();
+    let mut named = Vec::new();
     if !policy.signers.contains_key("forge") {
+        named.push("[signers.forge]");
         added.push_str(&format!(
             "\n# The forge's round job, which keeps each branch that takes pull requests\n\
              # (137, C.8); `sluice init actions` wrote it.\n\
@@ -107,10 +109,13 @@ pub fn actions(dir: &Path, force: bool, out: &mut dyn Write) -> Result<i32> {
         ));
     }
     if !policy.pools.iter().any(|p| p.name == "forge") {
+        named.push("[pools.forge]");
+        // Design D4, D5: a wake starts the round job on the default
+        // branch, which holds the workflow, whichever branch it keeps.
         added.push_str(&format!(
             "\n# The round job's pool: it names no runners, so it runs rounds alone.\n\
              [pools.forge]\n\
-             github = {{ workflow = \"{WORKFLOW_PATH}\" }}\n\
+             github = {{ workflow = \"{WORKFLOW_PATH}\", ref = \"refs/heads/{default}\" }}\n\
              signer = \"forge\"\n"
         ));
     }
@@ -123,10 +128,7 @@ pub fn actions(dir: &Path, force: bool, out: &mut dyn Write) -> Result<i32> {
         Policy::parse(&edited).context("the policy with the round job's signer and pool")?;
         std::fs::write(&policy_path, &edited)
             .with_context(|| format!("writing {}", policy_path.display()))?;
-        writeln!(
-            out,
-            "added [signers.forge] and [pools.forge] to {POLICY_PATH}"
-        )?;
+        writeln!(out, "added {} to {POLICY_PATH}", named.join(" and "))?;
     }
 
     writeln!(

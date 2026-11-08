@@ -65,6 +65,8 @@ struct Forge {
     /// deployment rule names.
     environment: Option<serde_json::Value>,
     branch_policies: serde_json::Value,
+    /// The repository's default branch.
+    default_branch: String,
     clock: Clock,
 }
 
@@ -88,6 +90,7 @@ impl Forge {
                 }
             })),
             branch_policies: json!([{ "name": "main", "type": "branch" }]),
+            default_branch: "main".into(),
             clock: clock.clone(),
         }
     }
@@ -124,6 +127,12 @@ impl Forge {
         if path == "/app" && r.method == "GET" {
             return json(200, json!({ "id": APP, "slug": "sluice-test" }));
         }
+        if path == "/repos/o/r" && r.method == "GET" {
+            return json(
+                200,
+                json!({ "full_name": "o/r", "default_branch": self.default_branch }),
+            );
+        }
         if path == "/repos/o/r/rules/branches/main" {
             let rules: Vec<_> = self
                 .rulesets
@@ -134,7 +143,9 @@ impl Forge {
         }
         if path.starts_with("/repos/o/r/contents/.github/workflows/sluice.yml") {
             use base64::Engine as _;
-            return match &self.workflow {
+            // The workflow is on the default branch alone.
+            let on = format!("?ref={}", self.default_branch);
+            return match self.workflow.as_ref().filter(|_| path.ends_with(&on)) {
                 Some(w) => json(
                     200,
                     json!({
@@ -1831,6 +1842,40 @@ fn forge_check_names_a_missing_round_job() {
     let got = failures(&found);
     assert_eq!(got.len(), 1, "{found:?}");
     assert!(got[0].contains("not the round job"), "{}", got[0]);
+}
+
+/// forge-identity, "Another branch the forge keeps" (C.8; design D4,
+/// D13): for `release/1`, whose round job runs on the default branch
+/// `main`, the check reads the workflow on `main` and wants the `sluice`
+/// environment to admit `main` alone, and passes; where the environment
+/// admits `release/1` alone, it is named, `main` its advice.
+#[test]
+fn forge_check_of_another_branch_reads_the_default_branch() {
+    let clock = Clock::new();
+    let fake = Forge::new(&clock).start();
+    let found = round_job(&app(&fake, &clock), &repo(), "release/1");
+    assert!(failures(&found).is_empty(), "{found:?}");
+    assert!(
+        fake.requests().iter().any(|r| r
+            .path
+            .ends_with("/contents/.github/workflows/sluice.yml?ref=main")),
+        "the workflow read on main"
+    );
+
+    let mut f = Forge::new(&clock);
+    f.branch_policies = json!([{ "name": "release/1", "type": "branch" }]);
+    let fake = f.start();
+    let found = round_job(&app(&fake, &clock), &repo(), "release/1");
+    let got = failures(&found);
+    assert_eq!(got.len(), 1, "{found:?}");
+    assert!(got[0].contains("not main alone"), "{}", got[0]);
+
+    let mut f = Forge::new(&clock);
+    f.default_branch = "trunk".into();
+    f.branch_policies = json!([{ "name": "trunk", "type": "branch" }]);
+    let fake = f.start();
+    let found = round_job(&app(&fake, &clock), &repo(), "main");
+    assert!(failures(&found).is_empty(), "{found:?}");
 }
 
 /// forge-identity, "The app may not dispatch it" (C.8; design D13): with

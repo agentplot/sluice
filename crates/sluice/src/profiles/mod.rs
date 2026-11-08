@@ -130,8 +130,8 @@ impl Bound {
             .forge
             .as_ref()
             .map_or(crate::instance::DISCOVERY, |f| f.discovery);
-        // 137: this host as its peers name it, and its lease, for the
-        // intake mark.
+        // 72, 73: this host as its peers name it, and its lease, for the
+        // branches whose records are on their remotes.
         let peer = sluice_core::Peer {
             name: instance.peers.name.clone().unwrap_or_else(checks::hostname),
             lease: instance.peers.lease,

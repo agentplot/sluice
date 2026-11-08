@@ -9375,11 +9375,16 @@ fn status_and_wait_say_a_combination_waits_for_a_host_whose_engine_answers() {
 
 /// A git repository on `main` whose working copy holds `policy`.
 fn init_repo(name: &str, policy: &str) -> std::path::PathBuf {
+    init_repo_on(name, policy, "main")
+}
+
+/// A git repository on `default` whose working copy holds `policy`.
+fn init_repo_on(name: &str, policy: &str, default: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("sluice-init-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join(".config")).unwrap();
     let ok = std::process::Command::new("git")
-        .args(["init", "-q", "-b", "main"])
+        .args(["init", "-q", "-b", default])
         .current_dir(&dir)
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
@@ -9423,6 +9428,17 @@ fn init_actions_writes_the_round_job() {
         .expect("[pools.forge]");
     assert!(pool.runners.is_empty());
     assert_eq!(pool.signer, "forge");
+    assert!(
+        policy.contains(
+            "[pools.forge]\ngithub = { workflow = \".github/workflows/sluice.yml\", \
+             ref = \"refs/heads/main\" }\n"
+        ),
+        "a wake starts the round job on the default branch: {policy}"
+    );
+    assert!(
+        said.contains("added [signers.forge] and [pools.forge] to .config/sluice.toml"),
+        "{said}"
+    );
     assert_eq!(
         p.rules_for("main").unwrap().unwrap().round_job.as_deref(),
         Some("pool/forge/round")
@@ -9442,6 +9458,36 @@ fn init_actions_writes_the_round_job() {
         std::fs::read_to_string(dir.join(".config/sluice.toml")).unwrap(),
         policy
     );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// forge-rounds, "The signer and the pool" (design D4, D5, D13): in a
+/// repository whose default branch is `trunk`, the pool names that branch
+/// as the one a wake starts the round job on, and where the policy already
+/// names `[signers.forge]`, the output names only the pool as added.
+#[test]
+fn init_actions_names_the_default_branch_and_only_what_it_added() {
+    let policy = format!(
+        "[signers.forge]\ngithub = {{ workflow = \".github/workflows/sluice.yml\", \
+         ref = \"refs/heads/trunk\" }}\n\n{SIGNED}"
+    );
+    let dir = init_repo_on("trunk", &policy, "trunk");
+    let (code, said) = init_actions(&dir, false);
+    assert_eq!(code, 0, "{said}");
+    let written = std::fs::read_to_string(dir.join(".config/sluice.toml")).unwrap();
+    assert!(
+        written.contains(
+            "[pools.forge]\ngithub = { workflow = \".github/workflows/sluice.yml\", \
+             ref = \"refs/heads/trunk\" }\n"
+        ),
+        "{written}"
+    );
+    assert!(
+        said.contains("added [pools.forge] to .config/sluice.toml"),
+        "{said}"
+    );
+    assert!(!said.contains("added [signers.forge]"), "{said}");
+    assert!(said.contains("admits trunk alone"), "{said}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

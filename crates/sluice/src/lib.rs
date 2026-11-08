@@ -712,9 +712,9 @@ pub enum Followed {
     /// Its submission on its head landed, failed or conflicts, with what
     /// each submission is called on a pull request.
     Done(Submission, BTreeMap<u64, String>),
-    /// 137: merged, while another host takes its branch's pull requests
-    /// in: sluice's check's title and summary on its head, where it says
-    /// it landed, and the head and draft mark the forge held for it, which
+    /// 137: merged, as the round job that keeps its branch landed it:
+    /// sluice's check's title and summary on its head, where it says it
+    /// landed, and the head and draft mark the forge held for it, which
     /// `--status` answers with (124; record 0096).
     Landed {
         title: String,
@@ -722,10 +722,10 @@ pub enum Followed {
         head: String,
         draft: bool,
     },
-    /// 137: sent back on its head, while another host takes its branch's
-    /// pull requests in: failed, or in conflict, as sluice's check there
-    /// names it, and the head and draft mark the forge holds for it, which
-    /// `--status` answers with (124; record 0096).
+    /// 137: sent back on its head by the round job that keeps its branch:
+    /// failed, or in conflict, as sluice's check there names it, and the
+    /// head and draft mark the forge holds for it, which `--status`
+    /// answers with (124; record 0096).
     SentBack {
         conflict: bool,
         title: String,
@@ -743,8 +743,15 @@ pub enum Followed {
 pub trait PullRequests {
     /// The branches that take pull requests by the policy on the default
     /// branch's revision, among those the host holds, its own and its
-    /// remotes', for `sluice job round` to wake each one the forge keeps.
+    /// remotes', for the overview to show the requests each follows.
     fn branches(&self, seams: Seams<'_>) -> Result<Vec<String>>;
+
+    /// Every branch the host holds, its own and its remotes' as last
+    /// fetched, for `sluice job round` with no branch to read each one's
+    /// policy at its revision (137; design D2).
+    fn held_branches(&self) -> Result<Vec<String>> {
+        Ok(Vec::new())
+    }
 
     /// 137, C.8: a round of `branch` by its round job, before the step:
     /// submit each pull request ready, withdraw each changed, and post each
@@ -813,12 +820,10 @@ pub trait PullRequests {
         number: u64,
     ) -> Result<Followed>;
 
-    /// 137, design D5: the pull requests into `branch` this host follows
-    /// whose submissions its queue does not hold at their heads, each read
-    /// as the host's one bound allows (design D4), with the host the
-    /// branch's intake mark names; one read merged or closed is given once
-    /// and followed no longer (design D3). `None` where it follows none, or
-    /// the branch's records are on its remote (26, 80).
+    /// 137, design D9: the pull requests into `branch` this host follows,
+    /// each read as the host's one bound allows, as sluice's check on its
+    /// head says, with the queue it carries; one read merged or closed is
+    /// given once and followed no longer. `None` where it follows none.
     fn across(
         &self,
         _seams: Seams<'_>,
@@ -831,8 +836,7 @@ pub trait PullRequests {
     /// 137, design D5: as [`PullRequests::across`], as the host last kept
     /// them, reading GitHub for none of them and following none no longer:
     /// for a reader's document, which reads them again only once what the
-    /// host keeps of them, or the intake mark, moved (129; rules core.25,
-    /// core.31).
+    /// host keeps of them moved (129; rules core.25, core.31).
     fn kept_across(
         &self,
         _seams: Seams<'_>,
@@ -993,16 +997,16 @@ fn job_round(
 
 /// `sluice job round` with no branch (111, 137; design D2): one round job
 /// woken for each branch the forge keeps among those the host holds, its
-/// own and its remotes' as last fetched, each read at its revision. A
-/// wake that fails is a warning: the schedule's next run wakes it again
-/// (59).
+/// own and its remotes' as last fetched, each by its own policy read at
+/// its revision, whatever the default branch's names. A wake that fails is
+/// a warning: the schedule's next run wakes it again (59).
 fn job_wakes(
     s: &Sluice<'_>,
     seams: Seams<'_>,
     pulls: &dyn PullRequests,
     out: &mut dyn Write,
 ) -> Result<i32> {
-    for branch in pulls.branches(seams)? {
+    for branch in pulls.held_branches()? {
         let Some(tip) = seams.branch.held(&branch)? else {
             continue;
         };
@@ -1853,9 +1857,9 @@ pub fn run(
                 } else {
                     in_queue(&status.submissions).cloned().collect()
                 };
-                // 137, design D5: the pull requests this host follows that
-                // another host takes in, as that host shows them; one that
-                // cannot be read is warned of, and the queue still shown.
+                // 137, design D9: the pull requests this host follows, as
+                // the round job's check on each shows them; one that cannot
+                // be read is warned of, and the queue still shown.
                 let across = pulls.across(s.seams(), clock, &target).unwrap_or_else(|e| {
                     telemetry::warn(&format!("sluice: warning: {e:#}"));
                     None
@@ -3154,7 +3158,8 @@ fn carried(
     // A head that is this one's, or holds it.
     let carries =
         |head: &Rev| *head == sub.head || branch.contains(head, &sub.head).unwrap_or(false);
-    // 137: a hand-over's withdrawal says the host it handed over to.
+    // 137: an older sluice's hand-over's withdrawal says the host it
+    // handed over to (design D12).
     let left = match sub.withdrawn.as_ref() {
         Some(w) => match &w.handed_over_to {
             Some(host) => format!("handed over to {host}"),
@@ -4836,8 +4841,8 @@ fn detail_of_state(
             })
             .unwrap_or_default(),
         State::Waiting => format!("after {}", hashes(&s.after, names, said)),
-        // 120, 137: withdrawn at a hand-over of intake, which holds no
-        // request: the host it went to.
+        // 120, 137: withdrawn at an older sluice's hand-over of intake,
+        // which holds no request: the host it went to (design D12).
         State::Withdrawn => s
             .withdrawn
             .as_ref()
