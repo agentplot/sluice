@@ -718,3 +718,221 @@ fn a_step_is_the_host_processs_round() {
         "the step ran none of it: {starts:?}"
     );
 }
+
+/// This setup's host bound: `[runs] max` in its config.
+fn bound(d: &OnDisk, max: usize) {
+    let dir = d.config.path().join("sluice");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("config.toml"),
+        format!("[runs]\nmax = {max}\nreserved = 0\n"),
+    )
+    .unwrap();
+}
+
+/// An agent's `sluice exec main -- sh -c <script>` in a session of its
+/// own, `name`, started now.
+fn agent(d: &OnDisk, name: &str, script: &str) -> std::process::Child {
+    let dir = d.session(name);
+    d.command(&dir)
+        .args(["exec", "main", "--", "sh", "-c", script])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap()
+}
+
+/// run-bound, "Turns on a bound of two" (150, S75; rule core.49; record
+/// 0087): two agents' checks hold both runs, a third waits and a
+/// combination falls due; the combination takes the first run to end, and
+/// the third agent the second, while the combination's run goes on.
+#[test]
+fn s75_a_combination_starts_before_a_third_agents_check() {
+    let marks = support::Scratch::new("host-s75-marks");
+    let m = |name: &str| marks.path().join(name);
+    let policy = format!(
+        "[tests]\nrunner = \"command\"\ncommand = \"touch '{}'; sleep 15\"\n\n[branches.main]\ntimeout = \"2m\"\n",
+        m("q").display()
+    );
+    let d = OnDisk::new("host-s75", &policy);
+    bound(&d, 2);
+    let repository = d.repository(d.repo.dir());
+    let _follow = d
+        .client(d.repo.dir())
+        .follow(Path::new(&repository), FollowKind::Wait)
+        .unwrap();
+    let a = agent(&d, "a", &format!("touch '{}'; sleep 3", m("a").display()));
+    let b = agent(&d, "b", &format!("touch '{}'; sleep 9", m("b").display()));
+    within(30, "two agents' checks hold both runs", || {
+        m("a").exists() && m("b").exists()
+    });
+    let c = agent(&d, "c", &format!("touch '{}'", m("c").display()));
+    let id = queued_live(&d, &d.session("q"));
+    within(60, "the combination's run starts", || m("q").exists());
+    assert!(!m("c").exists(), "the third agent's check still waits");
+    within(60, "the third agent's check starts", || m("c").exists());
+    assert_eq!(
+        state(&d, d.repo.dir(), id),
+        "testing",
+        "while the combination's run goes on"
+    );
+    for agent in [a, b, c] {
+        let out = agent.wait_with_output().unwrap();
+        assert!(out.status.success(), "{}", text(&out));
+    }
+}
+
+/// run-bound, "An agent's check stopped while it waits" (150; rule
+/// core.49): an agent's `sluice exec` stopped with Ctrl-C while it waits
+/// is counted nowhere, and the next agent's check that waits starts in the
+/// next free run.
+#[test]
+fn an_agents_check_stopped_while_it_waits_is_counted_nowhere() {
+    let marks = support::Scratch::new("host-stopped-marks");
+    let m = |name: &str| marks.path().join(name);
+    let d = OnDisk::new("host-stopped", POLICY);
+    bound(&d, 1);
+    let repository = d.repository(d.repo.dir());
+    let _follow = d
+        .client(d.repo.dir())
+        .follow(Path::new(&repository), FollowKind::Wait)
+        .unwrap();
+    let a = agent(&d, "a", &format!("touch '{}'; sleep 5", m("a").display()));
+    within(30, "the first agent's check holds the run", || {
+        m("a").exists()
+    });
+    let b = agent(&d, "b", &format!("touch '{}'", m("b").display()));
+    let waiting = |d: &OnDisk| {
+        let out = d
+            .command(d.repo.dir())
+            .env("SLUICE_ROUND_SLEEP", "record")
+            .args(["overview", "--json"])
+            .output()
+            .unwrap();
+        let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        doc["room"]["waiting"]["sessions"].as_u64().unwrap_or(0)
+    };
+    within(20, "the second agent's check waits", || waiting(&d) == 1);
+    let _ = nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(b.id() as i32),
+        nix::sys::signal::Signal::SIGINT,
+    );
+    let out = b.wait_with_output().unwrap();
+    assert_eq!(out.status.code(), Some(sluice::STOPPED), "{}", text(&out));
+    within(10, "the stopped check waits no more", || waiting(&d) == 0);
+    let c = agent(&d, "c", &format!("touch '{}'", m("c").display()));
+    within(60, "the next agent's check starts", || m("c").exists());
+    assert!(!m("b").exists(), "the stopped one never ran");
+    for agent in [a, c] {
+        let out = agent.wait_with_output().unwrap();
+        assert!(out.status.success(), "{}", text(&out));
+    }
+}
+
+/// `sluice status main` through the binary, the host process it may start
+/// passing at its own tick.
+fn status_live(d: &OnDisk) {
+    let out = d
+        .command(d.repo.dir())
+        .args(["status", "main"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", text(&out));
+}
+
+/// host-process, "A host process that stops loses nothing": a status that
+/// finds work in play and no host process answering starts one, which
+/// carries the work on (135; design D14).
+#[test]
+fn a_status_after_a_crash_starts_the_host_process() {
+    let d = OnDisk::new("host-status-crash", POLICY);
+    let id = queued(&d, "a");
+    kill(answering(&d).expect("the host process the submit started"));
+    within(10, "it is gone", || answering(&d).is_none());
+    status_live(&d);
+    assert!(answering(&d).is_some(), "the status started it");
+    within(60, "the submission lands", || {
+        state(&d, d.repo.dir(), id) == "landed"
+    });
+}
+
+/// 135, 129 (design D14): a status that finds nothing in play starts no
+/// host process.
+#[test]
+fn a_status_with_nothing_in_play_starts_nothing() {
+    let d = OnDisk::new("host-status-idle", POLICY);
+    d.land("a");
+    within(15, "the host process ends once idle", || {
+        answering(&d).is_none()
+    });
+    status_live(&d);
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(answering(&d), None);
+}
+
+/// host-process, "Killed while a combination is under test" (135, S10): a
+/// run outlives the host process killed under it; the one a status starts
+/// reads its result from the run, runs no check again, and lands it.
+#[test]
+fn a_killed_host_process_loses_nothing() {
+    let marks = support::Scratch::new("host-killed-marks");
+    let ran = marks.path().join("ran");
+    let done = marks.path().join("done");
+    let policy = format!(
+        "[tests]\nrunner = \"command\"\ncommand = \"echo run >> '{}'; sleep 3; touch '{}'\"\n\n[branches.main]\ntimeout = \"1m\"\n",
+        ran.display(),
+        done.display()
+    );
+    let d = OnDisk::new("host-killed-run", &policy);
+    let dir = d.session("a");
+    let id = queued_live(&d, &dir);
+    within(30, "the combination's checks run", || ran.exists());
+    // Once its round has recorded the run started: a run marked starting
+    // that a stopped round left is opened again (S10).
+    std::thread::sleep(Duration::from_secs(1));
+    kill(answering(&d).expect("the host process runs"));
+    within(30, "the checks end, outliving it", || done.exists());
+    within(10, "it is gone", || answering(&d).is_none());
+    status_live(&d);
+    within(60, "the submission lands", || {
+        state(&d, d.repo.dir(), id) == "landed"
+    });
+    let runs = std::fs::read_to_string(&ran).unwrap();
+    assert_eq!(runs.lines().count(), 1, "no check ran again: {runs}");
+}
+
+/// host-process, "The overview names the host process and the runs
+/// waiting" (150; design D12): `host_process` is the process that answers,
+/// its version, pid and start, and null where none answers.
+#[test]
+fn the_overview_names_the_host_process() {
+    let d = OnDisk::new("host-overview", POLICY);
+    let overview = |d: &OnDisk| {
+        let out = d
+            .command(d.repo.dir())
+            .env("SLUICE_ROUND_SLEEP", "record")
+            .args(["overview", "--json"])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", text(&out));
+        serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap()
+    };
+    assert_eq!(overview(&d)["host_process"], serde_json::Value::Null);
+    let repository = d.repository(d.repo.dir());
+    let follow = d
+        .client(d.repo.dir())
+        .follow(Path::new(&repository), FollowKind::Wait)
+        .unwrap();
+    let doc = overview(&d);
+    assert_eq!(doc["host_process"]["pid"], follow.named.pid, "{doc}");
+    assert_eq!(doc["host_process"]["version"], sluice::VERSION, "{doc}");
+    assert!(doc["host_process"]["since"].is_string(), "{doc}");
+    assert_eq!(
+        doc["room"]["waiting"],
+        serde_json::json!({ "queue": 0, "sessions": 0 }),
+        "{doc}"
+    );
+    assert_eq!(doc["room"]["turn"], "queue", "{doc}");
+    // The host's name stays where it was.
+    assert!(doc["host"].is_string(), "{doc}");
+}
