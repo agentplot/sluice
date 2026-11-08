@@ -26,18 +26,18 @@ of the path and the guide that makes it usable.
   host. The certificate's workflow, ref, repository and issuer must
   match `[signers.<name>] github` (78, 79).
 - **The workflows.** `sluice.yml` runs rounds, runs and signing in
-  separate jobs: a round job leads a branch when woken or on the
-  schedule; a run job runs the checks with no key and no identity
-  token; a sign job runs no code of the combination, keeps only keys
-  the tree bears out and signs them. `sluice-pr.yml` runs a pull
-  request's head with no secrets (D7 and D9 of `peers`).
-- **`sluice job`**: `round`, `run`, `sign` and `record`, the commands
-  the workflows call.
-- **`sluice init actions`** writes both workflows, adds
-  `[signers.forge]` and `[pools.forge]` when absent, and prints what to
-  set on GitHub; `sluice forge check` reports the workflow, the
-  permission to dispatch it, the environment's branch rule and the
-  forge signer.
+  separate jobs: its round job, which `forge-rounds` builds, leads a
+  branch when woken or on the schedule; a run job runs the checks with
+  no key and no identity token; a sign job runs no code of the
+  combination, keeps only keys the tree bears out and signs them.
+  `sluice-pr.yml` runs a pull request's head with no secrets (D7 and D9
+  of `peers`).
+- **`sluice job`**: `run`, `sign` and `record` beside `forge-rounds`'s
+  `round`, the commands the workflows call.
+- **`sluice init actions`**, whose round part `forge-rounds` builds,
+  writes the run and sign jobs and `sluice-pr.yml` and gives
+  `[pools.forge]` its runners; `sluice forge check` reports the run and
+  sign jobs and the forge signer beside the round job's checks.
 - **Pull requests.** A trusted run on a pull request's head counts
   toward its combination by key and system (113, S40), and shows in
   the checks per system that `pull-request-reports` posts;

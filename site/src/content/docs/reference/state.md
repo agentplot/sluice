@@ -117,24 +117,13 @@ every repository on the host and never pushed:
                        ready a pull request into the branch, so the next
                        round asks at once
   forge/follows/<owner>/<repository>/<branch>.json
-                       on a host that doesn't take the branch's pull
-                       requests in, each one it follows: one a submit on
-                       the host opened, updated or marked ready, one it
-                       handed over, or one a wait or status asked about,
-                       with what GitHub last said of it and of sluice's
-                       check on its head, and when
+                       each pull request into the branch the host follows:
+                       one a submit on the host opened, updated or marked
+                       ready, or one a wait or status asked about, with
+                       what GitHub last said of it and of sluice's check
+                       on its head, and when
   forge/follows/<owner>/<repository>/<branch>.lock
                        held while that file is written
-  forge/intake/<owner>/<repository>/<branch>.json
-                       the branch's intake mark as this host last saw it on
-                       the remote, when it first saw it there, and when it
-                       last pushed it
-  forge/intake/<owner>/<repository>/<branch>.waits/<process>.hold
-                       held by each wait on the host that reads the
-                       branch's pull requests, for as long as it runs: the
-                       last of them to end removes the mark
-  forge/intake/<owner>/<repository>/<branch>.waits/.lock
-                       held while a wait's hold is made or let go
   host/lock            held by sluice's host process for as long as it runs
   host/start.lock      held by a command starting the host process, and by
                        the process as it decides to end
@@ -186,6 +175,10 @@ ends. One process runs for each user: a second one started while the
 first holds `host/lock` ends at once. Removing `host/`, or the whole
 state folder, ends the process at its next look.
 
+An older sluice also kept `forge/intake/` here, with the branches'
+intake marks it saw and the holds of its waits on them. Nothing reads
+or writes it now, so remove it.
+
 A checkout's name is written as one file name, each `/` of it as `%2F`
 (or `+2F` for a directory a test works in), so a worktree's whole path
 is one name. macOS and Linux allow a file name of 255 bytes, so a name
@@ -208,8 +201,8 @@ a sluice started again asks nothing until `[forge] discovery` has passed
 since any sluice on the host asked. A branch's file in `follows/` says
 when each pull request in it was last read, so every sluice on the host
 reads one at most once in a quarter of `[forge] discovery`. A request
-leaves it once a wait or status has said it landed or closed, or once
-this host takes it in. Nothing in `forge/` holds a token,
+leaves it once a wait or status has said it landed or closed. Nothing
+in `forge/` holds a token,
 and any file in it may be removed at any time: sluice then asks GitHub
 as if it had kept nothing.
 
@@ -521,14 +514,12 @@ To a branch with pull requests, the submission is the pull request's,
 from `pull/<n>` with `head` the branch.
 
 A withdrawn submission has `"withdrawn": { "by": "operator", "at":
-"2026-10-11T09:30:02Z" }`: who withdrew it, and when. A host that found
-another host taking its branch's pull requests in withdrew its own
-submissions of them. Such a submission's `withdrawn` also has
-`"handed_over_to": "build-2"`, that host. It holds no pull request:
-whichever host takes the pull requests in submits it again, and its log
-line names the host the same way. A submission an older sluice withdrew
-so has no `handed_over_to`, and its `by` reads `build-2 takes main's
-pull requests in`.
+"2026-10-11T09:30:02Z" }`: who withdrew it, and when. An older sluice
+let one host at a time take a branch's pull requests in, and a host
+that found another taking them withdrew its own submissions of them,
+with `"handed_over_to": "build-2"` naming that host, or with no
+`handed_over_to` and a `by` reading `build-2 takes main's pull requests
+in`. sluice reads such a record as it was written and writes none.
 
 ## The log
 

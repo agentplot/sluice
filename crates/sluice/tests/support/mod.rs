@@ -692,7 +692,7 @@ impl sluice::host_process::HostProcess for FakeProcess {
         let s = sluice_core::Sluice::new(seams, here.clock)
             .as_peer(here.host.peer())
             .keeping(&self.policies);
-        sluice::host_process::pass::step(&s, here.pulls, here.clock, branch)
+        sluice::host_process::pass::step(&s, branch)
     }
 
     fn pass(

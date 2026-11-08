@@ -166,20 +166,18 @@ A `--no-wait` submission moves with nobody waiting on it: sluice's host
 process, which the submit told, runs its rounds. `sluice wait` follows it,
 and `sluice step main` asks the host process for one round of the branch.
 Do not submit again to move it: a second submit from the same worktree
-replaces the first. On a pull-request branch, `--no-wait --json`
-answers `{"id","branch","ahead","pull_request"}` when sluice queued the
-pull request at once, its conditions holding: hand `id` to `sluice wait`.
-Otherwise it answers `{"pull_request","branch","state"}`, `state` what the
-pull request waits for: run `sluice wait main` in the worktree, which
-follows the pull request and, once sluice queues it, its submission, whose
-record it prints under `--json` from then on. Where another host takes the
-branch's pull requests in, that document, and the wait's until it ends,
-also gives `taken_in_by`, the host holding the branch's intake mark and
-whether its `sluice run` or a wait holds it, and `queue`, where that host
-holds the pull request: `submission` and `state` once it is taken in,
-what is `ahead` of it in that host's order, and `waits_for`, what it lacks
-before it is taken in, or taken in again. The wait ends as the pull
-request lands or is sent back there; don't submit again to move it.
+replaces the first. On a pull-request branch, no host takes the pull
+request in: the forge's round job, a GitHub Actions workflow that runs
+`sluice job round`, takes it in and lands it, and a submit wakes it.
+`--no-wait --json` answers `{"pull_request","branch","state","queue"}`,
+`state` as sluice's check on the head pushed says, or `waiting to be taken
+in` before the round job has read it, and writes no submission. Run
+`sluice wait main` in the worktree, which follows the pull request by
+GitHub and that check, and prints the same document under `--json`.
+`queue` says where the round job holds the pull request: `submission` and
+`state` once it is taken in, what is `ahead` of it, and `waits_for`, what
+it lacks before it is taken in, or taken in again. The wait ends as the
+pull request lands or is sent back; don't submit again to move it.
 
 A submission that sits at `queued` while another is testing is waiting its
 turn. `sluice status <branch>` says `testing N at once (up to M)`. N is one

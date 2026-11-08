@@ -151,6 +151,12 @@ jobs:
   # A landing's tests were skipped, its tree passed already; any other
   # push's must each have passed. A skipped job skips what needs it unless
   # the condition says otherwise, hence !cancelled().
+  #
+  # The binary for each platform, built by the Rust rust-toolchain.toml
+  # pins, with the release's version: Linux's is static, against musl, and
+  # macOS's links only the system's libraries, so each runs on a host with
+  # no Nix and no Rust, the forge's round job's runner among them, as
+  # flume's release builds them (record 0101).
   binaries:
     if: |-
       !cancelled() && needs.version.outputs.tag != '' &&
@@ -163,19 +169,36 @@ jobs:
         include:
           - os: ubuntu-latest
             system: x86_64-linux
+            target: x86_64-unknown-linux-musl
           - os: ubuntu-24.04-arm
             system: aarch64-linux
+            target: aarch64-unknown-linux-musl
           - os: macos-latest
             system: aarch64-darwin
+            target: aarch64-apple-darwin
     runs-on: ${{ matrix.os }}
+    env:
+      TARGET: ${{ matrix.target }}
+      TAG: ${{ needs.version.outputs.tag }}
+      # ring's C for a musl target, by musl-tools' compiler.
+      CC_x86_64_unknown_linux_musl: musl-gcc
+      CC_aarch64_unknown_linux_musl: musl-gcc
     steps:
       - uses: actions/checkout@v5
-      - uses: cachix/install-nix-action@v31
-      - run: SLUICE_VERSION="${TAG#v}" nix build --impure .#default --print-build-logs
-        env:
-          TAG: ${{ needs.version.outputs.tag }}
-      - run: ./result/bin/sluice --version
-      - run: tar -czf "sluice-${{ matrix.system }}.tar.gz" -C result/bin sluice wt-submit
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - run: |
+          if ! command -v rustup >/dev/null; then
+            curl -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+            PATH="$HOME/.cargo/bin:$PATH"
+          fi
+          rustup toolchain install
+          rustup target add "$TARGET"
+      - run: |
+          SLUICE_VERSION="${TAG#v}" cargo build --release --locked -p sluice --target "$TARGET"
+          "target/$TARGET/release/sluice" --version
+          tar -czf "sluice-${{ matrix.system }}.tar.gz" -C "target/$TARGET/release" sluice wt-submit
       - uses: actions/upload-artifact@v4
         with:
           name: sluice-${{ matrix.system }}

@@ -131,6 +131,34 @@ impl LocalRefs {
         Ok(names)
     }
 
+    /// The branches each remote's tracking branches name, as last
+    /// fetched, `refs/remotes/<remote>/<branch>` read as `<branch>`, by
+    /// name, read with no process (129); a remote's `HEAD` is none.
+    pub fn remote_branch_names(&self) -> Result<Vec<String>> {
+        let refs = self
+            .repo
+            .references()
+            .map_err(|e| anyhow!("reading the branches: {e}"))?;
+        let mut names = Vec::new();
+        for r in refs
+            .remote_branches()
+            .map_err(|e| anyhow!("reading the branches: {e}"))?
+        {
+            let r = r.map_err(|e| anyhow!("reading the branches: {e}"))?;
+            let name = r.name().as_bstr().to_string();
+            let Some((_, branch)) = name
+                .strip_prefix("refs/remotes/")
+                .and_then(|rest| rest.split_once('/'))
+            else {
+                continue;
+            };
+            if branch != "HEAD" {
+                names.push(branch.to_string());
+            }
+        }
+        Ok(names)
+    }
+
     /// The tips of every branch the host holds, its own and each remote's
     /// tracking branch as last fetched, each once, read with no process
     /// (129).

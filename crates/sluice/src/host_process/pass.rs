@@ -1,9 +1,10 @@
 //! A pass of one repository (129, 135; rule core.14; design D5): what
 //! `sluice run` ran each tick, moved whole into the host process. The
 //! remote's one ask, the abandoned checkouts and unusable previews
-//! released, the intake as today, a round of each branch in play, each
-//! branch it could not read passed by with its words, and the reader's
-//! document. A step's round and a pass's are one round (rule core.14).
+//! released, a round of each branch in play, each branch it could not
+//! read passed by with its words, and the reader's document. A host takes
+//! no branch's pull requests in; the forge's round job does (137). A
+//! step's round and a pass's are one round (rule core.14).
 
 use std::collections::BTreeMap;
 use std::sync::atomic::Ordering;
@@ -17,7 +18,7 @@ use sluice_seams::Rev;
 use crate::overview::{self, Follows};
 use crate::reader::{no_sluice, Lead};
 use crate::told::{self, Kind};
-use crate::{exec, preview, telemetry, PullRequests, Taker, INTERRUPTED};
+use crate::{exec, preview, telemetry, PullRequests, INTERRUPTED};
 
 /// What a repository's passes keep from one to the next: what was last
 /// said, so each thing is said once while it stands (26, 121), and what
@@ -105,14 +106,11 @@ pub fn pass(
             return Ok(report);
         }
     };
-    match pulls.branches(seams) {
-        Ok(b) => branches.extend(b),
-        Err(e) => telemetry::warn(&format!("sluice: warning: {e:#}")),
-    }
+    // 137: a host takes no branch's pull requests in; the forge's round
+    // job does.
     branches.sort();
     branches.dedup();
     for branch in &branches {
-        crate::intake(pulls, seams, clock, branch, Taker::Driver, false, &mut out);
         // 26, rule core.14: a branch whose records' read or round fails is
         // that branch's alone; the pass goes on to every other branch. 129:
         // one with nothing in play costs the pass its records' read alone.
@@ -202,25 +200,12 @@ pub fn in_play(s: &Sluice<'_>) -> bool {
 }
 
 /// `sluice step`'s round of `branch`, as the host process runs it between
-/// its passes (rule core.14; design D10): its intake as today, then the
-/// round, answered as the document `sluice step --json` prints, with what
-/// the round said beside it and the line a step prints without `--json`.
-pub fn step(
-    s: &Sluice<'_>,
-    pulls: &dyn PullRequests,
-    clock: &dyn Clock,
-    branch: &str,
-) -> Result<serde_json::Value> {
+/// its passes (rule core.14; design D10): the round, answered as the
+/// document `sluice step --json` prints, with what the round said beside
+/// it and the line a step prints without `--json`. A host takes no
+/// branch's pull requests in; the forge's round job does (137).
+pub fn step(s: &Sluice<'_>, branch: &str) -> Result<serde_json::Value> {
     let mut said: Vec<u8> = Vec::new();
-    crate::intake(
-        pulls,
-        s.seams(),
-        clock,
-        branch,
-        Taker::Step,
-        false,
-        &mut said,
-    );
     let round = s.round(branch)?;
     exec::tell_abandoned(&mut said, false, &round.released)?;
     preview::tell_dropped(&mut said, false, &round.previews)?;

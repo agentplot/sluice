@@ -23,6 +23,15 @@ confined = true              # container checkouts; no session reaches its engin
 ssh = ".config/sluice.sessions" # one line per session host's key
 confined = false
 
+# The forge's round job, which takes main's pull requests in with every host
+# off: `sluice init actions` adds these two tables and writes its workflow.
+[signers.forge]
+github = { workflow = ".github/workflows/sluice.yml", ref = "refs/heads/main" }
+
+[pools.forge]
+github = { workflow = ".github/workflows/sluice.yml", ref = "refs/heads/main" }
+signer = "forge"                                                                # no runners: its jobs run rounds alone
+
 # feature/* is a placeholder: name the pattern as the project names its branches
 [branches."feature/*"]
 remote = "origin"

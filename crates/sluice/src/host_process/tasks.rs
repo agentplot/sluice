@@ -494,9 +494,7 @@ fn repository(inbox: Inbox, room: Shared, asked_only: bool, named: Named) {
                 let _ = reply.send(report);
             }
             Some(Job::Step(branch, reply)) => {
-                let _ = reply.send(
-                    pass::step(&s, &*bound.pulls, clock, &branch).map_err(|e| format!("{e:#}")),
-                );
+                let _ = reply.send(pass::step(&s, &branch).map_err(|e| format!("{e:#}")));
                 task.in_play = pass::in_play(&s);
             }
             Some(Job::Wake) if !asked_only => {

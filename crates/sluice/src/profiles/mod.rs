@@ -140,8 +140,8 @@ impl Bound {
             .forge
             .as_ref()
             .map_or(crate::instance::DISCOVERY, |f| f.discovery);
-        // 137: this host as its peers name it, and its lease, for the
-        // intake mark.
+        // 72, 73: this host as its peers name it, and its lease, for the
+        // branches whose records are on their remotes.
         let peer = sluice_core::Peer {
             name: instance.peers.name.clone().unwrap_or_else(checks::hostname),
             lease: instance.peers.lease,
@@ -219,6 +219,13 @@ impl Bound {
             state: &self.state,
         }
     }
+}
+
+/// `sluice init actions [--force]` in the repository holding `dir`: the
+/// forge's round job written and named in the policy (137, C.8). The
+/// forge is GitHub's, the one this binding knows.
+pub fn init_actions(dir: &Path, force: bool, out: &mut dyn Write) -> Result<i32> {
+    github::init::actions(dir, force, out)
 }
 
 /// `sluice forge check [<branch>]`: whether sluice's identity on the
@@ -329,7 +336,31 @@ fn forge_findings(
         branch,
         operator.as_deref(),
     ));
+    // 137, C.8: a branch the forge keeps needs its round job, the app's
+    // leave to dispatch it, and the environment that holds the app's key.
+    if forge_keeps(&branches, branch) {
+        found.extend(github::check::round_job(&app, &repo, branch));
+    }
     Ok(found)
+}
+
+/// 137: whether the forge keeps `branch`, by its policy at the revision
+/// the host holds, with no fetch (129); `false` where it cannot be read.
+fn forge_keeps(branches: &branches::Branches, branch: &str) -> bool {
+    let Ok(Some(tip)) = branches.held(branch) else {
+        return false;
+    };
+    let Ok(Some(bytes)) = branches
+        .local()
+        .read_file(&tip, sluice_core::policy::POLICY_PATH)
+    else {
+        return false;
+    };
+    std::str::from_utf8(&bytes)
+        .ok()
+        .and_then(|t| sluice_core::policy::Policy::parse(t).ok())
+        .and_then(|p| p.rules_for(branch).ok().flatten().cloned())
+        .is_some_and(|r| r.round_job.is_some())
 }
 
 /// The repository's default branch, the branch its common directory's

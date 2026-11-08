@@ -154,3 +154,127 @@ fn ruleset(app: u64, branch: &str, r: &Value) -> Finding {
     }
     ok(format!("{name} on {branch} lets only app {app} through"))
 }
+
+/// 137, C.8; design D4, D13 of pull-requests-are-queued-on-the-forge: for
+/// a branch the forge keeps, whether the repository's default branch, on
+/// which the round job of every branch the forge keeps runs, holds the
+/// round job `sluice init actions` writes at this version, whether the app
+/// may dispatch it, and whether the `sluice` environment exists and admits
+/// the default branch alone.
+pub fn round_job(app: &App, repo: &Repo, branch: &str) -> Vec<Finding> {
+    let mut found = Vec::new();
+    let at = format!("/repos/{}/{}", repo.owner, repo.name);
+    let default = match app.get(&at, Bearer::Repo(repo)) {
+        Ok(v) => match v["default_branch"].as_str() {
+            Some(d) => d.to_string(),
+            None => {
+                found.push(failed(format!("GitHub names no default branch for {repo}")));
+                return found;
+            }
+        },
+        Err(e) => {
+            found.push(failed(format!("reading {repo}'s default branch: {e:#}")));
+            return found;
+        }
+    };
+    let path = format!("{at}/contents/{}?ref={default}", super::init::WORKFLOW_PATH);
+    let wf = super::init::WORKFLOW_PATH;
+    let runs = if default == branch {
+        String::new()
+    } else {
+        format!(", where {branch}'s round job runs")
+    };
+    found.push(match app.get(&path, Bearer::Repo(repo)) {
+        Ok(v) => match content(&v) {
+            Some(text) if text == super::init::workflow() => ok(format!(
+                "{default} holds the round job of sluice {}{runs}",
+                crate::VERSION
+            )),
+            Some(_) => failed(format!(
+                "{default}'s {wf} is not the round job sluice {} writes: write it again with \
+                 `sluice init actions` and land it on {default}",
+                crate::VERSION
+            )),
+            None => failed(format!("{default}'s {wf} could not be read as a file")),
+        },
+        Err(e) if format!("{e:#}").contains("404") => failed(format!(
+            "{default} holds no {wf}, so nothing takes {branch}'s pull requests in: write it \
+             with `sluice init actions` and land it on {default}"
+        )),
+        Err(e) => failed(format!("reading {default}'s {wf}: {e:#}")),
+    });
+    match app.installation(repo) {
+        Ok(i) => found.push(match i.permissions.get("actions").map(String::as_str) {
+            Some("write") => ok(format!("the app may dispatch {repo}'s round job")),
+            other => failed(format!(
+                "the app may not dispatch {repo}'s round job (actions: {}): give it Actions \
+                 read and write, so a submit and a recorded result wake it",
+                other.unwrap_or("none")
+            )),
+        }),
+        Err(e) => found.push(failed(format!("{e:#}"))),
+    }
+    found.push(environment(app, repo, &default));
+    found
+}
+
+/// A file's text as the contents API answers it, base64 in `content`.
+fn content(v: &Value) -> Option<String> {
+    if v["encoding"] != "base64" {
+        return None;
+    }
+    let packed: String = v["content"].as_str()?.split_whitespace().collect();
+    use base64::Engine as _;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(packed)
+        .ok()?;
+    String::from_utf8(bytes).ok()
+}
+
+/// The `sluice` environment, which holds the app's key: it exists, and its
+/// deployment branch rule admits `branch`, the default branch the round
+/// job runs on, alone (C.8; design D4).
+fn environment(app: &App, repo: &Repo, branch: &str) -> Finding {
+    let at = format!("/repos/{}/{}/environments/sluice", repo.owner, repo.name);
+    let env = match app.get(&at, Bearer::Repo(repo)) {
+        Ok(v) => v,
+        Err(e) if format!("{e:#}").contains("404") => {
+            return failed(format!(
+                "{repo} has no `sluice` environment to hold the app's key: make one whose \
+                 deployment branch rule admits {branch} alone"
+            ))
+        }
+        Err(e) => return failed(format!("reading the `sluice` environment: {e:#}")),
+    };
+    let rule = &env["deployment_branch_policy"];
+    if rule.is_null() || rule["custom_branch_policies"] != true {
+        return failed(format!(
+            "any branch of {repo} may use the `sluice` environment, and with it the app's key: \
+             give it a deployment branch rule admitting {branch} alone"
+        ));
+    }
+    let path = format!("{at}/deployment-branch-policies");
+    let names: Vec<String> = match app.get(&path, Bearer::Repo(repo)) {
+        Ok(v) => v["branch_policies"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|p| p["type"].as_str().is_none_or(|t| t == "branch"))
+            .filter_map(|p| p["name"].as_str().map(str::to_string))
+            .collect(),
+        Err(e) => return failed(format!("reading the `sluice` environment's rule: {e:#}")),
+    };
+    if names == [branch] {
+        ok(format!("the `sluice` environment admits {branch} alone"))
+    } else {
+        failed(format!(
+            "the `sluice` environment admits {}, not {branch} alone: give it a deployment \
+             branch rule admitting {branch} alone",
+            if names.is_empty() {
+                "no branch".to_string()
+            } else {
+                names.join(", ")
+            }
+        ))
+    }
+}

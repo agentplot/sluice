@@ -110,8 +110,13 @@ _: {
     linter.rules.recommended = true;
   };
   # actionlint reads the workflows' keys and expressions, which yamlfmt
-  # only lays out.
+  # only lays out: the repository's own, and the round job's template that
+  # `sluice init actions` writes into a repository (C.8).
   programs.actionlint.enable = true;
+  programs.actionlint.includes = [
+    ".github/workflows/*.yml"
+    "crates/sluice/src/profiles/github/workflows/*.yml"
+  ];
 
   # ruff lints and formats the diagram scripts: its default rules, then
   # its format.
