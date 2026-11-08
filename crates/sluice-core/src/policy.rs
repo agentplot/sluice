@@ -167,6 +167,12 @@ pub struct Rules {
     /// its remote, submitted once these conditions hold. `None` for a
     /// branch whose work is submitted straight from a session's place.
     pub pull_requests: Option<PullRequests>,
+    /// 137, C.8: the instance that keeps a branch the forge keeps, one whose
+    /// records are on its remote, that takes pull requests and whose policy
+    /// names a pool: the round job of the policy's first pool,
+    /// `pool/<pool>/round`, and no host (D1 of
+    /// pull-requests-are-queued-on-the-forge). `None` for any other branch.
+    pub round_job: Option<String>,
 }
 
 /// C.7 `pull_requests`: what a pull request into the branch meets before
@@ -252,6 +258,7 @@ impl Default for Rules {
             claims: BTreeMap::new(),
             remote: None,
             pull_requests: None,
+            round_job: None,
         }
     }
 }
@@ -598,6 +605,10 @@ impl Policy {
                     },
                 }),
             };
+            let round_job = match (&pull_requests, pools.first()) {
+                (Some(_), Some(pool)) if signed => Some(format!("pool/{}/round", pool.name)),
+                _ => None,
+            };
             let claims = if signed {
                 trust
                     .iter()
@@ -633,6 +644,7 @@ impl Policy {
                     claims,
                     remote: r.remote,
                     pull_requests,
+                    round_job,
                 },
             ));
         }

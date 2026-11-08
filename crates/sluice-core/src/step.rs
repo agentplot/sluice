@@ -272,6 +272,13 @@ impl Sluice<'_> {
     /// refused. A branch in this host's own files has no lead. Intake asks
     /// it too, to take a branch's pull requests in only where this
     /// instance keeps the branch (137).
+    ///
+    /// A branch the forge keeps is kept by its round job alone,
+    /// `pool/<pool>/round`: any other instance claims its runs and never
+    /// takes it, however long its records stood (75, 137). The round job
+    /// takes it from an older lead after the lease by its own observation,
+    /// intake being work enough (73; D1 of
+    /// pull-requests-are-queued-on-the-forge).
     pub fn keeps(&self, branch: &str) -> Result<bool> {
         let line = self.read_line(branch)?;
         // 133: the round's first read of the records, answered from what was
@@ -282,10 +289,13 @@ impl Sluice<'_> {
         let Some(tip) = self.seams.branch.read(branch)? else {
             return Ok(true);
         };
-        if !self.rules_at(branch, &tip)?.is_some_and(|r| r.signed) {
+        let Some(rules) = self.rules_at(branch, &tip)?.filter(|r| r.signed) else {
             return Ok(true);
-        }
+        };
         let me = self.peer.name.clone();
+        if rules.round_job.as_ref().is_some_and(|job| *job != me) {
+            return Ok(false);
+        }
         let from = match &line.doc.lead {
             Some(l) if *l == me => return Ok(true),
             None => None,
@@ -300,7 +310,9 @@ impl Sluice<'_> {
                     }
                 };
                 let waited = seconds_between(&since, &now).unwrap_or(0.0);
-                if waited < self.peer.lease.as_secs_f64() || !has_work(&line) {
+                if waited < self.peer.lease.as_secs_f64()
+                    || (rules.round_job.is_none() && !has_work(&line))
+                {
                     return Ok(false);
                 }
                 Some(other.clone())
@@ -3921,6 +3933,171 @@ mod tests {
             .iter()
             .find(|c| c.submissions == ids)
             .cloned()
+    }
+
+    /// `main` the forge keeps: its records on `origin`, pull requests, and
+    /// a pool with no runners; the host signs as `a`.
+    fn forge_kept() -> (Fakes, Rev) {
+        let policy = "[tests]\nrunner = \"fake\"\n\n[checkout]\n\n\
+            [branches.main]\nrequired = [\"#gate\"]\nparallel = 4\nremote = \"origin\"\n\
+            trust = [\"a\"]\n\
+            \n[branches.main.pull_requests]\nreviews = 0\n\
+            \n[signers.a]\nssh = \"a ssh-ed25519 AAAA\"\n\
+            \n[signers.forge]\ngithub = { workflow = \".github/workflows/sluice.yml\", ref = \"refs/heads/main\" }\n\
+            \n[pools.forge]\ngithub = { workflow = \".github/workflows/sluice.yml\" }\nsigner = \"forge\"\n";
+        let f = Fakes::new();
+        let tip = f
+            .world
+            .init("main", &[(POLICY_PATH, policy), ("a/lib", "1")]);
+        f.world.on_remote("main");
+        f.world.task("a:test", "a/");
+        f.world.signs_as("a");
+        (f, tip)
+    }
+
+    /// A clock a test moves on by hand.
+    struct Moving(std::cell::Cell<chrono::DateTime<Utc>>);
+
+    impl Clock for Moving {
+        fn now(&self) -> chrono::DateTime<Utc> {
+            let now = self.0.get() + chrono::Duration::seconds(1);
+            self.0.set(now);
+            now
+        }
+    }
+
+    impl Moving {
+        fn new() -> Self {
+            Moving(std::cell::Cell::new(Noon.now()))
+        }
+
+        fn advance(&self, by: chrono::Duration) {
+            self.0.set(self.0.get() + by);
+        }
+    }
+
+    /// Instance `name` over `f`, on its own host, with a lease of five
+    /// minutes, signing as `signer`.
+    fn instance<'a>(
+        f: &'a Fakes,
+        clock: &'a Moving,
+        name: &str,
+        signer: Option<&str>,
+    ) -> Sluice<'a> {
+        f.world.be_host(name);
+        let seams = Seams {
+            checkout: &f.checkout,
+            tests: &f.tests,
+            branch: &f.branch,
+            driver: &f.driver,
+            state: &f.state,
+        };
+        Sluice::new(seams, clock).as_peer(crate::Peer {
+            name: name.into(),
+            lease: std::time::Duration::from_secs(300),
+            alive: std::time::Duration::from_secs(120),
+            signer: signer.map(str::to_string),
+            systems: None,
+        })
+    }
+
+    fn took(s: &Sluice<'_>) -> Vec<(String, Option<String>)> {
+        Line::read_log(&s.seams.state.read("main").unwrap())
+            .unwrap()
+            .into_iter()
+            .filter_map(|l| match l.event {
+                Event::Took { by, from } => Some((by, from)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// satisfies: forge-rounds' "A host claims and never leads" and
+    /// peer-lead's "A branch the forge keeps" (73, 75, 137; D1 of
+    /// pull-requests-are-queued-on-the-forge): a host with a combination's
+    /// run to claim claims it, however long the round job has written
+    /// nothing, and never takes the branch.
+    #[test]
+    fn a_host_never_takes_a_branch_the_forge_keeps() {
+        let (f, tip) = forge_kept();
+        let clock = Moving::new();
+        let rules = sluice(&f)
+            .rules_at("main", &tip)
+            .unwrap()
+            .expect("main's rules");
+        assert_eq!(rules.round_job.as_deref(), Some("pool/forge/round"));
+        let head = f.world.work(&tip, &[("a/lib", Some("2"))]);
+        f.world.session("unit/a", "agent", &head);
+        f.world.hold_runs(true);
+        let one = submit(&sluice(&f), "unit/a");
+        // A host with work to do never takes the branch, even with no lead.
+        assert_eq!(
+            instance(&f, &clock, "a", Some("a")).step("main").unwrap(),
+            Step::Led
+        );
+        assert_eq!(s_lead(&f), None);
+        // The round job takes it and forms the combination.
+        let job = || instance(&f, &clock, "pool/forge/round", None);
+        assert_eq!(job().step("main").unwrap(), Step::Stepped);
+        assert_eq!(s_lead(&f).as_deref(), Some("pool/forge/round"));
+        let line = sluice(&f).read_line("main").unwrap();
+        assert!(holding(&line, &[one]).is_some_and(|c| c.state.under_test()));
+        // The round job goes quiet for longer than the lease; the host
+        // claims the run and is still led.
+        for _ in 0..3 {
+            assert_eq!(
+                instance(&f, &clock, "a", Some("a")).step("main").unwrap(),
+                Step::Led
+            );
+            clock.advance(chrono::Duration::minutes(4));
+        }
+        assert_eq!(
+            instance(&f, &clock, "a", Some("a")).step("main").unwrap(),
+            Step::Led
+        );
+        let line = sluice(&f).read_line("main").unwrap();
+        let c = holding(&line, &[one]).expect("#1 under test");
+        assert!(
+            c.runs.iter().any(|r| r.host.as_deref() == Some("a")),
+            "{:?}",
+            c.runs
+        );
+        assert_eq!(line.doc.lead.as_deref(), Some("pool/forge/round"));
+        assert!(took(&sluice(&f))
+            .iter()
+            .all(|(by, _)| by == "pool/forge/round"));
+    }
+
+    /// satisfies: forge-rounds' "A lead an older sluice took" (73, 137; D1
+    /// of pull-requests-are-queued-on-the-forge): a round job takes a
+    /// branch an older host led once it has seen the records unchanged for
+    /// the lease from its first reading, with no submission in them.
+    #[test]
+    fn a_round_job_takes_a_branch_an_older_host_led() {
+        let (f, _) = forge_kept();
+        let clock = Moving::new();
+        let s = sluice(&f);
+        // An older sluice on host `a` took the branch.
+        let lock = s.seams.state.lock("main").unwrap().expect("the lock");
+        let mut line = s.read_line("main").unwrap();
+        line.doc.lead = Some("a".into());
+        assert!(matches!(s.write(&line).unwrap(), Written::Written(_)));
+        drop(lock);
+        let job = || instance(&f, &clock, "pool/forge/round", None);
+        assert_eq!(job().step("main").unwrap(), Step::Led);
+        clock.advance(chrono::Duration::minutes(4));
+        assert_eq!(job().step("main").unwrap(), Step::Led);
+        clock.advance(chrono::Duration::minutes(2));
+        assert_ne!(job().step("main").unwrap(), Step::Led);
+        assert_eq!(s_lead(&f).as_deref(), Some("pool/forge/round"));
+        assert_eq!(
+            took(&sluice(&f)).last().cloned(),
+            Some(("pool/forge/round".to_string(), Some("a".to_string())))
+        );
+    }
+
+    fn s_lead(f: &Fakes) -> Option<String> {
+        sluice(f).read_line("main").unwrap().doc.lead
     }
 
     /// satisfies: forge-rounds' "A run waits for a host" (87, 107; D7 of
