@@ -40,8 +40,8 @@ use sluice_core::overview::{in_queue, BranchView, Held};
 use sluice_core::records::{Beside, BranchHold, CopyBehind, Event, FailedTask, State, Submission};
 use sluice_core::{
     Accepted, AmendRefusal, Clock, CopyDiffers, Forecast, Forecasted, GroupRequest, Lookup,
-    Pending, Requester, Seams, Serves, Sluice, Status, Step, SubmitHead, SubmitRefusal,
-    SubmitRequest, Unread, WithdrawRefusal, Withdrew,
+    Pending, Requester, Seams, Sluice, Status, Step, SubmitHead, SubmitRefusal, SubmitRequest,
+    Unread, WithdrawRefusal, Withdrew,
 };
 use sluice_seams::{Decided, Outcome, Rev, SessionPlace, Submitter};
 use told::Kind;
@@ -1492,7 +1492,6 @@ pub fn run(
             Ok(0)
         }
         Command::Run { rounds } => {
-            let s = s.serving(Serves::Every);
             s.check_host_systems()?;
             // 135: the repository's one driver on the host, and so its
             // reader (129): a run that finds another live drives nothing,
@@ -5495,7 +5494,7 @@ fn sessions_json(places: &[SessionPlace], held: &[Held]) -> Vec<serde_json::Valu
 /// on 1a2b3c4, recorded`, or a command's `command passed on 1a2b3c4`
 /// (session-runs-1 clauses 92, 97).
 fn last_result_text(r: &sluice_seams::LastResult) -> String {
-    use sluice_seams::{RunKind, RunOutcome};
+    use sluice_seams::{RunOutcome, SessionRunKind};
     let how = match r.outcome {
         RunOutcome::Pass => "passed",
         RunOutcome::Fail => "failed",
@@ -5506,9 +5505,9 @@ fn last_result_text(r: &sluice_seams::LastResult) -> String {
     };
     let head = r.head.short();
     match (r.kind, r.recorded) {
-        (RunKind::Command, _) => format!("command {how} on {head}"),
-        (RunKind::Checks, true) => format!("{how} on {head}, recorded"),
-        (RunKind::Checks, false) => format!("{how} on {head}, not recorded"),
+        (SessionRunKind::Command, _) => format!("command {how} on {head}"),
+        (SessionRunKind::Checks, true) => format!("{how} on {head}, recorded"),
+        (SessionRunKind::Checks, false) => format!("{how} on {head}, not recorded"),
     }
 }
 

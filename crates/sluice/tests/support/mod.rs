@@ -293,6 +293,28 @@ impl OnDisk {
     }
 }
 
+/// A combination's part of the host's bound, held of `tests` as a round
+/// holds one before it starts a run (71; rule core.49).
+pub fn queue_part(tests: &dyn sluice_seams::Tests) -> sluice_seams::Part {
+    tests
+        .hold(sluice_seams::RunKind::Queue)
+        .expect("the host's count reads")
+        .expect("room on the host")
+}
+
+/// `tests` starting `request` in a combination's part it holds first: a
+/// round's start, refused with [`sluice_seams::AtBound`] where the host has
+/// no room.
+pub fn start(
+    tests: &dyn sluice_seams::Tests,
+    request: &sluice_seams::RunRequest,
+) -> anyhow::Result<sluice_seams::RunHandle> {
+    let part = tests
+        .hold(sluice_seams::RunKind::Queue)?
+        .ok_or(sluice_seams::AtBound)?;
+    tests.start(request, part)
+}
+
 /// A repository with one worktree, built with the git command.
 pub struct Repo {
     pub scratch: Scratch,

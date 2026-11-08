@@ -60,8 +60,9 @@ use anyhow::{anyhow, bail, Context as _, Result};
 use serde::{Deserialize, Serialize};
 use sluice_seams::{
     log_tail, AtBound, Enforced, Equip, EquipStep, Equipped, HostRun, KeptOutTask, Limits, Network,
-    NotRun, Outcome, Place, Progress, Reading, Reads, Rev, RunHandle, RunReport, RunRequest,
-    Running, Setting, Settings, Source, TaskLog, TaskProgress, TaskResult, Tests, Through,
+    NotRun, Outcome, Part, Place, Progress, Reading, Reads, Rev, RunHandle, RunKind, RunReport,
+    RunRequest, Running, Setting, Settings, Source, TaskLog, TaskProgress, TaskResult, Tests,
+    Through,
 };
 
 use super::moon::{self, Moon};
@@ -310,26 +311,22 @@ impl Checks {
     /// 71: admit the run `name` of `request` against the host's count:
     /// a session's or a preview's under the bound less the reserve, any
     /// other under the bound. `None` at the bound.
-    fn admit(
-        &self,
-        request: &RunRequest,
-        name: &str,
-        session: bool,
-    ) -> Result<Option<host_count::Admission>> {
-        let kind = if session || request.place.name.starts_with(super::places::PREVIEW) {
-            host_count::Kind::Session
-        } else {
-            host_count::Kind::Queue
-        };
-        let limit = match kind {
-            host_count::Kind::Queue => self.instance.bound,
-            host_count::Kind::Session => self.instance.bound.saturating_sub(self.instance.reserved),
+    /// 71 (rule core.49): a run's room of `kind`, admitted against the
+    /// host's count before its run begins; `None` at the bound, less the
+    /// reserve for a session's or a preview's (91, 102).
+    fn admit(&self, kind: RunKind) -> Result<Option<host_count::Admission>> {
+        let (kind, limit) = match kind {
+            RunKind::Queue => (host_count::Kind::Queue, self.instance.bound),
+            RunKind::Session => (
+                host_count::Kind::Session,
+                self.instance.bound.saturating_sub(self.instance.reserved),
+            ),
         };
         let entry = host_count::Entry {
             kind,
             repository: self.common.clone(),
-            place: request.place.name.clone(),
-            run_dir: self.runs.dir(name),
+            place: String::new(),
+            run_dir: PathBuf::new(),
             pid: std::process::id(),
             admitted: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         };
@@ -1432,7 +1429,15 @@ pub fn hostname() -> String {
 }
 
 impl Tests for Checks {
-    fn start(&self, request: &RunRequest) -> Result<RunHandle> {
+    fn hold(&self, kind: RunKind) -> Result<Option<Part>> {
+        Ok(self.admit(kind)?.map(|a| Part::new(kind, a)))
+    }
+
+    fn start(&self, request: &RunRequest, part: Part) -> Result<RunHandle> {
+        // 71 (rule core.49): the room its part holds, or none it honours.
+        let Ok(mut admission) = part.take::<host_count::Admission>() else {
+            return Err(AtBound.into());
+        };
         let runner = text(&request.tests, "runner")?
             .ok_or_else(|| anyhow!("[tests] names no runner: \"moon\" or \"command\""))?
             .to_string();
@@ -1462,18 +1467,8 @@ impl Tests for Checks {
         } else {
             request.place.name.clone()
         };
-        // 71: admitted against the host's count before anything runs; a
-        // session's or a preview's run never into the reserve (91, 102).
-        let admission = match self.admit(request, name, session)? {
-            Some(a) => a,
-            None => {
-                if session {
-                    // The run's number goes unused; nothing is in it.
-                    let _ = std::fs::remove_dir(self.runs.dir(name));
-                }
-                return Err(AtBound.into());
-            }
-        };
+        // 71: the run's room, held since its count, names the run from now.
+        admission.begin(&request.place.name, &self.runs.dir(name))?;
         let dir = self.runs.prepare(name)?;
         let script = dir.join("toolchain.sh");
         // 147: equipped up to the version check before the runner is

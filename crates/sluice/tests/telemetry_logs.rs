@@ -526,7 +526,9 @@ fn a_run_s_checks_join_the_round() {
         system: None,
     };
     let started = tracing::info_span!("sluice.start");
-    let handle = started.in_scope(|| checks.start(&request)).unwrap();
+    let handle = started
+        .in_scope(|| support::start(&checks, &request))
+        .unwrap();
     drop(started);
     let until = Instant::now() + Duration::from_secs(60);
     let report = loop {

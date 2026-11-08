@@ -1912,7 +1912,7 @@ mod tests {
         Made, Places,
     };
     use crate::runs::{dir_name, Runs};
-    use sluice_seams::{Checkout, LastResult, Rev, RunKind, RunOutcome};
+    use sluice_seams::{Checkout, LastResult, Rev, RunOutcome, SessionRunKind};
     use std::collections::BTreeMap;
     use std::path::Path;
 
@@ -1920,7 +1920,7 @@ mod tests {
         LastResult {
             at: "2026-10-16T09:00:00Z".into(),
             head: Rev("a".into()),
-            kind: RunKind::Checks,
+            kind: SessionRunKind::Checks,
             outcome: RunOutcome::Pass,
             recorded: true,
             tasks: Vec::new(),
