@@ -533,6 +533,10 @@ impl Tests for Roomed<'_> {
         self.inner.unmet(limits)
     }
 
+    fn switched(&self, run: &RunHandle) -> Result<Option<String>> {
+        self.inner.switched(run)
+    }
+
     fn bound(&self) -> Result<usize> {
         self.inner.bound()
     }

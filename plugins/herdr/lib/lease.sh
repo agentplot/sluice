@@ -1,6 +1,7 @@
 # shellcheck shell=sh disable=SC2154 # common.sh sets state.
-# The lock that taking and releasing the watcher's lease, and registering
-# and dropping a server, are done under: a directory holding its owner's
+# The lock that taking and releasing the watcher's lease, registering and
+# dropping a server, and keeping what was set in one, are done under: a
+# directory holding its owner's
 # pid and when it took it. A lock is held for a moment only, so one whose
 # owner is gone, that has had no owner for three seconds, or that is ten
 # seconds old, is broken. Sourced; `lock` may be pointed at another lock

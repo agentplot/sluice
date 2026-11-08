@@ -5,14 +5,14 @@
 
 mod support;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use sluice::instance::{HostCache, Instance};
 use sluice::profiles::checks::{docker_host, Checks, Endpoint, EngineTls};
 use sluice_seams::{
-    Equip, EquipStep, Limits, Network, Outcome, Place, Progress, RunKind, RunReport, RunRequest,
-    Setting, Settings, Source, Tests, Through,
+    Equip, EquipStep, Limits, Network, Outcome, Place, Progress, RunHandle, RunKind, RunReport,
+    RunRequest, Setting, Settings, Source, Tests, Through,
 };
 use support::{Repo, Scratch};
 
@@ -71,11 +71,16 @@ fn request(repo: &Repo, name: &str, tests: Settings) -> RunRequest {
 }
 
 fn finish(c: &Checks, req: &RunRequest) -> RunReport {
+    ran(c, req).1
+}
+
+/// `req` started and run to its end: its handle and its report.
+fn ran(c: &Checks, req: &RunRequest) -> (RunHandle, RunReport) {
     let run = support::start(c, req).unwrap();
     let until = Instant::now() + Duration::from_secs(60);
     loop {
         match c.progress(&run).unwrap() {
-            Progress::Finished(r) => return r,
+            Progress::Finished(r) => return (run, r),
             Progress::Lost => panic!("lost"),
             Progress::Running => {}
         }
@@ -742,6 +747,88 @@ fn a_run_that_asks_for_no_engine_is_met_with_none() {
     let dir = Scratch::short();
     let c = checks(&repo).with_engine_sockets(vec![dir.path().join("e.sock")]);
     assert_eq!(c.unmet(&Limits::default()).unwrap(), None);
+}
+
+/// 84, record 0097 (design D8): a link of the test's own in place of the
+/// host's `/run/current-system`, in `dir`, pointed at `<dir>/<to>` where
+/// `to` is given.
+fn system_link(dir: &Path, to: Option<&str>) -> PathBuf {
+    let link = dir.join("current-system");
+    if let Some(to) = to {
+        std::os::unix::fs::symlink(dir.join(to), &link).unwrap();
+    }
+    link
+}
+
+/// A command that does `then` to the system link at `link`, and fails.
+fn and_fail(then: &str, link: &Path) -> Settings {
+    command(&format!("{then} '{}'; exit 1", link.display()))
+}
+
+/// 84, 114, record 0097 (design D1, D4, D5): a run during which the
+/// active system's link moved from one store path to another answers that
+/// the host's system was switched, naming both.
+#[test]
+fn a_run_whose_system_was_switched_says_from_what_to_what() {
+    let repo = Repo::new("checks-switched");
+    let dir = Scratch::short();
+    let link = system_link(dir.path(), Some("aaa"));
+    let c = checks(&repo).with_system_link(link.clone());
+    let to = dir.path().join("bbb");
+    let then = format!("ln -sfn '{}'", to.display());
+    let (run, r) = ran(&c, &request(&repo, "p1", and_fail(&then, &link)));
+    assert_eq!(r.tasks[0].outcome, Outcome::Fail);
+    assert_eq!(
+        c.switched(&run).unwrap(),
+        Some(format!(
+            "the host's system was switched during the run, from {} to {}",
+            dir.path().join("aaa").display(),
+            to.display()
+        ))
+    );
+}
+
+/// 84, record 0097 (design D4): a run during which the link stood answers
+/// no switch.
+#[test]
+fn a_run_whose_system_stood_says_nothing() {
+    let repo = Repo::new("checks-system-stood");
+    let dir = Scratch::short();
+    let link = system_link(dir.path(), Some("aaa"));
+    let c = checks(&repo).with_system_link(link.clone());
+    let (run, r) = ran(&c, &request(&repo, "p1", and_fail("test -L", &link)));
+    assert_eq!(r.tasks[0].outcome, Outcome::Fail);
+    assert_eq!(c.switched(&run).unwrap(), None);
+}
+
+/// 84, record 0097 (design D4), the host-requirements spec's "No Nix
+/// system": a host with no link as the run starts is one Nix doesn't
+/// manage, and a link made during the run reads no switch.
+#[test]
+fn a_host_with_no_system_link_reads_nothing() {
+    let repo = Repo::new("checks-no-system");
+    let dir = Scratch::short();
+    let link = system_link(dir.path(), None);
+    let c = checks(&repo).with_system_link(link.clone());
+    let then = format!("ln -s '{}'", dir.path().join("bbb").display());
+    let (run, r) = ran(&c, &request(&repo, "p1", and_fail(&then, &link)));
+    assert_eq!(r.tasks[0].outcome, Outcome::Fail);
+    assert!(link.is_symlink(), "the command made the link");
+    assert_eq!(c.switched(&run).unwrap(), None);
+}
+
+/// 84, record 0097 (design D4): a link gone after the run reads no
+/// switch, since a switch replaces the link and never removes it.
+#[test]
+fn a_link_gone_after_the_run_reads_no_switch() {
+    let repo = Repo::new("checks-system-gone");
+    let dir = Scratch::short();
+    let link = system_link(dir.path(), Some("aaa"));
+    let c = checks(&repo).with_system_link(link.clone());
+    let (run, r) = ran(&c, &request(&repo, "p1", and_fail("rm", &link)));
+    assert_eq!(r.tasks[0].outcome, Outcome::Fail);
+    assert!(!link.is_symlink(), "the command removed the link");
+    assert_eq!(c.switched(&run).unwrap(), None);
 }
 
 /// A TCP endpoint on this host's loopback at `port`, plain or over `tls`.
