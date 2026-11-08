@@ -256,7 +256,7 @@ echo $! >"$ROOT/driver.pid"
 # check holds the queue back; the blame and the landing recent.
 ready() {
   checking && sluice overview --json | jq -e --argjson c "$C" --argjson d "$D" --argjson a "$A" --argjson b "$B" '
-    .room == {bound: 2, queue: 1, sessions: 1, reserve: 0} and
+    (.room | {bound, queue, sessions, reserve}) == {bound: 2, queue: 1, sessions: 1, reserve: 0} and
     (.branches[] | select(.branch == "main") |
     ([.candidates[] | select(.state == "testing" and .submissions == [$c]) | .tasks] | first // []) as $t |
     ([$t[] | select(.state == "passed")] | length) >= 3 and
