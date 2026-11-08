@@ -287,17 +287,18 @@ requests](/sluice/guides/pull-requests/#the-round-job-takes-them-in)).
 
 ```toml
 [pools.forge]
-github = { workflow = ".github/workflows/sluice.yml" }
+github = { workflow = ".github/workflows/sluice.yml", ref = "refs/heads/main" }
 signer = "forge"
 ```
 
 | key | meaning |
 |---|---|
-| `github` | The workflow that runs the pool's jobs. |
+| `github` | The workflow that runs the pool's jobs, and the branch, `ref`, a submit or a result starts its round job on: the one that holds the workflow. With no `ref`, the repository's default branch as GitHub names it. |
 | `signer` | The signer, of `[signers]`, the pool's jobs sign as. It signs by the same kind, `github`. |
 | `runners` | Optional: the runner for each system the pool runs tests on, `{ linux-x64 = "ubuntu-24.04" }`. With none, the pool runs rounds and no test, and a test no machine has room for waits for one. |
 
-`sluice init actions` adds `[pools.forge]` with no runners.
+`sluice init actions` adds `[pools.forge]` with no runners and the
+default branch as its `ref`.
 
 ## `[branches."<pattern>"]`: rules per target branch
 

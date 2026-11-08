@@ -29,8 +29,8 @@ confined = false
 github = { workflow = ".github/workflows/sluice.yml", ref = "refs/heads/main" }
 
 [pools.forge]
-github = { workflow = ".github/workflows/sluice.yml" }
-signer = "forge"                                       # no runners: its jobs run rounds alone
+github = { workflow = ".github/workflows/sluice.yml", ref = "refs/heads/main" }
+signer = "forge"                                                                # no runners: its jobs run rounds alone
 
 # feature/* is a placeholder: name the pattern as the project names its branches
 [branches."feature/*"]

@@ -28,7 +28,7 @@ each `discovery` while it runs, and SHALL end, exiting 0, once a round
 finds nothing its to do now, or after 50 minutes. Nothing is its to do
 when no pull request is due to be asked for or taken in, nothing is to
 be decided, landed, posted or released, and every open combination
-waits on a run another instance claimed (136, 137).
+waits on a run for another instance to claim (136, 137).
 
 #### Scenario: It ends while a run goes on elsewhere
 - **WHEN** host `a` holds the run of `main`'s only open combination and nothing else waits, and `sluice job round --branch main` runs
@@ -40,23 +40,35 @@ waits on a run another instance claimed (136, 137).
 
 ### Requirement: sluice job round with no branch wakes each branch the forge keeps
 `sluice job round` with no `--branch` SHALL wake one round job for each
-branch on the remote that the forge keeps, reading each branch's policy
-at its revision, and exit 0 (111, 137).
+branch on the remote that the forge keeps, reading each branch's own
+policy at its revision, whatever the default branch's policy names, and
+exit 0 (111, 137; rule core.27).
 
 #### Scenario: The schedule wakes each branch
 - **WHEN** `main` and `release/1` take pull requests with their records on `origin`, `bolt/x` takes none, and `sluice job round` runs with no branch
 - **THEN** it dispatches one round of the pool's workflow for `main` and one for `release/1`, none for `bolt/x`, and exits 0
 
+#### Scenario: A branch its own policy names
+- **WHEN** `hotfix/1`'s own revision takes pull requests with its records on `origin`, `main`'s policy names no `hotfix/1`, and `sluice job round` runs with no branch
+- **THEN** it dispatches one round for `hotfix/1` beside `main`'s
+
 ### Requirement: The round job is woken when work arrives on a host
 A submit that opens, updates or marks ready a pull request into a
 branch the forge keeps, and a host that records a run's result on such
-a branch, SHALL wake that branch's round job. A wake that fails SHALL
-be a warning and SHALL lose nothing: the schedule's next round job takes
-the work (59, 111, 136).
+a branch, SHALL wake that branch's round job, starting the pool's
+workflow on the branch its `ref` names, else on the repository's
+default branch as GitHub names it, which holds the workflow whichever
+branch the job keeps. A wake that fails SHALL be a warning and SHALL
+lose nothing: the schedule's next round job takes the work (59, 111,
+136).
 
 #### Scenario: A submit wakes it
 - **WHEN** an agent runs `wt submit main --no-wait` and `main` is the forge's
 - **THEN** GitHub records one dispatch of the pool's workflow with `mode` `round` and `branch` `main`
+
+#### Scenario: A default branch that is not main
+- **WHEN** the repository's default branch on GitHub is `trunk`, `[pools.forge]` names no `ref`, and an agent runs `wt submit main --no-wait`
+- **THEN** GitHub records one dispatch of a round of `main` started on `trunk`
 
 #### Scenario: A recorded result wakes it
 - **WHEN** host `a`'s `sluice step main` records the result of a run of `main`'s combination
@@ -95,8 +107,9 @@ exit 1, unless `--force` is given (C.8).
 
 ### Requirement: sluice init actions names the round job in the policy
 `sluice init actions` SHALL add `[signers.forge]`, naming the workflow
-on the default branch, and `[pools.forge]` with no runners, where
-absent, and print what to set on GitHub: the `sluice` environment, its
+on the default branch, and `[pools.forge]` with no runners, naming the
+workflow and the default branch as its `ref`, where absent, saying
+which it added, and print what to set on GitHub: the `sluice` environment, its
 `SLUICE_APP_ID` variable and `SLUICE_APP_KEY` secret, its branch rule,
 and the app's Actions write permission. A policy that names no
 `[signers]` SHALL be refused, changing nothing, with exit 2.

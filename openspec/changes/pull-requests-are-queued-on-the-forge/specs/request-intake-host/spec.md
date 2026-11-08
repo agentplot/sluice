@@ -6,7 +6,9 @@ them, or hand them over: a branch's requests SHALL be taken in only by
 the forge's round job of a branch whose records are on its remote
 (`forge-rounds`). A host's pass, round, step, wait and submit SHALL ask
 GitHub for no branch's open pull requests and SHALL write no
-submission of a pull request (137; rule core.33).
+submission of a pull request; a submit, a wait and `--status` SHALL
+find the host's own pull request by its head alone (137; rule
+core.33).
 
 #### Scenario: A host's step
 - **WHEN** `main` is the forge's, a pull request into it is ready with every condition holding, and host `a` runs `sluice step main`
@@ -14,7 +16,7 @@ submission of a pull request (137; rule core.33).
 
 #### Scenario: A wait
 - **WHEN** an agent's `sluice wait main` on host `a` follows its pull request for a minute
-- **THEN** `a` asks GitHub nothing about `main`'s open pull requests, and the pull request is taken in only by a round job
+- **THEN** `a` asks GitHub nothing about `main`'s open pull requests, finding its own by its head alone, and the pull request is taken in only by a round job
 
 ### Requirement: A status shows each pull request the host follows
 `sluice status <branch>` SHALL show, after the branch's queue, each pull

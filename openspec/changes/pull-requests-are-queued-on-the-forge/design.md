@@ -82,13 +82,15 @@ intake asks for the open requests at its first round and again each
 conditions hold, posts, forms, lands and releases. It ends, exiting 0,
 once a round finds nothing its to do now: no request due to be asked
 or taken in, nothing to decide, land, post or release, every open
-combination waiting on a run another instance claims. A run's result
-wakes the next job (D5). It ends after 50 minutes whatever is left,
+combination waiting on a run for another instance to claim, claimed or
+not. A run's result wakes the next job (D5). It ends after 50 minutes whatever is left,
 short of the job's limit; what it left is a lead gone quiet (73).
 
-With no `--branch`, it lists the branches on the remote whose policy at
-their revision the forge keeps, wakes one round job for each through
-`Actions::wake`, and exits 0. The schedule runs it so.
+With no `--branch`, it reads every branch the job's repository holds,
+its remote's tracking branches, each by its own policy at its revision
+whatever the default branch's names (core.27), wakes one round job for
+each the forge keeps through `Actions::wake`, and exits 0. The schedule
+runs it so.
 
 It reads the host config the workflow writes (D4) as any command does,
 so its forge client, lease and discovery are a host's. It needs no
@@ -118,7 +120,9 @@ round part of `actions-pool`'s `sluice.yml`:
   repository's address, which the round's own fetch fills, since the
   round reads the branch and its records from the remote (124, C.6);
   download the release of sluice whose version the template was
-  written at, from the project's releases; restore the state folder
+  written at, from the project's releases, whose Linux binaries are
+  static, against musl, as flume's are, so they run on a runner with no
+  Nix; restore the state folder
   from the cache (D6); write the host config (D4); run `sluice job
   round` with `--branch ${{ inputs.branch }}` where one was given; save
   the state folder.
@@ -133,7 +137,9 @@ round, and a toolchain the round needs nowhere else.
 
 The `sluice` environment holds the app's id as the variable
 `SLUICE_APP_ID` and its key as the secret `SLUICE_APP_KEY`, and admits
-only the branch the workflow runs on, the default branch. The job's
+only the branch the workflow runs on, the default branch: the round job
+of every branch the forge keeps runs there, on a wake (D5) and on the
+schedule, whichever branch it keeps. The job's
 step writes the key to `$RUNNER_TEMP/sluice/app.pem`, mode `0600`, and
 a host config `[forge] app_id`, `key` beside it, with `XDG_CONFIG_HOME`
 pointing there, so sluice's git calls carry the app's token as any
@@ -141,6 +147,10 @@ host's do (forge-identity). No other job holds the environment; a
 pull request's workflow run gets neither (C.8).
 
 ### D5. Wakes
+
+A wake starts the pool's workflow on the branch the pool's `ref` names,
+which `sluice init actions` writes, else on the repository's default
+branch as GitHub names it (D4).
 
 A submit that opened, updated or marked ready a request into a branch
 the forge keeps wakes its round job, once for the act, after the
@@ -204,6 +214,9 @@ Every host is one that does not take the requests in, so what records
 - `opening` keeps each request it opens, updates or marks ready in
   `forge/follows/`, whoever keeps the branch; a request leaves once a
   read finds it merged or closed and a wait or status has said so.
+- A submit, a wait and `--status` find the host's own request by its
+  head alone (`GET /pulls?state=open&head=<owner>:<branch>`), never by
+  the branch's open pull requests, which only the round job asks for.
 - `follow_across`, `across` and `kept_across` read every followed
   request, of a branch whose records are on its remote too.
 - A wait, a waiting submit, `--status`, `sluice status` and the
@@ -234,6 +247,11 @@ and never with an entry it wrote, since it writes none; under `--json`,
 the exits it gives today: 0 landed, 1 sent back or closed, 5 out of
 time. A request the round job sent back, failed, in conflict or held,
 is marked ready at the head pushed by the next submit (record 0096).
+Taken again at the head it stood at, it reads as waiting to be taken
+in, to the submit, a wait and `--status`, while sluice's check there
+still says what sent it back: the follow keeps that check as
+`taken_again`, read once on the submitter's own act, and drops it once
+the head or the check's words move.
 
 A group submit opens its drafts, reads their conditions, and where all
 hold marks them ready as one group and wakes the round job, which
@@ -265,18 +283,20 @@ deletes it; the guide's recipe does.
 template at the version that writes it; leaves a differing file, saying
 how it differs, unless `--force`; adds `[signers.forge] github = {
 workflow = ".github/workflows/sluice.yml", ref = "refs/heads/<default>" }`
-and `[pools.forge] signer = "forge"` where absent; and prints the
-environment, its variable, secret and branch rule, and the app's
-Actions write permission. It refuses a policy that names no
+and `[pools.forge] github = { workflow = ".github/workflows/sluice.yml",
+ref = "refs/heads/<default>" }, signer = "forge"` where absent, saying
+which it added; and prints the environment, its variable, secret and
+branch rule, and the app's Actions write permission. It refuses a policy that names no
 `[signers]`, changing nothing: adding the first signer moves every
 branch with a remote onto it, and the hosts that run their checks need
 signers of their own first (the guide).
 
 `sluice forge check <b>`, for a branch the forge keeps, also reports
-whether the workflow on `<b>` is the round job `sluice init actions`
-would write at this version, whether the app may dispatch it (Actions
-write), and whether the `sluice` environment exists and admits only
-`<b>`, exiting non-zero naming each that fails. The forge signer's own
+whether the workflow on the repository's default branch, where `<b>`'s
+round job runs (D4), is the round job `sluice init actions` would write
+at this version, whether the app may dispatch it (Actions write), and
+whether the `sluice` environment exists and admits only the default
+branch, exiting non-zero naming each that fails. The forge signer's own
 checks stay `actions-pool`'s.
 
 ### D14. The suite takes its requests in by the round job

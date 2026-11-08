@@ -980,11 +980,12 @@ failed  ruleset "main" on main lets more than the app through: RepositoryRole 5
 ```
 
 For a branch the forge keeps, one that takes pull requests with its
-state on its remote, it also checks the round job: the branch holds
-`.github/workflows/sluice.yml` as this version of `sluice init actions`
-writes it, the app may write the repository's Actions so it can wake
-the job, and the `sluice` environment exists and admits that branch
-alone.
+state on its remote, it also checks the round job, which runs on the
+repository's default branch whichever branch it keeps: the default
+branch holds `.github/workflows/sluice.yml` as this version of `sluice
+init actions` writes it, the app may write the repository's Actions so
+it can wake the job, and the `sluice` environment exists and admits
+the default branch alone.
 
 [Protecting main on GitHub](/sluice/guides/github-app/) sets
 it up.
@@ -997,8 +998,9 @@ takes the pull requests of each branch the forge keeps in and runs
 its rounds. In the working copy it runs in, it writes
 `.github/workflows/sluice.yml` at this sluice's version. It adds
 `[signers.forge]`, naming that workflow on the default branch, and
-`[pools.forge]` with no runners to `.config/sluice.toml`, where they're
-missing. Then it prints what to set on GitHub: the `sluice` environment
+`[pools.forge]` with no runners, naming the default branch as the one a
+wake starts the job on, to `.config/sluice.toml`, where they're
+missing, and says which it added. Then it prints what to set on GitHub: the `sluice` environment
 with a deployment branch rule admitting the default branch alone, its
 variable `SLUICE_APP_ID` and secret `SLUICE_APP_KEY`, and the app's
 Actions write permission. Land both files on the default branch.

@@ -31,8 +31,8 @@ ssh = ".config/sluice.hosts" # one line per host's key
 github = { workflow = ".github/workflows/sluice.yml", ref = "refs/heads/main" }
 
 [pools.forge]
-github = { workflow = ".github/workflows/sluice.yml" }
-signer = "forge"                                       # no runners: its jobs run rounds alone
+github = { workflow = ".github/workflows/sluice.yml", ref = "refs/heads/main" }
+signer = "forge"                                                                # no runners: its jobs run rounds alone
 
 # Small, fast landings many times a day. feature/* is a placeholder:
 # name the pattern as the project names its branches.
