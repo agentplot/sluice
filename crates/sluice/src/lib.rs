@@ -3348,21 +3348,7 @@ fn wait_on(
         s.next_pass();
         waiting.host.next_pass();
         let reports = follower.tick(&here);
-        // 97, 123: what the host process's passes freed, and what its rounds
-        // of this branch released, as a wait's own rounds said them.
-        for r in &reports {
-            let lines = r
-                .freed
-                .iter()
-                .chain(r.released.get(&branch).into_iter().flatten());
-            for line in lines {
-                if waiting.json {
-                    eprintln!("{line}");
-                } else {
-                    writeln!(out, "{line}")?;
-                }
-            }
-        }
+        tell_released(&reports, &branch, waiting.json, out)?;
         let failed = reports
             .into_iter()
             .filter_map(|r| r.failed.get(&branch).cloned())
@@ -4671,12 +4657,14 @@ fn submit_pull(
                 return still(out, WAITING);
             }
         }
-        // 135: the host process runs the rounds; the wait follows it, and
-        // says the branch's hold as its reader's document has it (121).
+        // 135: the host process runs the rounds; the wait follows it, says
+        // what its passes released as a wait does, and says the branch's
+        // hold as its reader's document has it (121).
         let follower = follower.get_or_insert_with(|| {
             host_process::ask::Follower::new(&here, host_process::protocol::FollowKind::Wait)
         });
-        follower.tick(&here);
+        let reports = follower.tick(&here);
+        tell_released(&reports, branch, json, out)?;
         if !json {
             tell_hold(
                 out,
@@ -4692,6 +4680,31 @@ fn submit_pull(
             return still(out, STOPPED);
         }
     }
+}
+
+/// 97, 123: what the host process's passes in `reports` freed, and what
+/// their rounds of `branch` released, as a waiting command's own rounds
+/// said them: beside its lines, or on stderr under `--json`.
+fn tell_released(
+    reports: &[host_process::pass::Report],
+    branch: &str,
+    json: bool,
+    out: &mut dyn Write,
+) -> Result<()> {
+    for r in reports {
+        let lines = r
+            .freed
+            .iter()
+            .chain(r.released.get(branch).into_iter().flatten());
+        for line in lines {
+            if json {
+                eprintln!("{line}");
+            } else {
+                writeln!(out, "{line}")?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// 121: `branch`'s hold, as the reader's document sluice's host process
@@ -4860,7 +4873,8 @@ fn submit_pull_group(
         let follower = follower.get_or_insert_with(|| {
             host_process::ask::Follower::new(&here, host_process::protocol::FollowKind::Wait)
         });
-        follower.tick(&here);
+        let reports = follower.tick(&here);
+        tell_released(&reports, branch, json, out)?;
         if !json {
             tell_hold(
                 out,
