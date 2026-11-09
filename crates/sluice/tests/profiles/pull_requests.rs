@@ -580,6 +580,13 @@ impl OnGitHub {
         self.bolt_on_github()
     }
 
+    /// Whether `host` took pull request `n` in: a submission of it in
+    /// main's records that `host` submitted, main's records being every
+    /// host's on its remote.
+    fn took_in(&self, host: &str, n: u64) -> bool {
+        self.of(n).iter().any(|s| s["from"]["host"] == host)
+    }
+
     /// The submissions from pull request `n`, after `steps` more rounds.
     fn of_after(&self, n: u64, steps: usize) -> Vec<Value> {
         for _ in 0..steps {
@@ -5676,7 +5683,7 @@ fn a_wait_across_hosts_reads_at_its_pace() {
     assert!((1..=4).contains(&reads), "{reads} reads: {}", text(&out));
     assert!(g.posted_reads(&pull.head) - checks <= 4, "{}", text(&out));
     assert_eq!(g.lists(), lists + 1, "its finding of its request alone");
-    assert!(g.of(pull.number).is_empty(), "no intake, no round");
+    assert!(!g.took_in("a", pull.number), "no intake, no round");
 }
 
 impl OnGitHub {
@@ -5718,7 +5725,7 @@ fn submitted_here_taken_in_there() {
     );
     g.step();
     assert_eq!(g.lists(), lists, "A's round asks nothing of the list");
-    assert!(g.of(pull.number).is_empty(), "A took nothing in");
+    assert!(!g.took_in("a", pull.number), "A took nothing in");
     assert!(g.follows()[pull.number.to_string()].is_object());
 }
 
@@ -5838,7 +5845,7 @@ fn two_waits_and_a_status_read_at_one_pace() {
     assert!(reads <= 4, "{reads} reads of the request: {shown:?}");
     let reads = g.posted_reads(&pull.head) - checks;
     assert!(reads <= 4, "{reads} reads of its check: {shown:?}");
-    assert!(g.of(pull.number).is_empty(), "no intake, no round");
+    assert!(!g.took_in("a", pull.number), "no intake, no round");
 }
 
 /// request-intake-host, "Landed on another host": a waiting `sluice submit
@@ -5849,8 +5856,10 @@ fn landed_on_another_host() {
     let g = OnGitHub::new("intake-landed", "");
     g.discovery("10s");
     g.named("a", "");
-    let b = g.other("b", "", "");
+    // B's pass runs first, so B keeps main and A does not.
+    let b = g.other("b", "", &g.signing("b"));
     b.run("1");
+    assert_eq!(g.keeper().as_deref(), Some("b"));
     let w = g.session("landed", &[("l.txt", "l\n")]);
     let mut submit = g
         .command(env!("CARGO_BIN_EXE_sluice"), &w)
@@ -5890,7 +5899,7 @@ fn landed_on_another_host() {
     // where it read the request between the two (this change's sluice
     // exec main, cli:tools, 2026-11-05): either reports it landed.
     assert!(text(&out).contains("passed · landed"), "{}", text(&out));
-    assert!(g.of(n).is_empty(), "A took nothing in");
+    assert!(!g.took_in("a", n), "A took nothing in");
 }
 
 /// request-intake-host, "Blamed on another host": B's round blames the
@@ -5901,8 +5910,10 @@ fn landed_on_another_host() {
 fn blamed_on_another_host() {
     let g = OnGitHub::new("intake-blamed", "");
     g.named("a", "");
-    let b = g.other("b", "", "");
+    // B's pass runs first, so B keeps main and A does not.
+    let b = g.other("b", "", &g.signing("b"));
     b.run("1");
+    assert_eq!(g.keeper().as_deref(), Some("b"));
     let w = g.session("blamed", &[("broken", "b\n")]);
     let out = g.wt_submit(&w, &["--no-wait"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
@@ -5966,8 +5977,10 @@ impl OnGitHub {
 fn a_run_github_keeps_completed_reads_by_its_block() {
     let g = OnGitHub::new("fields-completed", "");
     g.named("a", "");
-    let b = g.other("b", "", "");
+    // B's pass runs first, so B keeps main and A does not.
+    let b = g.other("b", "", &g.signing("b"));
     b.run("1");
+    assert_eq!(g.keeper().as_deref(), Some("b"));
     let w = g.session("kept", &[("k.txt", "k\n")]);
     let out = g.wt_submit(&w, &["--no-wait"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
@@ -5992,7 +6005,7 @@ fn a_run_github_keeps_completed_reads_by_its_block() {
     assert_eq!(out.status.code(), Some(sluice::WAITING), "{}", text(&out));
     assert!(text(&out).contains(&testing), "{}", text(&out));
     assert!(g.follows()[n.to_string()].is_object(), "{}", g.follows());
-    assert!(g.of(n).is_empty(), "A took nothing in");
+    assert!(!g.took_in("a", n), "A took nothing in");
 }
 
 /// request-intake-host, "An older sluice's check": host B's older sluice
@@ -6003,8 +6016,10 @@ fn a_run_github_keeps_completed_reads_by_its_block() {
 fn an_older_sluices_check_reads_by_its_words() {
     let g = OnGitHub::new("fields-older", "");
     g.named("a", "");
-    let b = g.other("b", "", "");
+    // B's pass runs first, so B keeps main and A does not.
+    let b = g.other("b", "", &g.signing("b"));
     b.run("1");
+    assert_eq!(g.keeper().as_deref(), Some("b"));
     let w = g.session("older", &[("o.txt", "o\n")]);
     let out = g.wt_submit(&w, &["--no-wait"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
@@ -6103,7 +6118,7 @@ fn out_of_time_queued_on_the_other_host() {
     );
     assert_eq!(doc["queue"]["submission"], 1406, "{doc}");
     assert_eq!(doc["queue"]["host"], "b", "{doc}");
-    assert!(g.of(pull.number).is_empty(), "A took nothing in");
+    assert!(!g.took_in("a", pull.number), "A took nothing in");
 }
 
 /// submission-wait, "The status a submit reads": the same, and `sluice
@@ -6349,7 +6364,7 @@ fn queued_on_the_other_host() {
         pull.title
     );
     assert!(said.contains(&line), "{said}");
-    assert!(g.of(n).is_empty(), "A took nothing in");
+    assert!(!g.took_in("a", n), "A took nothing in");
 }
 
 /// request-intake-host, "Waiting for a review there": a wait on host B
@@ -6557,7 +6572,7 @@ fn a_one_shot_overview_lists_requests_taken_in_elsewhere() {
         pull.title
     );
     assert!(under.join("\n").contains(&rows), "{said}");
-    assert!(g.of(n).is_empty(), "A took nothing in");
+    assert!(!g.took_in("a", n), "A took nothing in");
 }
 
 /// overview, "A watch reads none of them itself": `sluice overview --json
@@ -6634,7 +6649,7 @@ fn a_watch_reads_no_followed_request_itself() {
     let out = watch.wait_with_output().unwrap();
     assert_eq!(g.pull_reads(n), pulls, "{}", text(&out));
     assert_eq!(g.posted_reads(&pull.head), checks, "{}", text(&out));
-    assert!(g.of(n).is_empty(), "A took nothing in");
+    assert!(!g.took_in("a", n), "A took nothing in");
 }
 
 /// Host B takes main's pull requests in and has blamed the pull request a
@@ -6650,8 +6665,10 @@ fn held_on_b<'g>(
     changes: &[(&str, &str)],
 ) -> (Other<'g>, PathBuf, sluice::profiles::github::forge::Pull) {
     g.named("a", "");
-    let b = g.other("b", "", "");
+    // B's pass runs first, so B keeps main and A does not.
+    let b = g.other("b", "", &g.signing("b"));
     b.run("1");
+    assert_eq!(g.keeper().as_deref(), Some("b"));
     let w = g.session(name, changes);
     let out = g.wt_submit(&w, &["--no-wait"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
@@ -6735,7 +6752,7 @@ fn held_then_marked_ready_waits_to_be_taken_in() {
     assert_eq!(doc["pull_request"], pull.number, "{doc}");
     assert_eq!(doc["state"], "waiting to be taken in by b", "{doc}");
     assert_eq!(b.of(pull.number).len(), 1, "B has not taken it in again");
-    assert!(g.of(pull.number).is_empty(), "A took nothing in");
+    assert!(!g.took_in("a", pull.number), "A took nothing in");
 }
 
 /// request-intake-host, "Taken in again while GitHub keeps the check
@@ -6817,7 +6834,7 @@ fn taken_in_again_while_github_keeps_the_check_failed() {
     assert_eq!(subs.len(), 2, "{subs:?}");
     assert_eq!(subs[1]["head"], pull.head.as_str());
     assert_eq!(subs[1]["state"], "landed", "{subs:?}");
-    assert!(g.of(n).is_empty(), "A took nothing in");
+    assert!(!g.took_in("a", n), "A took nothing in");
 }
 
 /// pull-request-submit, "Sent back on another host": B blamed `#n` and
@@ -6860,7 +6877,7 @@ fn status_of_a_request_another_host_sent_back() {
         "{}",
         text(&out)
     );
-    assert!(g.of(pull.number).is_empty(), "A took nothing in");
+    assert!(!g.took_in("a", pull.number), "A took nothing in");
 }
 
 /// worktrunk-submit, "Sent back as a draft on another host", then "Run
@@ -6928,7 +6945,7 @@ fn run_again_marks_ready_a_draft_another_host_sent_back() {
         pushed
     );
     assert!(!g.pull_from("unit/redrafted").draft);
-    assert!(g.of(n).is_empty(), "A took nothing in");
+    assert!(!g.took_in("a", n), "A took nothing in");
 
     let until = Instant::now() + Duration::from_secs(60);
     while b.of(n).len() < 2 {
@@ -7024,7 +7041,7 @@ fn a_submit_marks_ready_a_request_another_host_sent_back_not_a_draft() {
     );
     let ready = g.pull_from("unit/review");
     assert!(!ready.draft && ready.head == head, "{ready:?}");
-    assert!(g.of(n).is_empty(), "A took nothing in");
+    assert!(!g.took_in("a", n), "A took nothing in");
     while b.of(n).len() < 2 {
         assert!(
             Instant::now() < until,
@@ -7091,7 +7108,7 @@ fn a_submit_leaves_a_request_queued_on_another_host() {
         text(&out)
     );
     assert!(!g.pull_from("unit/queued").draft);
-    assert!(g.of(n).is_empty(), "A took nothing in");
+    assert!(!g.took_in("a", n), "A took nothing in");
     // B's next pass reads no draft mark, so withdraws nothing (C.5): its
     // one submission of `#n` goes on.
     b.discovery_passes();
