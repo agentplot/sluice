@@ -251,4 +251,23 @@ mod tests {
         assert_eq!(standing[1].since, "2026-11-09T10:00:00Z");
         assert_eq!(standing[1].runs, 1);
     }
+
+    /// Design D6 (the spec's "A run that passed nothing"): a run that
+    /// left nothing unkept and proved no pass ends nothing, and logs
+    /// nothing.
+    #[test]
+    fn a_run_that_proved_no_pass_ends_nothing() {
+        let mut standing = Vec::new();
+        note(
+            &mut standing,
+            "build-1",
+            &unkept(&["a:test"], ONE),
+            false,
+            "2026-11-09T09:16:40Z",
+        );
+        let before = standing.clone();
+        let failed = note(&mut standing, "build-1", &[], false, "2026-11-09T09:46:40Z");
+        assert!(failed.is_empty(), "{failed:?}");
+        assert_eq!(standing, before);
+    }
 }
