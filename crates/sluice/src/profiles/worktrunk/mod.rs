@@ -224,7 +224,7 @@ impl Driver for Worktrunk {
             match herdr::prompt(
                 pane,
                 socket,
-                &crate::words::notice(n.submission, &n.branch, &n.decided),
+                &sluice_core::notice(n.submission, &n.branch, &n.decided),
                 herdr::BOUND,
             )? {
                 herdr::Answer::Took => Delivery::Delivered {

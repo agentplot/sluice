@@ -9,6 +9,7 @@
 pub mod branches;
 pub mod equip;
 pub mod line;
+pub mod notice;
 pub mod ops;
 pub mod order;
 pub mod overview;
@@ -33,6 +34,7 @@ use crate::policy::{Policy, Rules, POLICY_PATH};
 use crate::records::{parse_lines, to_line, ResultLine, SetAside, SET_ASIDE_SCHEMA};
 use crate::refused::Refusal;
 
+pub use notice::notice;
 pub use ops::{
     Accepted, AmendRefusal, CopyDiffers, CopyHow, Forecast, Forecasted, GroupRequest, KeptOut,
     Lookup, Pending, PendingOutcome, Refused, Requester, Status, SubmitHead, SubmitRefusal,

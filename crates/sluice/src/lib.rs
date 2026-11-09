@@ -2943,7 +2943,7 @@ fn decided_document(sub: &Submission, decided: Option<&Decided>) -> Result<serde
     let mut doc = serde_json::to_value(sub)?;
     let own = sub.decided();
     if let Some(d) = decided.or(own.as_ref()) {
-        doc["notice"] = words::notice(sub.id, &sub.branch, d).into();
+        doc["notice"] = sluice_core::notice(sub.id, &sub.branch, d).into();
     }
     Ok(doc)
 }
@@ -4120,7 +4120,11 @@ fn inbox(s: &Sluice<'_>, worktree: &str, json: bool, out: &mut dyn Write) -> Res
             if i > 0 {
                 writeln!(out)?;
             }
-            writeln!(out, "{}", words::notice(sub.id, &o.branch, &o.decided))?;
+            writeln!(
+                out,
+                "{}",
+                sluice_core::notice(sub.id, &o.branch, &o.decided)
+            )?;
             report(s, sub, &o.branch, &names, None, None, false, out)?;
         }
     }
