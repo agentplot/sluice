@@ -232,6 +232,35 @@ pub fn waits_beside(behind: u64, why: BesideWhy) -> String {
     }
 }
 
+/// 51: the line `sluice inbox` ends an outcome with, naming the key to
+/// confirm it by; an expired one's opening with when it expired, still
+/// owed (weir 104; design D8).
+pub fn confirm_line(o: &sluice_core::OwedOutcome) -> String {
+    let confirm = format!(
+        "Confirm it once you have acted on it: sluice confirm {}",
+        o.key
+    );
+    match o.owed.expired {
+        true => format!(
+            "Expired at {}, still owed. {confirm}",
+            o.owed.delivery.expires_at()
+        ),
+        false => confirm,
+    }
+}
+
+/// 51: `sluice confirm`'s line for a key it confirmed: the key, and the
+/// outcome it names on its branch (design D7).
+pub fn confirmed(key: &str, id: u64, branch: &str) -> String {
+    let what = match key.rsplit_once(':').map(|(_, w)| w) {
+        Some("landed") => format!("#{id} landed on {branch}"),
+        Some("failed") => format!("#{id} failed on {branch}"),
+        Some("conflict") => format!("#{id} conflicts on {branch}"),
+        _ => format!("#{id} on {branch}"),
+    };
+    format!("confirmed {key} ({what})")
+}
+
 /// Could-not-run-1 115: a check that could not run, and why.
 pub fn could_not_run(task: &str, why: &str) -> String {
     format!("{task} could not run: {why}")

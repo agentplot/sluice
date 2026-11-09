@@ -1253,18 +1253,37 @@ fn inbox(s: &Scratch, dir: &Path, args: &[&str]) -> Output {
         .unwrap()
 }
 
-/// 51, 135: a landing nothing delivered is collected by `sluice inbox` in
-/// the worktree, opening with the round's notice, then as `sluice wait`
-/// reports it, and marked delivered to the worktree where no pane names
-/// its session; collected again, it prints nothing.
+/// The ways each hand-over of submission `n`'s outcome took, as its
+/// `delivery` gives them.
+fn handed(s: &Scratch, n: u64) -> Vec<String> {
+    s.status(n)["delivery"]["handed"]
+        .as_array()
+        .map(|all| {
+            all.iter()
+                .map(|h| h["by"].as_str().unwrap_or_default().to_string())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// 51, 135; inbox spec, "Collecting twice hands over twice": a landing no
+/// carrier handed over is collected by `sluice inbox` in the worktree,
+/// opening with the round's notice, then as `sluice wait` reports it, and
+/// ending with the line naming its key; it is handed over by `inbox`, the
+/// log saying it reached the worktree where no pane names its session,
+/// and stays owed, so a second collect prints it again and its delivery
+/// holds two hand-overs by `inbox` (record 0102).
 #[test]
-fn inbox_delivers_a_landing_once_and_marks_it_delivered_to_the_worktree() {
+fn inbox_hands_a_landing_over_until_it_is_confirmed() {
     let s = Scratch::new("wt-inbox");
     let a = s.session("a", &[("a.txt", "a\n")]);
     let n = id(&s.wt_submit(&a, &["--no-wait", "--json"]));
     s.land(n);
     let landed_as = s.status(n)["landed_as"].as_str().unwrap().to_string();
-    assert_eq!(s.status(n)["delivered"], serde_json::Value::Null);
+    let key = format!("{n}:landed");
+    assert_eq!(s.status(n)["delivery"]["key"], key.as_str());
+    assert_eq!(s.status(n)["delivery"]["state"], "owed");
+    assert!(handed(&s, n).is_empty(), "{}", s.status(n));
 
     let out = inbox(&s, &a, &[]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
@@ -1274,15 +1293,30 @@ fn inbox_delivers_a_landing_once_and_marks_it_delivered_to_the_worktree() {
     for word in [format!("#{n}"), "landed".into(), landed_as[..7].to_string()] {
         assert!(first.contains(&word), "{word} not in {said}");
     }
-    assert!(lines.any(|l| l.starts_with("passed · landed as")), "{said}");
+    assert!(
+        said.lines().any(|l| l.starts_with("passed · landed as")),
+        "{said}"
+    );
+    assert_eq!(
+        said.lines().last(),
+        Some(format!("Confirm it once you have acted on it: sluice confirm {key}").as_str()),
+        "{said}"
+    );
+    assert_eq!(handed(&s, n), ["inbox"]);
     let record = s.status(n);
-    assert!(record["delivered"].is_string(), "{record}");
+    assert_eq!(record["delivery"]["state"], "owed", "{record}");
+    assert!(record.get("delivered").is_none(), "{record}");
     let path = std::fs::canonicalize(&a).unwrap();
-    assert_eq!(record["delivered_to"], path.to_str().unwrap());
+    let lines = s.logged("handed");
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert_eq!(lines[0]["key"], key.as_str());
+    assert_eq!(lines[0]["by"], "inbox");
+    assert_eq!(lines[0]["to"], path.to_str().unwrap());
 
     let again = inbox(&s, &a, &[]);
     assert_eq!(again.status.code(), Some(0), "{}", text(&again));
-    assert_eq!(text(&again), "");
+    assert_eq!(String::from_utf8_lossy(&again.stdout), said);
+    assert_eq!(handed(&s, n), ["inbox", "inbox"]);
 }
 
 /// 51, 135: under `--json`, one document of the records collected, each

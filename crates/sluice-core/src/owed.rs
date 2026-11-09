@@ -455,3 +455,219 @@ fn readers_of(line: &Line, key: &str) -> Option<Vec<String>> {
         _ => None,
     })
 }
+
+/// 51: where a decided submission's delivery stands, as a document gives
+/// it (weir 104 to 107; design D13).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DeliveryView {
+    /// As the branch's deliveries hold it.
+    Kept {
+        key: String,
+        reader: String,
+        /// `owed`, `expired` or `done`.
+        state: &'static str,
+        recorded_at: String,
+        expires_at: String,
+        /// Each hand-over to the reader, its way and when, in order.
+        handed: Vec<(String, String)>,
+        /// When the reader confirmed it, once it has.
+        confirmed: Option<String>,
+        /// Whether any reader has confirmed under the reader's name.
+        known: bool,
+    },
+    /// Done and let go of: nothing else of it is kept (weir 107).
+    LetGo { key: String },
+}
+
+impl DeliveryView {
+    /// The document's `delivery`.
+    pub fn to_json(&self) -> serde_json::Value {
+        match self {
+            DeliveryView::LetGo { key } => serde_json::json!({ "key": key, "state": "done" }),
+            DeliveryView::Kept {
+                key,
+                reader,
+                state,
+                recorded_at,
+                expires_at,
+                handed,
+                confirmed,
+                known,
+            } => serde_json::json!({
+                "key": key,
+                "reader": reader,
+                "state": state,
+                "recorded_at": recorded_at,
+                "expires_at": expires_at,
+                "handed": handed
+                    .iter()
+                    .map(|(by, at)| serde_json::json!({ "by": by, "at": at }))
+                    .collect::<Vec<_>>(),
+                "confirmed": confirmed,
+                "known": known,
+            }),
+        }
+    }
+}
+
+/// 51: one reader with what it is owed on a branch, as the branch's status
+/// shows it (weir 104 to 106, 111; S77; design D13).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReaderView {
+    pub reader: String,
+    /// Whether any reader has confirmed under its name, on any branch.
+    pub known: bool,
+    pub deliveries: Vec<OwedView>,
+}
+
+/// 51: one delivery a reader has not confirmed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OwedView {
+    pub key: String,
+    /// The submission its key names.
+    pub id: Option<u64>,
+    pub expired: bool,
+    pub expires_at: String,
+    /// Each hand-over to the reader, its way and when, in order.
+    pub handed: Vec<(String, String)>,
+}
+
+impl OwedOutcome {
+    /// 51: its delivery as a hand-over `by` a way at `at` leaves it,
+    /// confirmed with it where `confirms` (design D8, D13).
+    pub fn left(&self, by: &str, at: &str, confirms: bool) -> DeliveryView {
+        let d = &self.owed.delivery;
+        let mut handed = handovers(&self.owed);
+        handed.push((by.into(), at.into()));
+        DeliveryView::Kept {
+            key: self.key.clone(),
+            reader: self.reader.clone(),
+            state: match (confirms, self.owed.expired) {
+                (true, _) => "done",
+                (false, true) => "expired",
+                (false, false) => "owed",
+            },
+            recorded_at: d.recorded_at().to_string(),
+            expires_at: d.expires_at().to_string(),
+            handed,
+            confirmed: confirms.then(|| at.to_string()),
+            known: self.known || confirms,
+        }
+    }
+}
+
+fn handovers(owed: &weir_delivery::OwedDelivery) -> Vec<(String, String)> {
+    owed.handovers
+        .iter()
+        .map(|h| (h.by.to_string(), h.at.to_string()))
+        .collect()
+}
+
+impl Sluice<'_> {
+    /// 51: where `sub`'s delivery stands, read from its branch's records
+    /// at this time: none for a submission by name, a withdrawn one or one
+    /// not decided, nor for one decided before deliveries were recorded
+    /// that is live still; one finished whose delivery the records no
+    /// longer hold was done and let go of (124; weir 107; design D13).
+    pub fn delivery_of(&self, sub: &Submission) -> Result<Option<DeliveryView>> {
+        if sub.from.by_name()
+            || !matches!(sub.state, State::Landed | State::Failed | State::Conflict)
+        {
+            return Ok(None);
+        }
+        let Some(key) = sub.notification() else {
+            return Ok(None);
+        };
+        let line = self.read_line(&sub.branch)?;
+        let records = line.deliveries();
+        let Some(delivery) = records.iter().find_map(|r| match r {
+            weir_delivery::Record::Delivery(d) if d.key().as_str() == key => Some(d),
+            _ => None,
+        }) else {
+            return Ok((!line.subs.contains_key(&sub.id)).then_some(DeliveryView::LetGo { key }));
+        };
+        let reader = delivery
+            .readers()
+            .first()
+            .map(|r| r.to_string())
+            .unwrap_or_default();
+        let at = self.now();
+        let owed = weir_delivery::owed(records, &at)
+            .map_err(|refused| anyhow!("reading {}'s deliveries: {refused}", sub.branch))?;
+        let mine = owed.readers.iter().find(|o| o.reader.as_str() == reader);
+        let standing = mine.and_then(|o| {
+            o.deliveries
+                .iter()
+                .find(|d| d.delivery.key().as_str() == key)
+        });
+        let confirmed = records.iter().find_map(|r| match r {
+            weir_delivery::Record::Confirmation(c)
+                if c.key.as_str() == key && c.reader.as_str() == reader =>
+            {
+                Some(c.at.to_string())
+            }
+            _ => None,
+        });
+        let handed = records
+            .iter()
+            .filter_map(|r| match r {
+                weir_delivery::Record::Handover(h)
+                    if h.key.as_str() == key && h.reader.as_str() == reader =>
+                {
+                    Some((h.by.to_string(), h.at.to_string()))
+                }
+                _ => None,
+            })
+            .collect();
+        let known = confirmed.is_some()
+            || mine.is_some_and(|o| o.known)
+            || self.known_readers().contains(&reader);
+        Ok(Some(DeliveryView::Kept {
+            state: match standing {
+                None => "done",
+                Some(d) if d.expired => "expired",
+                Some(_) => "owed",
+            },
+            recorded_at: delivery.recorded_at().to_string(),
+            expires_at: delivery.expires_at().to_string(),
+            key,
+            reader,
+            handed,
+            confirmed,
+            known,
+        }))
+    }
+
+    /// 51: each reader owed something on `branch` at this time, owed or
+    /// expired, with its deliveries and their hand-overs, in the order
+    /// weir's `owed` gives them; a reader known where any branch's store
+    /// knows its name (weir 104 to 106, 111; S77; design D13).
+    pub fn owed_on_branch(&self, branch: &str) -> Result<Vec<ReaderView>> {
+        let line = self.read_line(branch)?;
+        let owed = weir_delivery::owed(line.deliveries(), &self.now())
+            .map_err(|refused| anyhow!("reading {branch}'s deliveries: {refused}"))?;
+        if owed.readers.is_empty() {
+            return Ok(Vec::new());
+        }
+        let known = self.known_readers();
+        Ok(owed
+            .readers
+            .into_iter()
+            .map(|r| ReaderView {
+                known: r.known || known.contains(r.reader.as_str()),
+                reader: r.reader.to_string(),
+                deliveries: r
+                    .deliveries
+                    .iter()
+                    .map(|d| OwedView {
+                        key: d.delivery.key().to_string(),
+                        id: submission_of(d.delivery.key().as_str()),
+                        expired: d.expired,
+                        expires_at: d.delivery.expires_at().to_string(),
+                        handed: handovers(d),
+                    })
+                    .collect(),
+            })
+            .collect())
+    }
+}
