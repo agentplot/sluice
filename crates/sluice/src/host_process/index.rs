@@ -111,7 +111,7 @@ pub fn has_sluice(repository: &Path) -> Result<bool> {
         repository,
         std::env::current_exe()?,
         crate::instance::Instance::from_file(None, 1)?,
-        Rc::new(crate::retry::Policy::command()),
+        Rc::new(crate::retry::Policy::command().recording_where_set()),
     )?;
     if !sluice_seams::State::branches(&bound.state)?.is_empty() {
         return Ok(true);
@@ -137,7 +137,7 @@ pub fn in_play(repository: &Path) -> Result<bool> {
         repository,
         std::env::current_exe()?,
         crate::instance::Instance::from_file(None, 1)?,
-        Rc::new(crate::retry::Policy::round()),
+        Rc::new(crate::retry::Policy::round().recording_where_set()),
     )?;
     // A refusal leaves the branches as last fetched, as a pass's ask does.
     let _ = sluice_seams::State::refresh(&bound.state);

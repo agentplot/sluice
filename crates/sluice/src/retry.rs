@@ -34,6 +34,10 @@ use chrono::{DateTime, Local, Utc};
 /// or five pauses.
 pub const COMMAND_FOR: Duration = Duration::from_secs(30);
 
+/// Set to `record` in tests that run the binary, the retry policy's
+/// pauses are skipped ([`Policy::recording_where_set`]).
+pub const SLEEP_VAR: &str = "SLUICE_RETRY_SLEEP";
+
 /// The first pause, and the longest the backoff grows to before jitter.
 const FIRST: Duration = Duration::from_secs(1);
 const LONGEST: Duration = Duration::from_secs(30);
@@ -271,6 +275,17 @@ impl Policy {
         self.now = Rc::new(now);
         self.origin = ((self.now)(), Utc::now());
         self
+    }
+
+    /// `self`, [`Policy::recording`] where the process's environment sets
+    /// [`SLEEP_VAR`] to `record`, as a test that runs the binary does: for
+    /// every policy the process binds, a command's and each repository's
+    /// in sluice's host process alike (135).
+    pub fn recording_where_set(self) -> Policy {
+        match std::env::var(SLEEP_VAR).as_deref() {
+            Ok("record") => self.recording(),
+            _ => self,
+        }
     }
 
     /// `self`, skipping every pause and reading the time as if it had

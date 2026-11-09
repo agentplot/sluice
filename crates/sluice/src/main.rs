@@ -249,14 +249,8 @@ fn retry(cli: &Cli) -> Policy {
         Some(Command::Run { .. } | Command::Step { .. }) => Policy::round(),
         _ => Policy::command(),
     };
-    match std::env::var(RETRY_SLEEP_VAR).as_deref() {
-        Ok("record") => policy.recording(),
-        _ => policy,
-    }
+    policy.recording_where_set()
 }
-
-/// Set to `record` in tests, the retry policy's pauses are skipped.
-const RETRY_SLEEP_VAR: &str = "SLUICE_RETRY_SLEEP";
 
 /// Set to `record` in tests, the pauses between a run's or a wait's rounds
 /// are skipped, and the clock the command reads moved on by each.

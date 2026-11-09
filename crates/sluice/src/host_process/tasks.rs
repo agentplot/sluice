@@ -416,7 +416,10 @@ fn tick(watched: bool) -> Duration {
 
 fn repository(inbox: Inbox, room: Shared, asked_only: bool, named: Named) {
     let common = inbox.repository.clone();
-    let bound = match Bound::open(&open_dir(&common), Rc::new(crate::retry::Policy::round())) {
+    let bound = match Bound::open(
+        &open_dir(&common),
+        Rc::new(crate::retry::Policy::round().recording_where_set()),
+    ) {
         Ok(b) => b,
         Err(e) => {
             inbox.refuse(format!(
