@@ -1344,8 +1344,14 @@ pub fn run(
             }
             // 137, S64; record 0103 D2: a branch that takes pull requests
             // where each host keeps its records is refused alone, before
-            // anything is pushed or opened.
-            if let Some(refused) = no_intake(&s, &branch)? {
+            // anything is pushed or opened. A forecast beside a current
+            // reader reads it at that reader's revision, asking the remote
+            // nothing, as it forms (64, 129; rule core.27).
+            let at = match check {
+                true => read_revision(&s, host, &branch)?,
+                false => None,
+            };
+            if let Some(refused) = no_intake(&s, &branch, at)? {
                 told::tell(
                     out,
                     json,
@@ -4040,17 +4046,36 @@ fn delivering<'s, 'a>(
     }
 }
 
+/// 64, 129: `branch`'s revision in the document of the host's reader while
+/// that reader keeps its tick, where this host holds it, as
+/// [`forecast_read`] finds it; `None` otherwise.
+fn read_revision(s: &Sluice<'_>, host: &dyn exec::Host, branch: &str) -> Result<Option<Rev>> {
+    let found = host
+        .readers()
+        .and_then(|dir| reader::current(&dir, &host.repository()?, std::time::SystemTime::now()));
+    let Some(tip) = found
+        .ok()
+        .flatten()
+        .and_then(|doc| branch_in(&doc, branch)?.revision)
+    else {
+        return Ok(None);
+    };
+    Ok(s.seams().branch.holds(&tip)?.then_some(tip))
+}
+
 /// 137, S64; record 0103 D2: the refusal of `branch`, at its revision,
 /// for a pull request table on records each host keeps; `None` where its
-/// policy refuses it for no such table. Read at the revision the host
-/// holds, with no fetch, so a forecast beside a current reader asks the
-/// remote nothing (64, 129; rule core.27), and fetched only where the
-/// host holds none.
-fn no_intake(s: &Sluice<'_>, branch: &str) -> Result<Option<sluice_core::policy::NoIntake>> {
-    let branches = s.seams().branch;
-    let tip = match branches.held(branch)? {
+/// policy refuses it for no such table. Read at `at` where the caller
+/// forms on a revision it already holds, and otherwise at the branch as a
+/// round reads it (124, 129).
+fn no_intake(
+    s: &Sluice<'_>,
+    branch: &str,
+    at: Option<Rev>,
+) -> Result<Option<sluice_core::policy::NoIntake>> {
+    let tip = match at {
         Some(tip) => tip,
-        None => match branches.read(branch)? {
+        None => match s.seams().branch.read(branch)? {
             Some(tip) => tip,
             None => return Ok(None),
         },
