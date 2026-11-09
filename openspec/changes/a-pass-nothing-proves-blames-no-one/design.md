@@ -245,9 +245,17 @@ combination is served the same whichever cause it is.
 on, `FakeTests::proven` answers each ran pass of a run in `unkept` with
 `it passed, but nothing the run kept proves it ran: its record is not
 in <store>`, and leaves it out of `proven`. Fails, the tasks a check
-was failed by, and replays are left as today. `None` keeps proof again.
-The fakes name no moon (core.1). `World::forges(task)` still makes a
-key the tree does not bear out, which is in neither list.
+was failed by, and replays are left as today. A run that keeps no proof
+keeps no pass in the fakes' cache either, as a store a run could not
+write holds neither, so the runs that 115 counts come in a row. `None`
+keeps proof again. The fakes name no moon (core.1). `World::forges(task)`
+still makes a key the tree does not bear out, which is in neither list.
+
+- Rejected: caching a pass whatever proof the run kept. The next run
+  would replay it, find no trusted pass for its key (108) and run again,
+  so an unproven replay would sit between each pair of runs with no
+  outcome, a run that moon, whose cache is the store it could not
+  write, never makes.
 
 ## Risks / Trade-offs
 
