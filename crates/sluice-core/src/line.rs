@@ -191,22 +191,53 @@ impl Line {
         }));
     }
 
-    /// 50, 51: queue `item`, an outcome a round decided, to be pushed into
-    /// its submitter's session; every outcome a round decides is queued
-    /// here. A submission by name has no session and no worktree to carry
-    /// it, so nothing is queued for it: no driver is asked, no `pending`
-    /// line is logged, and it is never marked delivered, and once landed
-    /// it leaves the live records as any finished submission does (124,
-    /// 130; design D5; rule core.50).
-    pub fn push_outcome(&mut self, item: OutboxItem) {
-        if self
-            .subs
-            .get(&item.submission)
-            .is_some_and(|s| s.from.by_name())
-        {
-            return;
+    /// 50, 51: queue `item`, an outcome a round decided at `now`, to be
+    /// pushed into its submitter's session, and record its delivery, owed
+    /// to the submission's work for `span`: key the item's id, reader the
+    /// work as the submission recorded it, a worktree's branch or a
+    /// request's `pull/<n>`, and message its notice (weir 100, 101, 108;
+    /// record 0102; design D2). Every outcome a round decides is queued
+    /// here. A key the branch holds records nothing more, so a round that
+    /// runs again records it once. A submission by name has no session and
+    /// no worktree to carry it, so nothing is queued and nothing recorded
+    /// for it: no driver is asked, no `pending` line is logged, and once
+    /// landed it leaves the live records as any finished submission does
+    /// (124, 130; rule core.50).
+    pub fn push_outcome(
+        &mut self,
+        item: OutboxItem,
+        now: &str,
+        span: std::time::Duration,
+    ) -> Result<()> {
+        let Some(s) = self.subs.get(&item.submission) else {
+            self.doc.outbox.push(item);
+            return Ok(());
+        };
+        if s.from.by_name() {
+            return Ok(());
+        }
+        let notice = crate::notice(item.submission, &self.branch, &item.outcome.to_decided());
+        let recorded = weir_delivery::record(
+            &self.deliveries,
+            &item.id,
+            &notice,
+            &[s.from.worktree.as_str()],
+            now,
+            span.as_secs(),
+        )
+        .map_err(|refused| {
+            anyhow!(
+                "recording #{}'s outcome {} on {}: {refused}",
+                item.submission,
+                item.id,
+                self.branch
+            )
+        })?;
+        if let weir_delivery::Recorded::Add(records) = recorded {
+            self.add_deliveries(&records);
         }
         self.doc.outbox.push(item);
+        Ok(())
     }
 
     pub fn sub(&self, id: u64) -> Result<&Submission> {

@@ -485,7 +485,7 @@ impl Sluice<'_> {
                                 covered_by,
                             },
                         };
-                        l.push_outcome(item);
+                        l.push_outcome(item, &now, self.peer.expire_after)?;
                     }
                     l.log(
                         &now,
@@ -1191,15 +1191,19 @@ impl Sluice<'_> {
                 s.landed_as = Some(to.clone());
                 s.landed_elsewhere = true;
                 s.held = None;
-                line.push_outcome(OutboxItem {
-                    id: format!("{id}:landed"),
-                    submission: id,
-                    outcome: DecidedRecord::Landed {
-                        landed_as: to.clone(),
-                        beside: false,
-                        covered_by: None,
+                line.push_outcome(
+                    OutboxItem {
+                        id: format!("{id}:landed"),
+                        submission: id,
+                        outcome: DecidedRecord::Landed {
+                            landed_as: to.clone(),
+                            beside: false,
+                            covered_by: None,
+                        },
                     },
-                });
+                    now,
+                    self.peer.expire_after,
+                )?;
             }
             line.log(now, Event::FoundLanded { ids, to });
         }
@@ -1967,7 +1971,7 @@ impl Sluice<'_> {
                     prefix.pop();
                     let work = |id| line.sub(id).map(|s| (s.head.clone(), s.from.clone()));
                     let with = self.contested(&work, &base, &ahead, &head)?;
-                    self.remove_conflict(line, id, paths, with, now);
+                    self.remove_conflict(line, id, paths, with, now)?;
                     removed = true;
                 }
             }
@@ -2004,7 +2008,7 @@ impl Sluice<'_> {
                 continue;
             }
             if c.state.failed() {
-                self.blame(line, &c, rules, now);
+                self.blame(line, &c, rules, now)?;
                 removed = true;
             }
             break;
@@ -2067,7 +2071,7 @@ impl Sluice<'_> {
         paths: Vec<String>,
         with: Vec<Contested>,
         now: &str,
-    ) {
+    ) -> Result<()> {
         info!(monotonic_counter.sluice.conflicts = 1u64, sluice.branch = %line.branch);
         let s = line.sub_mut(id);
         s.state = State::Conflict;
@@ -2083,16 +2087,20 @@ impl Sluice<'_> {
                 with: with.iter().map(|c| c.id).collect(),
             },
         );
-        line.push_outcome(OutboxItem {
-            id: format!("{id}:conflict"),
-            submission: id,
-            outcome: DecidedRecord::Conflict { paths, with },
-        });
+        line.push_outcome(
+            OutboxItem {
+                id: format!("{id}:conflict"),
+                submission: id,
+                outcome: DecidedRecord::Conflict { paths, with },
+            },
+            now,
+            self.peer.expire_after,
+        )
     }
 
     /// 17, 20, 21, 13: blame the newest submission of a failed
     /// candidate, tell its session alone, and test fewer at once.
-    fn blame(&self, line: &mut Line, c: &Candidate, rules: &Rules, now: &str) {
+    fn blame(&self, line: &mut Line, c: &Candidate, rules: &Rules, now: &str) -> Result<()> {
         let id = c.newest();
         let _span = info_span!(
             "sluice.blame",
@@ -2118,27 +2126,32 @@ impl Sluice<'_> {
                 combination: c.revision.clone(),
             },
         );
-        line.push_outcome(OutboxItem {
-            id: format!("{id}:failed"),
-            submission: id,
-            outcome: DecidedRecord::Failed {
-                failed: c.failed.iter().map(|f| f.task.clone()).collect(),
-                combination: c.revision.clone(),
-                submissions: c.submissions.clone(),
-                timed_out: c.state == CandidateState::TimedOut,
-                logs: c
-                    .failed
-                    .iter()
-                    .filter_map(|f| {
-                        f.log.clone().map(|at| TaskLog {
-                            task: f.task.clone(),
-                            text: at,
+        line.push_outcome(
+            OutboxItem {
+                id: format!("{id}:failed"),
+                submission: id,
+                outcome: DecidedRecord::Failed {
+                    failed: c.failed.iter().map(|f| f.task.clone()).collect(),
+                    combination: c.revision.clone(),
+                    submissions: c.submissions.clone(),
+                    timed_out: c.state == CandidateState::TimedOut,
+                    logs: c
+                        .failed
+                        .iter()
+                        .filter_map(|f| {
+                            f.log.clone().map(|at| TaskLog {
+                                task: f.task.clone(),
+                                text: at,
+                            })
                         })
-                    })
-                    .collect(),
+                        .collect(),
+                },
             },
-        });
+            now,
+            self.peer.expire_after,
+        )?;
         line.doc.window = (line.doc.window / 2).clamp(1, rules.parallel);
+        Ok(())
     }
 
     /// 140, 23: the revision whose tree `c` lands as: its tested revision

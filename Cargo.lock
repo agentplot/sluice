@@ -3315,6 +3315,7 @@ dependencies = [
  "sluice-core",
  "sluice-fakes",
  "sluice-seams",
+ "weir-delivery",
 ]
 
 [[package]]
