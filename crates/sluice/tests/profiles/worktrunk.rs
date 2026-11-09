@@ -930,7 +930,10 @@ fn a_first_submit_under_a_time_limit_submits_then_follows() {
     );
     assert!(a.join("slow").exists(), "{}", text(&out));
 
-    let out = s.wt_submit(&a, &["--timeout", "9m", "--json"]);
+    // Its passes asked, the wait's clock moves on three seconds at each
+    // (design D13), so its limit outlasts the slow check's five seconds
+    // however quickly the host process passes.
+    let out = s.wt_submit(&a, &["--timeout", "1h", "--json"]);
     assert_eq!(out.status.code(), Some(sluice::LANDED), "{}", text(&out));
     let record: serde_json::Value =
         serde_json::from_slice(&out.stdout).unwrap_or_else(|_| panic!("no JSON: {}", text(&out)));
@@ -1083,9 +1086,11 @@ fn a_commit_while_followed_keeps_the_worktree() {
     let s = Scratch::new("wt-again-commit");
     let a = s.session("a", &[("slow", "x\n")]);
     let one = id(&s.wt_submit(&a, &["--no-wait", "--json"]));
+    // A limit that outlasts the slow check, the wait's clock moving on
+    // at each pass it asks (design D13).
     let child = s
         .command("wt", &a)
-        .args(["submit", "bolt/x", "--timeout", "9m"])
+        .args(["submit", "bolt/x", "--timeout", "1h"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
