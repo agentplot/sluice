@@ -31,6 +31,10 @@ readable with plain tools whether or not sluice is running.
                        while this host's rounds can't read the branch's remote:
                        what they couldn't read, since when, for how many rounds,
                        and which of it the log holds yet
+  .intake/main.json    while this host can't take in a branch's pull requests:
+                       what its intake asked of GitHub and the words it was
+                       refused with, since when, for how many intakes, and
+                       which of it the log holds yet
   .places/<checkout>.json
                        a checkout's record: its kind, path, branch, ports, the
                        block of ports it holds on the host and, for a
@@ -286,7 +290,9 @@ logs it kept, is in `.git/sluice-remote/<remote>/`. A result moon
 replayed is kept there too: a replay is nobody's observation, so nobody
 signs it. Beside them, `refused/<branch>.json` holds what this host's
 rounds couldn't read of the remote while that lasts, as `.refused/` does
-for a branch whose state is on the host.
+for a branch whose state is on the host, and `intake/<branch>.json` what
+this host couldn't take in of the branch's pull requests on GitHub, as
+`.intake/` does.
 
 Read any of it with git, on any host:
 
@@ -585,6 +591,19 @@ that host's rounds it refused:
 ```json
 {"schema":"sluice/log@1","event":"read-refused","host":"build-1","remote":"origin","asked":"refs/heads/main","said":"remote: Repository not found.\nfatal: repository 'https://github.com/acme/app.git/' not found"}
 {"schema":"sluice/log@1","event":"read-again","host":"build-1","remote":"origin","since":"2026-10-26T09:16:40Z","stood":1800,"rounds":12}
+```
+
+The host that keeps a branch logs its intake's refusals the same way,
+marked `"intake":true`: once for each request or list it asked GitHub
+for, `pull/12` or `main's pull requests`, and the words GitHub refused it
+with, while they stand, and `read-again` so marked at the first intake
+that meets none. `rounds` then counts its intakes. A round's own lines
+carry no `intake`, and a sluice that doesn't know the field reads both
+as it reads any:
+
+```json
+{"schema":"sluice/log@1","event":"read-refused","host":"build-1","remote":"origin","asked":"main's pull requests","said":"502 Bad Gateway","intake":true}
+{"schema":"sluice/log@1","event":"read-again","host":"build-1","remote":"origin","since":"2026-11-08T09:16:40Z","stood":720,"rounds":12,"intake":true}
 ```
 
 `protected` is logged once for each command a host's protection

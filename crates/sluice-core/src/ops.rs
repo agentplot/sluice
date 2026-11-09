@@ -420,6 +420,9 @@ pub struct Status {
     /// 133: this host's refusal of the branch's remote, while it stands
     /// (record 0061).
     pub refused: Option<Refused>,
+    /// 128, 133: this host's refusal of the branch's intake, its pull
+    /// requests' reads of the forge, while it stands (record 0103 D7).
+    pub intake_refused: Option<Refused>,
     /// 148: every host's causes of writes the protection refused that
     /// stand now, newest last refusal first (design D5).
     pub refused_writes: Vec<crate::records::RefusedWrite>,
@@ -1410,10 +1413,8 @@ impl Sluice<'_> {
         };
         let mut warnings = policy.map(|p| p.warnings).unwrap_or_default();
         warnings.extend(kept_out.iter().map(|t| kept_out_warning(branch, t)));
-        let refused = self
-            .refusal(branch)?
-            .filter(|r| r.ended.is_none())
-            .and_then(|r| {
+        let standing = |r: Option<crate::refused::Refusal>| {
+            r.filter(|r| r.ended.is_none()).and_then(|r| {
                 let latest = r.latest()?.clone();
                 Some(Refused {
                     remote: r.remote,
@@ -1422,7 +1423,10 @@ impl Sluice<'_> {
                     since: r.since,
                     rounds: r.rounds,
                 })
-            });
+            })
+        };
+        let refused = standing(self.refusal(branch)?);
+        let intake_refused = standing(self.intake_refusal(branch)?);
         let refused_writes =
             crate::refused_writes::standing(&line.doc.refused_writes, || self.now());
         let on_remote =
@@ -1457,6 +1461,7 @@ impl Sluice<'_> {
             warnings,
             stale: self.seams.state.stale(branch).map(|r| r.remote),
             refused,
+            intake_refused,
         })
     }
 }

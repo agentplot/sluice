@@ -1630,6 +1630,51 @@ fn a_repository_github_no_longer_finds_is_said_once_with_what_to_do() {
     );
 }
 
+/// remote-read-log, "Status during an intake refusal": host A's intake of
+/// main has been refused for twelve passes. `sluice status main` on A says
+/// above the queue that it could not take in main's pull requests since the
+/// first, for twelve rounds, with GitHub's words, and `--json` carries
+/// `intake_refused` with `remote`, `asked`, `said`, `since` and `rounds`;
+/// once it ended, status shows nothing of it (133; record 0103 D7).
+#[test]
+fn status_shows_this_hosts_standing_intake_refusal() {
+    let g = OnGitHub::new("intake-status", "");
+    g.named("a", "");
+    g.discovery("10s");
+    g.on_main();
+    let out = g.skipping(g.repo.dir(), &["run", "--rounds", "1"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(g.keeper().as_deref(), Some("a"), "{}", text(&out));
+    g.gh.trouble(
+        "GET",
+        "/repos/o/r/pulls?state=open",
+        usize::MAX,
+        github::Trouble::Status(422),
+    );
+    g.discovery_passes();
+    let out = g.skipping(g.repo.dir(), &["run", "--rounds", "12"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let doc = g.status_document();
+    let r = &doc["intake_refused"];
+    assert_eq!(
+        (&r["remote"], &r["asked"], &r["rounds"]),
+        (&"origin".into(), &"main's pull requests".into(), &12.into()),
+        "{doc}"
+    );
+    assert!(r["said"].as_str().unwrap().contains("422"), "{doc}");
+    let since = r["since"].as_str().expect("since").to_string();
+    let said = g.status_words();
+    let line =
+        format!("this host could not take in main's pull requests since {since}, 12 rounds: ");
+    assert!(said.contains(&line), "{said}");
+    g.gh.calm();
+    g.discovery_passes();
+    let out = g.skipping(g.repo.dir(), &["run", "--rounds", "1"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(g.status_document()["intake_refused"].is_null());
+    assert!(!g.status_words().contains("could not take in"));
+}
+
 /// pull-request-intake, "A standing intake failure is said once for each
 /// cause and host": GitHub serves no head for a pull request into main,
 /// which host A keeps, for twenty passes of A's host process, which

@@ -5299,6 +5299,9 @@ fn write_status(
     if let Some(refused) = &status.refused {
         writeln!(out, "{}", refused_lines(refused))?;
     }
+    if let Some(refused) = &status.intake_refused {
+        writeln!(out, "{}", intake_refused_lines(&status.branch, refused))?;
+    }
     write_refused_writes(status, out)?;
     for t in testing {
         writeln!(out, "  {t}")?;
@@ -5416,6 +5419,9 @@ fn status_json(status: &Status, submissions: &[Submission]) -> Result<serde_json
     if let Some(refused) = &status.refused {
         json["refused"] = serde_json::json!(refused);
     }
+    if let Some(refused) = &status.intake_refused {
+        json["intake_refused"] = serde_json::json!(refused);
+    }
     Ok(json)
 }
 
@@ -5514,6 +5520,33 @@ fn refused_lines(refused: &sluice_core::Refused) -> String {
         "this host could not read {} from {} since {}, {rounds}: {}",
         refused.asked,
         refused.remote,
+        refused.since,
+        said.next().unwrap_or_default()
+    );
+    for line in said {
+        text.push_str(&format!("\n  {line}"));
+    }
+    text
+}
+
+/// 128, 133; record 0103 D7: this host's refusal of the branch's intake,
+/// what it asked and the forge's words, on as many lines as the forge gave
+/// them: `this host could not take in main's pull requests since <t>, 12
+/// rounds: pull/12: <said>`, with no `pull/<n>` where the whole intake
+/// failed.
+fn intake_refused_lines(branch: &str, refused: &sluice_core::Refused) -> String {
+    let rounds = match refused.rounds {
+        1 => "1 round".to_string(),
+        n => format!("{n} rounds"),
+    };
+    let whole = format!("{branch}'s pull requests");
+    let asked = match refused.asked == whole {
+        true => String::new(),
+        false => format!("{}: ", refused.asked),
+    };
+    let mut said = refused.said.lines();
+    let mut text = format!(
+        "this host could not take in {whole} since {}, {rounds}: {asked}{}",
         refused.since,
         said.next().unwrap_or_default()
     );
