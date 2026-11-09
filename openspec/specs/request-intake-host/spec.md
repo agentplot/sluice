@@ -1,9 +1,10 @@
 # request-intake-host Specification
 
 ## Purpose
-Which one host takes a branch's pull requests in, by the instance that
-keeps the branch or the intake mark on its remote, and how a wait on any
-other host follows its pull request on GitHub (137; rule core.33).
+Which one host takes a branch's pull requests in, the instance that
+keeps the branch on its remote, and how any other host follows the pull
+requests it submitted or waits on, by GitHub's word and sluice's check on
+their heads, and shows them (137; rule core.33; record 0103).
 
 ## Requirements
 
