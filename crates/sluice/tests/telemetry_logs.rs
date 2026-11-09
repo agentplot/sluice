@@ -670,6 +670,29 @@ fn with_traces_off_metrics_and_logs_still_go_to_the_endpoint() {
     sent_to(&seen, &["/v1/metrics", "/v1/logs"], "/v1/traces");
 }
 
+/// `OTEL_METRICS_EXPORTER=none` turns metrics alone off.
+#[test]
+fn with_metrics_off_traces_and_logs_still_go_to_the_endpoint() {
+    if !alone("with_metrics_off_traces_and_logs_still_go_to_the_endpoint") {
+        return;
+    }
+    std::env::set_var("OTEL_METRICS_EXPORTER", "none");
+    let seen = sent(Logs::Summary);
+    sent_to(&seen, &["/v1/traces", "/v1/logs"], "/v1/metrics");
+}
+
+/// `OTEL_LOGS_EXPORTER=none` turns logs alone off, whatever
+/// `SLUICE_OTEL_LOGS` asks.
+#[test]
+fn with_logs_off_traces_and_metrics_still_go_to_the_endpoint() {
+    if !alone("with_logs_off_traces_and_metrics_still_go_to_the_endpoint") {
+        return;
+    }
+    std::env::set_var("OTEL_LOGS_EXPORTER", "none");
+    let seen = sent(Logs::Summary);
+    sent_to(&seen, &["/v1/traces", "/v1/metrics"], "/v1/logs");
+}
+
 /// With traces off no span is made, so a failure's record goes with no
 /// trace or span id.
 #[test]
