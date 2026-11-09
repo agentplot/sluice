@@ -39,8 +39,8 @@ use reader::{Driver, Drives, Reader};
 use sluice_core::overview::{in_queue, BranchView, Held};
 use sluice_core::records::{Beside, BranchHold, CopyBehind, Event, FailedTask, State, Submission};
 use sluice_core::{
-    Accepted, AmendRefusal, Clock, CopyDiffers, Forecast, Forecasted, GroupRequest, Lookup,
-    Pending, Requester, Seams, Serves, Sluice, Status, Step, SubmitHead, SubmitRefusal,
+    Accepted, AmendRefusal, Clock, Collect, CopyDiffers, Forecast, Forecasted, GroupRequest,
+    Lookup, Owed, Requester, Seams, Serves, Sluice, Status, Step, SubmitHead, SubmitRefusal,
     SubmitRequest, Unread, WithdrawRefusal, Withdrew,
 };
 use sluice_seams::{Decided, Outcome, Rev, SessionPlace, Submitter};
@@ -2981,17 +2981,13 @@ fn report_delivering(
     out: &mut dyn Write,
 ) -> Result<i32> {
     let delivering = worktree.and_then(|w| delivering(s, w, &sub));
-    let shown = delivering
-        .as_ref()
-        .and_then(|(pending, to)| pending.marked(to).pop())
-        .unwrap_or(sub);
-    let code = report(s, &shown, branch, names, by, copy, json, out)?;
+    let code = report(s, &sub, branch, names, by, copy, json, out)?;
     out.flush()?;
-    if let Some((pending, to)) = delivering {
-        if let Err(e) = pending.mark(&to) {
+    if let Some((owed, to)) = delivering {
+        if let Err(e) = owed.hand("wait", &to, false) {
             telemetry::error(&format!(
-                "sluice: could not mark #{} delivered, so it stays pending for sluice inbox: {e:#}",
-                shown.id
+                "sluice: could not record #{}'s hand-over, so sluice inbox hands it over: {e:#}",
+                sub.id
             ));
         }
     }
@@ -4087,8 +4083,7 @@ fn inbox(s: &Sluice<'_>, worktree: &str, json: bool, out: &mut dyn Write) -> Res
         }
         return Ok(0);
     };
-    let pending = s.pending(&me)?;
-    let marked = pending.marked(&to);
+    let pending = s.owed(&me, Collect::All)?;
     for u in &pending.unread {
         telemetry::error(&format!(
             "sluice: could not read {}'s records: {}",
@@ -4101,8 +4096,7 @@ fn inbox(s: &Sluice<'_>, worktree: &str, json: bool, out: &mut dyn Write) -> Res
         let outcomes = pending
             .outcomes
             .iter()
-            .zip(&marked)
-            .map(|(o, sub)| decided_document(sub, Some(&o.decided)))
+            .map(|o| decided_document(&o.submission, Some(&o.decided)))
             .collect::<Result<Vec<_>>>()?;
         let mut doc = serde_json::json!({ "outcomes": outcomes });
         if !pending.unread.is_empty() {
@@ -4116,7 +4110,8 @@ fn inbox(s: &Sluice<'_>, worktree: &str, json: bool, out: &mut dyn Write) -> Res
         writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
     } else {
         let names = BTreeMap::new();
-        for (i, (o, sub)) in pending.outcomes.iter().zip(&marked).enumerate() {
+        for (i, o) in pending.outcomes.iter().enumerate() {
+            let sub = &o.submission;
             if i > 0 {
                 writeln!(out)?;
             }
@@ -4130,7 +4125,7 @@ fn inbox(s: &Sluice<'_>, worktree: &str, json: bool, out: &mut dyn Write) -> Res
     }
     out.flush()?;
     let unread = !pending.unread.is_empty();
-    pending.mark(&to)?;
+    pending.hand("inbox", &to, false)?;
     Ok(if unread { INTERNAL } else { 0 })
 }
 
@@ -4162,17 +4157,19 @@ fn delivering<'s, 'a>(
     s: &'s Sluice<'a>,
     worktree: &str,
     sub: &Submission,
-) -> Option<(Pending<'s, 'a>, String)> {
-    let found = recipient(s, worktree).and_then(|r| {
-        r.map(|(me, to)| Ok((s.pending_one(&sub.branch, sub.id, &me)?, to)))
-            .transpose()
-    });
+) -> Option<(Owed<'s, 'a>, String)> {
+    let one = || Collect::One {
+        branch: sub.branch.clone(),
+        id: sub.id,
+    };
+    let found = recipient(s, worktree)
+        .and_then(|r| r.map(|(me, to)| Ok((s.owed(&me, one())?, to))).transpose());
     match found {
         Ok(Some((pending, to))) if !pending.outcomes.is_empty() => Some((pending, to)),
         Ok(_) => None,
         Err(e) => {
             telemetry::error(&format!(
-                "sluice: could not read whether #{} is delivered, so it stays pending for sluice inbox: {e:#}",
+                "sluice: could not read whether #{} is owed here, so sluice inbox hands it over: {e:#}",
                 sub.id
             ));
             None

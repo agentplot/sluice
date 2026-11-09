@@ -1,54 +1,93 @@
-//! A session collecting its pending outcomes, as `sluice inbox` does: 51,
-//! 135; ADR 0068, record 0070.
+//! A session collecting what its submissions are owed, as `sluice inbox`
+//! does: each outcome handed over and owed until its reader confirms it:
+//! 51, 135; ADR 0068, records 0070, 0102.
 
 use anyhow::{bail, Result};
 use sluice_conformance::{policy, Harness, Rig, BRANCH};
+use sluice_core::line::Line;
 use sluice_core::records::{Event, State};
-use sluice_core::{Sluice, SubmitHead, SubmitRequest};
-use sluice_seams::{Delivery, Driver, Notification, Rev, Session, Submitter};
+use sluice_core::{Collect, Sluice, SubmitHead, SubmitRequest};
+use sluice_seams::{Delivery, Driver, Notification, Rev, Session, Submitter, Written};
 
-/// The session in place `worktree` collects its pending outcomes and has
-/// each marked delivered to it, as `sluice inbox` does: to the session its
-/// driver names, else its worktree's path, else its branch. Returns what it
-/// collected, by branch and submission.
-fn collect(h: &Harness, worktree: &str) -> Vec<(String, u64)> {
-    let s = h.sluice();
-    let me = s.seams().driver.session(worktree).unwrap().from;
-    let to = me
-        .session
+/// Where a collect in place `worktree` says it reached: the session its
+/// driver names, else its worktree's path, else its branch.
+fn reached(me: &Submitter) -> String {
+    me.session
         .clone()
         .or(me.path.clone())
-        .unwrap_or(me.worktree.clone());
-    let pending = s.pending(&me).unwrap();
-    assert!(pending.unread.is_empty(), "{:?}", pending.unread);
-    let collected = pending
+        .unwrap_or(me.worktree.clone())
+}
+
+/// The session in place `worktree` collects what `collect` takes of its
+/// owed outcomes and has each handed over to it by `inbox`, confirming on
+/// receipt where `confirms`, as `sluice inbox` does. Returns what it
+/// collected, by branch and submission.
+fn collect_as(h: &Harness, worktree: &str, collect: Collect, confirms: bool) -> Vec<(String, u64)> {
+    let s = h.sluice();
+    let me = s.seams().driver.session(worktree).unwrap().from;
+    let owed = s.owed(&me, collect).unwrap();
+    assert!(owed.unread.is_empty(), "{:?}", owed.unread);
+    let collected = owed
         .outcomes
         .iter()
         .map(|o| (o.branch.clone(), o.submission.id))
         .collect();
-    pending.mark(&to).unwrap();
+    owed.hand("inbox", &reached(&me), confirms).unwrap();
     collected
 }
 
-fn delivered_lines(h: &Harness, branch: &str, id: u64) -> Vec<String> {
+/// `sluice inbox` in place `worktree`.
+fn collect(h: &Harness, worktree: &str) -> Vec<(String, u64)> {
+    collect_as(h, worktree, Collect::All, false)
+}
+
+/// The `handed` lines of `branch`'s log for submission `id`, by key, way
+/// and where each reached.
+fn handed_lines(h: &Harness, branch: &str, id: u64) -> Vec<(String, String, String)> {
     let s = h.sluice();
     let snap = s.seams().state.read(branch).unwrap();
-    sluice_core::line::Line::read_log(&snap)
+    Line::read_log(&snap)
         .unwrap()
         .into_iter()
         .filter_map(|l| match l.event {
-            Event::Delivered {
-                id: delivered,
-                notification,
-            } if delivered == id => Some(notification),
+            Event::Handed {
+                id: handed,
+                key,
+                by,
+                to,
+            } if handed == id => Some((key, by, to)),
             _ => None,
         })
         .collect()
 }
 
-/// satisfies: 51, 135
+/// The keys of `branch`'s `handed` lines for submission `id`.
+fn handed_keys(h: &Harness, branch: &str, id: u64) -> Vec<String> {
+    handed_lines(h, branch, id)
+        .into_iter()
+        .map(|(key, _, _)| key)
+        .collect()
+}
+
+/// `reader` confirms the outcome under `key` on `BRANCH`, as `sluice
+/// confirm` does.
+fn confirm(h: &Harness, key: &str, reader: &str) {
+    let s = h.sluice();
+    let state = s.seams().state;
+    let _lock = state.lock(BRANCH).unwrap().expect("the lock");
+    let mut line = Line::load(BRANCH, state.read(BRANCH).unwrap()).unwrap();
+    if let weir_delivery::Confirmed::Add(add) =
+        weir_delivery::confirm(line.deliveries(), key, reader, "2026-10-11T10:00:00Z").unwrap()
+    {
+        line.add_deliveries(&add);
+    }
+    let written = state.write(BRANCH, line.version, line.changes()).unwrap();
+    assert!(matches!(written, Written::Written(_)));
+}
+
+/// satisfies: 51, 135, S76; scenario "Collecting twice hands over twice"
 #[test]
-fn a_landing_collected_is_marked_delivered_to_the_collector_once() {
+fn each_outcome_collected_is_handed_over_and_stays_owed() {
     let h = Harness::bolt();
     h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
     h.w().in_session("unit/a", "pane-1");
@@ -56,33 +95,104 @@ fn a_landing_collected_is_marked_delivered_to_the_collector_once() {
     let one = h.submit("unit/a");
     h.settle();
     assert_eq!(h.sub(one).state, State::Landed);
-    assert_eq!(h.sub(one).delivered, None, "the round delivered nothing");
+    let key = format!("{one}:landed");
+    assert!(h.handed(&key).is_empty(), "the round handed nothing over");
 
-    // The session comes back in another pane and collects.
+    // The session comes back in another pane and collects, twice.
     h.w().in_session("unit/a", "pane-2");
     assert_eq!(collect(&h, "unit/a"), [(BRANCH.to_string(), one)]);
-    let s = h.sub(one);
-    assert!(s.delivered.is_some());
-    assert_eq!(s.delivered_to.as_deref(), Some("pane-2"));
-    assert_eq!(delivered_lines(&h, BRANCH, one), [format!("{one}:landed")]);
-
-    assert!(
-        collect(&h, "unit/a").is_empty(),
-        "collecting again finds nothing"
+    assert_eq!(collect(&h, "unit/a"), [(BRANCH.to_string(), one)]);
+    assert_eq!(h.handed(&key), ["inbox", "inbox"]);
+    assert!(h.confirmed(&key).is_empty());
+    assert_eq!(
+        handed_lines(&h, BRANCH, one),
+        [
+            (key.clone(), "inbox".into(), "pane-2".into()),
+            (key.clone(), "inbox".into(), "pane-2".into()),
+        ]
     );
-    assert_eq!(delivered_lines(&h, BRANCH, one).len(), 1);
+
+    // Confirmed, it is collected no more.
+    confirm(&h, &key, "unit/a");
+    assert!(collect(&h, "unit/a").is_empty());
+    assert_eq!(h.handed(&key).len(), 2);
 }
 
-/// satisfies: 51, 135
+/// satisfies: 51, 135, S76; scenario "A session that stopped before it
+/// acted collects again"
 #[test]
-fn an_outcome_the_round_delivered_is_not_collected() {
+fn an_outcome_the_round_pushed_is_collected_until_it_is_confirmed() {
     let h = Harness::bolt();
     h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
     h.w().in_session("unit/a", "pane-1");
     let one = h.submit("unit/a");
     h.settle();
-    assert_eq!(h.sub(one).delivered_to.as_deref(), Some("pane-1"));
+    let key = format!("{one}:landed");
+    assert_eq!(h.handed(&key), ["notice"]);
+    assert_eq!(collect(&h, "unit/a"), [(BRANCH.to_string(), one)]);
+    assert_eq!(h.handed(&key), ["notice", "inbox"]);
+}
+
+/// satisfies: 51, 135; scenario "A caller that keeps its outcomes"
+#[test]
+fn confirm_confirms_what_the_collect_hands_over() {
+    let h = Harness::bolt();
+    h.fails_with("a:test", "a/lib", "broken");
+    h.work("unit/a", "agent-a", &[("a/lib", Some("broken"))]);
+    h.w().not_delivering("agent-a");
+    let blamed = h.submit("unit/a");
+    h.settle();
+    assert_eq!(h.sub(blamed).state, State::Failed);
+
+    let key = format!("{blamed}:failed");
+    assert_eq!(
+        collect_as(&h, "unit/a", Collect::All, true),
+        [(BRANCH.to_string(), blamed)]
+    );
+    assert_eq!(h.handed(&key), ["inbox"]);
+    assert_eq!(h.confirmed(&key), ["unit/a"]);
+    assert!(h.events().iter().any(|e| matches!(
+        e,
+        Event::Confirmed { id, reader, by, .. }
+            if *id == blamed && reader == "unit/a" && by == "inbox"
+    )));
     assert!(collect(&h, "unit/a").is_empty());
+}
+
+/// satisfies: 51, 135; scenarios "A notice already pushed" and "A new
+/// outcome with an older one owed"
+#[test]
+fn new_hands_over_only_what_no_way_has_handed_over() {
+    let h = Harness::bolt();
+    h.fails_with("b:test", "b/lib", "broken");
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    h.w().in_session("unit/a", "pane-1");
+    let pushed = h.submit("unit/a");
+    h.settle();
+    assert_eq!(h.handed(&format!("{pushed}:landed")), ["notice"]);
+    assert!(
+        collect_as(&h, "unit/a", Collect::New, false).is_empty(),
+        "the notice was pushed"
+    );
+    assert_eq!(h.handed(&format!("{pushed}:landed")), ["notice"]);
+
+    // An older one handed over by a collect, and a new one by nothing.
+    h.w().not_delivering("agent-a");
+    h.work_on("unit/a", &h.tip(), &[("b/lib", Some("broken"))]);
+    let blamed = h.submit("unit/a");
+    h.settle();
+    assert_eq!(h.sub(blamed).state, State::Failed);
+    assert_eq!(
+        collect_as(&h, "unit/a", Collect::New, false),
+        [(BRANCH.to_string(), blamed)]
+    );
+    assert_eq!(h.handed(&format!("{blamed}:failed")), ["inbox"]);
+    assert!(collect_as(&h, "unit/a", Collect::New, false).is_empty());
+    assert_eq!(
+        collect(&h, "unit/a"),
+        [(BRANCH.to_string(), pushed), (BRANCH.to_string(), blamed)],
+        "each still owed"
+    );
 }
 
 /// The fakes' driver, whose next notify fails as sluice's own failure
@@ -135,14 +245,17 @@ fn an_outcome_collected_is_not_pushed_by_the_next_round() {
 
     h.w().in_session("unit/a", "pane-2");
     assert_eq!(collect(&h, "unit/a"), [(BRANCH.to_string(), one)]);
-    assert!(h.doc().outbox.is_empty());
     h.settle();
+    assert!(h.doc().outbox.is_empty(), "the round let it go");
     assert!(
         h.w().delivered_to("agent-a").is_empty(),
         "no round pushed it"
     );
-    assert_eq!(h.sub(one).delivered_to.as_deref(), Some("pane-2"));
-    assert_eq!(delivered_lines(&h, BRANCH, one), [format!("{one}:landed")]);
+    assert_eq!(h.handed(&format!("{one}:landed")), ["inbox"]);
+    assert_eq!(
+        handed_lines(&h, BRANCH, one),
+        [(format!("{one}:landed"), "inbox".into(), "pane-2".into())]
+    );
 }
 
 /// satisfies: 51, 135
@@ -181,14 +294,14 @@ fn one_collect_finds_the_outcomes_of_every_branch() {
         [(BRANCH.to_string(), blamed), ("main".to_string(), landed)]
     );
     assert_eq!(
-        delivered_lines(&h, BRANCH, blamed),
+        handed_keys(&h, BRANCH, blamed),
         [format!("{blamed}:failed")]
     );
     assert_eq!(
-        delivered_lines(&h, "main", landed),
+        handed_keys(&h, "main", landed),
         [format!("{landed}:landed")]
     );
-    assert!(collect(&h, "unit/a").is_empty());
+    assert!(collect_as(&h, "unit/a", Collect::New, false).is_empty());
 }
 
 /// satisfies: 51, 135, 67
@@ -208,7 +321,7 @@ fn a_failure_withdrawn_by_a_resubmission_is_not_found() {
     h.settle();
     assert_eq!(h.sub(again).state, State::Landed);
     assert_eq!(collect(&h, "unit/a"), [(BRANCH.to_string(), again)]);
-    assert_eq!(h.sub(blamed).delivered, None);
+    assert!(handed_lines(&h, BRANCH, blamed).is_empty());
 }
 
 /// The fakes' driver as a driver with no carrier for a submitter that
@@ -241,7 +354,7 @@ impl Driver for NoSession<'_> {
 
 /// satisfies: 51, 135
 #[test]
-fn a_submitter_with_no_session_is_notified_once_and_collects_once() {
+fn a_submitter_with_no_session_is_notified_once_and_collects_until_it_confirms() {
     let h = Harness::bolt();
     h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
     let one = h.submit("unit/a");
@@ -262,8 +375,8 @@ fn a_submitter_with_no_session_is_notified_once_and_collects_once() {
     let notified = driver.notified.borrow().clone();
     assert_eq!(notified.len(), 1, "notified once: {notified:?}");
     assert_eq!(notified[0].submission, one);
-    let s = h.sub(one);
-    assert_eq!((s.delivered, s.delivered_to), (None, None));
+    let key = format!("{one}:landed");
+    assert!(h.handed(&key).is_empty());
     let pending: Vec<_> = h
         .events()
         .into_iter()
@@ -275,12 +388,19 @@ fn a_submitter_with_no_session_is_notified_once_and_collects_once() {
     assert_eq!(pending, [(one, "no session recorded".to_string())]);
     assert!(h.doc().outbox.is_empty(), "no round tries again");
 
-    // No session to name, so it is marked delivered to its place.
+    // No session to name, so it is handed over to its place, each time
+    // until it is confirmed.
     let at = h.sub(one).from.path.clone().unwrap_or("unit/a".into());
     assert_eq!(collect(&h, "unit/a"), [(BRANCH.to_string(), one)]);
-    assert_eq!(h.sub(one).delivered_to.as_deref(), Some(at.as_str()));
-    assert_eq!(delivered_lines(&h, BRANCH, one), [format!("{one}:landed")]);
-    assert!(collect(&h, "unit/a").is_empty(), "collected once");
+    assert_eq!(
+        handed_lines(&h, BRANCH, one),
+        [(key.clone(), "inbox".into(), at.clone())]
+    );
+    assert_eq!(
+        collect_as(&h, "unit/a", Collect::All, true),
+        [(BRANCH.to_string(), one)]
+    );
+    assert!(collect(&h, "unit/a").is_empty(), "confirmed");
     for _ in 0..3 {
         Sluice::new(seams, &h.f.clock).step(BRANCH).unwrap();
     }
@@ -356,7 +476,7 @@ fn blamed_request_from(h: &Harness, from: &str, head: &Rev) -> u64 {
     let s = h.sub(id);
     assert_eq!(s.state, State::Failed);
     assert_eq!(s.from.head.as_deref(), Some(from));
-    assert_eq!(s.delivered, None);
+    assert!(h.handed(&format!("{id}:failed")).is_empty());
     id
 }
 
@@ -370,7 +490,8 @@ fn a_request_from_the_worktrees_branch_is_collected() {
     h.branch_at("unit/a", &head);
     let id = blamed_request_from(&h, "unit/a", &head);
     assert_eq!(collect(&h, "unit/a"), [(BRANCH.to_string(), id)]);
-    assert_eq!(delivered_lines(&h, BRANCH, id), [format!("{id}:failed")]);
+    assert_eq!(handed_keys(&h, BRANCH, id), [format!("{id}:failed")]);
+    assert_eq!(h.handed(&format!("{id}:failed")), ["inbox"]);
 }
 
 /// satisfies: 51, 124, 1; core.50; scenario "A pull request from a branch
@@ -388,14 +509,13 @@ fn a_request_from_a_branch_sluice_lands_on_is_no_worktrees() {
     assert!(collect(&h, "bolt/w").is_empty());
     assert!(collect(&h, "unit/a").is_empty());
     let me = h.f.driver.session("bolt/w").unwrap().from;
-    assert!(h
-        .sluice()
-        .pending_one(BRANCH, id, &me)
-        .unwrap()
-        .outcomes
-        .is_empty());
-    assert_eq!(h.sub(id).delivered, None);
-    assert!(delivered_lines(&h, BRANCH, id).is_empty());
+    let one = Collect::One {
+        branch: BRANCH.into(),
+        id,
+    };
+    assert!(h.sluice().owed(&me, one).unwrap().outcomes.is_empty());
+    assert!(h.handed(&format!("{id}:failed")).is_empty());
+    assert!(handed_lines(&h, BRANCH, id).is_empty());
 }
 
 /// 124: a branch sluice lands on submitted by name, from no worktree,
@@ -403,9 +523,10 @@ fn a_request_from_a_branch_sluice_lands_on_is_no_worktrees() {
 mod by_name {
     use sluice_conformance::{Harness, Rig, BRANCH};
     use sluice_core::records::State;
+    use sluice_core::Collect;
     use sluice_seams::Driver;
 
-    use super::{collect, delivered_lines};
+    use super::{collect, handed_lines};
 
     /// Another bolt, a branch sluice lands on by the policy's `bolt/*`.
     const NAMED: &str = "bolt/w";
@@ -424,21 +545,19 @@ mod by_name {
     }
 
     /// No worktree takes submission `id`, by `sluice inbox` or a wait's
-    /// delivery read, and it stays undelivered.
+    /// delivery read, and nothing is handed over.
     fn taken_by_none(h: &Harness, id: u64) {
         assert!(collect(h, NAMED).is_empty(), "the worktree on the branch");
         assert!(collect(h, "unit/a").is_empty(), "another worktree");
         for worktree in [NAMED, "unit/a"] {
             let me = h.f.driver.session(worktree).unwrap().from;
-            assert!(h
-                .sluice()
-                .pending_one(BRANCH, id, &me)
-                .unwrap()
-                .outcomes
-                .is_empty());
+            let one = Collect::One {
+                branch: BRANCH.into(),
+                id,
+            };
+            assert!(h.sluice().owed(&me, one).unwrap().outcomes.is_empty());
         }
-        assert_eq!(h.sub(id).delivered, None);
-        assert!(delivered_lines(h, BRANCH, id).is_empty());
+        assert!(handed_lines(h, BRANCH, id).is_empty());
     }
 
     /// satisfies: 124, 51, 135, core.50; scenario "Blamed, and no inbox

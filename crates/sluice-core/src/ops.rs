@@ -7,11 +7,11 @@ use std::path::Path;
 
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
-use sluice_seams::{Contested, Decided, Formed, Guard, HostCopy, Rev, Session, Submitter};
+use sluice_seams::{Contested, Formed, HostCopy, Rev, Session, Submitter};
 
 use crate::line::Line;
 use crate::order::{self, Entry};
-use crate::overview::{after_landed, BranchView, Here};
+use crate::overview::{after_landed, BranchView};
 use crate::records::{CandidateState, Event, State, Submission, Withdrawal, SUBMISSION_SCHEMA};
 use crate::{Found, Sluice};
 
@@ -1477,19 +1477,6 @@ impl Sluice<'_> {
     }
 }
 
-/// 51, 135: one of a session's outcomes still pending, which no carrier
-/// has delivered to it yet, as read under its branch's lock.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PendingOutcome {
-    pub branch: String,
-    /// Its record as read, pending.
-    pub submission: Submission,
-    pub decided: Decided,
-    /// What it is delivered under: its outbox item's id where one stands,
-    /// else the one the round's outbox gives it (51: a repeat known as one).
-    pub notification: String,
-}
-
 /// A branch whose records could not be read, in the reader's words,
 /// whole (26, 133): a lookup passes it by, and a collection reads the
 /// other branches still.
@@ -1507,226 +1494,6 @@ impl Unread {
             branch: branch.into(),
             error: format!("{e:#}"),
         }
-    }
-}
-
-/// 51, 135: a session's pending outcomes, with the lock of each branch that
-/// holds one, so no round pushes one of them while they are collected.
-/// [`Pending::mark`] marks them delivered; dropped without it, it marks
-/// nothing and lets the locks go, and whichever carrier comes next delivers
-/// each again.
-pub struct Pending<'s, 'a> {
-    sluice: &'s Sluice<'a>,
-    /// When they are delivered: what [`Pending::mark`] records.
-    pub at: String,
-    /// In branch, then submission, order.
-    pub outcomes: Vec<PendingOutcome>,
-    /// The branches it could not read; every other was read (rule core.11).
-    pub unread: Vec<Unread>,
-    _locks: Vec<Box<dyn Guard + 'a>>,
-}
-
-impl Pending<'_, '_> {
-    /// Each outcome's record as [`Pending::mark`] writes it, delivered at
-    /// [`Pending::at`] to `to`.
-    pub fn marked(&self, to: &str) -> Vec<Submission> {
-        self.outcomes
-            .iter()
-            .map(|o| Submission {
-                delivered: Some(self.at.clone()),
-                delivered_to: Some(to.into()),
-                ..o.submission.clone()
-            })
-            .collect()
-    }
-
-    /// 51: mark each outcome delivered to `to`, one write per branch: its
-    /// record, live or finished, takes `delivered` and `delivered_to`, its
-    /// outbox item goes, and the log says it was delivered, under that
-    /// item's id or the round's. One delivered since it was read, by
-    /// another host, is left.
-    pub fn mark(self, to: &str) -> Result<()> {
-        let mut by_branch: BTreeMap<&str, Vec<&PendingOutcome>> = BTreeMap::new();
-        for o in &self.outcomes {
-            by_branch.entry(&o.branch).or_default().push(o);
-        }
-        for (branch, outcomes) in by_branch {
-            self.sluice.update(branch, |l| {
-                for o in &outcomes {
-                    let id = o.submission.id;
-                    let notification;
-                    if let Some(s) = l.subs.get(&id) {
-                        if s.delivered.is_some() {
-                            continue;
-                        }
-                        notification = match l.doc.outbox.iter().position(|i| i.submission == id) {
-                            Some(n) => l.doc.outbox.remove(n).id,
-                            None => o.notification.clone(),
-                        };
-                        let s = l.sub_mut(id);
-                        s.delivered = Some(self.at.clone());
-                        s.delivered_to = Some(to.into());
-                    } else {
-                        let Some(mut s) = self.sluice.finished_sub(branch, id)? else {
-                            continue;
-                        };
-                        if s.delivered.is_some() {
-                            continue;
-                        }
-                        notification = o.notification.clone();
-                        s.delivered = Some(self.at.clone());
-                        s.delivered_to = Some(to.into());
-                        l.rewritten.insert(id, s);
-                    }
-                    l.log(&self.at, Event::Delivered { id, notification });
-                }
-                Ok(())
-            })?;
-        }
-        Ok(())
-    }
-}
-
-impl<'a> Sluice<'a> {
-    /// 51, 135: every outcome of `me`'s submissions on any branch still
-    /// pending: each landed, blamed or conflicting submission that is the
-    /// worktree on `me`'s branch's by [`Here::made`], and whose
-    /// `delivered` is unset; never one by name (124). Read from the live
-    /// records and from the finished records of `me`'s own landings alone
-    /// (131), then read again under the lock of each branch holding one,
-    /// taken in the branches' order so two collectors never wait on each
-    /// other. A branch it cannot read is among the unread and the others
-    /// are read still (rule core.11). Nothing is written until
-    /// [`Pending::mark`].
-    pub fn pending<'s>(&'s self, me: &Submitter) -> Result<Pending<'s, 'a>> {
-        let mut branches = self.seams.state.branches()?;
-        branches.sort();
-        branches.dedup();
-        let here = Here::on(&me.worktree);
-        let mut unread = Vec::new();
-        let mut holding = Vec::new();
-        for b in branches {
-            match self.pending_on(&b, &here, None) {
-                Ok(found) if found.is_empty() => {}
-                Ok(_) => holding.push(b),
-                Err(e) => unread.push(Unread {
-                    branch: b,
-                    error: format!("{e:#}"),
-                }),
-            }
-        }
-        let state = self.seams.state;
-        let mut locks = Vec::new();
-        let mut outcomes = Vec::new();
-        for b in holding {
-            locks.push(state.wait_lock(&b)?);
-            match self.pending_on(&b, &here, None) {
-                Ok(found) => outcomes.extend(found),
-                Err(e) => unread.push(Unread {
-                    branch: b,
-                    error: format!("{e:#}"),
-                }),
-            }
-        }
-        unread.sort_by(|x, y| x.branch.cmp(&y.branch));
-        Ok(Pending {
-            sluice: self,
-            at: self.now(),
-            outcomes,
-            unread,
-            _locks: locks,
-        })
-    }
-
-    /// 51: submission `id` of `branch`, when it is `me`'s and pending, as
-    /// [`Sluice::pending`] finds and locks each of `me`'s: what a wait that
-    /// reported it marks delivered. Another's submission, one delivered
-    /// already or one not decided is not found, and nothing is locked.
-    pub fn pending_one<'s>(
-        &'s self,
-        branch: &str,
-        id: u64,
-        me: &Submitter,
-    ) -> Result<Pending<'s, 'a>> {
-        let here = Here::on(&me.worktree);
-        let mut locks = Vec::new();
-        let mut outcomes = Vec::new();
-        if !self.pending_on(branch, &here, Some(id))?.is_empty() {
-            locks.push(self.seams.state.wait_lock(branch)?);
-            outcomes = self.pending_on(branch, &here, Some(id))?;
-        }
-        Ok(Pending {
-            sluice: self,
-            at: self.now(),
-            outcomes,
-            unread: Vec::new(),
-            _locks: locks,
-        })
-    }
-
-    /// The pending outcomes on `branch` of the worktree `here`, in
-    /// submission order: only submission `only`, when it is given.
-    fn pending_on(
-        &self,
-        branch: &str,
-        here: &Here<'_>,
-        only: Option<u64>,
-    ) -> Result<Vec<PendingOutcome>> {
-        let line = self.read_line(branch)?;
-        let mut found = Vec::new();
-        let named = |id: u64| only.is_none_or(|o| o == id);
-        for s in line
-            .subs
-            .values()
-            .filter(|s| named(s.id) && s.delivered.is_none() && self.made(here, &s.from))
-        {
-            if !matches!(s.state, State::Landed | State::Failed | State::Conflict) {
-                continue;
-            }
-            let item = line.doc.outbox.iter().find(|o| o.submission == s.id);
-            let (Some(decided), Some(notification)) = (
-                item.map(|o| o.outcome.to_decided()).or_else(|| s.decided()),
-                item.map(|o| o.id.clone()).or_else(|| s.notification()),
-            ) else {
-                continue;
-            };
-            found.push(PendingOutcome {
-                branch: branch.into(),
-                submission: s.clone(),
-                decided,
-                notification,
-            });
-        }
-        // 130: a blame or a conflict stays live, so only a landing is read
-        // from the finished records, each by its own name (131), and taken
-        // by the same reading as a live one: never one by name, whose work
-        // its index line names as a worktree's is named (124).
-        for f in line.finished.values() {
-            if !named(f.id)
-                || f.state != State::Landed
-                || f.worktree != here.branch()
-                || line.subs.contains_key(&f.id)
-            {
-                continue;
-            }
-            let Some(s) = self.finished_sub(branch, f.id)? else {
-                continue;
-            };
-            if s.delivered.is_some() || !self.made(here, &s.from) {
-                continue;
-            }
-            let (Some(decided), Some(notification)) = (s.decided(), s.notification()) else {
-                continue;
-            };
-            found.push(PendingOutcome {
-                branch: branch.into(),
-                submission: s,
-                decided,
-                notification,
-            });
-        }
-        found.sort_by_key(|o| o.submission.id);
-        Ok(found)
     }
 }
 
@@ -1862,6 +1629,8 @@ fn under_test(line: &Line, id: u64) -> bool {
 mod tests {
     use std::cell::{Cell, RefCell};
     use std::collections::BTreeMap;
+
+    use sluice_seams::Decided;
 
     use chrono::{DateTime, TimeZone, Utc};
     use sluice_seams::{
@@ -2328,46 +2097,104 @@ mod tests {
         }
     }
 
-    fn found(h: &Host, worktree: &str) -> Vec<u64> {
-        let s = h.sluice();
-        let pending = s.pending(&me(worktree)).unwrap();
-        pending.outcomes.iter().map(|o| o.submission.id).collect()
+    /// The delivery of submission `id`'s outcome under `key`, owed to
+    /// `reader`, among the records' deliveries, as a round records it.
+    fn owe(h: &Host, key: &str, reader: &str) {
+        let mut records = h.records.borrow_mut();
+        let file = records
+            .files
+            .entry(crate::records::DELIVERIES_FILE.into())
+            .or_default();
+        let held = weir_delivery::json::read_lines(std::str::from_utf8(file).unwrap()).unwrap();
+        let weir_delivery::Recorded::Add(add) = weir_delivery::record(
+            &held,
+            key,
+            "[sluice] an outcome.",
+            &[reader],
+            "2026-10-23T11:00:00Z",
+            168 * 3600,
+        )
+        .unwrap() else {
+            panic!("{key} recorded twice");
+        };
+        file.extend(weir_delivery::json::write_lines(&add).into_bytes());
     }
 
-    /// 51: a session collects its own work's outcomes, by its branch or the
+    /// `s` kept among the live records, and, decided, its outcome owed to
+    /// its work.
+    fn keep_owed(h: &Host, s: &Submission) {
+        keep(h, s);
+        if let Some(key) = s.notification() {
+            owe(h, &key, &s.from.worktree);
+        }
+    }
+
+    fn found(h: &Host, worktree: &str) -> Vec<u64> {
+        let s = h.sluice();
+        let owed = s.owed(&me(worktree), crate::owed::Collect::All).unwrap();
+        owed.outcomes.iter().map(|o| o.submission.id).collect()
+    }
+
+    fn found_one(h: &Host, id: u64, worktree: &str) -> Vec<u64> {
+        let s = h.sluice();
+        let one = crate::owed::Collect::One {
+            branch: BRANCH.into(),
+            id,
+        };
+        let owed = s.owed(&me(worktree), one).unwrap();
+        owed.outcomes.iter().map(|o| o.submission.id).collect()
+    }
+
+    /// 51: a folder collects its own work's outcomes, by its branch or the
     /// branch its pull request was opened from, and not another's.
     #[test]
     fn another_worktrees_outcome_is_not_found() {
         let h = Host::new();
-        keep(&h, &decided(1, "unit-b", State::Failed));
-        keep(&h, &decided(2, "unit-a", State::Landed));
+        keep_owed(&h, &decided(1, "unit-b", State::Failed));
+        keep_owed(&h, &decided(2, "unit-a", State::Landed));
         let mut pull = decided(3, "pull/7", State::Failed);
         pull.from.head = Some("unit-a".into());
-        keep(&h, &pull);
+        keep_owed(&h, &pull);
         assert_eq!(found(&h, "unit-a"), [2, 3]);
         assert_eq!(found(&h, "unit-b"), [1]);
         assert!(found(&h, "unit-c").is_empty());
     }
 
-    /// 51: a submission withdrawn, still queued or delivered already is no
-    /// outcome pending.
+    /// 51: a submission withdrawn, still queued, or whose reader confirmed
+    /// its outcome is owed nothing.
     #[test]
-    fn a_withdrawn_queued_or_delivered_submission_is_not_found() {
+    fn a_withdrawn_queued_or_confirmed_submission_is_not_found() {
         let h = Host::new();
-        keep(&h, &decided(1, "unit-a", State::Withdrawn));
+        let mut withdrawn = decided(1, "unit-a", State::Failed);
+        keep_owed(&h, &withdrawn);
+        withdrawn.state = State::Withdrawn;
+        keep(&h, &withdrawn);
         keep(&h, &decided(2, "unit-a", State::Queued));
         keep(&h, &decided(3, "unit-a", State::Testing));
-        let mut delivered = decided(4, "unit-a", State::Failed);
-        delivered.delivered = Some("2026-10-23T11:00:00Z".into());
-        keep(&h, &delivered);
+        keep_owed(&h, &decided(4, "unit-a", State::Failed));
+        {
+            let mut records = h.records.borrow_mut();
+            let file = records
+                .files
+                .get_mut(crate::records::DELIVERIES_FILE)
+                .unwrap();
+            let held = weir_delivery::json::read_lines(std::str::from_utf8(file).unwrap()).unwrap();
+            let weir_delivery::Confirmed::Add(add) =
+                weir_delivery::confirm(&held, "4:failed", "unit-a", "2026-10-23T11:30:00Z")
+                    .unwrap()
+            else {
+                panic!("confirmed before");
+            };
+            file.extend(weir_delivery::json::write_lines(&add).into_bytes());
+        }
         assert!(found(&h, "unit-a").is_empty());
     }
 
-    /// 51, 130, 131: a landing moved to the finished records pending is
-    /// found by its index line, and marked in its own record, the index
-    /// left as it was.
+    /// 51, 130, 131: a landing moved to the finished records and owed is
+    /// found, and handed over in the branch's deliveries alone, its record
+    /// and the index left as they were; it stays owed.
     #[test]
-    fn a_finished_pending_landing_is_found_and_marked_in_its_record() {
+    fn a_finished_owed_landing_is_found_and_handed_over() {
         let h = Host::new();
         let landed = decided(5, "unit-a", State::Landed);
         let index = crate::records::to_line(&crate::records::FinishedLine {
@@ -2386,78 +2213,56 @@ mod tests {
                 .files
                 .insert(crate::records::FINISHED_INDEX.into(), index.clone());
         }
+        owe(&h, "5:landed", "unit-a");
         let s = h.sluice();
-        let pending = s.pending(&me("unit-a")).unwrap();
-        assert_eq!(pending.outcomes.len(), 1);
-        assert_eq!(pending.outcomes[0].notification, "5:landed");
+        let owed = s.owed(&me("unit-a"), crate::owed::Collect::All).unwrap();
+        assert_eq!(owed.outcomes.len(), 1);
+        assert_eq!(owed.outcomes[0].key, "5:landed");
+        assert_eq!(owed.outcomes[0].reader, "unit-a");
         assert_eq!(
-            pending.outcomes[0].decided,
+            owed.outcomes[0].decided,
             Decided::Landed {
                 landed_as: Rev::new("landed-5"),
                 beside: false,
                 covered_by: None,
             }
         );
-        pending.mark("/w/unit-a").unwrap();
-        let back = s.state(5).unwrap().unwrap();
-        assert_eq!(back.delivered.as_deref(), Some("2026-10-23T12:00:00Z"));
-        assert_eq!(back.delivered_to.as_deref(), Some("/w/unit-a"));
+        owed.hand("inbox", "/w/unit-a", false).unwrap();
+        assert_eq!(s.state(5).unwrap().unwrap(), landed, "its record as it was");
         assert_eq!(
             h.records.borrow().files[crate::records::FINISHED_INDEX],
             index
         );
         let log = String::from_utf8(h.records.borrow().files["log.jsonl"].clone()).unwrap();
         assert!(
-            log.contains("\"event\":\"delivered\",\"id\":5,\"notification\":\"5:landed\""),
+            log.contains(
+                "\"event\":\"handed\",\"id\":5,\"key\":\"5:landed\",\"by\":\"inbox\",\
+                 \"to\":\"/w/unit-a\""
+            ),
             "{log}"
         );
-        assert!(found(&h, "unit-a").is_empty(), "delivered once");
+        assert_eq!(found(&h, "unit-a"), [5], "owed until it is confirmed");
     }
 
-    /// 51, record 0070: a landing moved to the finished records that an
-    /// earlier sluice marked delivered under `told` was delivered: a
-    /// collect never finds it pending, so no session is told it twice.
+    /// 51, record 0102 (D12): an outcome decided before deliveries were
+    /// recorded is owed by nothing, whatever an earlier sluice marked on
+    /// its record.
     #[test]
-    fn a_finished_record_marked_told_is_never_pending() {
+    fn an_outcome_decided_before_deliveries_is_owed_by_nothing() {
         let h = Host::new();
-        let landed = decided(5, "unit-a", State::Landed);
-        let mut doc = String::from_utf8(crate::records::to_document(&landed)).unwrap();
-        let last = doc.rfind('}').unwrap();
-        doc.insert_str(
-            last,
-            ",\n  \"told\": \"2026-10-27T10:00:00Z\",\n  \"told_to\": \"/w/unit-a\"\n",
-        );
-        let index = crate::records::to_line(&crate::records::FinishedLine {
-            id: 5,
-            state: State::Landed,
-            worktree: "unit-a".into(),
-            subject: None,
-        });
-        {
-            let mut records = h.records.borrow_mut();
-            records
-                .files
-                .insert(crate::records::finished_file(5), doc.into_bytes());
-            records
-                .files
-                .insert(crate::records::FINISHED_INDEX.into(), index);
-        }
-        assert_eq!(
-            h.sluice().state(5).unwrap().unwrap().delivered.as_deref(),
-            Some("2026-10-27T10:00:00Z")
-        );
+        keep(&h, &decided(2, "unit-a", State::Landed));
         assert!(found(&h, "unit-a").is_empty());
-        assert!(found_one(&h, 5, "unit-a").is_empty());
+        assert!(found_one(&h, 2, "unit-a").is_empty());
     }
 
     /// 51, 67: a submission blamed and then withdrawn, as a resubmission
     /// withdraws it, keeps its blame and the outbox item the blame left, and
-    /// is no outcome pending, live or finished: its session hears of the
-    /// submission that took its place, never of the blame again.
+    /// is owed nothing, live or finished.
     #[test]
-    fn a_withdrawn_submissions_earlier_blame_is_never_pending() {
+    fn a_withdrawn_submissions_earlier_blame_is_never_owed() {
         let h = Host::new();
         let mut blamed = decided(4, "unit-a", State::Failed);
+        owe(&h, "4:failed", "unit-a");
         blamed.state = State::Withdrawn;
         blamed.withdrawn = Some(crate::records::Withdrawal {
             by: "resubmission".into(),
@@ -2478,6 +2283,7 @@ mod tests {
             },
         });
         let mut finished = decided(3, "unit-a", State::Failed);
+        owe(&h, "3:failed", "unit-a");
         finished.state = State::Withdrawn;
         let index = crate::records::to_line(&crate::records::FinishedLine {
             id: 3,
@@ -2504,13 +2310,14 @@ mod tests {
         assert!(found_one(&h, 3, "unit-a").is_empty());
     }
 
-    /// 51: an outcome whose outbox item stands is delivered under that item's
-    /// id, and marking it removes the item, so no round pushes it.
+    /// 51: an outcome whose outbox item stands is read as the item has it,
+    /// and handing it over leaves the item for the round, which pushes
+    /// nothing handed over (design D10).
     #[test]
-    fn marking_removes_the_outbox_item_and_logs_its_id() {
+    fn an_outcome_queued_is_read_as_its_item_and_handed_over_by_its_key() {
         let h = Host::new();
         let failed = decided(4, "unit-a", State::Failed);
-        keep(&h, &failed);
+        keep_owed(&h, &failed);
         let mut doc = crate::records::BranchDoc::new(BRANCH);
         doc.outbox.push(crate::records::OutboxItem {
             id: "4:failed".into(),
@@ -2528,57 +2335,51 @@ mod tests {
             crate::records::to_document(&doc),
         );
         let s = h.sluice();
-        let pending = s.pending(&me("unit-a")).unwrap();
-        assert_eq!(pending.outcomes[0].notification, "4:failed");
+        let owed = s.owed(&me("unit-a"), crate::owed::Collect::All).unwrap();
+        assert_eq!(owed.outcomes[0].key, "4:failed");
         assert!(matches!(
-            &pending.outcomes[0].decided,
+            &owed.outcomes[0].decided,
             Decided::Failed { failed, .. } if failed == &["cli:test"]
         ));
-        pending.mark("herdr:w1:p2@/run/herdr.sock").unwrap();
-        let l = line(&h);
-        assert!(l.doc.outbox.is_empty());
-        assert_eq!(
-            l.subs[&4].delivered_to.as_deref(),
-            Some("herdr:w1:p2@/run/herdr.sock")
-        );
+        owed.hand("inbox", "herdr:w1:p2@/run/herdr.sock", false)
+            .unwrap();
+        assert_eq!(line(&h).doc.outbox.len(), 1, "the round's to let go");
         let log = String::from_utf8(h.records.borrow().files["log.jsonl"].clone()).unwrap();
-        assert!(log.contains("\"notification\":\"4:failed\""), "{log}");
+        assert!(log.contains("\"key\":\"4:failed\""), "{log}");
+        assert!(
+            log.contains("\"to\":\"herdr:w1:p2@/run/herdr.sock\""),
+            "{log}"
+        );
     }
 
-    /// 51: a collect dropped before it marks writes nothing, so whichever
-    /// carrier comes next delivers the outcome again.
+    /// 51: a collect dropped before it hands over writes nothing, so it is
+    /// owed with no hand-over by it.
     #[test]
-    fn a_collect_dropped_without_marking_leaves_it_pending() {
+    fn a_collect_dropped_without_handing_over_writes_nothing() {
         let h = Host::new();
-        keep(&h, &decided(2, "unit-a", State::Landed));
+        keep_owed(&h, &decided(2, "unit-a", State::Landed));
         let before = h.writes.get();
         {
             let s = h.sluice();
-            let pending = s.pending(&me("unit-a")).unwrap();
-            assert_eq!(pending.outcomes.len(), 1);
+            let owed = s.owed(&me("unit-a"), crate::owed::Collect::All).unwrap();
+            assert_eq!(owed.outcomes.len(), 1);
+            assert!(owed.outcomes[0].owed.handovers.is_empty());
         }
         assert_eq!(h.writes.get(), before);
-        assert_eq!(line(&h).subs[&2].delivered, None);
         assert_eq!(found(&h, "unit-a"), [2]);
     }
 
-    fn found_one(h: &Host, id: u64, worktree: &str) -> Vec<u64> {
-        let s = h.sluice();
-        let pending = s.pending_one(BRANCH, id, &me(worktree)).unwrap();
-        pending.outcomes.iter().map(|o| o.submission.id).collect()
-    }
-
-    /// 51: a wait reporting its own worktree's pending outcome finds that
+    /// 51: a wait reporting its own worktree's owed outcome finds that
     /// submission alone, by its branch or the branch its pull request was
     /// opened from, and a landing moved to the finished records too.
     #[test]
-    fn the_narrowed_collect_finds_the_askers_pending_submission() {
+    fn the_narrowed_collect_finds_the_askers_owed_submission() {
         let h = Host::new();
-        keep(&h, &decided(1, "unit-a", State::Failed));
-        keep(&h, &decided(2, "unit-a", State::Landed));
+        keep_owed(&h, &decided(1, "unit-a", State::Failed));
+        keep_owed(&h, &decided(2, "unit-a", State::Landed));
         let mut pull = decided(3, "pull/7", State::Failed);
         pull.from.head = Some("unit-a".into());
-        keep(&h, &pull);
+        keep_owed(&h, &pull);
         assert_eq!(found_one(&h, 2, "unit-a"), [2]);
         assert_eq!(found_one(&h, 1, "unit-a"), [1]);
         assert_eq!(found_one(&h, 3, "unit-a"), [3]);
@@ -2599,44 +2400,49 @@ mod tests {
                 .files
                 .insert(crate::records::FINISHED_INDEX.into(), index);
         }
+        owe(&h, "5:landed", "unit-a");
         assert_eq!(found_one(&h, 5, "unit-a"), [5]);
     }
 
-    /// 20, 51: a wait on another worktree's submission, on one delivered
-    /// already, on one not decided or on no submission finds nothing.
+    /// 20, 51: a wait on another worktree's submission, on one not decided
+    /// or on no submission finds nothing.
     #[test]
-    fn the_narrowed_collect_finds_nothing_not_the_askers_to_deliver() {
+    fn the_narrowed_collect_finds_nothing_not_the_askers_to_hand_over() {
         let h = Host::new();
-        keep(&h, &decided(1, "unit-b", State::Failed));
-        let mut delivered = decided(2, "unit-a", State::Landed);
-        delivered.delivered = Some("2026-10-23T11:00:00Z".into());
-        keep(&h, &delivered);
+        keep_owed(&h, &decided(1, "unit-b", State::Failed));
         keep(&h, &decided(3, "unit-a", State::Queued));
         assert!(found_one(&h, 1, "unit-a").is_empty());
-        assert!(found_one(&h, 2, "unit-a").is_empty());
         assert!(found_one(&h, 3, "unit-a").is_empty());
         assert!(found_one(&h, 9, "unit-a").is_empty());
         assert_eq!(found_one(&h, 1, "unit-b"), [1]);
     }
 
-    /// 51: marking the narrowed collect marks the one submission named and
-    /// leaves the asker's others pending.
+    /// 51: handing the narrowed collect over hands over the one submission
+    /// named, and leaves the asker's others with no hand-over.
     #[test]
-    fn the_narrowed_collect_marks_only_the_one_named() {
+    fn the_narrowed_collect_hands_over_only_the_one_named() {
         let h = Host::new();
-        keep(&h, &decided(1, "unit-a", State::Failed));
-        keep(&h, &decided(2, "unit-a", State::Landed));
+        keep_owed(&h, &decided(1, "unit-a", State::Failed));
+        keep_owed(&h, &decided(2, "unit-a", State::Landed));
         let s = h.sluice();
-        let pending = s.pending_one(BRANCH, 2, &me("unit-a")).unwrap();
+        let one = crate::owed::Collect::One {
+            branch: BRANCH.into(),
+            id: 2,
+        };
+        s.owed(&me("unit-a"), one)
+            .unwrap()
+            .hand("wait", "/w/unit-a", false)
+            .unwrap();
+        let owed = s.owed(&me("unit-a"), crate::owed::Collect::New).unwrap();
         assert_eq!(
-            pending.marked("/w/unit-a")[0].delivered_to.as_deref(),
-            Some("/w/unit-a")
+            owed.outcomes
+                .iter()
+                .map(|o| o.submission.id)
+                .collect::<Vec<_>>(),
+            [1],
+            "only the other has no hand-over"
         );
-        pending.mark("/w/unit-a").unwrap();
-        let two = s.state(2).unwrap().unwrap();
-        assert_eq!(two.delivered_to.as_deref(), Some("/w/unit-a"));
-        assert_eq!(s.state(1).unwrap().unwrap().delivered, None);
-        assert_eq!(found(&h, "unit-a"), [1]);
+        assert_eq!(found(&h, "unit-a"), [1, 2]);
     }
 
     /// Rule core.11: a branch whose records cannot be read is named with
@@ -2645,12 +2451,12 @@ mod tests {
     fn an_unreadable_branch_is_named_and_the_others_read() {
         let h = Host::new();
         h.unreadable.borrow_mut().push("bolt/x".into());
-        keep(&h, &decided(2, "unit-a", State::Landed));
+        keep_owed(&h, &decided(2, "unit-a", State::Landed));
         let s = h.sluice();
-        let pending = s.pending(&me("unit-a")).unwrap();
-        assert_eq!(pending.outcomes.len(), 1);
+        let owed = s.owed(&me("unit-a"), crate::owed::Collect::All).unwrap();
+        assert_eq!(owed.outcomes.len(), 1);
         assert_eq!(
-            pending.unread,
+            owed.unread,
             [Unread {
                 branch: "bolt/x".into(),
                 error: "remote: Repository not found.".into(),
