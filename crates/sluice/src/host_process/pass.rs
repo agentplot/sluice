@@ -17,7 +17,7 @@ use sluice_seams::Rev;
 use crate::overview::{self, Follows};
 use crate::reader::{no_sluice, Lead};
 use crate::told::{self, Kind};
-use crate::{exec, preview, telemetry, PullRequests, Taker, INTERRUPTED};
+use crate::{exec, preview, telemetry, PullRequests, INTERRUPTED};
 
 /// What a repository's passes keep from one to the next: what was last
 /// said, so each thing is said once while it stands (26, 121), and what
@@ -112,7 +112,7 @@ pub fn pass(
     branches.sort();
     branches.dedup();
     for branch in &branches {
-        crate::intake(pulls, seams, clock, branch, Taker::Driver, false, &mut out);
+        crate::intake(pulls, seams, clock, branch, false, &mut out);
         // 26, rule core.14: a branch whose records' read or round fails is
         // that branch's alone; the pass goes on to every other branch. 129:
         // one with nothing in play costs the pass its records' read alone.
@@ -212,15 +212,7 @@ pub fn step(
     branch: &str,
 ) -> Result<serde_json::Value> {
     let mut said: Vec<u8> = Vec::new();
-    crate::intake(
-        pulls,
-        s.seams(),
-        clock,
-        branch,
-        Taker::Step,
-        false,
-        &mut said,
-    );
+    crate::intake(pulls, s.seams(), clock, branch, false, &mut said);
     let round = s.round(branch)?;
     exec::tell_abandoned(&mut said, false, &round.released)?;
     preview::tell_dropped(&mut said, false, &round.previews)?;

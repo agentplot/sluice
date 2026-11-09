@@ -6011,7 +6011,6 @@ impl sluice::PullRequests for Pull7 {
         _: sluice_core::Seams<'_>,
         _: &dyn sluice_core::Clock,
         _: &str,
-        _: sluice::Taker,
     ) -> anyhow::Result<bool> {
         Ok(true)
     }
