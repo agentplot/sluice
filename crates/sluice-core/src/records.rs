@@ -5,7 +5,10 @@
 //! - `branch.json`: the queue's own state, one document;
 //! - `submissions/<id>.json`: one document per submission;
 //! - `log.jsonl`: every submission, run, result, blame and landing, one
-//!   event per line, appended and never rewritten (16).
+//!   event per line, appended and never rewritten (16);
+//! - `deliveries.jsonl`: each decided outcome a reader is owed, as weir's
+//!   delivery records, one to a line in C.8's JSON, in the order added
+//!   (51; record 0102).
 //!
 //! and beside every branch, one `results.jsonl` for the repository: every
 //! check's outcome under its key, for any branch's gate to read (69).
@@ -38,6 +41,9 @@ fn result_schema() -> String {
 
 pub const BRANCH_FILE: &str = "branch.json";
 pub const LOG_FILE: &str = "log.jsonl";
+/// 51: the branch's deliveries, weir's records in C.8's JSON (record 0102;
+/// design D3).
+pub const DELIVERIES_FILE: &str = "deliveries.jsonl";
 
 pub fn submission_file(id: u64) -> String {
     format!("submissions/{id}.json")

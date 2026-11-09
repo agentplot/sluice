@@ -9,7 +9,7 @@ use sluice_seams::{Changes, Rev, Snapshot};
 use crate::records::{
     finished_file, parse_lines, submission_file, to_document, to_line, BranchDoc, Candidate, Event,
     FinishedLine, LogLine, OutboxItem, RefusedWrite, State, Submission, BRANCH_FILE,
-    FINISHED_INDEX, LOG_FILE,
+    DELIVERIES_FILE, FINISHED_INDEX, LOG_FILE,
 };
 use crate::refused_writes::{command_of, ends, stands, STANDING};
 
@@ -27,6 +27,11 @@ pub struct Line {
     /// Finished submissions changed in this write, each put back at its
     /// finished record whole; their index lines stand as they are (130).
     pub rewritten: BTreeMap<u64, Submission>,
+    /// 51: the branch's deliveries, weir's records as read and then as
+    /// added, in the order added (record 0102; design D3).
+    deliveries: Vec<weir_delivery::Record>,
+    /// How many of `deliveries` were read: the rest this write adds.
+    deliveries_read: usize,
     original: BTreeMap<String, Vec<u8>>,
     appended: Vec<u8>,
 }
@@ -54,6 +59,11 @@ impl Line {
                 .collect(),
             None => BTreeMap::new(),
         };
+        let deliveries = match snapshot.files.get(DELIVERIES_FILE) {
+            Some(bytes) => read_deliveries(bytes)
+                .with_context(|| format!("reading {branch}'s {DELIVERIES_FILE}"))?,
+            None => Vec::new(),
+        };
         Ok(Line {
             branch: branch.into(),
             version: snapshot.version,
@@ -61,9 +71,23 @@ impl Line {
             subs,
             finished,
             rewritten: BTreeMap::new(),
+            deliveries_read: deliveries.len(),
+            deliveries,
             original: snapshot.files,
             appended: Vec::new(),
         })
+    }
+
+    /// 51: the branch's deliveries, in the order added, this write's
+    /// after those read (record 0102).
+    pub fn deliveries(&self) -> &[weir_delivery::Record] {
+        &self.deliveries
+    }
+
+    /// 51: hold `records` after the others, in the order given, every one;
+    /// nothing is let go of (weir 112, 113; design D3).
+    pub fn add_deliveries(&mut self, records: &[weir_delivery::Record]) {
+        self.deliveries.extend_from_slice(records);
     }
 
     /// Whether the branch has had submission `id`, live or finished.
@@ -330,8 +354,10 @@ impl Line {
         }
         // A write that changes nothing moves nothing: it is no write. A
         // submission done with in this very write is a change.
+        let added = &self.deliveries[self.deliveries_read..];
         let changed = !changes.put.is_empty()
             || !self.appended.is_empty()
+            || !added.is_empty()
             || self.subs.values().any(|s| {
                 self.done_with(s)
                     && self.original.get(&submission_file(s.id)) != Some(&to_document(s))
@@ -354,7 +380,38 @@ impl Line {
         if !index.is_empty() {
             changes.append.insert(FINISHED_INDEX.into(), index);
         }
+        if !added.is_empty() {
+            changes.append.insert(
+                DELIVERIES_FILE.into(),
+                weir_delivery::json::write_lines(added).into_bytes(),
+            );
+        }
         changes
+    }
+}
+
+/// 51: a branch's deliveries as `deliveries.jsonl` holds them, one record
+/// to a line in C.8's JSON, read by weir's own reader; a line that does
+/// not read is refused in weir's words, saying which (design D3).
+fn read_deliveries(bytes: &[u8]) -> Result<Vec<weir_delivery::Record>> {
+    let text = std::str::from_utf8(bytes)?;
+    weir_delivery::json::read_lines(text).map_err(|refused| anyhow!("{refused}"))
+}
+
+/// 51, 112: the line is a deliverer's store, its deliveries read in the
+/// order added and added to every one or none, letting go of nothing; it
+/// is written with the rest of the branch's records, under its lock
+/// (weir 113; design D3).
+impl weir_delivery::Store for Line {
+    type Error = std::convert::Infallible;
+
+    fn read(&self) -> Result<Vec<weir_delivery::Record>, Self::Error> {
+        Ok(self.deliveries.clone())
+    }
+
+    fn add(&mut self, records: &[weir_delivery::Record]) -> Result<(), Self::Error> {
+        self.add_deliveries(records);
+        Ok(())
     }
 }
 
@@ -431,5 +488,70 @@ mod tests {
         assert_eq!(changes.put[&finished_file(12)], to_document(&s));
         assert!(changes.remove.is_empty());
         assert!(changes.append.is_empty());
+    }
+
+    const DELIVERY: &str = "{\"format\": \"weir-delivery/1\", \"key\": \"12:landed\", \
+                            \"readers\": [\"unit-a\"], \
+                            \"message\": \"[sluice] #12 landed on main as abc1234.\", \
+                            \"recorded_at\": \"2026-11-08T10:02:00Z\", \
+                            \"expires_at\": \"2026-11-15T10:02:00Z\"}\n";
+    const HANDOVER: &str = "{\"format\": \"weir-handover/1\", \"key\": \"12:landed\", \
+                            \"reader\": \"unit-a\", \"by\": \"notice\", \
+                            \"at\": \"2026-11-08T10:02:01Z\"}\n";
+
+    fn with_deliveries(text: &str) -> Result<Line> {
+        Line::load(
+            "main",
+            Snapshot {
+                version: 1,
+                files: [
+                    (
+                        BRANCH_FILE.to_string(),
+                        to_document(&BranchDoc::new("main")),
+                    ),
+                    (DELIVERIES_FILE.to_string(), text.as_bytes().to_vec()),
+                ]
+                .into_iter()
+                .collect(),
+            },
+        )
+    }
+
+    /// 51: the branch's deliveries are read in the order written, and a
+    /// write appends what it added in C.8's spelling, so the file reads
+    /// back as written (record 0102; design D3).
+    #[test]
+    fn deliveries_read_back_as_written() {
+        let mut line = with_deliveries(DELIVERY).unwrap();
+        assert_eq!(line.deliveries().len(), 1);
+        assert!(line.changes().is_empty(), "a read writes nothing");
+        let added = weir_delivery::json::read(HANDOVER.trim_end()).unwrap();
+        weir_delivery::Store::add(&mut line, std::slice::from_ref(&added)).unwrap();
+        let changes = line.changes();
+        assert_eq!(
+            String::from_utf8(changes.append[DELIVERIES_FILE].clone()).unwrap(),
+            HANDOVER
+        );
+        assert!(!changes.put.contains_key(DELIVERIES_FILE));
+        let both = with_deliveries(&format!("{DELIVERY}{HANDOVER}")).unwrap();
+        assert_eq!(
+            weir_delivery::Store::read(&both).unwrap(),
+            weir_delivery::json::read_lines(&format!("{DELIVERY}{HANDOVER}")).unwrap()
+        );
+        assert_eq!(
+            weir_delivery::json::write_lines(both.deliveries()),
+            format!("{DELIVERY}{HANDOVER}")
+        );
+    }
+
+    /// 51: a line that does not read stops the branch's reads, naming the
+    /// file and the field in weir's words (design D3).
+    #[test]
+    fn deliveries_that_do_not_read_name_the_file() {
+        let wrong = DELIVERY.replace("weir-delivery/1", "weir-delivery/2");
+        let why = format!("{:#}", with_deliveries(&wrong).unwrap_err());
+        assert!(why.contains("main's deliveries.jsonl"), "{why}");
+        assert!(why.contains("`format`"), "{why}");
+        assert!(why.contains("weir-delivery/2"), "{why}");
     }
 }
