@@ -79,23 +79,27 @@ sluice's queue inside a Claude Code session.
   while a checkout, worktree or preview is held because its release failed,
   and with nothing queued says that alone: `sluice: 1 held: release failed`.
 - **Wake**: when one of this session's submissions lands, fails or
-  conflicts, a toast. The board then collects the session's pending
-  outcomes with `sluice inbox`, and starts a turn with sluice's words;
-  where the outcome was delivered already, by the notice sluice typed
-  into the session's pane or by a wait, `sluice inbox` prints nothing and
-  no turn starts. The board collects too when the session starts, so a
-  session that restarted gets what it missed. Turn the collecting and the
-  turn off with the `wake` option in `/config`: the outcome then stays
-  pending for the session's own `sluice inbox` or a wait.
+  conflicts, a toast. The board then collects with `sluice inbox --new`,
+  which hands over only what nothing has handed the session yet, and
+  starts a turn with sluice's words; where the outcome was handed over
+  already, by the notice sluice typed into the session's pane or by a
+  wait, it prints nothing and no turn starts. When the session starts, and
+  after a reload of the board, it collects with `sluice inbox`, which
+  hands over again every outcome the session's agent has not confirmed
+  with `sluice confirm <key>`, so a session that restarted gets what it
+  never acted on. The board keeps no list of what it handed over. Turn the
+  collecting and the turn off with the `wake` option in `/config`: the
+  outcome then stays owed for the session's own `sluice inbox` or a wait.
 - **The sluice it runs with**: `.claude-plugin/sluice.json` names the
-  releases, from the first with `sluice inbox` (`from`) up to, not
-  including, the first the board does not know (`before`). On its first
+  releases, from the first with `sluice inbox --new` and `sluice confirm`
+  (`from`) up to, not including, the first the board does not know
+  (`before`). On its first
   queue the board asks `sluice --version`; where the host's sluice is
   outside them, it says so once in the session, in a toast naming both
   releases and whether sluice or the board is to be upgraded, and from
   then on shows nothing, collects nothing, starts no turn and runs no
   further watch; `/sluice` answers with the same words. So outcomes are
-  delivered by `sluice inbox` alone, never by a board that keeps its own
+  handed over by `sluice inbox` alone, never by a board that keeps its own
   list. A sluice built with no release (`0.0.0`) is run with.
 - **Forecast**: while this session's worktree has commits ahead of its
   branch and no submission of its own queued, the board runs `sluice

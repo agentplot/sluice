@@ -885,9 +885,9 @@ export function cannotFollow(version: string | null): string {
 
 /**
  * The sluice releases the board runs with, as its `.claude-plugin/sluice.json`
- * names them: from the first that has `sluice inbox`, which alone marks an
- * outcome delivered (51; rule core.31), up to, not including, the first it
- * does not know.
+ * names them: from the first that has `sluice inbox --new` and `sluice
+ * confirm`, whose inbox alone records an outcome handed over (51; rule
+ * core.31; record 0102), up to, not including, the first it does not know.
  */
 export type Supported = { from: string; before: string };
 
