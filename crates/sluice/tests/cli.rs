@@ -1331,12 +1331,27 @@ fn status_lists_the_queue() {
         lines[1].starts_with(&format!("  testing {BRANCH} + #3 unit/forecast · ")),
         "{out}"
     );
+    // D13 (51; record 0102): after the queue, what is owed, since nobody
+    // confirmed #1's landing or #2's blame.
     assert_eq!(
         lines[2..],
         [
             format!("  #3 unit/forecast  testing   crw-1-unit-3  unit/forecast   {BRANCH} + #3"),
             format!("2 no longer in the queue: sluice status {BRANCH} --all"),
-        ]
+            "OWED".to_string(),
+            "  unit/batch-review · never confirmed".to_string(),
+            "    2:failed #2  owed until 2026-10-18T09:00:09Z · handed over by notice at \
+             2026-10-11T09:00:15Z"
+                .to_string(),
+            "  unit/touches · never confirmed".to_string(),
+            "    1:landed #1  owed until 2026-10-18T09:00:10Z · handed over by notice at \
+             2026-10-11T09:00:16Z"
+                .to_string(),
+            "confirm one with: sluice confirm <key>, in its worktree, or sluice confirm <key> \
+             --as operator"
+                .to_string(),
+        ],
+        "{out}"
     );
 
     let (code, out) = sluice(&f, &["status", BRANCH, "--all"]);
@@ -7272,6 +7287,15 @@ fn status_and_overview_show_a_hold_while_it_lasts() {
             held.clone(),
             "  #2 unit/b  queued    agent-b  unit/b".to_string(),
             format!("1 no longer in the queue: sluice status {BRANCH} --all"),
+            // D13 (51; record 0102): #1's landing, which nobody confirmed.
+            "OWED".to_string(),
+            "  unit/a · never confirmed".to_string(),
+            "    1:landed #1  owed until 2026-10-18T09:00:12Z · handed over by notice at \
+             2026-10-11T09:00:16Z, wait at 2026-10-11T09:00:19Z"
+                .to_string(),
+            "confirm one with: sluice confirm <key>, in its worktree, or sluice confirm <key> \
+             --as operator"
+                .to_string(),
         ],
         "{out}"
     );

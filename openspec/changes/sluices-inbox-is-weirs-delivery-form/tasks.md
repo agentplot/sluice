@@ -43,6 +43,7 @@ record 0102 and the design's decisions by D-number.
 - [x] 4.7 Add `a_requests_post_confirms_its_outcome_on_receipt`, holding the outcome-delivery spec's "A request's landing is posted" and "A post that fails", and rewrite the pull request tests that read `delivered` or `delivered_to` to read `delivery`. True when `sluice exec bolt/sluices-outcomes-are-owed-until-confirmed -- cargo test -p sluice --features tools --test pull_requests a_requests_post_confirms_its_outcome_on_receipt` passes.
 - [x] 4.8 Rewrite the tests that hold the submit-by-name spec's "Blamed, and no inbox takes it" and "A wait in a bare clone reports it and marks nothing" to look for no `delivery`, no `handed` and no `confirmed` line. True when `sluice exec bolt/sluices-outcomes-are-owed-until-confirmed -- cargo test -p sluice --features tools --test worktrunk by_name` passes.
 - [x] 4.9 Rewrite sluice's conformance profile, `crates/sluice/tests/profiles/conformance.rs`, to the seam's `Delivery::Handed`. True when `sluice exec bolt/sluices-outcomes-are-owed-until-confirmed -- cargo test -p sluice --features tools --test conformance` passes.
+- [ ] 4.10 Have `status_lists_the_queue` and `status_and_overview_show_a_hold_while_it_lasts` in `crates/sluice/tests/cli.rs` take in the `OWED` section and its confirm line after the queue, for the outcomes their fixtures leave unconfirmed (D13). True when `sluice exec bolt/sluices-outcomes-are-owed-until-confirmed -- cargo test -p sluice --test cli` passes.
 
 ## 5. The plugins
 
