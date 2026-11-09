@@ -307,6 +307,12 @@ impl OnGitHub {
             .collect()
     }
 
+    /// The host `main`'s records on its remote name as keeping it (72).
+    fn keeper(&self) -> Option<String> {
+        let doc: Value = serde_json::from_str(&self.on_the_remote("branch.json")?).ok()?;
+        doc["lead"].as_str().map(str::to_string)
+    }
+
     /// The file `path` of `main`'s records on the remote, where they are.
     fn on_the_remote(&self, path: &str) -> Option<String> {
         let out = support::git_command()
@@ -5651,8 +5657,10 @@ fn a_worktrees_submission_stays() {
 fn a_wait_across_hosts_reads_at_its_pace() {
     let g = OnGitHub::new("intake-pace", "reviews = 1");
     g.named("a", "");
-    let b = g.other("b", "", "");
+    // B's pass runs first, so B keeps main and A does not.
+    let b = g.other("b", "", &g.signing("b"));
     b.run("1");
+    assert_eq!(g.keeper().as_deref(), Some("b"));
     let w = g.session("paced", &[("p.txt", "p\n")]);
     let out = g.wt_submit(&w, &["--no-wait"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
@@ -5683,17 +5691,18 @@ impl OnGitHub {
     }
 }
 
-/// request-intake-host, "Submitted here, taken in there": host B's `sluice
-/// run` holds main's intake mark, and `wt submit main --no-wait` on host A
-/// opens a pull request; A's follows name it at its head, and A's next
-/// round asks GitHub nothing of main's open pull requests.
+/// request-intake-host, "Submitted here, taken in there": host B keeps
+/// main, and `wt submit main --no-wait` on host A opens a pull request;
+/// A's follows name it at its head, and A's next round asks GitHub nothing
+/// of main's open pull requests.
 #[test]
 fn submitted_here_taken_in_there() {
     let g = OnGitHub::new("follows-submitted", "");
     g.named("a", "");
-    let b = g.other("b", "", "");
+    // B's pass runs first, so B keeps main and A does not.
+    let b = g.other("b", "", &g.signing("b"));
     b.run("1");
-    assert_eq!(g.mark().unwrap().1["host"], "b");
+    assert_eq!(g.keeper().as_deref(), Some("b"));
     let w = g.session("there", &[("t.txt", "t\n")]);
     let out = g.wt_submit(&w, &["--no-wait"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
@@ -5737,8 +5746,10 @@ fn a_merged_request_leaves_the_follows() {
     let g = OnGitHub::new("follows-merged", "");
     g.discovery("10s");
     g.named("a", "");
-    let b = g.other("b", "", "");
+    // B's pass runs first, so B keeps main and A does not.
+    let b = g.other("b", "", &g.signing("b"));
     b.run("1");
+    assert_eq!(g.keeper().as_deref(), Some("b"));
     let w = g.session("merged", &[("m.txt", "m\n")]);
     let mut submit = g
         .command(env!("CARGO_BIN_EXE_sluice"), &w)
@@ -5792,8 +5803,10 @@ fn a_merged_request_leaves_the_follows() {
 fn two_waits_and_a_status_read_at_one_pace() {
     let g = OnGitHub::new("follows-pace", "reviews = 1");
     g.named("a", "");
-    let b = g.other("b", "", "");
+    // B's pass runs first, so B keeps main and A does not.
+    let b = g.other("b", "", &g.signing("b"));
     b.run("1");
+    assert_eq!(g.keeper().as_deref(), Some("b"));
     let w = g.session("paced", &[("p.txt", "p\n")]);
     let out = g.wt_submit(&w, &["--no-wait"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
@@ -6022,7 +6035,9 @@ impl OnGitHub {
         name: &str,
     ) -> (PathBuf, sluice::profiles::github::forge::Pull) {
         self.named("a", "");
-        self.other("b", "", "").run("1");
+        // B's pass runs first, so B keeps main and A does not.
+        self.other("b", "", &self.signing("b")).run("1");
+        assert_eq!(self.keeper().as_deref(), Some("b"));
         let file = format!("{name}.txt");
         let w = self.session(name, &[(file.as_str(), "x\n")]);
         let out = self.wt_submit(&w, &["--no-wait"]);
