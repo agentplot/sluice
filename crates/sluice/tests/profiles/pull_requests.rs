@@ -221,6 +221,23 @@ impl OnGitHub {
         v["submissions"].as_array().cloned().unwrap_or_default()
     }
 
+    /// 51, D13: submission `id`'s `delivery`, as `sluice status <id>
+    /// --json` gives it; null where it has none.
+    fn delivery(&self, id: &Value) -> Value {
+        let out = self.sluice(&["status", &id.to_string(), "--json"]);
+        assert!(out.status.success(), "{}", text(&out));
+        let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+        v["delivery"].clone()
+    }
+
+    /// The log's lines of `event` naming submission `id`.
+    fn logged(&self, event: &str, id: &Value) -> Vec<Value> {
+        self.log()
+            .into_iter()
+            .filter(|l| l["event"] == event && l["id"] == *id)
+            .collect()
+    }
+
     /// The submissions from pull request `n`.
     fn of(&self, n: u64) -> Vec<Value> {
         let place = format!("pull/{n}");
@@ -1512,18 +1529,84 @@ fn landed_and_merged_by_landing() {
         .contains("## sluice: landed on main as "));
 }
 
-/// 51: a landed pull request's outcome is delivered to the request, and
-/// its submission is marked delivered to it.
+/// 51, C.5; outcome-delivery spec, "A request's landing is posted" and "A
+/// post that fails": the driver's post of a request's outcome is a
+/// hand-over by `pull-request` to `pull/<n>` that confirms on receipt, so a
+/// landing posted is done, with its hand-over and its confirmation logged,
+/// and no inbox in a worktree on the request's head branch gives it; a
+/// blame whose post GitHub refuses stays owed to the request with no
+/// hand-over (record 0102, design D5).
 #[test]
-fn a_landed_requests_outcome_is_delivered_to_it() {
+fn a_requests_post_confirms_its_outcome_on_receipt() {
     let g = OnGitHub::new("pr-delivered", "");
     let (n, _) = g.by_hand("unit/delivered", &[("t.txt", Some("t\n"))], false);
-    g.step_until("delivered", |g| {
-        g.of(n).first().is_some_and(|s| s["delivered"].is_string())
+    g.step_until("landed", |g| {
+        g.of(n).first().is_some_and(|s| s["state"] == "landed")
     });
-    let s = &g.of(n)[0];
-    assert_eq!(s["state"], "landed", "{s}");
-    assert_eq!(s["delivered_to"], format!("pull/{n}").as_str(), "{s}");
+    let id = g.of(n)[0]["id"].clone();
+    let key = format!("{id}:landed");
+    let reader = format!("pull/{n}");
+    g.step_until("posted", |g| !g.logged("handed", &id).is_empty());
+    let delivery = g.delivery(&id);
+    assert_eq!(delivery["key"], key.as_str(), "{delivery}");
+    assert_eq!(delivery["state"], "done", "{delivery}");
+    let handed = g.logged("handed", &id);
+    assert_eq!(handed.len(), 1, "{handed:?}");
+    assert_eq!(handed[0]["by"], "pull-request");
+    assert_eq!(handed[0]["to"], reader.as_str());
+    let confirmed = g.logged("confirmed", &id);
+    assert_eq!(confirmed.len(), 1, "{confirmed:?}");
+    assert_eq!(confirmed[0]["reader"], reader.as_str());
+    assert_eq!(confirmed[0]["by"], "pull-request");
+    let w = g.repo.dir().with_extension("on-delivered");
+    let _ = std::fs::remove_dir_all(&w);
+    g.repo.git(&[
+        "worktree",
+        "add",
+        "-q",
+        w.to_str().unwrap(),
+        "unit/delivered",
+    ]);
+    let out = g
+        .command(env!("CARGO_BIN_EXE_sluice"), &w)
+        .args(["inbox", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let doc: Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
+    assert_eq!(doc, serde_json::json!({ "outcomes": [] }));
+
+    // A post that fails.
+    let (m, _) = g.by_hand("unit/broken", &[("broken", Some("x\n"))], false);
+    for (method, path) in [
+        ("POST", "/repos/o/r/check-runs"),
+        ("PATCH", "/repos/o/r/check-runs"),
+        ("POST", "/repos/o/r/issues"),
+        ("PATCH", "/repos/o/r/issues"),
+    ] {
+        g.gh.trouble(method, path, usize::MAX, github::Trouble::Status(422));
+    }
+    let until = Instant::now() + Duration::from_secs(60);
+    while g.of(m).iter().all(|s| s["state"] != "failed") {
+        assert!(Instant::now() < until, "never failed: {:?}", g.subs());
+        g.discovery_passes();
+        g.sluice(&["step", "main"]);
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    for _ in 0..2 {
+        g.sluice(&["step", "main"]);
+    }
+    let id = g.of(m)[0]["id"].clone();
+    let delivery = g.delivery(&id);
+    assert_eq!(
+        delivery["reader"],
+        format!("pull/{m}").as_str(),
+        "{delivery}"
+    );
+    assert_eq!(delivery["state"], "owed", "{delivery}");
+    assert_eq!(delivery["handed"], serde_json::json!([]), "{delivery}");
+    assert!(g.logged("handed", &id).is_empty());
 }
 
 /// D1: the queue a check's summary carries in its block, as a program
@@ -2333,13 +2416,17 @@ fn a_waiting_submit_follows_its_pull_request() {
         "{said}"
     );
     assert!(!w.exists(), "the worktree is removed on landing: {said}");
-    // 51: the request's outcome was delivered to it, and the wait that
-    // reported it left that mark as it stood.
-    let s = &g.of(pull.number)[0];
+    // 51: the request's outcome was posted on it, which confirmed it on
+    // receipt, and the wait that reported it left that as it stood.
+    let id = g.of(pull.number)[0]["id"].clone();
+    assert_eq!(g.delivery(&id)["state"], "done");
+    let handed = g.logged("handed", &id);
+    assert_eq!(handed.len(), 1, "{handed:?}");
+    assert_eq!(handed[0]["by"], "pull-request");
     assert_eq!(
-        s["delivered_to"],
+        handed[0]["to"],
         format!("pull/{}", pull.number).as_str(),
-        "{s}"
+        "{handed:?}"
     );
 }
 
@@ -4243,10 +4330,11 @@ fn a_submit_by_name_opens_the_request_from_the_branch() {
 }
 
 /// 124, 51, D6: the request a submit by name opened is blamed while GitHub
-/// refuses every post of its outcome, so the outcome stays undelivered;
+/// refuses every post of its outcome, so the outcome stays owed to the
+/// request with no hand-over;
 /// `sluice inbox --json` in a worktree that has checked out `bolt/x`
 /// collects nothing of it, since no worktree pushed a branch sluice lands
-/// on.
+/// on, and `main`'s status shows it owed to the request.
 #[test]
 fn a_request_by_name_is_collected_by_no_worktree() {
     let g = OnGitHub::checked_policy("pr-by-name-inbox", "", "1m", "", BOLTS);
@@ -4279,7 +4367,7 @@ fn a_request_by_name_is_collected_by_no_worktree() {
     let sub = g.of(n).into_iter().find(|s| s["id"] == id).unwrap();
     assert_eq!(sub["state"], "failed", "{sub}");
     assert_eq!(sub["from"]["head"], "bolt/x", "{sub}");
-    assert_eq!(sub["delivered"], Value::Null, "{sub}");
+    assert_eq!(g.delivery(&sub["id"])["state"], "owed", "{sub}");
 
     let w = g.repo.dir().with_extension("on-bolt");
     let _ = std::fs::remove_dir_all(&w);
@@ -4294,8 +4382,29 @@ fn a_request_by_name_is_collected_by_no_worktree() {
     let doc: Value =
         serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
     assert_eq!(doc, serde_json::json!({ "outcomes": [] }));
-    let sub = g.of(n).into_iter().find(|s| s["id"] == id).unwrap();
-    assert_eq!(sub["delivered"], Value::Null, "{sub}");
+    let id = Value::from(id);
+    assert_eq!(g.delivery(&id)["reader"], format!("pull/{n}").as_str());
+    assert_eq!(g.delivery(&id)["handed"], serde_json::json!([]));
+    // Submit-by-name spec, "No worktree on the branch collects its
+    // outcome": still owed to the request, it is shown in `main`'s status
+    // under the request, handed over by nothing (record 0102, D13).
+    let out = g.sluice(&["status", "main"]);
+    let said = text(&out);
+    let owed = said
+        .split_once("OWED\n")
+        .unwrap_or_else(|| panic!("no OWED section: {said}"))
+        .1;
+    let mut lines = owed.lines();
+    assert!(
+        lines
+            .next()
+            .unwrap_or_default()
+            .starts_with(&format!("  pull/{n}")),
+        "{said}"
+    );
+    let row = lines.next().unwrap_or_default();
+    assert!(row.contains(&format!("{id}:failed #{id}")), "{said}");
+    assert!(row.contains("handed over by nothing"), "{said}");
 }
 
 // ---------------------------------------------------------------------------

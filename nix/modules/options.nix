@@ -125,6 +125,13 @@ in
           default = { };
           description = "`[peers]`: how long a quiet host keeps a branch, how often this host shows it is alive, and its name among the hosts (74).";
         };
+        deliveries = mkOption {
+          type = table {
+            expire_after = unset types.str "How long an outcome this host's rounds record is owed to its submitter's work before it shows as expired, still owed, a duration such as `\"168h\"` or `\"90m\"`, at least a second. Where unset, `\"168h\"` (51).";
+          };
+          default = { };
+          description = "`[deliveries]`: how long an outcome is owed before it shows as expired (51).";
+        };
         caches =
           unset
             (types.listOf (table {

@@ -69,7 +69,12 @@
             inherit version;
             env.SLUICE_VERSION = version;
             src = self;
-            cargoLock.lockFile = ./Cargo.lock;
+            cargoLock = {
+              lockFile = ./Cargo.lock;
+              # agentplot/weir at the revision Cargo.toml names, which
+              # moves with it (record 0102).
+              outputHashes."weir-delivery-0.0.0" = "sha256-29h7paqrZ2AONJ/Xs2KBTF+9qYJWJMoJBZDE+OIxqoc=";
+            };
             cargoBuildFlags = [
               "-p"
               "sluice"

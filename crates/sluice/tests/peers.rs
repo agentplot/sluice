@@ -264,6 +264,60 @@ fn a_submission_lands_by_another_host() {
     );
 }
 
+/// 51, rule core.11; outcome-deliveries spec, "A branch whose state is
+/// on its remote": a submission from worktree `unit/x` on the first host
+/// lands there on `main`, whose state is on origin; on the second host, a
+/// worktree on `unit/x` collects its landing with `sluice inbox --json`,
+/// since its delivery is among the branch's state on origin, and hands it
+/// over by `inbox` there (record 0102, D3).
+#[test]
+fn an_outcome_on_the_remote_is_collected_on_another_host() {
+    let (host_a, host_b, _origin) = two_hosts("peers-inbox", "[\"a\", \"b\"]");
+    let id = host_a.submit("x");
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while host_a.state_of(id) != "landed" {
+        assert!(
+            Instant::now() < deadline,
+            "never landed: {}",
+            host_a.state_of(id)
+        );
+        let out = host_a.sluice(&["step", "main"]);
+        assert!(out.status.success(), "{}", text(&out));
+        std::thread::sleep(Duration::from_millis(200));
+    }
+
+    let dir = host_b.sessions.path().join("x");
+    host_b.repo.git(&[
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        "unit/x",
+        dir.to_str().unwrap(),
+        "main",
+    ]);
+    let out = host_b
+        .command(&dir)
+        .args(["inbox", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let v: serde_json::Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
+    let outcomes = v["outcomes"].as_array().unwrap();
+    assert_eq!(outcomes.len(), 1, "{v}");
+    assert_eq!(outcomes[0]["id"], id, "{v}");
+    assert_eq!(outcomes[0]["state"], "landed", "{v}");
+    assert_eq!(
+        outcomes[0]["delivery"]["key"],
+        format!("{id}:landed").as_str(),
+        "{v}"
+    );
+    assert_eq!(outcomes[0]["delivery"]["reader"], "unit/x", "{v}");
+    let handed = outcomes[0]["delivery"]["handed"].as_array().unwrap();
+    assert_eq!(handed.last().unwrap()["by"], "inbox", "{v}");
+}
+
 /// 124, 27; record 0069: two hosts share origin, whose `main` names
 /// `[signers.box]` with box's key and `remote = "origin"`; the second
 /// host's own `main`, moved past the protection, adds a

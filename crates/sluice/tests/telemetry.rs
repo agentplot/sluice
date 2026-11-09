@@ -400,6 +400,7 @@ fn telemetry_is_off_unless_asked() {
             peers: Default::default(),
             systems: None,
             caches: Vec::new(),
+            expire_after: sluice_core::EXPIRE_AFTER,
         },
     )
     .with_running(repo.dir().join(".git/host-running"));

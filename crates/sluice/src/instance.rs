@@ -37,6 +37,9 @@
 //! lease = "5m"
 //! alive = "2m"
 //!
+//! [deliveries]
+//! expire_after = "168h"
+//!
 //! [[caches]]                       # a compile server's cache
 //! dir = "~/.cache/sccache"
 //! socket = "~/.cache/sccache/server.sock"
@@ -52,7 +55,9 @@
 //! `[runs] systems` names the systems this host runs, of those the
 //! policy names (85, 87); `[signing]` the signer it signs its runs as
 //! and its SSH key (78); `[peers]` the lease and the bound on a host's
-//! sign of life, the host's and never a branch's (74).
+//! sign of life, the host's and never a branch's (74); `[deliveries]
+//! expire_after` how long an outcome its rounds record is owed before it
+//! expires, a week where unset (51; weir 104; record 0102).
 //!
 //! `[[caches]]` are the host's shared caches, as its keeper declares them
 //! (35, 71; ADR 0049): each a directory outside every checkout, `dir`,
@@ -98,6 +103,9 @@ pub struct Instance {
     pub systems: Option<Vec<String>>,
     /// The host's shared caches, which every run is given (35, 71).
     pub caches: Vec<HostCache>,
+    /// 51: how long an outcome this host's rounds record is owed before it
+    /// expires, `[deliveries] expire_after` (weir 104; design D9).
+    pub expire_after: Duration,
 }
 
 /// One of the host's `[[caches]]`: a directory outside every checkout,
@@ -175,6 +183,8 @@ struct ConfigForm {
     signing: Option<SigningForm>,
     #[serde(default)]
     peers: PeersForm,
+    #[serde(default)]
+    deliveries: DeliveriesForm,
     /// Each read on its own, so what is wrong with one is named by its
     /// place among them.
     #[serde(default)]
@@ -203,6 +213,12 @@ struct PeersForm {
     lease: Option<String>,
     alive: Option<String>,
     name: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct DeliveriesForm {
+    expire_after: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -341,6 +357,7 @@ impl Instance {
             s => s,
         };
         let caches = caches(form.caches, home)?;
+        let expire_after = expire_after(form.deliveries.expire_after)?;
         Ok(Instance {
             bound,
             reserved,
@@ -350,6 +367,7 @@ impl Instance {
             peers,
             systems,
             caches,
+            expire_after,
         })
     }
 
@@ -384,6 +402,7 @@ impl Instance {
             peers: Peers::default(),
             systems: None,
             caches: Vec::new(),
+            expire_after: sluice_core::EXPIRE_AFTER,
         })
     }
 
@@ -393,6 +412,23 @@ impl Instance {
     pub fn jobs(&self) -> usize {
         (self.processors / self.bound).max(1)
     }
+}
+
+/// 51: `[deliveries] expire_after`, a duration as sluice's settings write
+/// one, a week where unset; refused, naming the setting, where it does not
+/// read or is under a second, which weir's span cannot be (weir 104;
+/// design D9).
+fn expire_after(text: Option<String>) -> Result<Duration> {
+    let Some(text) = text else {
+        return Ok(sluice_core::EXPIRE_AFTER);
+    };
+    let span = sluice_core::policy::parse_duration(&text).context("[deliveries] expire_after")?;
+    if span < Duration::from_secs(1) {
+        bail!(
+            "[deliveries] expire_after = {text:?} is under a second, the least an outcome is owed"
+        );
+    }
+    Ok(span)
 }
 
 /// The host's `[[caches]]`, `~` expanded in each `dir` and `socket`;
@@ -716,6 +752,39 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// 51: an outcome is owed a week where the host sets no `[deliveries]
+    /// expire_after`, and the span it sets where it does (weir 104; design
+    /// D9).
+    #[test]
+    fn deliveries_expire_after_168h_where_unset() {
+        let none = Instance::from_file(None, 4).unwrap();
+        assert_eq!(none.expire_after, Duration::from_secs(168 * 3600));
+        let empty = with("[deliveries]\n", 4).unwrap();
+        assert_eq!(empty.expire_after, Duration::from_secs(168 * 3600));
+        let day = with("[deliveries]\nexpire_after = \"24h\"\n", 4).unwrap();
+        assert_eq!(day.expire_after, Duration::from_secs(24 * 3600));
+        let short = with("[deliveries]\nexpire_after = \"90m\"\n", 4).unwrap();
+        assert_eq!(short.expire_after, Duration::from_secs(90 * 60));
+    }
+
+    /// 51: a span that does not read, or under a second, is refused naming
+    /// `[deliveries] expire_after`, and so is a field `[deliveries]` does
+    /// not name (design D9).
+    #[test]
+    fn deliveries_expire_after_that_does_not_read_is_refused() {
+        for text in ["\"a week\"", "\"0s\"", "\"\"", "168"] {
+            let why = format!(
+                "{:#}",
+                with(&format!("[deliveries]\nexpire_after = {text}\n"), 4).unwrap_err()
+            );
+            assert!(why.contains("expire_after"), "{text}: {why}");
+            if text.starts_with('"') {
+                assert!(why.contains("[deliveries] expire_after"), "{text}: {why}");
+            }
+        }
+        assert!(with("[deliveries]\nexpires = \"24h\"\n", 4).is_err());
+    }
+
     /// `[signing]`, `[peers]` and `[runs] systems` (74, 78, 87).
     #[test]
     fn signing_peers_and_systems() {
@@ -874,9 +943,10 @@ dir = "/caches/moon"
         );
     }
 
-    /// 35, 71, 74, 78, 87, 136; record 0098: the file sluice's flake module
-    /// renders with every key it declares set, read by the reader that
-    /// refuses a field it does not know, as its settings name it.
+    /// 35, 51, 71, 74, 78, 87, 136; records 0098, 0102: the file sluice's
+    /// flake module renders with every key it declares set, read by the
+    /// reader that refuses a field it does not know, as its settings name
+    /// it, the span an outcome is owed among them.
     #[test]
     fn the_modules_file_is_read_as_written() {
         use std::os::unix::fs::PermissionsExt;
@@ -938,6 +1008,7 @@ dir = "/caches/moon"
                         env: variables(&[("MOON_CACHE_SHARED_WORKTREE_CACHE", "true")]),
                     },
                 ],
+                expire_after: Duration::from_secs(72 * 3600),
             }
         );
     }

@@ -2934,8 +2934,10 @@ impl Driver for FakeDriver {
         if std::mem::take(&mut inner.crash_notify) {
             bail!("crashed after delivering {}", notification.id);
         }
-        Ok(Delivery::Delivered {
+        Ok(Delivery::Handed {
+            way: "notice".into(),
             to: to.session.clone().unwrap_or_else(|| to.agent.clone()),
+            confirms: false,
         })
     }
 }
@@ -3340,7 +3342,11 @@ mod tests {
             },
             report: None,
         };
-        let delivered = |to: &str| Delivery::Delivered { to: to.into() };
+        let delivered = |to: &str| Delivery::Handed {
+            way: "notice".into(),
+            to: to.into(),
+            confirms: false,
+        };
         assert_eq!(f.driver.notify(&to("unit/a")).unwrap(), delivered("pane-1"));
         assert_eq!(
             f.driver.notify(&to("unit/b")).unwrap(),

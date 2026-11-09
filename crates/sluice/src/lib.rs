@@ -39,8 +39,8 @@ use reader::{Driver, Drives, Reader};
 use sluice_core::overview::{in_queue, BranchView, Held};
 use sluice_core::records::{Beside, BranchHold, CopyBehind, Event, FailedTask, State, Submission};
 use sluice_core::{
-    Accepted, AmendRefusal, Clock, CopyDiffers, Forecast, Forecasted, GroupRequest, Lookup,
-    Pending, Requester, Seams, Serves, Sluice, Status, Step, SubmitHead, SubmitRefusal,
+    Accepted, AmendRefusal, Clock, Collect, CopyDiffers, Forecast, Forecasted, GroupRequest,
+    Lookup, Owed, Requester, Seams, Serves, Sluice, Status, Step, SubmitHead, SubmitRefusal,
     SubmitRequest, Unread, WithdrawRefusal, Withdrew,
 };
 use sluice_seams::{Decided, Outcome, Rev, SessionPlace, Submitter};
@@ -145,13 +145,33 @@ Exit codes:
 /// `sluice inbox --help`'s examples and exits (51, 135).
 const INBOX_AFTER_HELP: &str = "\
 Examples:
-  $ sluice inbox           once, when a session starts again
+  $ sluice inbox                    once, when a session starts again
   $ sluice inbox --json
+  $ sluice inbox --confirm --json   a caller that keeps what it is given
+  $ sluice inbox --new              only what nothing has handed over yet
+
+Each outcome is handed over again by every inbox until it is confirmed:
+sluice confirm <key> once it has been acted on.
 
 Exit codes:
-  0    delivered every outcome pending, or there was none
+  0    handed over every outcome owed, or there was none
   3    a branch's records could not be read, said on stderr after the rest
-       is delivered; or sluice itself failed
+       is handed over; or sluice itself failed
+  64   a command line sluice cannot read";
+
+/// `sluice confirm --help`'s examples and exits (51).
+const CONFIRM_AFTER_HELP: &str = "\
+Examples:
+  $ sluice confirm 12:landed
+  $ sluice confirm 12:landed 15:conflict
+  $ sluice confirm 13:failed --as operator   a removed worktree's
+
+Exit codes:
+  0    confirmed, or confirmed before
+  1    no outcome is owed under a key
+  2    a key's outcome is owed to another worktree: --as operator confirms it
+  3    a branch's records could not be read, so a key not found may be
+       there; or sluice itself failed
   64   a command line sluice cannot read";
 
 /// `--timeout`'s value, read as the policy reads a duration; one it cannot
@@ -268,6 +288,14 @@ pub enum Command {
         /// One JSON document on stdout.
         #[arg(long)]
         json: bool,
+        /// Waiting, confirm the outcome it reports on receipt, for a
+        /// caller that keeps what it is given (51).
+        #[arg(long, conflicts_with_all = ["no_wait", "check", "status"])]
+        confirm: bool,
+        /// Waiting, confirm on receipt a landing alone: `wt submit`'s, for
+        /// a landing whose worktree it removes.
+        #[arg(long, hide = true)]
+        confirm_landing: bool,
     },
     /// Wait for a submission's outcome, running sluice's rounds meanwhile
     /// unless `sluice run` drives the repository on this host, as a waiting
@@ -287,16 +315,51 @@ pub enum Command {
         /// One JSON document on stdout: the submission's record.
         #[arg(long)]
         json: bool,
+        /// Confirm the outcome it reports on receipt, for a caller that
+        /// keeps what it is given (51).
+        #[arg(long)]
+        confirm: bool,
+        /// Confirm on receipt a landing alone: `wt submit`'s, for a
+        /// landing whose worktree it removes.
+        #[arg(long, hide = true)]
+        confirm_landing: bool,
     },
-    /// Collect every outcome pending for this worktree's submissions, print
-    /// each, and mark each delivered.
+    /// Hand over every outcome still owed to this worktree's submissions,
+    /// printing each with the key to confirm it by; each is handed over
+    /// again until it is confirmed.
     #[command(after_help = INBOX_AFTER_HELP)]
     Inbox {
         /// The worktree whose outcomes are collected.
         #[arg(long, default_value = ".")]
         worktree: String,
         /// One JSON document on stdout: `{"outcomes":[...]}`, each the
-        /// submission's record.
+        /// submission's record with its `delivery`.
+        #[arg(long)]
+        json: bool,
+        /// Confirm each outcome on receipt, for a caller that keeps what it
+        /// is given for readers of its own.
+        #[arg(long)]
+        confirm: bool,
+        /// Only the outcomes no way has handed over yet: no notice pushed,
+        /// no inbox or wait that printed them.
+        #[arg(long)]
+        new: bool,
+    },
+    /// Confirm an outcome once it has been acted on, by the key its notice
+    /// and `sluice inbox` give it, so it is handed over no more.
+    #[command(after_help = CONFIRM_AFTER_HELP)]
+    Confirm {
+        /// Each outcome's key, as `12:landed`.
+        #[arg(required = true)]
+        keys: Vec<String>,
+        /// `operator`: confirm for the outcome's own reader, such as a
+        /// worktree removed before it confirmed.
+        #[arg(long = "as", value_parser = ["operator"])]
+        who: Option<String>,
+        /// The worktree whose outcomes are confirmed.
+        #[arg(long, default_value = ".")]
+        worktree: String,
+        /// One JSON document on stdout: `{"confirmed":[...]}`.
         #[arg(long)]
         json: bool,
     },
@@ -1175,6 +1238,7 @@ impl Cli {
                 Command::Submit { json, .. }
                 | Command::Wait { json, .. }
                 | Command::Inbox { json, .. }
+                | Command::Confirm { json, .. }
                 | Command::Status { json, .. }
                 | Command::Overview { json, .. }
                 | Command::Exec { json, .. }
@@ -1235,7 +1299,10 @@ pub fn run(
             status,
             worktree,
             json,
+            confirm,
+            confirm_landing,
         } => {
+            let confirms = Confirms::of(confirm, confirm_landing);
             // 124, D1: a submit by name reads no worktree, and has no last
             // submission of one to report.
             if head.is_some() && !check {
@@ -1337,7 +1404,8 @@ pub fn run(
                     };
                     let named = SubmitHead::Branch(named);
                     return submit_pull(
-                        &s, host, pulls, clock, &named, &branch, mode, json, pause, tick, out,
+                        &s, host, pulls, clock, &named, &branch, mode, json, confirms, pause, tick,
+                        out,
                     );
                 }
                 return submit(
@@ -1355,6 +1423,7 @@ pub fn run(
                     },
                     no_wait,
                     json,
+                    confirms,
                     pause,
                     tick,
                     out,
@@ -1371,7 +1440,8 @@ pub fn run(
                 };
                 let worktree = SubmitHead::Worktree(worktree);
                 return submit_pull(
-                    &s, host, pulls, clock, &worktree, &branch, mode, json, pause, tick, out,
+                    &s, host, pulls, clock, &worktree, &branch, mode, json, confirms, pause, tick,
+                    out,
                 );
             }
             if status {
@@ -1392,6 +1462,7 @@ pub fn run(
                 },
                 no_wait,
                 json,
+                confirms,
                 pause,
                 tick,
                 out,
@@ -1402,7 +1473,10 @@ pub fn run(
             timeout,
             worktree,
             json,
+            confirm,
+            confirm_landing,
         } => {
+            let confirms = Confirms::of(confirm, confirm_landing);
             let deadline = timeout.map(|t| {
                 clock.now() + chrono::Duration::from_std(t).unwrap_or(chrono::Duration::MAX)
             });
@@ -1421,7 +1495,8 @@ pub fn run(
                     let mode = PullMode::Wait { deadline };
                     let worktree = SubmitHead::Worktree(worktree);
                     return submit_pull(
-                        &s, host, pulls, clock, &worktree, &target, mode, json, pause, tick, out,
+                        &s, host, pulls, clock, &worktree, &target, mode, json, confirms, pause,
+                        tick, out,
                     );
                 }
                 Err(_) => match last_submitted(&s, &worktree, &target)? {
@@ -1446,10 +1521,22 @@ pub fn run(
                 tick,
                 copy: None,
                 worktree: Some(&worktree),
+                confirms,
             };
             await_submission(&s, &waiting, sub, None, out)
         }
-        Command::Inbox { worktree, json } => inbox(&s, &worktree, json, out),
+        Command::Inbox {
+            worktree,
+            json,
+            confirm,
+            new,
+        } => inbox(&s, &worktree, json, confirm, new, out),
+        Command::Confirm {
+            keys,
+            who,
+            worktree,
+            json,
+        } => confirm(&s, &keys, who.is_some(), &worktree, json, out),
         Command::Step { branch, json } => {
             intake(pulls, seams, clock, &branch, Taker::Step, json, out);
             let round = s.round(&branch)?;
@@ -1674,7 +1761,11 @@ pub fn run(
                 }
                 Lookup::Unfound(unread) => unfound(id, &unread, json, out),
                 Lookup::Found(sub) if json => {
-                    let doc = with_waiting(&s, &sub, decided_document(&sub, None)?);
+                    let mut doc = with_waiting(&s, &sub, decided_document(&sub, None)?);
+                    // 51, D13: a decided submission's delivery.
+                    if let Some(d) = s.delivery_of(&sub)? {
+                        doc["delivery"] = d.to_json();
+                    }
                     writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
                     Ok(0)
                 }
@@ -1749,10 +1840,14 @@ pub fn run(
                     telemetry::warn(&format!("sluice: warning: {e:#}"));
                     None
                 });
+                // 51, D13: what the branch's readers are owed, shown after
+                // its queue.
+                let owed = s.owed_on_branch(&target)?;
                 if json {
                     let mut doc = status_json(&status, &shown)?;
                     // 84, record 0074: what each combination waits for.
                     doc["waiting"] = progress::waiting_json(&s.branch_view_of(&target)?);
+                    doc["owed"] = owed_json(&owed);
                     if let Some(a) = &across {
                         doc["taken_in_by"] = serde_json::to_value(&a.taken_in_by)?;
                         doc["pull_requests"] = serde_json::to_value(&a.pull_requests)?;
@@ -1789,6 +1884,7 @@ pub fn run(
                             writeln!(out, "  {}", a.line(row))?;
                         }
                     }
+                    write_owed(&owed, out)?;
                 }
                 Ok(0)
             }
@@ -2448,6 +2544,7 @@ fn submit(
     req: SubmitRequest,
     no_wait: bool,
     json: bool,
+    confirms: Confirms,
     pause: &dyn Pause,
     tick: Duration,
     out: &mut dyn Write,
@@ -2509,6 +2606,7 @@ fn submit(
             SubmitHead::Worktree(w) => Some(w),
             SubmitHead::Branch(_) => None,
         },
+        confirms,
     };
     await_submission(s, &waiting, sub, Some(State::Queued), out)
 }
@@ -2598,6 +2696,7 @@ fn submit_group(
         tick,
         copy: None,
         worktree: None,
+        confirms: Confirms::No,
     };
     // Each in turn; once stopped, the rest as they stand.
     let mut subs = Vec::new();
@@ -2659,6 +2758,7 @@ fn submit_group(
                     branch,
                     &BTreeMap::new(),
                     by.as_ref(),
+                    None,
                     None,
                     false,
                     out,
@@ -2843,9 +2943,41 @@ struct Waiting<'a> {
     /// 124: how the host's copy differed from what the submit waited on
     /// submitted, carried by its `--json` document.
     copy: Option<&'a CopyDiffers>,
-    /// 51: the worktree that waits, whose own outcome the wait delivers
-    /// when it reports it; none for a wait that delivers nothing.
+    /// 51: the worktree that waits, whose own outcome the wait hands over
+    /// when it reports it; none for a wait that hands over nothing.
     worktree: Option<&'a str>,
+    /// 51: whether its hand-over confirms on receipt (design D5).
+    confirms: Confirms,
+}
+
+/// 51: whether a wait's hand-over of the outcome it reports confirms it on
+/// receipt: never, unless its caller says so, for any outcome or, for
+/// `wt submit`, for a landing whose worktree it removes (weir 103; design
+/// D5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Confirms {
+    No,
+    Every,
+    Landing,
+}
+
+impl Confirms {
+    fn of(confirm: bool, landing: bool) -> Confirms {
+        match (confirm, landing) {
+            (true, _) => Confirms::Every,
+            (false, true) => Confirms::Landing,
+            (false, false) => Confirms::No,
+        }
+    }
+
+    /// Whether the hand-over of `sub`'s outcome confirms it.
+    fn confirms(self, sub: &Submission) -> bool {
+        match self {
+            Confirms::No => false,
+            Confirms::Every => true,
+            Confirms::Landing => sub.state == State::Landed,
+        }
+    }
 }
 
 /// ADR 0041: wait on `sub` to its outcome, or as `waiting` bounds it, and
@@ -2876,6 +3008,7 @@ fn await_submission(
                 by.as_ref(),
                 waiting.copy,
                 waiting.json,
+                waiting.confirms,
                 out,
             )?;
             if let Some(e) = after {
@@ -2909,6 +3042,7 @@ fn await_submission(
                 &sub.branch,
                 mode,
                 waiting.json,
+                waiting.confirms,
                 waiting.pause,
                 waiting.tick,
                 out,
@@ -2943,7 +3077,7 @@ fn decided_document(sub: &Submission, decided: Option<&Decided>) -> Result<serde
     let mut doc = serde_json::to_value(sub)?;
     let own = sub.decided();
     if let Some(d) = decided.or(own.as_ref()) {
-        doc["notice"] = words::notice(sub.id, &sub.branch, d).into();
+        doc["notice"] = sluice_core::notice(sub.id, &sub.branch, d).into();
     }
     Ok(doc)
 }
@@ -2961,13 +3095,15 @@ fn with_waiting(s: &Sluice<'_>, sub: &Submission, mut doc: serde_json::Value) ->
     doc
 }
 
-/// 51: report `sub`, decided, as [`report`] does; when it is the waiting
-/// `worktree`'s own and pending, the record reported carries the mark,
-/// and it is marked delivered once the report is written and flushed. A
-/// mark that fails is said and leaves the outcome pending for `sluice
-/// inbox`. Only `sub` is marked, the submission the wait reports as its
-/// own, never `by`, what carried its work, whose outcome stays pending
-/// for its own delivery (record 0100 D3).
+/// 51: report `sub`, decided, as [`report`] does, its document giving its
+/// `delivery`; when it is owed to the waiting `worktree`'s reader, it is
+/// recorded handed over by `wait` once the report is written and flushed,
+/// confirmed with it where `confirms` says, and the document gives it as
+/// that leaves it. A hand-over that fails to be recorded is said and leaves
+/// the outcome owed for `sluice inbox`. Only `sub` is handed over, the
+/// submission the wait reports as its own, never `by`, what carried its
+/// work, whose outcome stays owed for its own carriers (record 0100 D3;
+/// design D5, D13).
 #[allow(clippy::too_many_arguments)]
 fn report_delivering(
     s: &Sluice<'_>,
@@ -2978,20 +3114,33 @@ fn report_delivering(
     by: Option<&CarriedBy>,
     copy: Option<&CopyDiffers>,
     json: bool,
+    confirms: Confirms,
     out: &mut dyn Write,
 ) -> Result<i32> {
     let delivering = worktree.and_then(|w| delivering(s, w, &sub));
-    let shown = delivering
-        .as_ref()
-        .and_then(|(pending, to)| pending.marked(to).pop())
-        .unwrap_or(sub);
-    let code = report(s, &shown, branch, names, by, copy, json, out)?;
+    let confirm = confirms.confirms(&sub);
+    let delivery = match &delivering {
+        Some((owed, _)) => owed
+            .outcomes
+            .first()
+            .map(|o| o.left("wait", &owed.at, confirm)),
+        None if json => s.delivery_of(&sub).unwrap_or_else(|e| {
+            telemetry::warn(&format!(
+                "sluice: warning: could not read #{}'s delivery: {e:#}",
+                sub.id
+            ));
+            None
+        }),
+        None => None,
+    };
+    let delivery = delivery.map(|d| d.to_json());
+    let code = report(s, &sub, branch, names, by, copy, delivery, json, out)?;
     out.flush()?;
-    if let Some((pending, to)) = delivering {
-        if let Err(e) = pending.mark(&to) {
+    if let Some((owed, to)) = delivering {
+        if let Err(e) = owed.hand("wait", &to, confirm) {
             telemetry::error(&format!(
-                "sluice: could not mark #{} delivered, so it stays pending for sluice inbox: {e:#}",
-                shown.id
+                "sluice: could not record #{}'s hand-over, so sluice inbox hands it over: {e:#}",
+                sub.id
             ));
         }
     }
@@ -3637,6 +3786,7 @@ fn report(
     names: &BTreeMap<u64, String>,
     by: Option<&CarriedBy>,
     copy: Option<&CopyDiffers>,
+    delivery: Option<serde_json::Value>,
     json: bool,
     out: &mut dyn Write,
 ) -> Result<i32> {
@@ -3650,7 +3800,11 @@ fn report(
         s
     };
     if json {
-        let doc = with_carried(with_copy(serde_json::to_value(sub)?, copy)?, by);
+        let mut doc = with_carried(with_copy(serde_json::to_value(sub)?, copy)?, by);
+        // 51, D13: a decided submission's delivery, where it has one.
+        if let Some(delivery) = delivery {
+            doc["delivery"] = delivery;
+        }
         writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
         return Ok(exit_for(sub));
     }
@@ -4074,39 +4228,52 @@ fn ways_on(s: &Sluice<'_>, sub: &Submission, branch: &str) -> Result<Vec<String>
     Ok(ways)
 }
 
-/// 51, 135: `sluice inbox`: collect every outcome pending for the
-/// submissions of `worktree`, print each in the notice the round pushes and
-/// what `sluice wait <id>` prints, then mark each delivered to it. What it
-/// prints is written before it marks, so a collect stopped between them is
-/// delivered again; each branch it collects from is locked meanwhile, so
-/// no round pushes the same outcome.
-fn inbox(s: &Sluice<'_>, worktree: &str, json: bool, out: &mut dyn Write) -> Result<i32> {
+/// 51, 135: `sluice inbox`: hand over every outcome still owed to the
+/// readers of `worktree`, or with `new` only those no way has handed over
+/// yet: print each in the notice the round pushes and what `sluice wait
+/// <id>` prints, then, unless `confirms`, the line naming the key to
+/// confirm it by, and record each handed over by `inbox` to it, confirmed
+/// with it where `confirms`. What it prints is written before it records,
+/// so a collect stopped between them hands it over again; each branch it
+/// collects from is locked meanwhile, so no round pushes the same outcome
+/// (record 0102; design D8).
+fn inbox(
+    s: &Sluice<'_>,
+    worktree: &str,
+    json: bool,
+    confirms: bool,
+    new: bool,
+    out: &mut dyn Write,
+) -> Result<i32> {
     let Some((me, to)) = recipient(s, worktree)? else {
         if json {
             writeln!(out, "{}", serde_json::json!({ "outcomes": [] }))?;
         }
         return Ok(0);
     };
-    let pending = s.pending(&me)?;
-    let marked = pending.marked(&to);
-    for u in &pending.unread {
+    let collect = if new { Collect::New } else { Collect::All };
+    let owed = s.owed(&me, collect)?;
+    for u in &owed.unread {
         telemetry::error(&format!(
             "sluice: could not read {}'s records: {}",
             u.branch, u.error
         ));
     }
     if json {
-        // Each element is the record as this run marks it, with the notice
-        // the round pushes for it (D8).
-        let outcomes = pending
+        // Each element is the record with the notice the round pushes for
+        // it, and its delivery as this run leaves it (D8, D13).
+        let outcomes = owed
             .outcomes
             .iter()
-            .zip(&marked)
-            .map(|(o, sub)| decided_document(sub, Some(&o.decided)))
+            .map(|o| {
+                let mut doc = decided_document(&o.submission, Some(&o.decided))?;
+                doc["delivery"] = o.left("inbox", &owed.at, confirms).to_json();
+                Ok(doc)
+            })
             .collect::<Result<Vec<_>>>()?;
         let mut doc = serde_json::json!({ "outcomes": outcomes });
-        if !pending.unread.is_empty() {
-            let unread: Vec<_> = pending
+        if !owed.unread.is_empty() {
+            let unread: Vec<_> = owed
                 .unread
                 .iter()
                 .map(|u| serde_json::json!({ "branch": u.branch, "error": u.error }))
@@ -4116,18 +4283,152 @@ fn inbox(s: &Sluice<'_>, worktree: &str, json: bool, out: &mut dyn Write) -> Res
         writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
     } else {
         let names = BTreeMap::new();
-        for (i, (o, sub)) in pending.outcomes.iter().zip(&marked).enumerate() {
+        for (i, o) in owed.outcomes.iter().enumerate() {
+            let sub = &o.submission;
             if i > 0 {
                 writeln!(out)?;
             }
-            writeln!(out, "{}", words::notice(sub.id, &o.branch, &o.decided))?;
-            report(s, sub, &o.branch, &names, None, None, false, out)?;
+            writeln!(
+                out,
+                "{}",
+                sluice_core::notice(sub.id, &o.branch, &o.decided)
+            )?;
+            report(s, sub, &o.branch, &names, None, None, None, false, out)?;
+            if !confirms {
+                writeln!(out, "{}", words::confirm_line(o))?;
+            }
         }
     }
     out.flush()?;
-    let unread = !pending.unread.is_empty();
-    pending.mark(&to)?;
+    let unread = !owed.unread.is_empty();
+    owed.hand("inbox", &to, confirms)?;
     Ok(if unread { INTERNAL } else { 0 })
+}
+
+/// 51: `sluice confirm <key>...`: confirm each key for the readers
+/// `worktree` reads as, or, `as_operator`, for each outcome's own reader,
+/// and say each: confirmed, confirmed before and when, not found, or owed
+/// to another reader, in the order given. The exit is the worst of the
+/// keys', 3 over 2 over 1: a branch it could not read where a key was not
+/// found is 3 (rule core.11). Under `--json`, one document of the keys
+/// confirmed, or the error document of the worst refusal (design D7).
+fn confirm(
+    s: &Sluice<'_>,
+    keys: &[String],
+    as_operator: bool,
+    worktree: &str,
+    json: bool,
+    out: &mut dyn Write,
+) -> Result<i32> {
+    let who = if as_operator {
+        sluice_core::ConfirmAs::Operator
+    } else {
+        match recipient(s, worktree)? {
+            Some((me, _)) => sluice_core::ConfirmAs::Folder(me),
+            None => {
+                let text = "this folder is on no branch, so it is owed nothing to confirm";
+                let next = [
+                    "sluice inbox".to_string(),
+                    "sluice confirm <key> --as operator".to_string(),
+                ];
+                told::tell(out, json, Kind::Refused, text, &next)?;
+                return Ok(CONFLICT);
+            }
+        }
+    };
+    let got = s.confirm(keys, &who)?;
+    let unread = !got.unread.is_empty();
+    for u in &got.unread {
+        telemetry::error(&format!(
+            "sluice: could not read {}'s records: {}",
+            u.branch, u.error
+        ));
+    }
+    let mut code = 0;
+    let mut worst: Option<(Kind, String, Vec<String>)> = None;
+    let mut confirmed = Vec::new();
+    for answer in &got.answers {
+        use sluice_core::Confirmation as C;
+        match answer {
+            C::Confirmed {
+                key,
+                branch,
+                id,
+                reader,
+                at,
+            }
+            | C::Before {
+                key,
+                branch,
+                id,
+                reader,
+                at,
+            } => {
+                let first = matches!(answer, C::Confirmed { .. });
+                confirmed.push(serde_json::json!({
+                    "key": key, "branch": branch, "reader": reader, "at": at, "first": first,
+                }));
+                if !json {
+                    match first {
+                        true => writeln!(out, "{}", words::confirmed(key, *id, branch))?,
+                        false => writeln!(out, "{key} was confirmed at {at}")?,
+                    }
+                }
+            }
+            C::NotFound { key } if unread => {
+                code = code.max(INTERNAL);
+                let text = format!(
+                    "no branch read holds an outcome under {key}, and a branch could not be read"
+                );
+                worst = Some((Kind::Internal, text, vec![format!("sluice confirm {key}")]));
+            }
+            C::NotFound { key } => {
+                let text = format!("no outcome is owed under {key}: sluice inbox gives the keys");
+                if code < FAILED {
+                    worst = Some((Kind::NotFound, text.clone(), vec!["sluice inbox".into()]));
+                }
+                code = code.max(FAILED);
+                if !json {
+                    writeln!(out, "{text}")?;
+                }
+            }
+            C::Another {
+                key,
+                branch,
+                readers,
+            } => {
+                let text = format!(
+                    "refused: {key} on {branch} is owed to {}, not this worktree: sluice \
+                     confirm {key} --as operator confirms it for them",
+                    readers.join(", ")
+                );
+                if code < CONFLICT {
+                    worst = Some((
+                        Kind::Refused,
+                        text.clone(),
+                        vec![format!("sluice confirm {key} --as operator")],
+                    ));
+                }
+                code = code.max(CONFLICT);
+                if !json {
+                    writeln!(out, "{text}")?;
+                }
+            }
+        }
+    }
+    if json {
+        match &worst {
+            Some((kind, text, next)) => told::tell(out, true, *kind, text, next)?,
+            None => writeln!(
+                out,
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({ "confirmed": confirmed }))?
+            )?,
+        }
+    } else if let Some((Kind::Internal, text, _)) = &worst {
+        writeln!(out, "{text}")?;
+    }
+    Ok(code)
 }
 
 /// 51: who works in `worktree`, and the name an outcome is delivered to
@@ -4158,17 +4459,19 @@ fn delivering<'s, 'a>(
     s: &'s Sluice<'a>,
     worktree: &str,
     sub: &Submission,
-) -> Option<(Pending<'s, 'a>, String)> {
-    let found = recipient(s, worktree).and_then(|r| {
-        r.map(|(me, to)| Ok((s.pending_one(&sub.branch, sub.id, &me)?, to)))
-            .transpose()
-    });
+) -> Option<(Owed<'s, 'a>, String)> {
+    let one = || Collect::One {
+        branch: sub.branch.clone(),
+        id: sub.id,
+    };
+    let found = recipient(s, worktree)
+        .and_then(|r| r.map(|(me, to)| Ok((s.owed(&me, one())?, to))).transpose());
     match found {
         Ok(Some((pending, to))) if !pending.outcomes.is_empty() => Some((pending, to)),
         Ok(_) => None,
         Err(e) => {
             telemetry::error(&format!(
-                "sluice: could not read whether #{} is delivered, so it stays pending for sluice inbox: {e:#}",
+                "sluice: could not read whether #{} is owed here, so sluice inbox hands it over: {e:#}",
                 sub.id
             ));
             None
@@ -4379,6 +4682,7 @@ fn submit_pull(
     branch: &str,
     mode: PullMode<'_>,
     json: bool,
+    confirms: Confirms,
     pause: &dyn Pause,
     tick: Duration,
     out: &mut dyn Write,
@@ -4422,6 +4726,7 @@ fn submit_pull(
             tick,
             copy,
             worktree: delivered_to,
+            confirms,
         };
         await_submission(s, &waiting, own, None, out)
     };
@@ -4575,6 +4880,7 @@ fn submit_pull(
                         by,
                         copy.as_ref(),
                         json,
+                        confirms,
                         out,
                     );
                 }
@@ -4596,6 +4902,7 @@ fn submit_pull(
                     None,
                     copy.as_ref(),
                     json,
+                    confirms,
                     out,
                 );
             }
@@ -4629,6 +4936,7 @@ fn submit_pull(
                     Some(&by),
                     copy.as_ref(),
                     json,
+                    confirms,
                     out,
                 );
             }
@@ -4853,6 +5161,7 @@ fn submit_pull(
                         by.as_ref(),
                         copy.as_ref(),
                         json,
+                        confirms,
                         out,
                     )?;
                     after_landing(&e);
@@ -5114,7 +5423,7 @@ fn submit_pull_group(
         let this = match &decided[i] {
             Some(Followed::Done(sub, _)) if json => exit_for(sub),
             Some(Followed::Done(sub, names)) => {
-                report(s, sub, branch, names, None, None, false, out)?
+                report(s, sub, branch, names, None, None, None, false, out)?
             }
             Some(f @ (Followed::Landed { .. } | Followed::SentBack { .. })) if json => {
                 across_exit(f)
@@ -5536,6 +5845,78 @@ fn write_status(
         );
         writeln!(out, "{}", line.trim_end())?;
     }
+    Ok(())
+}
+
+/// 51, D13: a branch's `owed`: each reader owed something, whether any
+/// reader has confirmed under its name, and its deliveries.
+fn owed_json(owed: &[sluice_core::ReaderView]) -> serde_json::Value {
+    owed.iter()
+        .map(|r| {
+            let deliveries: Vec<_> = r
+                .deliveries
+                .iter()
+                .map(|d| {
+                    serde_json::json!({
+                        "key": d.key,
+                        "id": d.id,
+                        "state": if d.expired { "expired" } else { "owed" },
+                        "expires_at": d.expires_at,
+                        "handed": d
+                            .handed
+                            .iter()
+                            .map(|(by, at)| serde_json::json!({ "by": by, "at": at }))
+                            .collect::<Vec<_>>(),
+                    })
+                })
+                .collect();
+            serde_json::json!({
+                "reader": r.reader,
+                "known": r.known,
+                "deliveries": deliveries,
+            })
+        })
+        .collect()
+}
+
+/// 51, D13 (weir 104 to 106; S77): the branch's `OWED` section, after its
+/// queue: each reader owed something, marked `never confirmed` where no
+/// reader has confirmed under its name, and under it each delivery by key
+/// and submission, owed until or expired at its expiry, with each
+/// hand-over's way and time; nothing where nothing is owed.
+fn write_owed(owed: &[sluice_core::ReaderView], out: &mut dyn Write) -> Result<()> {
+    if owed.is_empty() {
+        return Ok(());
+    }
+    writeln!(out, "OWED")?;
+    for r in owed {
+        match r.known {
+            true => writeln!(out, "  {}", r.reader)?,
+            false => writeln!(out, "  {} · never confirmed", r.reader)?,
+        }
+        for d in &r.deliveries {
+            let id = d.id.map_or(String::new(), |id| format!(" #{id}"));
+            let when = match d.expired {
+                true => format!("expired at {}", d.expires_at),
+                false => format!("owed until {}", d.expires_at),
+            };
+            let handed = match d.handed.as_slice() {
+                [] => "handed over by nothing".to_string(),
+                handed => {
+                    let each: Vec<String> = handed
+                        .iter()
+                        .map(|(by, at)| format!("{by} at {at}"))
+                        .collect();
+                    format!("handed over by {}", each.join(", "))
+                }
+            };
+            writeln!(out, "    {}{id}  {when} · {handed}", d.key)?;
+        }
+    }
+    writeln!(
+        out,
+        "confirm one with: sluice confirm <key>, in its worktree, or sluice confirm <key> --as operator"
+    )?;
     Ok(())
 }
 

@@ -1,10 +1,11 @@
-//! An outcome's notice pushed into the session that submitted it, and
-//! marked delivered only when a carrier delivered it: B.5, 50, 51; ADR 0068.
+//! An outcome's notice pushed into the session that submitted it, and each
+//! hand-over recorded on its carrier's word, confirming nothing: B.5, 50,
+//! 51; ADR 0068; record 0102.
 
 use sluice_conformance::{Harness, Rig, BRANCH};
 use sluice_core::line::Line;
-use sluice_core::records::{submission_file, to_document, Event, State};
-use sluice_seams::{Changes, Written};
+use sluice_core::records::{Event, State};
+use sluice_seams::Written;
 
 const PANE: &str = "herdr:w1:p2@/run/herdr.sock";
 
@@ -19,44 +20,81 @@ fn pending_lines(h: &Harness) -> Vec<(u64, String)> {
         .collect()
 }
 
+/// The `handed` lines of the branch's log, by submission, key, way and
+/// where each reached.
+fn handed_lines(h: &Harness) -> Vec<(u64, String, String, String)> {
+    h.events()
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::Handed { id, key, by, to } => Some((id, key, by, to)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Whether the outcome under `key` is owed to `reader`, as weir reads it.
+fn owed_to(h: &Harness, key: &str, reader: &str) -> bool {
+    weir_delivery::owed(&h.deliveries(), "2026-10-11T09:00:00Z")
+        .unwrap()
+        .readers
+        .iter()
+        .filter(|o| o.reader.as_str() == reader)
+        .flat_map(|o| &o.deliveries)
+        .any(|d| d.delivery.key().as_str() == key)
+}
+
+/// herdr took the prompt: one hand-over by `notice`, and the outcome stays
+/// owed; the log says it reached the pane (weir 103, 109).
+///
 /// satisfies: 51, 50
 #[test]
-fn a_delivered_outcome_is_marked_with_the_session_it_was_delivered_to() {
+fn a_notice_taken_into_the_pane_is_a_hand_over_that_confirms_nothing() {
     let h = Harness::bolt();
     h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
     h.w().in_session("unit/a", PANE);
     let one = h.submit("unit/a");
     h.settle();
 
-    let s = h.sub(one);
-    assert_eq!(s.state, State::Landed);
-    assert!(s.delivered.is_some());
-    assert_eq!(s.delivered_to.as_deref(), Some(PANE));
+    assert_eq!(h.sub(one).state, State::Landed);
     assert_eq!(h.delivered_to("agent-a").len(), 1);
-    assert!(h
+    let key = format!("{one}:landed");
+    assert_eq!(h.handed(&key), ["notice"]);
+    assert!(h.confirmed(&key).is_empty(), "a notice confirms nothing");
+    assert!(owed_to(&h, &key, "unit/a"));
+    assert_eq!(
+        handed_lines(&h),
+        [(one, key.clone(), "notice".to_string(), PANE.to_string())]
+    );
+    assert!(pending_lines(&h).is_empty());
+    assert!(!h
         .events()
         .iter()
-        .any(|e| matches!(e, Event::Delivered { id, .. } if *id == one)));
-    assert!(pending_lines(&h).is_empty());
+        .any(|e| matches!(e, Event::Confirmed { .. } | Event::Delivered { .. })));
 }
 
+/// A carrier that refused the push records no hand-over: the outcome stays
+/// owed with none, one `pending` line saying why in its words, and no later
+/// round pushes it.
+///
 /// satisfies: 51
 #[test]
-fn an_undelivered_outcome_stands_pending_and_is_not_pushed_again() {
+fn a_refused_push_records_nothing_and_is_not_pushed_again() {
     let h = Harness::bolt();
     h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
     h.w().not_delivering("agent-a");
     let one = h.submit("unit/a");
     h.settle();
 
-    let s = h.sub(one);
-    assert_eq!(s.state, State::Landed, "decided all the same");
-    assert_eq!((s.delivered, s.delivered_to), (None, None));
+    let key = format!("{one}:landed");
+    assert_eq!(h.sub(one).state, State::Landed, "decided all the same");
+    assert!(h.handed(&key).is_empty());
+    assert!(owed_to(&h, &key, "unit/a"));
     assert_eq!(h.w().undelivered().len(), 1);
     assert_eq!(
         pending_lines(&h),
         [(one, "agent-a takes nothing".to_string())]
     );
+    assert!(handed_lines(&h).is_empty());
     assert!(h.doc().outbox.is_empty());
 
     // No later round tries again.
@@ -68,44 +106,87 @@ fn an_undelivered_outcome_stands_pending_and_is_not_pushed_again() {
     assert!(h.delivered_to("agent-a").is_empty());
 }
 
+/// An outcome another way handed to its reader before the round could
+/// record its own push is pushed no more, and holds that one hand-over.
+///
 /// satisfies: 51
 #[test]
-fn an_outcome_already_delivered_is_not_pushed() {
+fn an_outcome_already_handed_over_is_not_pushed() {
     let h = Harness::bolt();
     h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
     let one = h.submit("unit/a");
     h.step();
-    // The round stops before it can mark it; the outcome stays to push.
+    // The round stops before it can record its push; the item stays.
     h.w().crash_after_next_notify();
-    assert!(h.sluice().step(BRANCH).is_err());
+    for _ in 0..8 {
+        if h.sluice().step(BRANCH).is_err() {
+            break;
+        }
+    }
     assert_eq!(h.delivered_to("agent-a").len(), 1);
     assert_eq!(h.doc().outbox.len(), 1);
 
-    // Another carrier delivers it first.
+    // `sluice inbox` hands it over first.
+    let key = format!("{one}:landed");
     let s = h.sluice();
-    let lock = s.seams().state.lock(BRANCH).unwrap().expect("the lock");
-    let snapshot = s.seams().state.read(BRANCH).unwrap();
-    let version = snapshot.version;
-    let mut sub = Line::load(BRANCH, snapshot)
-        .unwrap()
-        .sub(one)
-        .unwrap()
-        .clone();
-    sub.delivered = Some("2026-10-28T09:00:00Z".into());
-    sub.delivered_to = Some("elsewhere".into());
-    let mut changes = Changes::default();
-    changes.put.insert(submission_file(one), to_document(&sub));
-    let written = s.seams().state.write(BRANCH, version, changes).unwrap();
+    let state = s.seams().state;
+    let lock = state.lock(BRANCH).unwrap().expect("the lock");
+    let mut line = Line::load(BRANCH, state.read(BRANCH).unwrap()).unwrap();
+    assert!(line
+        .hand(
+            one,
+            &key,
+            "unit/a",
+            "inbox",
+            "/w/unit-a",
+            false,
+            "2026-10-11T09:05:00Z"
+        )
+        .unwrap());
+    let written = state.write(BRANCH, line.version, line.changes()).unwrap();
     assert!(matches!(written, Written::Written(_)));
     drop(lock);
 
     h.settle();
     assert_eq!(h.delivered_to("agent-a").len(), 1, "pushed no more");
-    let s = h.sub(one);
-    assert_eq!(s.delivered.as_deref(), Some("2026-10-28T09:00:00Z"));
-    assert_eq!(s.delivered_to.as_deref(), Some("elsewhere"));
+    assert_eq!(h.handed(&key), ["inbox"]);
     assert!(h.doc().outbox.is_empty());
     assert!(pending_lines(&h).is_empty());
+}
+
+/// Each hand-over is one `handed` line naming the submission, the key, the
+/// way and where it reached.
+///
+/// satisfies: 51
+#[test]
+fn the_log_says_where_each_hand_over_reached() {
+    let h = Harness::bolt();
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    h.work("unit/b", "agent-b", &[("b/lib", Some("b2"))]);
+    h.w().in_session("unit/a", PANE);
+    let one = h.submit("unit/a");
+    let two = h.submit("unit/b");
+    h.settle();
+
+    let mut lines = handed_lines(&h);
+    lines.sort();
+    assert_eq!(
+        lines,
+        [
+            (
+                one,
+                format!("{one}:landed"),
+                "notice".to_string(),
+                PANE.to_string()
+            ),
+            (
+                two,
+                format!("{two}:landed"),
+                "notice".to_string(),
+                "agent-b".to_string()
+            ),
+        ]
+    );
 }
 
 /// satisfies: 50, 20
@@ -124,8 +205,8 @@ fn of_two_tested_together_only_the_blamed_ones_session_hears_of_the_failure() {
     let b = h.delivered_to("agent-b");
     assert_eq!(b.len(), 1);
     assert_eq!((b[0].submission, b[0].decided.word()), (two, "failed"));
-    assert!(h.sub(two).delivered.is_some());
-    // The other is delivered its own landing, and nothing of the failure.
+    assert_eq!(h.handed(&format!("{two}:failed")), ["notice"]);
+    // The other is handed its own landing, and nothing of the failure.
     assert!(h
         .delivered_to("agent-a")
         .iter()
@@ -148,16 +229,28 @@ mod by_name {
         h.branch_at(NAMED, &at);
     }
 
-    /// The branch's log lines that name submission `id`'s delivery, or
-    /// its staying pending.
+    /// The branch's log lines that name submission `id`'s hand-over, its
+    /// confirmation, or its staying owed.
     fn delivery_lines(h: &Harness, id: u64) -> Vec<Event> {
         h.events()
             .into_iter()
             .filter(|e| match e {
-                Event::Pending { id: of, .. } | Event::Delivered { id: of, .. } => *of == id,
+                Event::Pending { id: of, .. }
+                | Event::Delivered { id: of, .. }
+                | Event::Handed { id: of, .. }
+                | Event::Confirmed { id: of, .. } => *of == id,
                 _ => false,
             })
             .collect()
+    }
+
+    /// No delivery of `id`'s is among the branch's records.
+    fn no_delivery(h: &Harness, id: u64) -> bool {
+        let prefix = format!("{id}:");
+        !h.deliveries().iter().any(|r| match r {
+            weir_delivery::Record::Delivery(d) => d.key().as_str().starts_with(&prefix),
+            _ => false,
+        })
     }
 
     /// satisfies: 124, 51, 50, 20, core.50, core.31
@@ -183,9 +276,9 @@ mod by_name {
         assert!(h.w().undelivered().is_empty(), "no notify asked");
         assert!(
             delivery_lines(&h, id).is_empty(),
-            "no pending or delivered line"
+            "no pending, handed or confirmed line"
         );
-        assert_eq!((s.delivered, s.delivered_to), (None, None));
+        assert!(no_delivery(&h, id));
         assert!(h.doc().outbox.is_empty());
 
         // No later round pushes it either.
@@ -207,7 +300,7 @@ mod by_name {
         let s = h.sub(id);
         assert_eq!(s.state, State::Landed);
         assert!(s.landed_as.is_some());
-        assert_eq!(s.delivered, None);
+        assert!(no_delivery(&h, id));
         assert!(h.w().delivered().is_empty());
         assert!(delivery_lines(&h, id).is_empty());
         assert!(h
