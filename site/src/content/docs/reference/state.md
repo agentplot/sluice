@@ -31,6 +31,10 @@ readable with plain tools whether or not sluice is running.
                        while this host's rounds can't read the branch's remote:
                        what they couldn't read, since when, for how many rounds,
                        and which of it the log holds yet
+  .intake/main.json    while this host can't take in a branch's pull requests:
+                       what its intake asked of GitHub and the words it was
+                       refused with, since when, for how many intakes, and
+                       which of it the log holds yet
   .places/<checkout>.json
                        a checkout's record: its kind, path, branch, ports, the
                        block of ports it holds on the host and, for a
@@ -117,24 +121,17 @@ every repository on the host and never pushed:
                        ready a pull request into the branch, so the next
                        round asks at once
   forge/follows/<owner>/<repository>/<branch>.json
-                       on a host that doesn't take the branch's pull
-                       requests in, each one it follows: one a submit on
-                       the host opened, updated or marked ready, one it
-                       handed over, or one a wait or status asked about,
-                       with what GitHub last said of it and of sluice's
-                       check on its head, and when
+                       on a host that doesn't keep the branch, which
+                       takes its pull requests in, each one it follows:
+                       one a submit on the host opened, updated or marked
+                       ready, or one a wait or status asked about, with
+                       what GitHub last said of it and of sluice's check
+                       on its head, and when
   forge/follows/<owner>/<repository>/<branch>.lock
                        held while that file is written
-  forge/intake/<owner>/<repository>/<branch>.json
-                       the branch's intake mark as this host last saw it on
-                       the remote, when it first saw it there, and when it
-                       last pushed it
-  forge/intake/<owner>/<repository>/<branch>.waits/<process>.hold
-                       held by each wait on the host that reads the
-                       branch's pull requests, for as long as it runs: the
-                       last of them to end removes the mark
-  forge/intake/<owner>/<repository>/<branch>.waits/.lock
-                       held while a wait's hold is made or let go
+  forge/intake/        an older sluice's view of each branch's intake mark
+                       and its waits' holds; nothing reads it now, and it
+                       may be removed
   host/lock            held by sluice's host process for as long as it runs
   host/start.lock      held by a command starting the host process, and by
                        the process as it decides to end
@@ -293,7 +290,9 @@ logs it kept, is in `.git/sluice-remote/<remote>/`. A result moon
 replayed is kept there too: a replay is nobody's observation, so nobody
 signs it. Beside them, `refused/<branch>.json` holds what this host's
 rounds couldn't read of the remote while that lasts, as `.refused/` does
-for a branch whose state is on the host.
+for a branch whose state is on the host, and `intake/<branch>.json` what
+this host couldn't take in of the branch's pull requests on GitHub, as
+`.intake/` does.
 
 Read any of it with git, on any host:
 
@@ -523,14 +522,14 @@ To a branch with pull requests, the submission is the pull request's,
 from `pull/<n>` with `head` the branch.
 
 A withdrawn submission has `"withdrawn": { "by": "operator", "at":
-"2026-10-11T09:30:02Z" }`: who withdrew it, and when. A host that found
-another host taking its branch's pull requests in withdrew its own
-submissions of them. Such a submission's `withdrawn` also has
-`"handed_over_to": "build-2"`, that host. It holds no pull request:
-whichever host takes the pull requests in submits it again, and its log
-line names the host the same way. A submission an older sluice withdrew
-so has no `handed_over_to`, and its `by` reads `build-2 takes main's
-pull requests in`.
+"2026-10-11T09:30:02Z" }`: who withdrew it, and when. An older sluice
+withdrew a host's own submissions of its branch's pull requests when it
+found another host taking them in, a hand-over, and gave such a
+submission's `withdrawn`, and its log line, `"handed_over_to": "build-2"`,
+that host; one older still gave none, and its `by` reads `build-2 takes
+main's pull requests in`. sluice reads `handed_over_to` and no longer
+writes it. Such a submission holds no pull request: the host that keeps
+the branch submits it again at its latest commit.
 
 ## The log
 
@@ -592,6 +591,19 @@ that host's rounds it refused:
 ```json
 {"schema":"sluice/log@1","event":"read-refused","host":"build-1","remote":"origin","asked":"refs/heads/main","said":"remote: Repository not found.\nfatal: repository 'https://github.com/acme/app.git/' not found"}
 {"schema":"sluice/log@1","event":"read-again","host":"build-1","remote":"origin","since":"2026-10-26T09:16:40Z","stood":1800,"rounds":12}
+```
+
+The host that keeps a branch logs its intake's refusals the same way,
+marked `"intake":true`: once for each request or list it asked GitHub
+for, `pull/12` or `main's pull requests`, and the words GitHub refused it
+with, while they stand, and `read-again` so marked at the first intake
+that meets none. `rounds` then counts its intakes. A round's own lines
+carry no `intake`, and a sluice that doesn't know the field reads both
+as it reads any:
+
+```json
+{"schema":"sluice/log@1","event":"read-refused","host":"build-1","remote":"origin","asked":"main's pull requests","said":"502 Bad Gateway","intake":true}
+{"schema":"sluice/log@1","event":"read-again","host":"build-1","remote":"origin","since":"2026-11-08T09:16:40Z","stood":720,"rounds":12,"intake":true}
 ```
 
 `protected` is logged once for each command a host's protection

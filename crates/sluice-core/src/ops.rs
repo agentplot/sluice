@@ -184,14 +184,6 @@ pub enum Requester {
     Session(String),
     Planner,
     Operator,
-    /// A host's intake handing its own pull requests' submissions over to
-    /// `to`, the host that takes the branch's pull requests in, in
-    /// `words` (137). Its withdrawal's record names `to`, which is what
-    /// tells it a hand-over (120; record 0088 as amended).
-    HandOver {
-        to: String,
-        words: String,
-    },
 }
 
 impl Requester {
@@ -200,23 +192,13 @@ impl Requester {
             Requester::Session(a) => a.clone(),
             Requester::Planner => "planner".into(),
             Requester::Operator => "operator".into(),
-            Requester::HandOver { words, .. } => words.clone(),
-        }
-    }
-
-    /// 120, 137: the host a hand-over's withdrawal names; `None` for any
-    /// other withdrawal.
-    fn handed_over_to(&self) -> Option<String> {
-        match self {
-            Requester::HandOver { to, .. } => Some(to.clone()),
-            _ => None,
         }
     }
 
     fn may_change(&self, sub: &Submission) -> bool {
         match self {
             Requester::Session(a) => *a == sub.from.agent,
-            Requester::Planner | Requester::Operator | Requester::HandOver { .. } => true,
+            Requester::Planner | Requester::Operator => true,
         }
     }
 }
@@ -438,6 +420,9 @@ pub struct Status {
     /// 133: this host's refusal of the branch's remote, while it stands
     /// (record 0061).
     pub refused: Option<Refused>,
+    /// 128, 133: this host's refusal of the branch's intake, its pull
+    /// requests' reads of the forge, while it stands (record 0103 D7).
+    pub intake_refused: Option<Refused>,
     /// 148: every host's causes of writes the protection refused that
     /// stand now, newest last refusal first (design D5).
     pub refused_writes: Vec<crate::records::RefusedWrite>,
@@ -1132,17 +1117,19 @@ impl Sluice<'_> {
             }
             let s = l.sub_mut(id);
             s.state = State::Withdrawn;
+            // Record 0103 D4: no withdrawal is a hand-over's, so none names
+            // the host it went to; an older sluice's is read as written.
             s.withdrawn = Some(Withdrawal {
                 by: by.word(),
                 at: now.clone(),
-                handed_over_to: by.handed_over_to(),
+                handed_over_to: None,
             });
             l.log(
                 &now,
                 Event::Withdrawn {
                     id,
                     by: by.word(),
-                    handed_over_to: by.handed_over_to(),
+                    handed_over_to: None,
                 },
             );
             Ok(Ok(Withdrew::Now))
@@ -1426,10 +1413,8 @@ impl Sluice<'_> {
         };
         let mut warnings = policy.map(|p| p.warnings).unwrap_or_default();
         warnings.extend(kept_out.iter().map(|t| kept_out_warning(branch, t)));
-        let refused = self
-            .refusal(branch)?
-            .filter(|r| r.ended.is_none())
-            .and_then(|r| {
+        let standing = |r: Option<crate::refused::Refusal>| {
+            r.filter(|r| r.ended.is_none()).and_then(|r| {
                 let latest = r.latest()?.clone();
                 Some(Refused {
                     remote: r.remote,
@@ -1438,7 +1423,10 @@ impl Sluice<'_> {
                     since: r.since,
                     rounds: r.rounds,
                 })
-            });
+            })
+        };
+        let refused = standing(self.refusal(branch)?);
+        let intake_refused = standing(self.intake_refusal(branch)?);
         let refused_writes =
             crate::refused_writes::standing(&line.doc.refused_writes, || self.now());
         let on_remote =
@@ -1473,6 +1461,7 @@ impl Sluice<'_> {
             warnings,
             stale: self.seams.state.stale(branch).map(|r| r.remote),
             refused,
+            intake_refused,
         })
     }
 }

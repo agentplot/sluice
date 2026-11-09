@@ -442,6 +442,17 @@ impl Sluice<'_> {
                 .unwrap_or_else(|e| BranchView::unread(&branch, &e));
             out.push(view);
         }
+        // 137, S64; record 0103 D2: the default branch, refused for a pull
+        // request table on records each host keeps, is named with its
+        // refusal whether or not it has records, so no host's operator
+        // opens a request there unsaid.
+        if let Some(f) = from.filter(|f| !out.iter().any(|v| v.branch == f.branch)) {
+            if let Err(e) = self.branch_view_of(&f.branch) {
+                if e.downcast_ref::<crate::policy::NoIntake>().is_some() {
+                    out.push(BranchView::unread(&f.branch, &e));
+                }
+            }
+        }
         // The order decides nothing, so a policy it cannot read leaves the
         // branches in name order rather than failing the overview.
         let policy = order_at.and_then(|rev| self.policy_at(&rev).ok().flatten());

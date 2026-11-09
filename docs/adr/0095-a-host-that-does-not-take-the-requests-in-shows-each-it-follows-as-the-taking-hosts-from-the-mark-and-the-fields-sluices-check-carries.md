@@ -12,6 +12,8 @@ decision-makers:
 
 Status: accepted. 137 and C.5's pull request row as amended at agentplot/blueprints 4791adf are the design agent's, on crew's fix `fix--a-landing-in-another-hosts-queue-reads-as-in-the-queue`, which looked for such a read and found none at sluice main 0b15d250. D1 to D6 below are the change `a-host-without-the-intake-mark-shows-where-each-request-stands`'s own, under the statement so amended and rules core.25, core.31, core.32 and core.33, which they keep; cheap to change later.
 
+Amended in part by record 0103, on 2026-11-08: this record's rows are every host's that does not keep the branch on its remote, and its `taken_in_by` names the host the branch's state names as keeping it, with no holder, since no intake mark stands (137; record 0093 as amended on 2026-11-08).
+
 Record 0093, accepted by the user on 2026-11-06 ("I approved 93.") after this change was designed, has no host take a branch's requests in, and the intake mark goes (137 as the statement at 7c2fbf0 proposes it and 88a4cf0 accepts it). What of this record goes with the mark once 0093 is built is under Consequences.
 
 Deciders: the design agent, for the statement; the change's design, for D1 to D6.

@@ -17,8 +17,9 @@
 //! and the logs it read, is in `<common>/sluice-remote/<remote>/`, a
 //! `local files` of its own. A replay is recorded there too: it is no
 //! one's observation (core.9), so no signer signs it. Beside it, what the
-//! host observed of each branch (73) and a refusal of its reads that
-//! stands (133), under `observed/` and `refused/`.
+//! host observed of each branch (73), a refusal of its reads that stands
+//! (133) and one of its intake of the branch's pull requests (record 0103
+//! D7), under `observed/`, `refused/` and `intake/`.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -544,6 +545,19 @@ impl RemoteRefs {
         self.own_file("refused", branch)
     }
 
+    /// Where this host keeps a refusal of its intake of `branch`'s pull
+    /// requests, beside its refusal of the remote, in the repository's
+    /// common directory, so that every worktree's command reads the one
+    /// refusal its host's intake met (record 0103 D7).
+    fn intake_refusal_file(&self, branch: &str) -> Result<PathBuf> {
+        state_ref(branch)?;
+        Ok(self
+            .own
+            .root()
+            .join("intake")
+            .join(format!("{branch}.json")))
+    }
+
     /// `branch`'s file under `what` in what this host keeps of the remote.
     fn own_file(&self, what: &str, branch: &str) -> Result<PathBuf> {
         state_ref(branch)?;
@@ -912,6 +926,30 @@ impl State for RemoteRefs {
 
     fn keep_refusal(&self, branch: &str, doc: Option<&[u8]>) -> Result<()> {
         let path = self.refusal_file(branch)?;
+        let Some(doc) = doc else {
+            return match std::fs::remove_file(&path) {
+                Ok(()) => Ok(()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(e) => Err(e.into()),
+            };
+        };
+        std::fs::create_dir_all(path.parent().expect("a parent"))?;
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, doc)?;
+        std::fs::rename(&tmp, &path)?;
+        Ok(())
+    }
+
+    fn intake_refusal(&self, branch: &str) -> Result<Option<Vec<u8>>> {
+        match std::fs::read(self.intake_refusal_file(branch)?) {
+            Ok(b) => Ok(Some(b)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    fn keep_intake_refusal(&self, branch: &str, doc: Option<&[u8]>) -> Result<()> {
+        let path = self.intake_refusal_file(branch)?;
         let Some(doc) = doc else {
             return match std::fs::remove_file(&path) {
                 Ok(()) => Ok(()),
