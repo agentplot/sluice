@@ -20,6 +20,12 @@ docker = true         # the integration tests start a database container
 [landing]
 subject = "chore(land): #{id} {from}"
 
+# The hosts whose runs count on main, each by its SSH key. Naming any
+# keeps main's state on origin, where the host that keeps main takes its
+# pull requests in; a branch that takes pull requests needs them.
+[signers.box]
+ssh = ".config/sluice.boxes" # one line per host's key
+
 # Small, fast landings many times a day. feature/* is a placeholder:
 # name the pattern as the project names its branches.
 [branches."feature/*"]
@@ -33,7 +39,7 @@ required = ["#check-fast", "#check-tools"]
 parallel = 2
 batch = true                               # test the longest combination, bisect on failure
 timeout = "30m"
-trust = ["confined", "sandbox"]
+trust = ["box"]                            # the signers whose runs count here
 remote = "origin"                          # fetched every round, landed by a leased push
 
 [branches.main.pull_requests]

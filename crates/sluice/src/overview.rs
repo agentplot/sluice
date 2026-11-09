@@ -529,7 +529,7 @@ fn across_in(doc: &serde_json::Value, branch: &str) -> Option<Across> {
 /// another host takes in, as `sluice status <branch>` words them.
 fn write_across(doc: &serde_json::Value, branch: &str, out: &mut dyn Write) -> Result<()> {
     if let Some(a) = across_in(doc, branch) {
-        writeln!(out, "  {}", a.heading(branch))?;
+        writeln!(out, "  {}", a.heading())?;
         for row in &a.pull_requests {
             writeln!(out, "    {}", a.line(row))?;
         }

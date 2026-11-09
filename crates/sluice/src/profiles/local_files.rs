@@ -38,6 +38,9 @@ const PROGRESS: &str = ".progress";
 /// 133: this host's refusals of its branches' remotes, beside the records
 /// and never in them; the dot keeps them out of [`State::branches`].
 const REFUSED: &str = ".refused";
+/// 128, 133; record 0103 D7: this host's refusals of its branches'
+/// intakes, beside the refusals of their remotes and apart from them.
+const INTAKE_REFUSED: &str = ".intake";
 const PROGRESS_SCHEMA: &str = "sluice/progress@1";
 
 /// One candidate's tasks as kept: the candidate is named inside, since a
@@ -97,6 +100,11 @@ impl LocalFiles {
 
     /// Records under `root`, for what a host keeps of a remote's records:
     /// its locks, its runs' tasks and the logs it kept.
+    /// The directory the records are kept in.
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
     pub fn at(root: PathBuf) -> Self {
         LocalFiles {
             root,
@@ -562,6 +570,33 @@ impl State for LocalFiles {
     fn keep_refusal(&self, branch: &str, doc: Option<&[u8]>) -> Result<()> {
         self.dir(branch)?;
         let dir = self.root.join(REFUSED);
+        let name = format!("{branch}.json");
+        match doc {
+            Some(doc) => write_atomic(&dir, &name, doc),
+            None => match std::fs::remove_file(dir.join(&name)) {
+                Ok(()) => Ok(()),
+                Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
+                Err(e) => Err(e).with_context(|| format!("removing {name}")),
+            },
+        }
+    }
+
+    fn intake_refusal(&self, branch: &str) -> Result<Option<Vec<u8>>> {
+        self.dir(branch)?;
+        let path = self
+            .root
+            .join(INTAKE_REFUSED)
+            .join(format!("{branch}.json"));
+        match std::fs::read(&path) {
+            Ok(b) => Ok(Some(b)),
+            Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
+        }
+    }
+
+    fn keep_intake_refusal(&self, branch: &str, doc: Option<&[u8]>) -> Result<()> {
+        self.dir(branch)?;
+        let dir = self.root.join(INTAKE_REFUSED);
         let name = format!("{branch}.json");
         match doc {
             Some(doc) => write_atomic(&dir, &name, doc),

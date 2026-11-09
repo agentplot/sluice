@@ -146,7 +146,9 @@ impl Records {
         }
         let routed = match self.branches.policy_of(branch)? {
             Some((_, policy)) if !policy.signers.is_empty() => {
-                match policy.rules_for(branch)?.and_then(|r| r.remote.clone()) {
+                // Rule core.27; record 0103 D2: its remote, whatever else
+                // of its table the policy refuses.
+                match policy.remote_of(branch)? {
                     Some(remote) => Some(self.open(&remote)?),
                     None => None,
                 }
@@ -595,6 +597,20 @@ impl State for Records {
         match self.route(branch)? {
             None => self.local.keep_refusal(branch, doc),
             Some(r) => r.keep_refusal(branch, doc),
+        }
+    }
+
+    fn intake_refusal(&self, branch: &str) -> Result<Option<Vec<u8>>> {
+        match self.route(branch)? {
+            None => self.local.intake_refusal(branch),
+            Some(r) => r.intake_refusal(branch),
+        }
+    }
+
+    fn keep_intake_refusal(&self, branch: &str, doc: Option<&[u8]>) -> Result<()> {
+        match self.route(branch)? {
+            None => self.local.keep_intake_refusal(branch, doc),
+            Some(r) => r.keep_intake_refusal(branch, doc),
         }
     }
 

@@ -207,7 +207,8 @@ Then ask the user, before writing anything:
 3. **For each that lives on GitHub, whether the team lands on it through
    pull requests today.** Ask only for a branch whose policy will name a
    remote on GitHub: one kept on this host has no pull requests, and
-   sluice refuses the table without `remote`. Ask per branch, since a team
+   sluice refuses the table without `remote`, and in a policy with no
+   `[signers]`, whose branches' state each host keeps. Ask per branch, since a team
    often reviews everything into `main` and lets agents land on a family
    of integration branches straight from their worktrees. On no, write no `pull_requests` table
    for it; on yes, see [a branch the team lands by pull
@@ -257,9 +258,23 @@ its combination passes." Never stand in for one, such as by counting code
 owners into `reviews`: sluice would land a pull request the team's own
 rule would have held.
 
-Write what the user confirms:
+Write what the user confirms. A branch that takes pull requests keeps its
+state on its remote, where the host that keeps it takes its requests in,
+so propose `[signers]` with the table where the policy names none: a
+signer for the hosts whose runs count on the branch, and `trust` naming
+it ([peers](references/profiles/peers.md) sets up the keys). Without
+signers, sluice refuses the branch alone: `main takes pull requests,
+which only the host that keeps it on origin takes in, and its state is
+each host's own: name [signers] in .config/sluice.toml so its state is
+kept on origin (137)`.
 
 ```toml
+[signers.box]
+ssh = ".config/sluice.boxes"   # one line per host's key
+
+[branches.main]
+trust = ["box"]
+
 [branches.main.pull_requests]
 reviews = 1
 checks = ["ci/test"]
