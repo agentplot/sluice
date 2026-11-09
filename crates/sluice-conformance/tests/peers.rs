@@ -29,6 +29,7 @@ fn on<'a>(h: &'a Harness, name: &str) -> Sluice<'a> {
         alive: Duration::from_secs(120),
         signer: Some("box".into()),
         systems: None,
+        expire_after: sluice_core::EXPIRE_AFTER,
     })
 }
 
@@ -146,6 +147,7 @@ fn as_signer<'a>(h: &'a Harness, name: &str, signer: Option<&str>) -> Sluice<'a>
         alive: Duration::from_secs(120),
         signer: signer.map(str::to_string),
         systems: None,
+        expire_after: sluice_core::EXPIRE_AFTER,
     })
 }
 
@@ -329,6 +331,7 @@ fn with_systems<'a>(h: &'a Harness, name: &str, systems: &[&str]) -> Sluice<'a> 
         alive: Duration::from_secs(120),
         signer: Some("box".into()),
         systems: Some(systems.iter().map(|s| s.to_string()).collect()),
+        expire_after: sluice_core::EXPIRE_AFTER,
     })
 }
 
@@ -584,6 +587,7 @@ fn s42_a_replay_no_trusted_signer_proved_runs_again() {
         alive: Duration::from_secs(120),
         signer: Some("sessions".into()),
         systems: None,
+        expire_after: sluice_core::EXPIRE_AFTER,
     });
     let y = sessions
         .submit(&sluice_core::SubmitRequest {
@@ -645,6 +649,7 @@ fn signer<'a>(h: &'a Harness, name: &str, signer: &str) -> Sluice<'a> {
         alive: Duration::from_secs(120),
         signer: Some(signer.into()),
         systems: None,
+        expire_after: sluice_core::EXPIRE_AFTER,
     })
 }
 
@@ -843,6 +848,7 @@ fn s18_a_signer_the_gate_does_not_trust_settles_nothing() {
             alive: Duration::from_secs(120),
             signer: Some("sessions".into()),
             systems: None,
+            expire_after: sluice_core::EXPIRE_AFTER,
         })
     };
     for _ in 0..4 {

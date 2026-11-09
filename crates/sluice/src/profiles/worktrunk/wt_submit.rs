@@ -3,7 +3,10 @@
 //! landed and sluice's record says its submission landed, the session's
 //! worktree is released with `sluice release` and then removed as `wt
 //! merge` removes it (C.4; session-runs-1 clause 95), unless `--no-remove`
-//! is given or worktrunk's `[merge] remove` is false.
+//! is given or worktrunk's `[merge] remove` is false. A landing whose
+//! worktree it removes is confirmed on receipt, since its reader goes with
+//! the worktree; any other outcome it reports stays owed (51; record 0102,
+//! design D5).
 //!
 //! A submit from one worktree first reads what stands: the worktree's last
 //! submission to the branch, at the revision sluice says a submit from it
@@ -38,6 +41,12 @@ fn main() {
     let Some(one) = &submit.single else {
         std::process::exit(run(&submit.sluice));
     };
+    // 51, D5: a landing whose worktree goes is confirmed on receipt.
+    let confirms = one.waits && one.remove && removes_on_landing(one.worktree.as_path());
+    let mut sluice_args = submit.sluice.clone();
+    if confirms {
+        sluice_args.push("--confirm-landing".into());
+    }
     // Never a guess: a submit at the revision standing withdraws it (67).
     let standing = match standing_in(&one.branch, &one.worktree) {
         Ok(standing) => standing,
@@ -74,9 +83,9 @@ fn main() {
                 std::process::exit(code);
             }
             let _ = std::io::stderr().write_all(&out.stdout);
-            follow(one)
+            follow(one, confirms)
         }
-        Standing::Nothing => run(&submit.sluice),
+        Standing::Nothing => run(&sluice_args),
         standing if one.orders => {
             let why = match standing {
                 Standing::Submission { id, .. } => format!(
@@ -116,7 +125,7 @@ fn main() {
                 "wt submit: following {}, {what} at this revision",
                 named(&standing)
             );
-            follow(one)
+            follow(one, confirms)
         }
     };
     if code == LANDED && one.waits && one.remove {
@@ -152,8 +161,9 @@ fn run(args: &[OsString]) -> i32 {
 
 /// `sluice wait <branch>` from the worktree, under `--timeout` and `--json`
 /// when given: it follows the worktree's last submission, a pull request
-/// not yet taken in among them, as no `sluice wait <id>` can.
-fn follow(one: &Single) -> i32 {
+/// not yet taken in among them, as no `sluice wait <id>` can; confirming on
+/// receipt a landing whose worktree goes, where `confirms`.
+fn follow(one: &Single, confirms: bool) -> i32 {
     let mut args: Vec<OsString> = vec![
         "wait".into(),
         one.branch.clone().into(),
@@ -165,6 +175,9 @@ fn follow(one: &Single) -> i32 {
     }
     if one.json {
         args.push("--json".into());
+    }
+    if confirms {
+        args.push("--confirm-landing".into());
     }
     run(&args)
 }

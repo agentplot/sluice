@@ -5,7 +5,10 @@
 //! - `branch.json`: the queue's own state, one document;
 //! - `submissions/<id>.json`: one document per submission;
 //! - `log.jsonl`: every submission, run, result, blame and landing, one
-//!   event per line, appended and never rewritten (16).
+//!   event per line, appended and never rewritten (16);
+//! - `deliveries.jsonl`: each decided outcome a reader is owed, as weir's
+//!   delivery records, one to a line in C.8's JSON, in the order added
+//!   (51; record 0102).
 //!
 //! and beside every branch, one `results.jsonl` for the repository: every
 //! check's outcome under its key, for any branch's gate to read (69).
@@ -38,6 +41,9 @@ fn result_schema() -> String {
 
 pub const BRANCH_FILE: &str = "branch.json";
 pub const LOG_FILE: &str = "log.jsonl";
+/// 51: the branch's deliveries, weir's records in C.8's JSON (record 0102;
+/// design D3).
+pub const DELIVERIES_FILE: &str = "deliveries.jsonl";
 
 pub fn submission_file(id: u64) -> String {
     format!("submissions/{id}.json")
@@ -251,16 +257,6 @@ pub struct Submission {
     pub conflict: Option<ConflictRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub withdrawn: Option<Withdrawal>,
-    /// 51: when its outcome was delivered to its session; `None` while it
-    /// stands pending. Read under `told` too, the name an earlier sluice
-    /// wrote it under (record 0070).
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "told")]
-    pub delivered: Option<String>,
-    /// 51: the session its outcome was delivered to, as its carrier named
-    /// it; `None` while pending, and in records delivered before it was
-    /// kept. Read under `told_to` too (record 0070).
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "told_to")]
-    pub delivered_to: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub landed_as: Option<Rev>,
     /// 122: landed by a landing this queue did not make, found when the
@@ -1199,19 +1195,40 @@ pub enum Event {
         first: String,
         last: String,
     },
-    /// 51: an outcome a carrier delivered to its session. Read under
-    /// `told` too, the name an earlier sluice wrote it under (record 0070).
+    /// 51: an outcome a carrier delivered to its session, as an earlier
+    /// sluice marked it; kept as written and read as history (record 0102;
+    /// rule core.41). Read under `told` too, the name a sluice before it
+    /// wrote it under (record 0070).
     #[serde(alias = "told")]
     Delivered {
         id: u64,
         notification: String,
     },
     /// 51: an outcome its driver did not deliver, and why in the carrier's
-    /// words; it stands decided and pending, and no round pushes it again.
+    /// words; it stays owed, and no round pushes it again.
     Pending {
         id: u64,
         notification: String,
         why: String,
+    },
+    /// 51: an outcome handed to its reader `by` a way, `notice`,
+    /// `pull-request`, `inbox` or `wait`, reaching `to` as the carrier
+    /// names it, the pane, the request, the path or the agent; it confirms
+    /// nothing by itself (weir 103; record 0102; design D5).
+    Handed {
+        id: u64,
+        key: String,
+        by: String,
+        to: String,
+    },
+    /// 51: an outcome confirmed for `reader`, `by` the way that confirmed
+    /// it on receipt, `confirm`, `operator` or `resubmission` (weir 102;
+    /// design D5, D7, D16).
+    Confirmed {
+        id: u64,
+        key: String,
+        reader: String,
+        by: String,
     },
 }
 
@@ -1889,46 +1906,25 @@ mod tests {
         assert_eq!(serde_json::from_str::<Submitter>(&text).unwrap(), both);
     }
 
-    /// 51, record 0070: a submission an earlier sluice marked under `told`
-    /// and `told_to` reads them as `delivered` and `delivered_to`, and
-    /// writes them back under the new names.
+    /// 51, record 0102 (D12): a submission holds no `delivered` mark; one
+    /// an earlier sluice wrote, under that name or `told`, is passed over
+    /// and written back without it.
     #[test]
-    fn a_submission_marked_told_reads_as_delivered() {
+    fn a_submission_holds_no_delivered_mark() {
         let old = submission(None);
         let doc = String::from_utf8(to_document(&old)).unwrap();
-        let earlier = doc.replacen(
-            "\"state\": \"queued\"",
+        let landed = doc.replacen("\"state\": \"queued\"", "\"state\": \"landed\"", 1);
+        for marked in [
+            "\"state\": \"landed\",\n  \"delivered\": \"2026-10-27T10:00:00Z\",\n  \"delivered_to\": \"/w/review\"",
             "\"state\": \"landed\",\n  \"told\": \"2026-10-27T10:00:00Z\",\n  \"told_to\": \"/w/review\"",
-            1,
-        );
-        let read: Submission = serde_json::from_str(&earlier).unwrap();
-        assert_eq!(read.delivered.as_deref(), Some("2026-10-27T10:00:00Z"));
-        assert_eq!(read.delivered_to.as_deref(), Some("/w/review"));
-        let written = String::from_utf8(to_document(&read)).unwrap();
-        assert_eq!(
-            written,
-            earlier
-                .replace("\"told\":", "\"delivered\":")
-                .replace("\"told_to\":", "\"delivered_to\":")
-        );
-        assert!(!written.contains("told"), "{written}");
-    }
-
-    /// 51: a submission delivered before `delivered_to` was kept reads with
-    /// none and writes back unchanged.
-    #[test]
-    fn a_submission_delivered_before_its_session_reads_as_it_was() {
-        let old = submission(None);
-        let mut doc = String::from_utf8(to_document(&old)).unwrap();
-        doc = doc.replacen(
-            "\"state\": \"queued\"",
-            "\"state\": \"landed\",\n  \"delivered\": \"2026-10-27T10:00:00Z\"",
-            1,
-        );
-        let read: Submission = serde_json::from_str(&doc).unwrap();
-        assert_eq!(read.delivered.as_deref(), Some("2026-10-27T10:00:00Z"));
-        assert_eq!(read.delivered_to, None);
-        assert_eq!(String::from_utf8(to_document(&read)).unwrap(), doc);
+        ] {
+            let earlier = doc.replacen("\"state\": \"queued\"", marked, 1);
+            let read: Submission = serde_json::from_str(&earlier).unwrap();
+            let written = String::from_utf8(to_document(&read)).unwrap();
+            assert_eq!(written, landed);
+            assert!(!written.contains("delivered"), "{written}");
+            assert!(!written.contains("told"), "{written}");
+        }
     }
 
     /// 51, record 0070: a `told` line an earlier sluice wrote reads as

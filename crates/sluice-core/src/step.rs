@@ -485,7 +485,7 @@ impl Sluice<'_> {
                                 covered_by,
                             },
                         };
-                        l.push_outcome(item);
+                        l.push_outcome(item, &now, self.peer.expire_after)?;
                     }
                     l.log(
                         &now,
@@ -612,16 +612,37 @@ impl Sluice<'_> {
     }
 
     /// 50, 51: push each outcome's notice to its submission's session
-    /// alone, once: marked delivered only when its driver delivered it, and
-    /// an outcome not delivered left decided and pending, for `sluice inbox`
-    /// or a wait, with nothing pushed again. A step that stops
-    /// between a delivery and its record pushes it again, under the same id.
+    /// alone, at most once: only an outcome owed to its reader with no
+    /// hand-over and no confirmation, as `owed` reads them, is pushed, and
+    /// its item goes whatever the carrier answered (design D10). A push the
+    /// carrier took is recorded as a hand-over by its way with weir's
+    /// `hand`, confirming it only where the carrier says its reader
+    /// confirms on receipt, and logged `handed`, and `confirmed` where it
+    /// confirms; one it refused stays owed, logged `pending`, and is pushed
+    /// by no later round (weir 103, 109, 111; record 0102; design D5). A
+    /// step that stops between a push and its record pushes it again, under
+    /// the same key.
     fn perform_outbox(&self, branch: &str) -> Result<()> {
         let line = self.read_line(branch)?;
+        let now = self.now();
+        let owed = weir_delivery::owed(line.deliveries(), &now)
+            .map_err(|refused| anyhow!("reading {branch}'s deliveries: {refused}"))?;
         for item in line.doc.outbox.clone() {
             let sub = line.sub(item.submission)?;
-            let delivery = if sub.delivered.is_some() {
-                // 51: no push of an outcome already delivered.
+            let reader = sub.from.worktree.as_str();
+            // 51: no push of an outcome handed to its reader by any way, or
+            // confirmed: owed with no hand-over alone, or one decided
+            // before its delivery was recorded, which has none.
+            let recorded = line.deliveries().iter().any(
+                |r| matches!(r, weir_delivery::Record::Delivery(d) if d.key().as_str() == item.id),
+            );
+            let unhanded = owed
+                .readers
+                .iter()
+                .filter(|o| o.reader.as_str() == reader)
+                .flat_map(|o| &o.deliveries)
+                .any(|d| d.delivery.key().as_str() == item.id && d.handovers.is_empty());
+            let delivery = if recorded && !unhanded {
                 None
             } else {
                 // ADR 0044: the report as it stands, for a driver that shows
@@ -644,17 +665,8 @@ impl Sluice<'_> {
                 l.doc.outbox.remove(n);
                 match &delivery {
                     None => {}
-                    Some(Delivery::Delivered { to }) => {
-                        let s = l.sub_mut(item.submission);
-                        s.delivered = Some(now.clone());
-                        s.delivered_to = Some(to.clone());
-                        l.log(
-                            &now,
-                            Event::Delivered {
-                                id: item.submission,
-                                notification: item.id.clone(),
-                            },
-                        );
+                    Some(Delivery::Handed { way, to, confirms }) => {
+                        l.hand(item.submission, &item.id, reader, way, to, *confirms, &now)?;
                     }
                     Some(Delivery::Undelivered { why }) => {
                         l.log(
@@ -1191,15 +1203,19 @@ impl Sluice<'_> {
                 s.landed_as = Some(to.clone());
                 s.landed_elsewhere = true;
                 s.held = None;
-                line.push_outcome(OutboxItem {
-                    id: format!("{id}:landed"),
-                    submission: id,
-                    outcome: DecidedRecord::Landed {
-                        landed_as: to.clone(),
-                        beside: false,
-                        covered_by: None,
+                line.push_outcome(
+                    OutboxItem {
+                        id: format!("{id}:landed"),
+                        submission: id,
+                        outcome: DecidedRecord::Landed {
+                            landed_as: to.clone(),
+                            beside: false,
+                            covered_by: None,
+                        },
                     },
-                });
+                    now,
+                    self.peer.expire_after,
+                )?;
             }
             line.log(now, Event::FoundLanded { ids, to });
         }
@@ -1309,8 +1325,6 @@ impl Sluice<'_> {
                     failed: Vec::new(),
                     conflict: None,
                     withdrawn: None,
-                    delivered: None,
-                    delivered_to: None,
                     landed_as: None,
                     was: Some(old.id),
                     ..old
@@ -1967,7 +1981,7 @@ impl Sluice<'_> {
                     prefix.pop();
                     let work = |id| line.sub(id).map(|s| (s.head.clone(), s.from.clone()));
                     let with = self.contested(&work, &base, &ahead, &head)?;
-                    self.remove_conflict(line, id, paths, with, now);
+                    self.remove_conflict(line, id, paths, with, now)?;
                     removed = true;
                 }
             }
@@ -2004,7 +2018,7 @@ impl Sluice<'_> {
                 continue;
             }
             if c.state.failed() {
-                self.blame(line, &c, rules, now);
+                self.blame(line, &c, rules, now)?;
                 removed = true;
             }
             break;
@@ -2067,7 +2081,7 @@ impl Sluice<'_> {
         paths: Vec<String>,
         with: Vec<Contested>,
         now: &str,
-    ) {
+    ) -> Result<()> {
         info!(monotonic_counter.sluice.conflicts = 1u64, sluice.branch = %line.branch);
         let s = line.sub_mut(id);
         s.state = State::Conflict;
@@ -2083,16 +2097,20 @@ impl Sluice<'_> {
                 with: with.iter().map(|c| c.id).collect(),
             },
         );
-        line.push_outcome(OutboxItem {
-            id: format!("{id}:conflict"),
-            submission: id,
-            outcome: DecidedRecord::Conflict { paths, with },
-        });
+        line.push_outcome(
+            OutboxItem {
+                id: format!("{id}:conflict"),
+                submission: id,
+                outcome: DecidedRecord::Conflict { paths, with },
+            },
+            now,
+            self.peer.expire_after,
+        )
     }
 
     /// 17, 20, 21, 13: blame the newest submission of a failed
     /// candidate, tell its session alone, and test fewer at once.
-    fn blame(&self, line: &mut Line, c: &Candidate, rules: &Rules, now: &str) {
+    fn blame(&self, line: &mut Line, c: &Candidate, rules: &Rules, now: &str) -> Result<()> {
         let id = c.newest();
         let _span = info_span!(
             "sluice.blame",
@@ -2118,27 +2136,32 @@ impl Sluice<'_> {
                 combination: c.revision.clone(),
             },
         );
-        line.push_outcome(OutboxItem {
-            id: format!("{id}:failed"),
-            submission: id,
-            outcome: DecidedRecord::Failed {
-                failed: c.failed.iter().map(|f| f.task.clone()).collect(),
-                combination: c.revision.clone(),
-                submissions: c.submissions.clone(),
-                timed_out: c.state == CandidateState::TimedOut,
-                logs: c
-                    .failed
-                    .iter()
-                    .filter_map(|f| {
-                        f.log.clone().map(|at| TaskLog {
-                            task: f.task.clone(),
-                            text: at,
+        line.push_outcome(
+            OutboxItem {
+                id: format!("{id}:failed"),
+                submission: id,
+                outcome: DecidedRecord::Failed {
+                    failed: c.failed.iter().map(|f| f.task.clone()).collect(),
+                    combination: c.revision.clone(),
+                    submissions: c.submissions.clone(),
+                    timed_out: c.state == CandidateState::TimedOut,
+                    logs: c
+                        .failed
+                        .iter()
+                        .filter_map(|f| {
+                            f.log.clone().map(|at| TaskLog {
+                                task: f.task.clone(),
+                                text: at,
+                            })
                         })
-                    })
-                    .collect(),
+                        .collect(),
+                },
             },
-        });
+            now,
+            self.peer.expire_after,
+        )?;
         line.doc.window = (line.doc.window / 2).clamp(1, rules.parallel);
+        Ok(())
     }
 
     /// 140, 23: the revision whose tree `c` lands as: its tested revision

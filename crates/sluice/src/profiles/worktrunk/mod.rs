@@ -201,10 +201,12 @@ impl Driver for Worktrunk {
         })
     }
 
-    /// 50, 51: push the outcome into the pane the submit ran in, delivered
-    /// once herdr takes it. A submit in no pane, or on another host, is not
-    /// delivered, and nothing is called; herdr's refusal is not delivered,
-    /// in its words.
+    /// 50, 51: push the outcome into the pane the submit ran in, ending with
+    /// the key it is confirmed by: a hand-over by `notice` to the pane once
+    /// herdr takes it, which confirms nothing. A submit in no pane, or on
+    /// another host, is not handed over, and nothing is called; herdr's
+    /// refusal is not handed over, in its words (record 0102; design D5,
+    /// D10).
     fn notify(&self, n: &Notification) -> Result<Delivery> {
         let undelivered = |why: String| Ok(Delivery::Undelivered { why });
         let Some(session) = &n.to.session else {
@@ -220,19 +222,20 @@ impl Driver for Worktrunk {
         let Some((pane, socket)) = herdr::pane_of(session) else {
             return undelivered(format!("{session} is no herdr pane"));
         };
-        Ok(
-            match herdr::prompt(
-                pane,
-                socket,
-                &crate::words::notice(n.submission, &n.branch, &n.decided),
-                herdr::BOUND,
-            )? {
-                herdr::Answer::Took => Delivery::Delivered {
-                    to: session.clone(),
-                },
-                herdr::Answer::Refused(why) => Delivery::Undelivered { why },
+        // 51, D10: the notice, then the key the agent confirms it by.
+        let notice = format!(
+            "{} sluice confirm {} once you have read it.",
+            sluice_core::notice(n.submission, &n.branch, &n.decided),
+            n.id
+        );
+        Ok(match herdr::prompt(pane, socket, &notice, herdr::BOUND)? {
+            herdr::Answer::Took => Delivery::Handed {
+                way: "notice".into(),
+                to: session.clone(),
+                confirms: false,
             },
-        )
+            herdr::Answer::Refused(why) => Delivery::Undelivered { why },
+        })
     }
 }
 

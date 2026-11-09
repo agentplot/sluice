@@ -61,20 +61,24 @@ type Answer = { exitCode: number; stdout: string; stderr: string };
 
 /**
  * What the host's `sluice inbox` answers, run after run, each host setting
- * it afresh: `answers` in turn, then nothing pending; while `held` is set, a
- * run waits on it before it answers. The worktree each run ran in is kept.
+ * it afresh: `answers` in turn, then nothing owed; while `held` is set, a
+ * run waits on it before it answers. The worktree each run ran in, and the
+ * command line, `sluice inbox` or `sluice inbox --new`, are kept.
  */
 const inbox = {
   answers: [] as Answer[],
   held: null as Promise<void> | null,
   ranIn: [] as (string | undefined)[],
+  ran: [] as string[],
 };
 
 const INBOX = "sluice inbox";
+const INBOX_NEW = "sluice inbox --new";
 
-/** The host's answer to `sluice inbox`, run in `cwd`, as `inbox` says. */
-async function inboxRun(cwd: string | undefined) {
+/** The host's answer to `argv`, `sluice inbox` or its `--new`, run in `cwd`, as `inbox` says. */
+async function inboxRun(cwd: string | undefined, argv: string) {
   inbox.ranIn.push(cwd);
+  inbox.ran.push(argv);
   const answer = inbox.answers.shift() ?? { exitCode: 0, stdout: "", stderr: "" };
   if (inbox.held) await inbox.held;
   return { value: { ...answer, ...WHOLE } };
@@ -85,19 +89,23 @@ function inboxAfresh() {
   inbox.answers = [];
   inbox.held = null;
   inbox.ranIn = [];
+  inbox.ran = [];
 }
 
-/** What `sluice inbox` printed for #13's blame: the notice, then the wait's lines. */
+/** What `sluice inbox` printed for #13's blame: the notice, the wait's lines, then its key. */
 const BLAME13 = [
   "[sluice] #13 failed on main: cli:test. sluice wait 13 shows why.",
   "failed · blamed for cli:test on e20a6f9",
   `  cli:test  log: ${LOG}`,
+  "Confirm it once you have acted on it: sluice confirm 13:failed",
 ].join("\n");
 
 /** What `sluice inbox` printed for #13's landing. */
-const LANDED13 = ["[sluice] #13 landed on main as 5d6e7f8.", "passed · landed as 5d6e7f8"].join(
-  "\n",
-);
+const LANDED13 = [
+  "[sluice] #13 landed on main as 5d6e7f8.",
+  "passed · landed as 5d6e7f8",
+  "Confirm it once you have acted on it: sluice confirm 13:landed",
+].join("\n");
 
 /** `sluice inbox`'s answer printing `text`, as it prints it. */
 function printing(text: string): Answer {
@@ -144,7 +152,7 @@ function host(
     const answer = more[argv];
     if (answer !== undefined)
       return { value: { exitCode: 0, stdout: answer, stderr: "", ...WHOLE } };
-    if (argv === INBOX) return inboxRun(e.init?.cwd);
+    if (argv === INBOX || argv === INBOX_NEW) return inboxRun(e.init?.cwd, argv);
     if (argv === `tail -n 20 -- ${LOG}`)
       return { value: { exitCode: 0, stdout: "first\nlast line\n", stderr: "", ...WHOLE } };
     if (argv === "sluice status 9 --json") {
@@ -943,8 +951,11 @@ test("a blame of this session's submission is a toast, and one turn in sluice's 
   await clock.settle();
   expect(seen.toasts).toEqual(["sluice: #13 was blamed"]);
   expect(seen.prompts).toEqual([BLAME13]);
-  // Run in the session's worktree; the board reads no record of #13 for the turn.
+  // Run in the session's worktree: everything owed at the first overview,
+  // then only what nothing has handed over; the board reads no record of
+  // #13 for the turn.
   expect(inbox.ranIn).toEqual([ROOT, ROOT]);
+  expect(inbox.ran).toEqual([INBOX, INBOX_NEW]);
   expect(ran).not.toContain("sluice status 13 --json");
 });
 
@@ -1520,6 +1531,8 @@ test("the host's sluice upgraded: the queue comes back, and what was decided mea
   expect(watch.isOpen()).toBe(true);
   await watch.print(landed13());
   expect(inbox.ranIn).toHaveLength(2);
+  // Decided while no watch was open, it is new: only what nothing handed over.
+  expect(inbox.ran).toEqual([INBOX, INBOX_NEW]);
   expect(seen.toasts).toContain("sluice: #13 landed on main");
   expect(seen.prompts).toEqual([LANDED13]);
   const band = await bandOf($);
@@ -1630,7 +1643,7 @@ function watchedHost(
     const out = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: "", ...WHOLE } });
     const answer = more[argv];
     if (answer !== undefined) return out(answer);
-    if (argv === INBOX) return inboxRun(e.init?.cwd);
+    if (argv === INBOX || argv === INBOX_NEW) return inboxRun(e.init?.cwd, argv);
     if (argv === "git rev-parse --show-toplevel") return out(`${ROOT}\n`);
     return { value: { exitCode: 1, stdout: "", stderr: `no ${argv}`, ...WHOLE } };
   });
@@ -1705,12 +1718,14 @@ test("a watch that ends is started again a second later, and what it prints is c
   expect(watch.started[1]! - watch.ended[0]!).toBe(1000);
   await watch.print(landed13());
   expect(inbox.ranIn).toHaveLength(2);
+  // Landed while no watch was open: only what nothing handed over.
+  expect(inbox.ran).toEqual([INBOX, INBOX_NEW]);
   expect(seen.toasts).toContain("sluice: #13 landed on main");
   expect(seen.prompts).toEqual([LANDED13]);
   expect(ran.filter((r) => r === READ)).toEqual([]);
 });
 
-test("a reload after a turn starts no turn for what sluice has delivered", async ($, on) => {
+test("a reload after a turn starts no turn for what sluice has handed over", async ($, on) => {
   const clock = mock.clock(on);
   await clock.set(NOW);
   const seen = nothingSeen();
@@ -1721,10 +1736,36 @@ test("a reload after a turn starts no turn for what sluice has delivered", async
   await watch.print(queued13());
   await watch.print(landed13());
   expect(seen.prompts).toEqual([LANDED13]);
-  // Reloaded, the next watch prints the same; sluice now tells nothing of #13.
+  // The first overview collects what is owed; the landing, what is new.
+  expect(inbox.ran).toEqual([INBOX, INBOX_NEW]);
+  // The agent confirmed #13; reloaded, the next watch prints the same, a
+  // first overview, whose collect asks for everything still owed and is
+  // told nothing.
   await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
   await watch.print(landed13());
+  expect(inbox.ran).toEqual([INBOX, INBOX_NEW, INBOX]);
   expect(seen.prompts).toEqual([LANDED13]);
+  expect(seen.toasts).toEqual(["sluice: #13 landed on main"]);
+});
+
+test("a reload after a turn the agent did not confirm starts it again", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const seen = nothingSeen();
+  const watch = watchedHost(on, clock, seen);
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  // Nobody confirmed #13's blame, so the reload's collect prints it again.
+  inbox.answers = [printing(""), printing(BLAME13), printing(BLAME13)];
+  await watch.print(overview());
+  await watch.print(blamed());
+  expect(seen.prompts).toEqual([BLAME13]);
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await watch.print(blamed());
+  expect(inbox.ran).toEqual([INBOX, INBOX_NEW, INBOX]);
+  expect(seen.prompts).toEqual([BLAME13, BLAME13]);
+  // The blame is not news again: one toast, from before the reload.
+  expect(seen.toasts).toEqual(["sluice: #13 was blamed"]);
 });
 
 test("two outcomes while a collect runs give one more collect once it ends", async ($, on) => {
@@ -1936,6 +1977,30 @@ test("still not set up: /sluice reads once more, and the pane says so and what t
   await clock.settle();
   expect(watch.started).toEqual([NOW, NOW, NOW + 600_000]);
   expect(ran.filter((r) => r.startsWith("sluice"))).toEqual([]);
+});
+
+test("the first overview after the repository had no sluice collects everything owed, with no toast", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const seen = nothingSeen();
+  const watch = watchedHost(on, clock, seen);
+  panes(on);
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  inbox.answers = [printing(""), printing(LANDED13)];
+  await watch.print(queued13());
+  expect(inbox.ran).toEqual([INBOX]);
+  await watch.print(noSluice());
+  await watch.exit(0, "");
+  // Set up again: /sluice's watch prints #13 landed meanwhile, a first
+  // overview, which collects all that is owed and raises no toast for it.
+  await $.command.run(slash(true));
+  await clock.settle();
+  await watch.print(landed13());
+  expect(inbox.ran).toEqual([INBOX, INBOX]);
+  expect(inbox.ranIn).toEqual([ROOT, ROOT]);
+  expect(seen.prompts).toEqual([LANDED13]);
+  expect(seen.toasts).toEqual([]);
 });
 
 test("set up during the session: /sluice's watch shows the queue, and is followed", async ($, on) => {
@@ -2232,7 +2297,7 @@ function forecastHost(
   on("process.run", ($, e) => {
     const argv = e.argv.join(" ");
     const out = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: "", ...WHOLE } });
-    if (argv === INBOX) return inboxRun(e.init?.cwd);
+    if (argv === INBOX || argv === INBOX_NEW) return inboxRun(e.init?.cwd, argv);
     if (argv === "git rev-parse --show-toplevel") return out(`${ROOT}\n`);
     if (argv === "git rev-parse HEAD") return out(`${w.head}\n`);
     if (argv.startsWith("git rev-list --count ")) return out("4\n");

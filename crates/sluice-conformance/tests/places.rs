@@ -224,6 +224,7 @@ fn on<'a>(h: &'a Harness, name: &str, signer: Option<&str>) -> Sluice<'a> {
         alive: Duration::from_secs(120),
         signer: signer.map(str::to_string),
         systems: None,
+        expire_after: sluice_core::EXPIRE_AFTER,
     })
 }
 

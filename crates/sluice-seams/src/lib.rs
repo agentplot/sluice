@@ -1461,13 +1461,18 @@ pub struct Notification {
     pub report: Option<VerdictView>,
 }
 
-/// 51: whether a notify delivered its outcome, which alone marks it
-/// delivered.
+/// 51: whether a notify handed its outcome to its reader, which alone is
+/// recorded as a hand-over (weir 103; record 0102; design D5).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Delivery {
-    /// Delivered to this session, as the driver names it.
-    Delivered { to: String },
-    /// Not delivered, and why, in the carrier's words.
+    /// Handed to the reader by `way`, reaching `to`, as the carrier names
+    /// it; `confirms` where its reader confirms on receipt (weir 103).
+    Handed {
+        way: String,
+        to: String,
+        confirms: bool,
+    },
+    /// Not handed over, and why, in the carrier's words.
     Undelivered { why: String },
 }
 
@@ -1495,9 +1500,10 @@ pub trait Driver {
     /// core.50).
     fn named(&self, branch: &str) -> Result<Submitter>;
 
-    /// 50, 51: deliver an outcome to that entry's session and no other,
-    /// and say whether it was. A carrier asked that answered no is
-    /// `Undelivered`, which no round tries again; `Err` is sluice's own
+    /// 50, 51: hand an outcome to that entry's session and no other, and
+    /// say whether it was, by what way and whether its reader confirms on
+    /// receipt. A carrier asked that answered no is `Undelivered`, which no
+    /// round tries again; `Err` is sluice's own
     /// failure, such as a forge write the retry policy gave up on, and
     /// leaves the outcome for the next round.
     fn notify(&self, notification: &Notification) -> Result<Delivery>;

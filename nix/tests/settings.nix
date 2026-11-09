@@ -29,6 +29,7 @@
       alive = "2m";
       name = "host-a";
     };
+    deliveries.expire_after = "72h";
     caches = [
       {
         dir = "~/.cache/sccache";

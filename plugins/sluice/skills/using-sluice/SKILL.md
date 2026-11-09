@@ -137,20 +137,25 @@ it has landed, failed or conflicts; `sluice submit main --status` reads this wor
 submission or its pull request.
 
 A session that starts again, after a restart or on another host, runs
-`sluice inbox` once to collect the outcomes of its submissions it
-missed, in place of keeping a `sluice wait` for each. It collects every
-submission from this worktree's branch, on any branch, that landed, was
-blamed or conflicts and is still pending, each printed as its notice,
-the line a round types into the session's pane, then what `sluice wait
-<id>` prints, and marks each delivered. An outcome is delivered once,
-by that line, a wait in this worktree that reported it, or an earlier
-`sluice inbox`: for one already delivered it prints nothing and exits
-`0` (`{"outcomes":[]}` under `--json`). It exits `3` when a branch's
-records could not be read, after delivering the rest.
+`sluice inbox` once to collect the outcomes of its submissions, in place
+of keeping a `sluice wait` for each. It hands over every outcome still
+owed to this worktree, on any branch, a landing, a blame or a conflict,
+each printed as its notice, the line a round types into the session's
+pane, then what `sluice wait <id>` prints, then the line naming its key,
+`12:landed`, `13:failed` or `14:conflict`. Act on each outcome, then
+confirm it with `sluice confirm <key>`. An outcome stays owed until it
+is confirmed: the notice typed into the pane, a wait that reported it
+and every `sluice inbox` hand it over and confirm nothing, so the next
+`sluice inbox` hands over again whatever was not confirmed. With nothing
+owed it prints nothing and exits `0` (`{"outcomes":[]}` under `--json`).
+It exits `3` when a branch's records could not be read, after handing
+over the rest. An outcome nobody confirms expires after a week, and is
+still owed: `sluice inbox` says so, and `sluice status <branch>` shows it.
 
 ```sh
 sluice inbox                              # once, when the session starts again
-sluice inbox --json                       # {"outcomes":[...]}, each the submission's record
+sluice confirm 12:landed                  # once you have acted on #12's landing
+sluice inbox --json                       # {"outcomes":[...]}, each the submission's record and its delivery
 ```
 
 Several worktrees whose heads must go in together, such as a set of

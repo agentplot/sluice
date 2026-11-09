@@ -45,14 +45,15 @@ it conflicts with. No other session SHALL be sent the notice.
 - **WHEN** submission 12, submitted from herdr pane `w1:p2` on this
   host, lands on `main` as `abc1234`
 - **THEN** the round prompts the agent in pane `w1:p2` once, with a line
-  naming `#12`, `main`, `landed` and `abc1234`
+  naming `#12`, `main`, `landed`, `abc1234` and `sluice confirm
+  12:landed`
 
 #### Scenario: A failure is pushed with its failed checks
 
 - **WHEN** submission 13, submitted from a herdr pane on this host, is
   blamed for `cli:test`
-- **THEN** the line pushed into its pane names `#13`, `failed` and
-  `cli:test`
+- **THEN** the line pushed into its pane names `#13`, `failed`,
+  `cli:test` and `sluice confirm 13:failed`
 
 #### Scenario: No other pane is prompted
 
@@ -67,54 +68,25 @@ it conflicts with. No other session SHALL be sent the notice.
 - **THEN** the prompt goes to the server and pane submission 12
   recorded, and none of the round's own pane
 
-### Requirement: A submission is marked delivered only when its outcome was delivered
+### Requirement: The notice names the key that confirms its outcome
 
-A submission SHALL be marked delivered only when a carrier delivered its
-outcome: herdr took the prompt into the pane, the pull request driver
-posted it on the request, `sluice inbox` printed it, or a wait reported
-it. The record SHALL say when, `delivered`, and to which session,
-`delivered_to`. An outcome not delivered SHALL stay pending: decided,
-with neither field, and one line in the branch's log saying it was not
-delivered and why, in the carrier's words.
+The notice the round pushes SHALL end with `sluice confirm <key>` for
+the outcome's key (51; record 0102).
 
-#### Scenario: A delivered outcome is recorded with its session
+#### Scenario: A landing's notice names its key
 
-- **WHEN** herdr takes the prompt for submission 12 into pane `w1:p2`
-- **THEN** submission 12's record shows `delivered` with the time and
-  `delivered_to` with the session naming pane `w1:p2`
-
-#### Scenario: A pull request's outcome is delivered to the request
-
-- **WHEN** the pull request driver posts submission 20's landing on
-  pull request 41
-- **THEN** submission 20 shows `delivered_to` `pull/41`
-
-#### Scenario: A submission outside any multiplexer stays pending
-
-- **WHEN** submission 14, which recorded no session, lands
-- **THEN** no pane is prompted, its record shows it landed and shows
-  neither `delivered` nor `delivered_to`, and the branch's log has one
-  `pending` line for it
-
-#### Scenario: A refused prompt marks nothing
-
-- **WHEN** herdr refuses the prompt for submission 15 with `agent is
-  blocked`
-- **THEN** submission 15 shows no `delivered`, and the branch's log has
-  one `pending` line for it holding `agent is blocked`
-
-#### Scenario: A session on another host is not prompted from this one
-
-- **WHEN** the round that decides submission 16 runs on a host other
-  than the one 16 recorded
-- **THEN** no pane is prompted, and 16 shows no `delivered`
+- **WHEN** submission 12, submitted from herdr pane `w1:p2` on this
+  host, lands on `main`
+- **THEN** the line pushed into pane `w1:p2` names `sluice confirm
+  12:landed` after its outcome
 
 ### Requirement: An outcome is pushed once
 
-A round SHALL push an outcome at most once: one not delivered SHALL NOT
-be pushed again by a later round, and none SHALL be pushed for a
-submission already delivered. A round that stopped between a delivery
-and its record MAY push it again under the same submission and outcome.
+A round SHALL push an outcome at most once: one its carrier refused
+SHALL NOT be pushed again by a later round, and none SHALL be pushed for
+an outcome already handed to its reader by any way, or confirmed. A
+round that stopped between a push and its record MAY push it again
+under the same key.
 
 #### Scenario: A pending outcome is not pushed again
 
@@ -125,96 +97,66 @@ and its record MAY push it again under the same submission and outcome.
 
 #### Scenario: An outcome already delivered is not pushed
 
-- **WHEN** submission 17 is marked delivered before the round that
-  would push its outcome
-- **THEN** the round prompts no pane for 17 and its `delivered` is
-  unchanged
-
-### Requirement: A wait that reports its own submission's outcome marks it delivered
-
-When `sluice wait`, a waiting `sluice submit` or `wt submit` reports a
-pending landed, failed or conflicting submission whose submitter is the
-waiting worktree's work (its branch, or the branch a pull request was
-opened from), it SHALL mark it delivered once its report is written:
-`delivered_to` the multiplexer's name for the waiting session where it
-runs in one, else the worktree's path, and where no files are checked
-out the agent `SLUICE_AGENT` names, else the branch.
-
-#### Scenario: A waiting submit delivers its landing
-
-- **WHEN** `sluice submit main --json` in worktree `/w/unit-a`, with no
-  multiplexer, waits and reports submission 12 landed
-- **THEN** its record shows `delivered` and `delivered_to` `/w/unit-a`,
-  and `sluice inbox` in that worktree then prints nothing
+- **WHEN** `sluice inbox` in submission 17's worktree handed over its
+  landing before the round that would push it
+- **THEN** the round prompts no pane for 17, and 17's `delivery` holds
+  the one hand-over by `inbox`
 
 ### Requirement: A wait marks nothing that is not its own to deliver
 
-A wait that reports an outcome already delivered SHALL report it as it
-stands and mark nothing. A wait on another worktree's submission, or
-one that ends undecided, SHALL mark nothing.
+A wait that reports an outcome its reader has confirmed SHALL report it
+as it stands and record nothing. A wait on another worktree's
+submission, or one that ends undecided, SHALL record no hand-over and
+no confirmation.
 
 #### Scenario: A wait on another's submission marks nothing
 
 - **WHEN** `sluice wait 13` runs in worktree `unit-b` and reports
   submission 13, submitted from `unit-a`, failed
-- **THEN** submission 13 shows no `delivered`
+- **THEN** 13's `delivery` holds no hand-over by `wait`
 
 #### Scenario: A wait reads an outcome already delivered
 
-- **WHEN** the round pushed submission 12's landing into its pane, and
-  the session then runs `sluice wait 12 --json`
-- **THEN** it reports 12 landed with the `delivered_to` the push
-  recorded, unchanged
-
-### Requirement: A record written before reads as it was
-
-A submission written by an earlier sluice, with `told` and `told_to` or
-`told` alone, SHALL read and show as delivered at that time and to that
-session, and a log line `"event":"told"` SHALL read as a `delivered`
-line. sluice SHALL write `delivered` and `delivered_to`.
-
-#### Scenario: An old record is read
-
-- **WHEN** a branch's records hold submission 9 with `"told":
-  "2026-10-27T10:00:00Z"` and no `told_to`
-- **THEN** `sluice wait 9 --json` shows `delivered` as
-  `2026-10-27T10:00:00Z` and no `delivered_to`, and `sluice inbox` does
-  not deliver 9 again
+- **WHEN** `unit-a` confirmed `12:landed`, and the session then runs
+  `sluice wait 12 --json`
+- **THEN** it reports 12 landed with its `delivery` as it stood, and
+  records nothing
 
 ### Requirement: A wait where no files are checked out reads as a worktree on its branch
 
 A wait or a waiting submit run in a folder with no files checked out, a
 bare repository or a git directory, SHALL read whose its submission is
 as the worktree on the branch the folder's `HEAD` names would, reading
-neither the folder's files nor `HEAD`'s commit, and SHALL mark delivered
-what that worktree's wait would, and nothing else. It SHALL NOT fail,
-nor say an outcome stays pending, because no files are checked out (2,
-51; record 0099).
+neither the folder's files nor `HEAD`'s commit, and SHALL hand over what
+that worktree's wait would, and nothing else. It SHALL NOT fail, nor
+say an outcome stays owed, because no files are checked out (2, 51;
+record 0099).
 
 #### Scenario: Another worktree's landing read in the git directory
 
-- **WHEN** submission 12 from worktree branch `unit-a` landed and is not
-  delivered, and `sluice wait 12` runs in the repository's git directory,
+- **WHEN** submission 12 from worktree branch `unit-a` landed and is
+  owed, and `sluice wait 12` runs in the repository's git directory,
   whose `HEAD` names `main`
-- **THEN** it reports 12 landed and exits 0, says nothing of 12 pending,
-  of `git status` or of files checked out, and marks nothing; `sluice
-  inbox` in `unit-a`'s worktree then delivers it
+- **THEN** it reports 12 landed and exits 0, says nothing of 12 owed, of
+  `git status` or of files checked out, and records nothing; `sluice
+  inbox` in `unit-a`'s worktree then hands it over
 
 #### Scenario: The git directory's own landing
 
-- **WHEN** submission 12 from worktree branch `unit-a` landed and is not
-  delivered, and `sluice wait 12` runs with `SLUICE_AGENT` `agent-a` and
-  no multiplexer in `unit-a`'s own git directory, which has no files
+- **WHEN** submission 12 from worktree branch `unit-a` landed and is
+  owed, and `sluice wait 12` runs with `SLUICE_AGENT` `agent-a` and no
+  multiplexer in `unit-a`'s own git directory, which has no files
   checked out and whose `HEAD` names `unit-a`
-- **THEN** it reports 12 landed, and 12 shows `delivered` and
-  `delivered_to` `agent-a`
+- **THEN** it reports 12 landed, 12's `delivery` holds a hand-over by
+  `wait`, and `main`'s log holds a `handed` line for 12 whose `to` is
+  `agent-a`
 
 #### Scenario: A HEAD whose branch has no commit
 
 - **WHEN** submission 12 landed, and `sluice wait 12` runs in a folder
   with no files checked out whose `HEAD` names a branch with no commit
 - **THEN** it reports 12 landed and exits 0, says nothing of what it
-  could not read, and marks nothing
+  could not read, and records nothing
 
 ### Requirement: A repository with no files checked out is read with no git status
 
@@ -228,3 +170,110 @@ as holding nothing beyond its commits and naming no path (2).
   checkout's git directory while the checkout holds an untracked file
 - **THEN** it runs no `git status`, and reads nothing held beyond the
   commits and no path
+
+### Requirement: A hand-over is recorded on its carrier's word and confirms nothing
+
+A hand-over SHALL be recorded by `weir-delivery`'s `hand` only when a
+carrier handed the outcome over, by its way: `notice` (herdr took the
+prompt), `pull-request` (the driver posted it), `inbox` or `wait`. It
+SHALL leave the outcome owed unless its call says its reader confirms
+on receipt. An outcome not handed over SHALL stay owed with none, and
+one `pending` line in the log saying why in the carrier's words (51;
+weir 103, 109).
+
+#### Scenario: A notice taken into the pane
+
+- **WHEN** herdr takes the prompt for submission 12 into pane `w1:p2`
+- **THEN** 12's `delivery` is `owed`, with one hand-over by `notice`,
+  and `main`'s log holds a `handed` line for 12 naming `w1:p2`
+
+#### Scenario: A submission outside any multiplexer
+
+- **WHEN** submission 14, which recorded no session, lands
+- **THEN** no pane is prompted, 14's `delivery` is `owed` with no
+  hand-over, and the branch's log has one `pending` line for 14
+
+#### Scenario: A refused prompt records nothing
+
+- **WHEN** herdr refuses the prompt for submission 15 with `agent is
+  blocked`
+- **THEN** 15's `delivery` holds no hand-over, and the branch's log has
+  one `pending` line for it holding `agent is blocked`
+
+#### Scenario: A session on another host is not prompted from this one
+
+- **WHEN** the round that decides submission 16 runs on a host other
+  than the one 16 recorded
+- **THEN** no pane is prompted, and 16's `delivery` holds no hand-over
+
+### Requirement: The log says where each hand-over reached
+
+Each hand-over SHALL be logged on the branch as one `handed` line naming
+the submission, the key, the way and where it reached, the pane, the
+request, the path or the agent; each confirmation as one `confirmed`
+line naming the submission, the key, the reader and who confirmed it.
+
+#### Scenario: A collect outside any multiplexer
+
+- **WHEN** `sluice inbox` runs with no multiplexer in worktree
+  `/w/unit-a` and hands over submission 12's landing
+- **THEN** `main`'s log holds a `handed` line for 12 with key
+  `12:landed`, `by` `inbox` and `to` `/w/unit-a`
+
+### Requirement: A pull request's post confirms on receipt
+
+The pull request driver's post of an outcome on its request SHALL be a
+hand-over by `pull-request` that confirms on receipt, recorded with the
+request's confirmation in the same write, since the request keeps the
+post for whoever reads it (51, C.5; weir 103).
+
+#### Scenario: A request's landing is posted
+
+- **WHEN** the pull request driver posts submission 20's landing on
+  pull request 41
+- **THEN** 20's `delivery` is `done`, its reader `pull/41`, with one
+  hand-over by `pull-request` and its confirmation, and `sluice inbox`
+  in a worktree on the request's head branch gives nothing of 20
+
+#### Scenario: A post that fails
+
+- **WHEN** the post of submission 21's blame on pull request 42 fails
+  and the driver answers that it did not deliver it
+- **THEN** 21 stays owed to `pull/42` with no hand-over
+
+### Requirement: A wait hands over its own submission's outcome
+
+When `sluice wait`, a waiting `sluice submit` or `wt submit` reports an
+owed landed, failed or conflicting submission whose reader the waiting
+worktree reads as (its branch, or the request opened from it), it SHALL
+record a hand-over by `wait` once its report is written, and leave the
+outcome owed. With `--confirm`, the reader SHALL confirm it on receipt
+in the same call. `wt submit` SHALL confirm on receipt a landing whose
+worktree it removes, since the reader's worktree goes with it.
+
+#### Scenario: A waiting submit hands over its landing
+
+- **WHEN** `sluice submit main --json` in worktree `/w/unit-a`, with no
+  multiplexer, waits and reports submission 12 landed
+- **THEN** 12's `delivery` is `owed` with one hand-over by `wait`, and
+  `sluice inbox` in that worktree then hands 12 over again
+
+#### Scenario: A wait that confirms on receipt
+
+- **WHEN** `sluice wait 12 --confirm --json` in worktree `unit-a`
+  reports submission 12 landed
+- **THEN** 12's `delivery` holds a hand-over by `wait` and `unit-a`'s
+  confirmation, and `sluice inbox` in that worktree prints nothing of 12
+
+#### Scenario: wt submit removes a landed worktree
+
+- **WHEN** `wt submit main` in worktree `unit-a` reports submission 12
+  landed and removes the worktree
+- **THEN** 12's `delivery` holds a hand-over by `wait` and `unit-a`'s
+  confirmation
+
+#### Scenario: wt submit reports a blame
+
+- **WHEN** `wt submit main` in worktree `unit-a` reports submission 13
+  blamed, and keeps the worktree
+- **THEN** 13's `delivery` is `owed` with one hand-over by `wait`

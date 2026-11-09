@@ -91,3 +91,19 @@ NOT ask the user to run `sluice submit`, in that worktree or any other.
 
 - **WHEN** two background agents have committed their work in their worktrees and ended, and the user asks to land it on `dev/ai-spike`
 - **THEN** Claude starts an agent in each worktree that runs `sluice submit dev/ai-spike` there and reports the outcome, and tells the user nothing to run
+
+### Requirement: An agent confirms each outcome once it has acted on it
+
+The note sluice's plugin adds when a session starts, and the
+using-sluice skill, SHALL tell an agent that `sluice inbox` hands over
+each outcome of its submissions still owed, that it confirms each with
+`sluice confirm <key>` once it has acted on it, and that an outcome it
+has not confirmed is handed over again by its next `sluice inbox` (51;
+record 0102).
+
+#### Scenario: The session-start note says so
+
+- **WHEN** a session starts in a repository with a `.config/sluice.toml`
+- **THEN** the note tells the agent to run `sluice inbox` once in its
+  worktree, and to run `sluice confirm <key>` for each outcome once it
+  has acted on it
