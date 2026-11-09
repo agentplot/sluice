@@ -52,7 +52,7 @@ record 0102 and the design's decisions by D-number.
 ## 6. The flake's module
 
 - [x] 6.1 Declare `deliveries.expire_after` in `nix/modules/options.nix`, a string with no default, and add `deliveries` with `expire_after = "72h"` to "Every key" and `nix/tests/files/every.toml`, as the host-settings-module spec says (D9, core.51). True when `sluice exec bolt/sluices-outcomes-are-owed-until-confirmed -- moon run nix:test` passes.
-- [ ] 6.2 Have `the_modules_file_is_read_as_written` read the span of 72 hours from `nix/tests/files/every.toml`. True when `cargo test -p sluice --lib instance::tests::the_modules_file_is_read_as_written` passes.
+- [x] 6.2 Have `the_modules_file_is_read_as_written` read the span of 72 hours from `nix/tests/files/every.toml`. True when `cargo test -p sluice --lib instance::tests::the_modules_file_is_read_as_written` passes.
 
 ## 7. Say it
 

@@ -943,9 +943,10 @@ dir = "/caches/moon"
         );
     }
 
-    /// 35, 71, 74, 78, 87, 136; record 0098: the file sluice's flake module
-    /// renders with every key it declares set, read by the reader that
-    /// refuses a field it does not know, as its settings name it.
+    /// 35, 51, 71, 74, 78, 87, 136; records 0098, 0102: the file sluice's
+    /// flake module renders with every key it declares set, read by the
+    /// reader that refuses a field it does not know, as its settings name
+    /// it, the span an outcome is owed among them.
     #[test]
     fn the_modules_file_is_read_as_written() {
         use std::os::unix::fs::PermissionsExt;
@@ -1007,7 +1008,7 @@ dir = "/caches/moon"
                         env: variables(&[("MOON_CACHE_SHARED_WORKTREE_CACHE", "true")]),
                     },
                 ],
-                expire_after: sluice_core::EXPIRE_AFTER,
+                expire_after: Duration::from_secs(72 * 3600),
             }
         );
     }
