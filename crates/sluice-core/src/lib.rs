@@ -41,7 +41,7 @@ pub use ops::{
     Lookup, Refused, Requester, Status, SubmitHead, SubmitRefusal, SubmitRequest, SubmittedHead,
     Unread, WithdrawRefusal, Withdrew,
 };
-pub use owed::{Collect, Owed, OwedOutcome};
+pub use owed::{Collect, ConfirmAs, Confirmation, Confirmations, Owed, OwedOutcome};
 pub use step::{Round, Started, Step};
 
 /// The `tracing` target of a failure's output, one event per failed task

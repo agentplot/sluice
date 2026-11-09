@@ -251,3 +251,207 @@ fn known_in(line: &Line) -> Vec<String> {
         })
         .collect()
 }
+
+/// 51: who confirms: the readers a folder reads as, or the operator, for
+/// each of a delivery's own readers (S77; design D7).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ConfirmAs {
+    /// The folder of the submitter a submit there would record.
+    Folder(Submitter),
+    /// The operator, for the delivery's own readers, wherever it runs.
+    Operator,
+}
+
+/// 51: what [`Sluice::confirm`] answers of one key (weir 102; design D7).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Confirmation {
+    /// Confirmed by this call for `reader`, at `at`: submission `id`'s
+    /// outcome on `branch`.
+    Confirmed {
+        key: String,
+        branch: String,
+        id: u64,
+        reader: String,
+        at: String,
+    },
+    /// The reader had confirmed it, first at `at`; nothing written.
+    Before {
+        key: String,
+        branch: String,
+        id: u64,
+        reader: String,
+        at: String,
+    },
+    /// No branch read holds a delivery under it.
+    NotFound { key: String },
+    /// Owed to readers the folder does not read as, which it names.
+    Another {
+        key: String,
+        branch: String,
+        readers: Vec<String>,
+    },
+}
+
+/// 51: [`Sluice::confirm`]'s answers, one per key in the order given, and
+/// the branches it could not read, where a key not found may be.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Confirmations {
+    pub answers: Vec<Confirmation>,
+    pub unread: Vec<Unread>,
+}
+
+impl Sluice<'_> {
+    /// 51: confirm each of `keys` on whichever branch holds a delivery
+    /// under it, with weir's `confirm`: for the reader the folder reads
+    /// as, by [`Here::made`]'s reading of the submission's work, or, as
+    /// the operator, for each of the delivery's readers that has not
+    /// confirmed it; each confirmation written under the branch's lock,
+    /// one write per branch, and logged `confirmed`, `by` `confirm` or
+    /// `operator`. A key the reader confirmed already says when and writes
+    /// nothing; one owed to another reader is refused, naming it; one no
+    /// branch read holds is not found, and a branch it could not read is
+    /// named (weir 102, 104, 106, 110; S77; rule core.11; design D7).
+    pub fn confirm(&self, keys: &[String], who: &ConfirmAs) -> Result<Confirmations> {
+        let mut branches = self.seams.state.branches()?;
+        branches.sort();
+        branches.dedup();
+        let mut unread = Vec::new();
+        let mut at_branch: BTreeMap<&str, String> = BTreeMap::new();
+        for b in &branches {
+            match self.read_line(b) {
+                Ok(line) => {
+                    for key in keys {
+                        if !at_branch.contains_key(key.as_str()) && delivery_in(&line, key) {
+                            at_branch.insert(key, b.clone());
+                        }
+                    }
+                }
+                Err(e) => unread.push(Unread::of(b, &e)),
+            }
+        }
+        let mut answered: BTreeMap<&str, Confirmation> = BTreeMap::new();
+        let mut by_branch: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+        for (key, branch) in &at_branch {
+            by_branch.entry(branch).or_default().push(key);
+        }
+        let now = self.now();
+        for (branch, keyed) in by_branch {
+            let _lock = self.seams.state.wait_lock(branch)?;
+            let mut got = Vec::new();
+            self.update(branch, |l| {
+                got = keyed
+                    .iter()
+                    .map(|key| self.confirm_on(l, key, who, &now))
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(())
+            })?;
+            for (key, answer) in keyed.into_iter().zip(got) {
+                answered.insert(key, answer);
+            }
+        }
+        let answers = keys
+            .iter()
+            .map(|key| {
+                answered
+                    .remove(key.as_str())
+                    .unwrap_or_else(|| Confirmation::NotFound { key: key.clone() })
+            })
+            .collect();
+        unread.sort_by(|x, y| x.branch.cmp(&y.branch));
+        Ok(Confirmations { answers, unread })
+    }
+
+    /// The confirmation of `key` on `l` by `who` at `now`, added to `l`
+    /// with its `confirmed` lines.
+    fn confirm_on(
+        &self,
+        l: &mut Line,
+        key: &str,
+        who: &ConfirmAs,
+        now: &str,
+    ) -> Result<Confirmation> {
+        let branch = l.branch.clone();
+        let id = submission_of(key).unwrap_or_default();
+        let Some(readers) = readers_of(l, key) else {
+            return Ok(Confirmation::NotFound { key: key.into() });
+        };
+        let (mine, by): (Vec<String>, &str) = match who {
+            ConfirmAs::Operator => (readers.clone(), "operator"),
+            ConfirmAs::Folder(me) => {
+                let here = Here::on(&me.worktree);
+                let from = match l.subs.get(&id) {
+                    Some(s) => Some(s.from.clone()),
+                    None => self.finished_sub(&branch, id)?.map(|s| s.from),
+                };
+                let mine = readers
+                    .iter()
+                    .filter(|r| match &from {
+                        Some(from) => from.worktree == **r && self.made(&here, from),
+                        None => **r == me.worktree,
+                    })
+                    .cloned()
+                    .collect();
+                (mine, "confirm")
+            }
+        };
+        if mine.is_empty() {
+            return Ok(Confirmation::Another {
+                key: key.into(),
+                branch,
+                readers,
+            });
+        }
+        let mut answer = None;
+        for reader in &mine {
+            let confirmed = weir_delivery::confirm(l.deliveries(), key, reader, now)
+                .map_err(|refused| anyhow!("confirming {key} on {branch}: {refused}"))?;
+            match confirmed {
+                weir_delivery::Confirmed::Add(add) => {
+                    l.add_deliveries(&add);
+                    l.log(
+                        now,
+                        crate::records::Event::Confirmed {
+                            id,
+                            key: key.into(),
+                            reader: reader.clone(),
+                            by: by.into(),
+                        },
+                    );
+                    answer = Some(Confirmation::Confirmed {
+                        key: key.into(),
+                        branch: branch.clone(),
+                        id,
+                        reader: reader.clone(),
+                        at: now.into(),
+                    });
+                }
+                weir_delivery::Confirmed::Already(first) => {
+                    answer.get_or_insert(Confirmation::Before {
+                        key: key.into(),
+                        branch: branch.clone(),
+                        id,
+                        reader: reader.clone(),
+                        at: first.to_string(),
+                    });
+                }
+            }
+        }
+        Ok(answer.expect("a reader confirmed or had"))
+    }
+}
+
+/// Whether `line`'s deliveries hold one under `key`.
+fn delivery_in(line: &Line, key: &str) -> bool {
+    readers_of(line, key).is_some()
+}
+
+/// The readers of the delivery `line` holds under `key`, the first under
+/// it, which stands (weir 101).
+fn readers_of(line: &Line, key: &str) -> Option<Vec<String>> {
+    line.deliveries().iter().find_map(|r| match r {
+        weir_delivery::Record::Delivery(d) if d.key().as_str() == key => {
+            Some(d.readers().iter().map(|r| r.to_string()).collect())
+        }
+        _ => None,
+    })
+}
