@@ -1,0 +1,169 @@
+{
+  "schema": "sluice/submission@1",
+  "id": 1,
+  "branch": "bolt/sluice-runs-one-host-process",
+  "head": "ef050f6906bd8a38bf6ea62a21e631258dce3487",
+  "from": {
+    "agent": "fix/sluice-runs-one-host-process--passes-mains-checks-954d21e",
+    "worktree": "fix/sluice-runs-one-host-process--passes-mains-checks-954d21e",
+    "path": "/Users/chuck/.local/share/flume/places/8fbc1094d53c/fix--sluice-runs-one-host-process--passes-mains-checks-954d21e",
+    "host": "deneb"
+  },
+  "submitted": "2026-11-09T16:14:02Z",
+  "after": [],
+  "priority": 0,
+  "attempt": 1,
+  "state": "failed",
+  "tested": {
+    "combination": "84f22db13a50571f2ff0156cd17772f8ca464625",
+    "on": "e61acba09654175bec8c5eda3df206d759d2ed7b",
+    "submissions": [
+      1
+    ]
+  },
+  "result": "failed",
+  "failed": [
+    {
+      "task": "cli:test",
+      "hash": "e83244c098bcf4c09bd1c582ee2002b686626ab5cf379eb7c661bcf9cf02a3eb",
+      "log": "/Users/chuck/.local/share/flywheel/repositories/agentplot/sluice/sluice.git/sluice-remote/origin/.logs/bolt/sluice-runs-one-host-process/c11/cli:test.log"
+    },
+    {
+      "task": "conformance:test",
+      "hash": "9ac1a5811deeb8f25fa7721abc62186da1cb10598eefa90424745c14a2792028",
+      "log": "/Users/chuck/.local/share/flywheel/repositories/agentplot/sluice/sluice.git/sluice-remote/origin/.logs/bolt/sluice-runs-one-host-process/c11/conformance:test.log"
+    },
+    {
+      "task": "core:test",
+      "hash": "fec0b8e6eb301ab4132e85293427de392c3974575f2bd22225f6d1feabf19eae",
+      "log": "/Users/chuck/.local/share/flywheel/repositories/agentplot/sluice/sluice.git/sluice-remote/origin/.logs/bolt/sluice-runs-one-host-process/c11/core:test.log"
+    },
+    {
+      "task": "fakes:test",
+      "hash": "0ae2b37499e1c1ec5b67e6a2a8fae12fdfaf1574cd90cc7b1a8c8c0c0041744c",
+      "log": "/Users/chuck/.local/share/flywheel/repositories/agentplot/sluice/sluice.git/sluice-remote/origin/.logs/bolt/sluice-runs-one-host-process/c11/fakes:test.log"
+    },
+    {
+      "task": "nix:lint",
+      "hash": "94573b5e7c044431196dfc177370b06a335e9e7d1643912aa8c573f2cf335365",
+      "log": "/Users/chuck/.local/share/flywheel/repositories/agentplot/sluice/sluice.git/sluice-remote/origin/.logs/bolt/sluice-runs-one-host-process/c11/nix:lint.log"
+    },
+    {
+      "task": "nix:test",
+      "hash": "5efbfb1cf4fa27729c6e3115dc21cafd8b2a81f1e2c1851a74d77fd0c17568fc",
+      "log": "/Users/chuck/.local/share/flywheel/repositories/agentplot/sluice/sluice.git/sluice-remote/origin/.logs/bolt/sluice-runs-one-host-process/c11/nix:test.log"
+    },
+    {
+      "task": "nix:typecheck",
+      "hash": "af25b9790b7596c0e46100b5e7a9fa3a6cbb7c0f3315a2982cbde7cc75c796f9",
+      "log": "/Users/chuck/.local/share/flywheel/repositories/agentplot/sluice/sluice.git/sluice-remote/origin/.logs/bolt/sluice-runs-one-host-process/c11/nix:typecheck.log"
+    },
+    {
+      "task": "plugin-board:engine-types",
+      "hash": "8cf916a81c0a13226ee5c6e2b27cbd02e17808aed3e216746ab0d3560e0c352e",
+      "log": "/Users/chuck/.local/share/flywheel/repositories/agentplot/sluice/sluice.git/sluice-remote/origin/.logs/bolt/sluice-runs-one-host-process/c11/plugin-board:engine-types.log"
+    },
+    {
+      "task": "plugin-board:test",
+      "hash": "73f28a4c1717bb82f190d9c142f86f805791935f93b4c40fb6a7991c0088b374",
+      "log": "/Users/chuck/.local/share/flywheel/repositories/agentplot/sluice/sluice.git/sluice-remote/origin/.logs/bolt/sluice-runs-one-host-process/c11/plugin-board:test.log"
+    },
+    {
+      "task": "plugin-board:typecheck",
+      "hash": "b61f1eb0bd0031c74857c808a49c6f4eed5c2272c99c9f6367f41fb2330dbd00",
+      "log": "/Users/chuck/.local/share/flywheel/repositories/agentplot/sluice/sluice.git/sluice-remote/origin/.logs/bolt/sluice-runs-one-host-process/c11/plugin-board:typecheck.log"
+    },
+    {
+      "task": "plugin-board:validate",
+      "hash": "48e5d75813bf54f6d6484d98ef3b65245e1cd1ccfe0be25bafcab13d62480878",
+      "log": "/Users/chuck/.local/share/flywheel/repositories/agentplot/sluice/sluice.git/sluice-remote/origin/.logs/bolt/sluice-runs-one-host-process/c11/plugin-board:validate.log"
+    },
+    {
+      "task": "plugin-herdr:manifest",
+      "hash": "592565dc5dc07ff8cddb76c24f88d569d8122107c146ea2414e27da932303f01",
+      "log": "/Users/chuck/.local/share/flywheel/repositories/agentplot/sluice/sluice.git/sluice-remote/origin/.logs/bolt/sluice-runs-one-host-process/c11/plugin-herdr:manifest.log"
+    },
+    {
+      "task": "plugin-herdr:test-dash",
+      "hash": "a86b14b2672a222ffbe658e1ab7ce83e0dd81931866e716840fe6426954858d2",
+      "log": "/Users/chuck/.local/share/flywheel/repositories/agentplot/sluice/sluice.git/sluice-remote/origin/.logs/bolt/sluice-runs-one-host-process/c11/plugin-herdr:test-dash.log"
+    },
+    {
+      "task": "plugin-herdr:test-sh",
+      "hash": "7f6019994b589f6ba690361112710d84e3ef841c9848a7b25ee45d071214164f",
+      "log": "/Users/chuck/.local/share/flywheel/repositories/agentplot/sluice/sluice.git/sluice-remote/origin/.logs/bolt/sluice-runs-one-host-process/c11/plugin-herdr:test-sh.log"
+    },
+    {
+      "task": "plugin-sluice:hooks",
+      "hash": "0ba36fbfa169b6b1b22dd7455683e5fec6ecec2b444220e518d234af8edce4ae",
+      "log": "/Users/chuck/.local/share/flywheel/repositories/agentplot/sluice/sluice.git/sluice-remote/origin/.logs/bolt/sluice-runs-one-host-process/c11/plugin-sluice:hooks.log"
+    },
+    {
+      "task": "plugin-sluice:lay-out",
+      "hash": "1c580bd20d8cdb63c1abfd1abc7f65e6724f2055a6249546b8ce1d62aa6b63cc",
+      "log": "/Users/chuck/.local/share/flywheel/repositories/agentplot/sluice/sluice.git/sluice-remote/origin/.logs/bolt/sluice-runs-one-host-process/c11/plugin-sluice:lay-out.log"
+    },
+    {
+      "task": "plugin-sluice:validate",
+      "hash": "2070dc5ff920ca279f99ea79294296b018e0fbcda4b553af5b21fb52602124d9",
+      "log": "/Users/chuck/.local/share/flywheel/repositories/agentplot/sluice/sluice.git/sluice-remote/origin/.logs/bolt/sluice-runs-one-host-process/c11/plugin-sluice:validate.log"
+    },
+    {
+      "task": "root:adrs",
+      "hash": "f63a213c4fe42e8bddf8f175ae1eff2d1df02d09a42ddb0495c72ed76a502b77",
+      "log": "/Users/chuck/.local/share/flywheel/repositories/agentplot/sluice/sluice.git/sluice-remote/origin/.logs/bolt/sluice-runs-one-host-process/c11/root:adrs.log"
+    },
+    {
+      "task": "root:changes",
+      "hash": "e1437dc1c504e7405cbe03d3528cbdc61312d229395cc343b7a358ad5f35631d",
+      "log": "/Users/chuck/.local/share/flywheel/repositories/agentplot/sluice/sluice.git/sluice-remote/origin/.logs/bolt/sluice-runs-one-host-process/c11/root:changes.log"
+    },
+    {
+      "task": "root:format",
+      "hash": "d0402d930db8b227eb9c640976fce4c917a71839da1a427de20941e5a08c07b0",
+      "log": "/Users/chuck/.local/share/flywheel/repositories/agentplot/sluice/sluice.git/sluice-remote/origin/.logs/bolt/sluice-runs-one-host-process/c11/root:format.log"
+    },
+    {
+      "task": "root:lint",
+      "hash": "6a6ada28eaac6bebb9ce77e026bd515c9c40b01760a25509a2ec0bfd91e31f98",
+      "log": "/Users/chuck/.local/share/flywheel/repositories/agentplot/sluice/sluice.git/sluice-remote/origin/.logs/bolt/sluice-runs-one-host-process/c11/root:lint.log"
+    },
+    {
+      "task": "root:marketplace",
+      "hash": "53cf5a24aef6ec386779c525c8a799f059363ac15092192e15ab7c0763fd9646",
+      "log": "/Users/chuck/.local/share/flywheel/repositories/agentplot/sluice/sluice.git/sluice-remote/origin/.logs/bolt/sluice-runs-one-host-process/c11/root:marketplace.log"
+    },
+    {
+      "task": "root:openspec-claude",
+      "hash": "c52fba5ed822505475afe0de790b50d861db61b1b2d052e96f6724cc1516d8af",
+      "log": "/Users/chuck/.local/share/flywheel/repositories/agentplot/sluice/sluice.git/sluice-remote/origin/.logs/bolt/sluice-runs-one-host-process/c11/root:openspec-claude.log"
+    },
+    {
+      "task": "root:specs",
+      "hash": "730ef2317385f2536c6514a96f53b2869c620b9c5a03a8b88f70b62dbd782fd4",
+      "log": "/Users/chuck/.local/share/flywheel/repositories/agentplot/sluice/sluice.git/sluice-remote/origin/.logs/bolt/sluice-runs-one-host-process/c11/root:specs.log"
+    },
+    {
+      "task": "root:toolchain",
+      "hash": "12ea5acea9e789e484d13b8d0b751e04b3fecab53e6252dababa27a938b30afb",
+      "log": "/Users/chuck/.local/share/flywheel/repositories/agentplot/sluice/sluice.git/sluice-remote/origin/.logs/bolt/sluice-runs-one-host-process/c11/root:toolchain.log"
+    },
+    {
+      "task": "seams:test",
+      "hash": "ac438248f4469a3e7c51b81a89541deb769d45d720265927c50c11c59326bb3e",
+      "log": "/Users/chuck/.local/share/flywheel/repositories/agentplot/sluice/sluice.git/sluice-remote/origin/.logs/bolt/sluice-runs-one-host-process/c11/seams:test.log"
+    },
+    {
+      "task": "site:prose",
+      "hash": "3940796a124b6da36d4889332f393e684eeea0e4ca105f62b9866946faa0d037",
+      "log": "/Users/chuck/.local/share/flywheel/repositories/agentplot/sluice/sluice.git/sluice-remote/origin/.logs/bolt/sluice-runs-one-host-process/c11/site:prose.log"
+    },
+    {
+      "task": "site:rules",
+      "hash": "e4f04be989d27edbf280ff69ad27ce4ff3f35e1e98fc4519193446c8a0d19368",
+      "log": "/Users/chuck/.local/share/flywheel/repositories/agentplot/sluice/sluice.git/sluice-remote/origin/.logs/bolt/sluice-runs-one-host-process/c11/site:rules.log"
+    }
+  ],
+  "delivered": "2026-11-09T16:22:30Z",
+  "delivered_to": "/Users/chuck/.local/share/flume/places/8fbc1094d53c/fix--sluice-runs-one-host-process--passes-mains-checks-954d21e"
+}

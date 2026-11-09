@@ -1,0 +1,28 @@
+{
+  "schema": "sluice/submission@1",
+  "id": 23,
+  "branch": "bolt/sluice-runs-one-host-process",
+  "head": "39a809e1eda79454b4a31f4c2c083d9f5efa2d69",
+  "from": {
+    "agent": "change/a-hosts-queues-move-in-sluices-own-host-process",
+    "worktree": "change/a-hosts-queues-move-in-sluices-own-host-process",
+    "path": "/Users/chuck/.local/share/flume/places/8fbc1094d53c/change--a-hosts-queues-move-in-sluices-own-host-process",
+    "host": "deneb"
+  },
+  "submitted": "2026-11-08T04:53:34Z",
+  "after": [],
+  "priority": 0,
+  "attempt": 1,
+  "state": "landed",
+  "tested": {
+    "combination": "cb79a473d6efcf9bdf949dcc61c7e401fbc86e01",
+    "on": "68d68a9a4a7c3008a2c6c36a3745ad5e7ad83bb6",
+    "submissions": [
+      23
+    ]
+  },
+  "result": "passed",
+  "delivered": "2026-11-08T05:04:12Z",
+  "delivered_to": "/Users/chuck/.local/share/flume/places/8fbc1094d53c/change--a-hosts-queues-move-in-sluices-own-host-process",
+  "landed_as": "cd141bab04742356a3a11959add06aa3b86719b4"
+}

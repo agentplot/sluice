@@ -1,0 +1,51 @@
+{
+  "schema": "sluice/submission@1",
+  "id": 41,
+  "branch": "bolt/sluice-runs-one-host-process",
+  "head": "291a33276d4fe17821dabd980bf6a0736ac1a7ad",
+  "from": {
+    "agent": "fix/sluice-runs-one-host-process--takes-main-in-2",
+    "worktree": "fix/sluice-runs-one-host-process--takes-main-in-2",
+    "path": "/Users/chuck/.local/share/flume/places/8fbc1094d53c/fix--sluice-runs-one-host-process--takes-main-in-2",
+    "host": "deneb"
+  },
+  "submitted": "2026-11-08T20:12:32Z",
+  "after": [],
+  "priority": 0,
+  "attempt": 1,
+  "state": "withdrawn",
+  "tested": {
+    "combination": "96cb3e3d7a0202ccf8225bf0b7a9c9b5688d06d1",
+    "on": "18524ae907119f16d9efd40f875b51af54b78012",
+    "submissions": [
+      41
+    ]
+  },
+  "result": "failed",
+  "failed": [
+    {
+      "task": "cli:test",
+      "hash": "ca0fa69ad61151e34b0f6bc03b81da8be89b0a770aaebd8d9fd7fe8b002ee3dc",
+      "log": "/Users/chuck/.local/share/flywheel/repositories/agentplot/sluice/sluice.git/sluice/.logs/bolt/sluice-runs-one-host-process/c6/cli:test.log",
+      "flaky": {
+        "here": "pass",
+        "at": "2026-11-08T20:50:54Z",
+        "host": "deneb",
+        "other": {
+          "outcome": "fail",
+          "at": "2026-11-08T20:04:46Z",
+          "branch": "bolt/sluice-runs-one-host-process",
+          "combination": "291a33276d4fe17821dabd980bf6a0736ac1a7ad",
+          "host": "deneb",
+          "worktree": "/Users/chuck/.local/share/flume/places/8fbc1094d53c/fix--sluice-runs-one-host-process--takes-main-in-2"
+        }
+      }
+    }
+  ],
+  "withdrawn": {
+    "by": "resubmission",
+    "at": "2026-11-08T21:06:01Z"
+  },
+  "delivered": "2026-11-08T20:50:58Z",
+  "delivered_to": "/Users/chuck/.local/share/flume/places/8fbc1094d53c/fix--sluice-runs-one-host-process--takes-main-in-2"
+}

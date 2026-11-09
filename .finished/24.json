@@ -1,0 +1,35 @@
+{
+  "schema": "sluice/submission@1",
+  "id": 24,
+  "branch": "bolt/sluice-runs-one-host-process",
+  "head": "9787790f5982b0ecd87dfc6f11a75d41ba831e05",
+  "from": {
+    "agent": "change/pull-requests-are-queued-on-the-forge",
+    "worktree": "change/pull-requests-are-queued-on-the-forge",
+    "path": "/Users/chuck/.local/share/flume/places/8fbc1094d53c/change--pull-requests-are-queued-on-the-forge",
+    "host": "deneb"
+  },
+  "submitted": "2026-11-08T05:27:12Z",
+  "after": [],
+  "priority": 0,
+  "attempt": 1,
+  "state": "withdrawn",
+  "conflict": {
+    "paths": [
+      "crates/sluice/src/lib.rs",
+      "crates/sluice/src/overview.rs",
+      "plugins/sluice/skills/setting-up-sluice/SKILL.md",
+      "plugins/sluice/skills/using-sluice/SKILL.md",
+      "plugins/sluice/skills/using-sluice/references/submit.md",
+      "site/src/content/docs/reference/commands.md",
+      "site/src/content/docs/reference/state.md"
+    ],
+    "with": []
+  },
+  "withdrawn": {
+    "by": "resubmission",
+    "at": "2026-11-08T07:34:02Z"
+  },
+  "delivered": "2026-11-08T05:27:16Z",
+  "delivered_to": "/Users/chuck/.local/share/flume/places/8fbc1094d53c/change--pull-requests-are-queued-on-the-forge"
+}

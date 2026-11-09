@@ -1,0 +1,38 @@
+{
+  "schema": "sluice/submission@1",
+  "id": 49,
+  "branch": "bolt/sluice-runs-one-host-process",
+  "head": "14b27603bccf206ae27d17ba3d36cd9a5c91f08c",
+  "from": {
+    "agent": "change/requests-are-taken-in-with-no-intake-mark",
+    "worktree": "change/requests-are-taken-in-with-no-intake-mark",
+    "path": "/Users/chuck/.local/share/flume/places/8fbc1094d53c/change--requests-are-taken-in-with-no-intake-mark",
+    "host": "deneb"
+  },
+  "submitted": "2026-11-09T04:11:00Z",
+  "after": [],
+  "priority": 0,
+  "attempt": 1,
+  "state": "withdrawn",
+  "tested": {
+    "combination": "4a07cce12b02c6572b28bd7f92c97b7b73feb81e",
+    "on": "752db9a92b928fed317bd805b8bb57677c9ac42a",
+    "submissions": [
+      49
+    ]
+  },
+  "result": "failed",
+  "failed": [
+    {
+      "task": "root:changes",
+      "hash": "533c8babacabcbbe06b44ca1282123f8082c64a5a7290c68568542186f97788d",
+      "log": "/Users/chuck/.local/share/flywheel/repositories/agentplot/sluice/sluice.git/sluice/.logs/bolt/sluice-runs-one-host-process/c8/root:changes.log"
+    }
+  ],
+  "withdrawn": {
+    "by": "resubmission",
+    "at": "2026-11-09T04:22:14Z"
+  },
+  "delivered": "2026-11-09T04:15:12Z",
+  "delivered_to": "/Users/chuck/.local/share/flume/places/8fbc1094d53c/change--requests-are-taken-in-with-no-intake-mark"
+}

@@ -1,0 +1,16 @@
+{
+  "schema": "sluice/branch@1",
+  "branch": "bolt/sluice-runs-one-host-process",
+  "log": "sluice/log@1",
+  "base": "e61acba09654175bec8c5eda3df206d759d2ed7b",
+  "verified": false,
+  "window": 1,
+  "next_place": 12,
+  "next_candidate": 12,
+  "candidates": [],
+  "landing": null,
+  "release": [],
+  "outbox": [],
+  "lead": "deneb",
+  "landed": "e61acba09654175bec8c5eda3df206d759d2ed7b"
+}

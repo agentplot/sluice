@@ -1,0 +1,69 @@
+{
+  "schema": "sluice/submission@1",
+  "id": 37,
+  "branch": "bolt/sluice-runs-one-host-process",
+  "head": "55cac9bbed0a856d8f8e535e16b60cc9059887f0",
+  "from": {
+    "agent": "fix/sluice-runs-one-host-process--take-main-dd3fa01",
+    "worktree": "fix/sluice-runs-one-host-process--take-main-dd3fa01",
+    "path": "/Users/chuck/.local/share/flume/places/8fbc1094d53c/fix--sluice-runs-one-host-process--take-main-dd3fa01",
+    "host": "deneb"
+  },
+  "submitted": "2026-11-08T18:08:22Z",
+  "after": [],
+  "priority": 0,
+  "attempt": 1,
+  "state": "withdrawn",
+  "tested": {
+    "combination": "092adb324bbc779d9b84eaaf208c0a7368492855",
+    "on": "cb8f0426bc7ff6b0eefc5cb15d39fda89974925e",
+    "submissions": [
+      37
+    ]
+  },
+  "result": "failed",
+  "failed": [
+    {
+      "task": "plugin-herdr:test-dash",
+      "hash": "cff14d509dd45817384e9149f062458b6c70bf368c5cc0a505fa4f0ee45a20bd",
+      "log": "/Users/chuck/.local/share/flywheel/repositories/agentplot/sluice/sluice.git/sluice/.logs/bolt/sluice-runs-one-host-process/c4/plugin-herdr:test-dash.log",
+      "flaky": {
+        "here": "pass",
+        "at": "2026-11-08T18:16:31Z",
+        "host": "deneb",
+        "other": {
+          "outcome": "fail",
+          "at": "2026-11-08T17:30:01Z",
+          "branch": "bolt/sluice-runs-one-host-process",
+          "combination": "55cac9bbed0a856d8f8e535e16b60cc9059887f0",
+          "host": "deneb",
+          "worktree": "/Users/chuck/.local/share/flume/places/8fbc1094d53c/fix--sluice-runs-one-host-process--take-main-dd3fa01"
+        }
+      }
+    },
+    {
+      "task": "plugin-herdr:test-sh",
+      "hash": "d96fdb16773a5087c48dff33ee611c992ef9ac70bb8f6b9c4aa3c3c81a339511",
+      "log": "/Users/chuck/.local/share/flywheel/repositories/agentplot/sluice/sluice.git/sluice/.logs/bolt/sluice-runs-one-host-process/c4/plugin-herdr:test-sh.log",
+      "flaky": {
+        "here": "pass",
+        "at": "2026-11-08T18:16:31Z",
+        "host": "deneb",
+        "other": {
+          "outcome": "fail",
+          "at": "2026-11-08T17:52:31Z",
+          "branch": "bolt/sluice-runs-one-host-process",
+          "combination": "55cac9bbed0a856d8f8e535e16b60cc9059887f0",
+          "host": "deneb",
+          "worktree": "/Users/chuck/.local/share/flume/places/8fbc1094d53c/fix--sluice-runs-one-host-process--take-main-dd3fa01"
+        }
+      }
+    }
+  ],
+  "withdrawn": {
+    "by": "resubmission",
+    "at": "2026-11-08T18:31:20Z"
+  },
+  "delivered": "2026-11-08T18:16:35Z",
+  "delivered_to": "/Users/chuck/.local/share/flume/places/8fbc1094d53c/fix--sluice-runs-one-host-process--take-main-dd3fa01"
+}

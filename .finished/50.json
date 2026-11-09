@@ -1,0 +1,28 @@
+{
+  "schema": "sluice/submission@1",
+  "id": 50,
+  "branch": "bolt/sluice-runs-one-host-process",
+  "head": "1256b8d7fefbef2343f00ff68889f3843934603c",
+  "from": {
+    "agent": "change/requests-are-taken-in-with-no-intake-mark",
+    "worktree": "change/requests-are-taken-in-with-no-intake-mark",
+    "path": "/Users/chuck/.local/share/flume/places/8fbc1094d53c/change--requests-are-taken-in-with-no-intake-mark",
+    "host": "deneb"
+  },
+  "submitted": "2026-11-09T04:22:14Z",
+  "after": [],
+  "priority": 0,
+  "attempt": 2,
+  "state": "landed",
+  "tested": {
+    "combination": "0f72d9bf53e767278b2231bbda1b167bd0eb0f22",
+    "on": "752db9a92b928fed317bd805b8bb57677c9ac42a",
+    "submissions": [
+      50
+    ]
+  },
+  "result": "passed",
+  "delivered": "2026-11-09T04:26:46Z",
+  "delivered_to": "/Users/chuck/.local/share/flume/places/8fbc1094d53c/change--requests-are-taken-in-with-no-intake-mark",
+  "landed_as": "2c86104475e36351ed0a4e49960a76ba15a7207e"
+}

@@ -1,0 +1,28 @@
+{
+  "schema": "sluice/submission@1",
+  "id": 29,
+  "branch": "bolt/sluice-runs-one-host-process",
+  "head": "60aa9ebf3989ec456fbcfb6e1192240bd03608c1",
+  "from": {
+    "agent": "fix/sluice-runs-one-host-process--takes-out-the-forge-round",
+    "worktree": "fix/sluice-runs-one-host-process--takes-out-the-forge-round",
+    "path": "/Users/chuck/.local/share/flume/places/8fbc1094d53c/fix--sluice-runs-one-host-process--takes-out-the-forge-round",
+    "host": "deneb"
+  },
+  "submitted": "2026-11-08T16:22:55Z",
+  "after": [],
+  "priority": 0,
+  "attempt": 1,
+  "state": "landed",
+  "tested": {
+    "combination": "49d6d333da931938d004c0f2f92f9f31a6248d97",
+    "on": "3d319a8f5aedf591af4fc0679c56079e774a150c",
+    "submissions": [
+      29
+    ]
+  },
+  "result": "passed",
+  "delivered": "2026-11-08T16:27:25Z",
+  "delivered_to": "/Users/chuck/.local/share/flume/places/8fbc1094d53c/fix--sluice-runs-one-host-process--takes-out-the-forge-round",
+  "landed_as": "cb8f0426bc7ff6b0eefc5cb15d39fda89974925e"
+}
