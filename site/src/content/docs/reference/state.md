@@ -516,14 +516,14 @@ To a branch with pull requests, the submission is the pull request's,
 from `pull/<n>` with `head` the branch.
 
 A withdrawn submission has `"withdrawn": { "by": "operator", "at":
-"2026-10-11T09:30:02Z" }`: who withdrew it, and when. A host that found
-another host taking its branch's pull requests in withdrew its own
-submissions of them. Such a submission's `withdrawn` also has
-`"handed_over_to": "build-2"`, that host. It holds no pull request:
-whichever host takes the pull requests in submits it again, and its log
-line names the host the same way. A submission an older sluice withdrew
-so has no `handed_over_to`, and its `by` reads `build-2 takes main's
-pull requests in`.
+"2026-10-11T09:30:02Z" }`: who withdrew it, and when. An older sluice
+withdrew a host's own submissions of its branch's pull requests when it
+found another host taking them in, a hand-over, and gave such a
+submission's `withdrawn`, and its log line, `"handed_over_to": "build-2"`,
+that host; one older still gave none, and its `by` reads `build-2 takes
+main's pull requests in`. sluice reads `handed_over_to` and no longer
+writes it. Such a submission holds no pull request: the host that keeps
+the branch submits it again at its latest commit.
 
 ## The log
 

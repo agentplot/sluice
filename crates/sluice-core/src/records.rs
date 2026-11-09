@@ -221,10 +221,11 @@ pub struct ConflictRecord {
 pub struct Withdrawal {
     pub by: String,
     pub at: String,
-    /// 120, 137: the host that takes the branch's pull requests in, where
-    /// this host withdrew the submission at a hand-over of its intake to
-    /// it, which holds no request; `None` for any other withdrawal, and in
-    /// records written before it (record 0088 as amended).
+    /// 120, 137: the host that took the branch's pull requests in, where
+    /// an older sluice withdrew the submission at a hand-over of its intake
+    /// to it, which holds no request; `None` for any other withdrawal, and
+    /// in records written before it (record 0088 as amended). Read, and
+    /// never written: no withdrawal is a hand-over's (record 0103 D4).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handed_over_to: Option<String>,
 }
@@ -938,7 +939,8 @@ pub enum Event {
     Withdrawn {
         id: u64,
         by: String,
-        /// As the submission's [`Withdrawal`] names it.
+        /// As the submission's [`Withdrawal`] names it: read, and never
+        /// written (record 0103 D4).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         handed_over_to: Option<String>,
     },
