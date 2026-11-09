@@ -172,11 +172,11 @@ pull request at once, its conditions holding: hand `id` to `sluice wait`.
 Otherwise it answers `{"pull_request","branch","state"}`, `state` what the
 pull request waits for: run `sluice wait main` in the worktree, which
 follows the pull request and, once sluice queues it, its submission, whose
-record it prints under `--json` from then on. Where another host takes the
-branch's pull requests in, that document, and the wait's until it ends,
-also gives `taken_in_by`, the host holding the branch's intake mark and
-whether its `sluice run` or a wait holds it, and `queue`, where that host
-holds the pull request: `submission` and `state` once it is taken in,
+record it prints under `--json` from then on. Where another host keeps the
+branch on its remote, and so takes its pull requests in, that document,
+and the wait's until it ends, also gives `taken_in_by`, `{"host"}`, the
+host that keeps the branch, and `queue`, where that host holds the pull
+request: `submission` and `state` once it is taken in,
 what is `ahead` of it in that host's order, and `waits_for`, what it lacks
 before it is taken in, or taken in again. The wait ends as the pull
 request lands or is sent back there; don't submit again to move it.
