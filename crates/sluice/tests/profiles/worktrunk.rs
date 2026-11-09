@@ -2187,11 +2187,13 @@ fn a_head_with_no_commit_fails_no_delivery_read() {
     assert_eq!(v, serde_json::json!({ "outcomes": [] }));
 }
 
-/// 124, 51, 2: a branch sluice lands on submitted by name, from the
-/// repository's git directory, is pending in no inbox: a wait on it there
-/// reports it landed and exits 0, saying nothing of it staying pending,
-/// and marks nothing; no inbox, there or in a worktree on the branch,
-/// collects it (design D5; record 0085; rule core.50).
+/// 124, 51, 2; submit-by-name spec, "A wait in a bare clone reports it and
+/// marks nothing": a branch sluice lands on submitted by name, from the
+/// repository's git directory, is owed to no inbox: a wait on it there
+/// reports it landed and exits 0, saying nothing of it staying owed, and
+/// records nothing; the branch's deliveries hold nothing under its key, it
+/// gives no `delivery`, and no inbox, there or in a worktree on the branch,
+/// collects it (design D5; records 0085, 0102; rule core.50).
 #[test]
 fn a_wait_by_name_in_a_bare_clone_says_nothing_pending() {
     let s = Scratch::new("wt-named-bare");
@@ -2226,10 +2228,19 @@ fn a_wait_by_name_in_a_bare_clone_says_nothing_pending() {
     assert_eq!(out.status.code(), Some(0), "{said}");
     assert!(said.contains("landed as"), "{said}");
     assert!(!said.contains("pending"), "{said}");
+    assert!(!said.contains("owed"), "{said}");
     assert!(!said.contains("no files checked out"), "{said}");
-    assert_eq!(s.status(n)["delivered"], serde_json::Value::Null);
-    assert!(s.logged("delivered").is_empty());
-    assert!(s.logged("pending").is_empty());
+    assert!(s.status(n).get("delivery").is_none(), "{}", s.status(n));
+    for event in ["pending", "handed", "confirmed"] {
+        assert!(s.logged(event).is_empty(), "a {event} line");
+    }
+    let deliveries =
+        std::fs::read_to_string(s.repo.dir().join(".git/sluice/bolt/x/deliveries.jsonl"))
+            .unwrap_or_default();
+    assert!(
+        !deliveries.contains(&format!("\"{n}:landed\"")),
+        "{deliveries}"
+    );
 
     let out = inbox(&s, &git_dir, &["--json"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
@@ -2244,7 +2255,7 @@ fn a_wait_by_name_in_a_bare_clone_says_nothing_pending() {
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(v, serde_json::json!({ "outcomes": [] }));
-    assert_eq!(s.status(n)["delivered"], serde_json::Value::Null);
+    assert!(s.logged("handed").is_empty());
 }
 
 /// 3, 135: a worktree on no branch has submitted nothing, and collects
@@ -2661,8 +2672,9 @@ mod by_name {
     /// D9, 135: a submit by name that waits runs `bolt/x`'s rounds while it
     /// waits, with no `sluice run` on the host, says `submission <n> to
     /// <target> from <branch>`, reports the landing and exits 0. It
-    /// delivers nothing: nothing is typed into its pane, no `pending` or
-    /// `delivered` line is logged, and the submission shows no `delivered`.
+    /// hands over nothing: nothing is typed into its pane, no `pending`,
+    /// `handed` or `confirmed` line is logged, and the submission gives no
+    /// `delivery`.
     #[test]
     fn a_waiting_submit_by_name_lands() {
         let s = Scratch::new("wt-by-name-waits");
@@ -2690,9 +2702,10 @@ mod by_name {
             "{said}"
         );
         assert_eq!(s.tip(), landed);
-        assert_eq!(record["delivered"], serde_json::Value::Null);
-        assert!(s.logged("pending").is_empty());
-        assert!(s.logged("delivered").is_empty());
+        assert!(record.get("delivery").is_none(), "{record}");
+        for event in ["pending", "handed", "confirmed"] {
+            assert!(s.logged(event).is_empty(), "a {event} line");
+        }
         assert!(s.herdr.calls().is_empty(), "{:?}", s.herdr.calls());
     }
 
@@ -2805,7 +2818,11 @@ mod status_gives_the_inbox_words {
     /// `bolt/w` by name, blamed for `sh check.sh`: queued, it has no
     /// notice; decided, `sluice status bolt/x --all --json` and `sluice
     /// status <n> --json` give it the inbox's notice, its `failed` and the
-    /// revision of `bolt/x` it was tested on.
+    /// revision of `bolt/x` it was tested on. Submit-by-name spec, "Blamed,
+    /// and no inbox takes it": the log holds its blame and no `pending`,
+    /// `handed` or `confirmed` line, it gives no `delivery`, and `sluice
+    /// inbox --json` in the git directory, the main checkout and a worktree
+    /// on `bolt/w` each give nothing (record 0102; rule core.50).
     #[test]
     fn a_failure_by_name() {
         let s = Scratch::new("wt-status-words-fails");
@@ -2832,6 +2849,29 @@ mod status_gives_the_inbox_words {
         let one = s.status(n);
         assert_eq!(one["notice"], notice.as_str(), "{one}");
         assert_eq!(one["tested"]["on"], tip.as_str(), "{one}");
+        assert!(one.get("delivery").is_none(), "{one}");
+        assert!(s.logged("blamed").iter().any(|l| l["id"] == n));
+        for event in ["pending", "handed", "confirmed"] {
+            assert!(
+                s.logged(event).iter().all(|l| l["id"] != n),
+                "a {event} line"
+            );
+        }
+        let w = s.repo.dir().with_extension("s-w");
+        let _ = std::fs::remove_dir_all(&w);
+        s.repo
+            .git(&["worktree", "add", "-q", w.to_str().unwrap(), "bolt/w"]);
+        for dir in [s.repo.dir().join(".git"), s.repo.dir().to_path_buf(), w] {
+            let out = inbox(&s, &dir, &["--json"]);
+            assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+            let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+            assert_eq!(
+                v,
+                serde_json::json!({ "outcomes": [] }),
+                "{}",
+                dir.display()
+            );
+        }
     }
 
     /// `bolt/w` by name, conflicting in `same.txt` with a session's landing:
