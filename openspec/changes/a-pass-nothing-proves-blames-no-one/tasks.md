@@ -22,7 +22,7 @@ record 0105 and rules by id.
 
 ## 3. The fakes keep no proof
 
-- [ ] 3.1 In `crates/sluice-fakes/src/lib.rs`, add `World::keeps_no_proof(Option<&str>)`: with `Some(store)`, from then on `FakeTests::proven` answers each ran pass in `unkept` with `it passed, but nothing the run kept proves it ran: its record is not in <store>`, and leaves it out of `proven`. Fails, the tasks a check was failed by, and replays are left as today. `None` keeps proof again, and `forges` still makes a key in neither list (design D8). The fakes name no moon (rule core.1). In its tests module add `a_world_that_keeps_no_proof_answers_each_ran_pass_unkept`: a run with a pass and a fail answering the pass unkept and the fail proven, and, after `keeps_no_proof(None)`, both proven. True when `cargo test -p sluice-fakes --lib a_world_that_keeps_no_proof_answers_each_ran_pass_unkept` passes.
+- [x] 3.1 In `crates/sluice-fakes/src/lib.rs`, add `World::keeps_no_proof(Option<&str>)`: with `Some(store)`, from then on `FakeTests::proven` answers each ran pass in `unkept` with `it passed, but nothing the run kept proves it ran: its record is not in <store>`, and leaves it out of `proven`. Fails, the tasks a check was failed by, and replays are left as today. `None` keeps proof again, and `forges` still makes a key in neither list (design D8). The fakes name no moon (rule core.1). In its tests module add `a_world_that_keeps_no_proof_answers_each_ran_pass_unkept`: a run with a pass and a fail answering the pass unkept and the fail proven, and, after `keeps_no_proof(None)`, both proven. True when `cargo test -p sluice-fakes --lib a_world_that_keeps_no_proof_answers_each_ran_pass_unkept` passes.
 
 ## 4. The records keep a lost run and a standing cause
 
