@@ -2095,7 +2095,12 @@ fn inbox_in_a_detached_worktree_delivers_nothing() {
 /// whatever its state (the contract a caller reads, which only gains
 /// fields).
 fn collected_one(s: &Scratch, dir: &Path) -> serde_json::Value {
-    let out = inbox(s, dir, &["--json"]);
+    collected_one_by(s, dir, &["--json"])
+}
+
+/// `sluice inbox` with `args` in `dir`, as [`collected_one`] reads it.
+fn collected_one_by(s: &Scratch, dir: &Path, args: &[&str]) -> serde_json::Value {
+    let out = inbox(s, dir, args);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert!(v.get("unread").is_none(), "{v}");
@@ -2105,8 +2110,17 @@ fn collected_one(s: &Scratch, dir: &Path) -> serde_json::Value {
     let path = std::fs::canonicalize(dir).unwrap();
     assert!(e["id"].is_u64(), "{e}");
     assert_eq!(e["branch"], "bolt/x", "{e}");
-    assert!(e["delivered"].is_string(), "{e}");
-    assert_eq!(e["delivered_to"], path.to_str().unwrap(), "{e}");
+    assert!(e.get("delivered").is_none(), "{e}");
+    assert!(e.get("delivered_to").is_none(), "{e}");
+    let delivery = &e["delivery"];
+    assert_eq!(
+        delivery["key"],
+        format!("{}:{}", e["id"], e["state"].as_str().unwrap()).as_str(),
+        "{e}"
+    );
+    assert_eq!(delivery["reader"], e["from"]["worktree"], "{e}");
+    let handed = delivery["handed"].as_array().unwrap();
+    assert_eq!(handed.last().unwrap()["by"], "inbox", "{e}");
     assert!(e["from"]["worktree"].is_string(), "{e}");
     assert_eq!(e["from"]["path"], path.to_str().unwrap(), "{e}");
     let notice = e["notice"].as_str().unwrap();
@@ -2250,10 +2264,13 @@ fn of_two_tested_together_only_the_blamed_ones_pane_is_sent_the_failure() {
     assert_eq!(calls.len(), 2, "{calls:?}");
 }
 
-/// 51, 135; inbox spec, "A place submitted with no session collects its
-/// outcome by inbox": a caller that submits with `sluice submit --no-wait
-/// --json` in no pane and never waits, rounds run by `sluice step`, then
-/// `sluice inbox --json` twice. `sluice step` is as it was.
+/// 51, 135; inbox spec, "A caller that never waits collects a failure" and
+/// "A caller that never waits collects a landing": a caller that submits
+/// with `sluice submit --no-wait --json` in no pane and never waits, rounds
+/// run by `sluice step`, then `sluice inbox --json` twice, each handing the
+/// blame over owed, then `sluice inbox --confirm --json`, which confirms
+/// it, then `sluice inbox --json`, which gives nothing. `sluice step` is as
+/// it was (record 0102).
 #[test]
 fn a_caller_that_never_waits_collects_a_failure_and_a_landing_by_inbox() {
     let s = Scratch::new("wt-inbox-caller");
@@ -2267,6 +2284,12 @@ fn a_caller_that_never_waits_collects_a_failure_and_a_landing_by_inbox() {
         id(&out)
     };
     let pending_for = |n: u64| s.logged("pending").iter().filter(|l| l["id"] == n).count();
+    let none = |dir: &Path| {
+        let again = inbox(&s, dir, &["--json"]);
+        assert_eq!(again.status.code(), Some(0), "{}", text(&again));
+        let v: serde_json::Value = serde_json::from_slice(&again.stdout).unwrap();
+        assert_eq!(v, serde_json::json!({ "outcomes": [] }));
+    };
 
     // A blame.
     let b = s.session("b", &[("broken", "x\n")]);
@@ -2280,18 +2303,24 @@ fn a_caller_that_never_waits_collects_a_failure_and_a_landing_by_inbox() {
     }
     assert_eq!(pending_for(n), 1, "no further attempt");
     assert!(s.herdr.calls().is_empty());
-    let e = collected_one(&s, &b);
+    for _ in 0..2 {
+        let e = collected_one(&s, &b);
+        assert_eq!(e["id"], n, "{e}");
+        assert_eq!(e["state"], "failed", "{e}");
+        assert_eq!(e["failed"][0]["task"], "sh check.sh", "{e}");
+        assert!(
+            e["notice"].as_str().unwrap().contains(&format!("#{n}")),
+            "{e}"
+        );
+        assert_eq!(e["delivery"]["state"], "owed", "{e}");
+        assert_eq!(e["delivery"]["confirmed"], serde_json::Value::Null, "{e}");
+    }
+    let e = collected_one_by(&s, &b, &["--confirm", "--json"]);
     assert_eq!(e["id"], n, "{e}");
-    assert_eq!(e["state"], "failed", "{e}");
-    assert_eq!(e["failed"][0]["task"], "sh check.sh", "{e}");
-    assert!(
-        e["notice"].as_str().unwrap().contains(&format!("#{n}")),
-        "{e}"
-    );
-    let again = inbox(&s, &b, &["--json"]);
-    assert_eq!(again.status.code(), Some(0), "{}", text(&again));
-    let v: serde_json::Value = serde_json::from_slice(&again.stdout).unwrap();
-    assert_eq!(v, serde_json::json!({ "outcomes": [] }));
+    assert_eq!(e["delivery"]["state"], "done", "{e}");
+    assert!(e["delivery"]["confirmed"].is_string(), "{e}");
+    none(&b);
+    assert_eq!(pending_for(n), 1);
 
     // A landing.
     let a = s.session("a", &[("a.txt", "a\n")]);
@@ -2302,9 +2331,10 @@ fn a_caller_that_never_waits_collects_a_failure_and_a_landing_by_inbox() {
     assert_eq!(e["id"], n, "{e}");
     assert_eq!(e["state"], "landed", "{e}");
     assert_eq!(e["landed_as"], s.tip().as_str(), "{e}");
-    let again = inbox(&s, &a, &["--json"]);
-    let v: serde_json::Value = serde_json::from_slice(&again.stdout).unwrap();
-    assert_eq!(v, serde_json::json!({ "outcomes": [] }));
+    assert_eq!(e["delivery"]["state"], "owed", "{e}");
+    let e = collected_one_by(&s, &a, &["--confirm", "--json"]);
+    assert_eq!(e["delivery"]["state"], "done", "{e}");
+    none(&a);
 }
 
 /// 124: a branch sluice lands on submitted by name, `sluice submit
