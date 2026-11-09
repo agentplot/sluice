@@ -77,6 +77,43 @@ impl FakeHerdr {
     }
 }
 
+/// What the scratch and its tests make beside the repository, each named
+/// `<repository>.<what>`: the host's configuration and state, the fake
+/// herdr, the sessions' worktrees, a bare clone and the rest, removed when
+/// the test ends. The state among them ends the host process the test's
+/// commands started (135; design D6), which would otherwise outlive it.
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let repo = self.repo.dir();
+        let (Some(parent), Some(name)) = (repo.parent(), repo.file_name()) else {
+            return;
+        };
+        let prefix = format!("{}.", name.to_string_lossy());
+        // A host process still going may write into its state as it is
+        // removed: removed again until nothing of the test's is left.
+        for _ in 0..40 {
+            let Ok(entries) = std::fs::read_dir(parent) else {
+                return;
+            };
+            let mine: Vec<PathBuf> = entries
+                .flatten()
+                .filter(|e| e.file_name().to_string_lossy().starts_with(&prefix))
+                .map(|e| e.path())
+                .collect();
+            if mine.is_empty() {
+                return;
+            }
+            for p in mine {
+                let _ = match std::fs::symlink_metadata(&p) {
+                    Ok(m) if m.is_dir() => std::fs::remove_dir_all(&p),
+                    _ => std::fs::remove_file(&p),
+                };
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+}
+
 impl Scratch {
     fn new(name: &str) -> Scratch {
         Scratch::with_policy(name, POLICY)
