@@ -12,8 +12,8 @@ record 0102 and the design's decisions by D-number.
 
 ## 1. sluice takes weir's crates
 
-- [ ] 1.1 Name `weir-delivery` in the workspace's `Cargo.toml` by `git = "https://github.com/agentplot/weir"`, `rev = "52b95528a495100e34fca39109d563d8bf75673a"`, as a dependency of `sluice-core`, and `weir-pack` the same way as a dev-dependency of `sluice-core`, with `Cargo.lock` taking both, as D1 says. True when `cargo check -p sluice-core --tests` passes.
-- [ ] 1.2 Give `flake.nix`'s package `cargoLock.outputHashes` the hash of the weir source, as D1 says. True when `sluice exec bolt/sluices-outcomes-are-owed-until-confirmed -- moon run nix:typecheck` passes.
+- [x] 1.1 Name `weir-delivery` in the workspace's `Cargo.toml` by `git = "https://github.com/agentplot/weir"`, `rev = "52b95528a495100e34fca39109d563d8bf75673a"`, as a dependency of `sluice-core`, and `weir-pack` the same way as a dev-dependency of `sluice-core`, with `Cargo.lock` taking both, as D1 says. True when `cargo check -p sluice-core --tests` passes.
+- [x] 1.2 Give `flake.nix`'s package `cargoLock.outputHashes` the hash of the weir source, as D1 says. True when `sluice exec bolt/sluices-outcomes-are-owed-until-confirmed -- moon run nix:typecheck` passes.
 
 ## 2. The branch's deliveries
 
