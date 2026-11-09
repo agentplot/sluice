@@ -4042,9 +4042,20 @@ fn delivering<'s, 'a>(
 
 /// 137, S64; record 0103 D2: the refusal of `branch`, at its revision,
 /// for a pull request table on records each host keeps; `None` where its
-/// policy refuses it for no such table.
+/// policy refuses it for no such table. Read at the revision the host
+/// holds, with no fetch, so a forecast beside a current reader asks the
+/// remote nothing (64, 129; rule core.27), and fetched only where the
+/// host holds none.
 fn no_intake(s: &Sluice<'_>, branch: &str) -> Result<Option<sluice_core::policy::NoIntake>> {
-    match takes_pulls(s, branch) {
+    let branches = s.seams().branch;
+    let tip = match branches.held(branch)? {
+        Some(tip) => tip,
+        None => match branches.read(branch)? {
+            Some(tip) => tip,
+            None => return Ok(None),
+        },
+    };
+    match s.rules_at(branch, &tip) {
         Ok(_) => Ok(None),
         Err(e) => match e.downcast_ref::<sluice_core::policy::NoIntake>() {
             Some(refused) => Ok(Some(refused.clone())),
