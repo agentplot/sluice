@@ -3,8 +3,9 @@
 //! that read the verdict, scrubbed, as much of it as the host asks and
 //! none at `off`; a failed preview's, and sluice's warnings; a round's
 //! spans, how they nest and what they carry; a run's checks joined to the
-//! round; and OTLP over HTTP to the collector, whose absence fails
-//! nothing. Each test runs alone in a process of its own, since the
+//! round; OTLP over HTTP to the collector, whose absence fails
+//! nothing; and each signal sent only while OpenTelemetry's own settings
+//! leave it on. Each test runs alone in a process of its own, since the
 //! exporters' subscriber is the process's.
 
 mod support;
@@ -593,6 +594,44 @@ fn telemetry_goes_to_the_endpoint_as_otlp_over_http() {
     for text in ["sluice-under-test", sluice::VERSION, "sluice.verdict"] {
         assert!(traces.body.contains(text), "no {text} in the traces sent");
     }
+}
+
+/// The paths a collector is sent to, by telemetry started as `main`
+/// starts it at `logs`, while a submission's combination fails its gate.
+fn sent(logs: Logs) -> Vec<String> {
+    let collector = support::http::Fake::start(|_| (200, Vec::new(), String::new()));
+    std::env::set_var("OTEL_EXPORTER_OTLP_ENDPOINT", collector.url());
+    let telemetry = Telemetry::start("sluice", logs, 8192).unwrap();
+    let f = setup();
+    assert_eq!(
+        submit(&f, "unit/a", &[("tests/t_a.py", Some("broken"))]),
+        FAILED
+    );
+    telemetry.finish();
+    collector.requests().into_iter().map(|r| r.path).collect()
+}
+
+/// That `seen` holds a request to each path of `to` and none to `not`.
+fn sent_to(seen: &[String], to: &[&str], not: &str) {
+    for path in to {
+        assert!(
+            seen.iter().any(|p| p == path),
+            "nothing to {path}: {seen:?}"
+        );
+    }
+    assert!(!seen.iter().any(|p| p == not), "sent to {not}: {seen:?}");
+}
+
+/// `OTEL_TRACES_EXPORTER=none` turns traces alone off: no span is sent,
+/// and the metrics and a failure's record still go.
+#[test]
+fn with_traces_off_metrics_and_logs_still_go_to_the_endpoint() {
+    if !alone("with_traces_off_metrics_and_logs_still_go_to_the_endpoint") {
+        return;
+    }
+    std::env::set_var("OTEL_TRACES_EXPORTER", "none");
+    let seen = sent(Logs::Summary);
+    sent_to(&seen, &["/v1/metrics", "/v1/logs"], "/v1/traces");
 }
 
 /// A collector that cannot be reached loses what was held and fails
