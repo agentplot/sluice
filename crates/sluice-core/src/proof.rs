@@ -184,4 +184,71 @@ mod tests {
             ]
         );
     }
+
+    /// Design D6 (the spec's "The host keeps proof again" and "A cause
+    /// that comes back"): a run that proves its passes and leaves none
+    /// unkept ends its host's cause, saying since when, for how many
+    /// seconds and over how many runs, and leaves another host's; a later
+    /// run that keeps no proof begins a new cause.
+    #[test]
+    fn a_cause_ends_with_how_long_and_how_many_runs() {
+        let mut standing = Vec::new();
+        for at in [
+            "2026-11-09T09:16:40Z",
+            "2026-11-09T09:26:40Z",
+            "2026-11-09T09:36:40Z",
+        ] {
+            note(
+                &mut standing,
+                "build-1",
+                &unkept(&["a:test"], ONE),
+                false,
+                at,
+            );
+        }
+        note(
+            &mut standing,
+            "build-2",
+            &unkept(&["a:test"], OTHER),
+            false,
+            "2026-11-09T09:40:00Z",
+        );
+        let kept = note(&mut standing, "build-1", &[], true, "2026-11-09T09:46:40Z");
+        assert_eq!(
+            kept,
+            [Event::ProofKept {
+                host: "build-1".into(),
+                why: ONE.into(),
+                since: "2026-11-09T09:16:40Z".into(),
+                stood: 1800,
+                runs: 3,
+            }]
+        );
+        assert_eq!(
+            standing,
+            [ProofMissing {
+                host: "build-2".into(),
+                why: OTHER.into(),
+                since: "2026-11-09T09:40:00Z".into(),
+                runs: 1,
+            }]
+        );
+        let back = note(
+            &mut standing,
+            "build-1",
+            &unkept(&["a:test"], ONE),
+            false,
+            "2026-11-09T10:00:00Z",
+        );
+        assert_eq!(
+            back,
+            [Event::ProofMissing {
+                host: "build-1".into(),
+                why: ONE.into()
+            }]
+        );
+        assert_eq!(standing.len(), 2);
+        assert_eq!(standing[1].since, "2026-11-09T10:00:00Z");
+        assert_eq!(standing[1].runs, 1);
+    }
 }
