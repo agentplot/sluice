@@ -168,6 +168,25 @@ impl OnGitHub {
         )
     }
 
+    /// `main` on GitHub taking pull requests, and `bolt/x` beside it,
+    /// under a policy that names no `[signers]`, so each host keeps their
+    /// records: main is refused for its pull request table (137, S64;
+    /// record 0103 D2).
+    fn unsigned(name: &str) -> OnGitHub {
+        let g = OnGitHub::with(
+            name,
+            "[tests]\nrunner = \"command\"\ncommand = \"sh check.sh\"\n\n\
+             [branches.main]\nremote = \"origin\"\ntimeout = \"1m\"\n\n\
+             [branches.main.pull_requests]\n\n\
+             [branches.\"bolt/*\"]\nremote = \"origin\"\ntimeout = \"1m\"\n",
+            &[("check.sh", CHECK)],
+        );
+        g.repo.git(&["branch", "bolt/x", "main"]);
+        g.repo
+            .git(&["push", "-q", "origin", "bolt/x:refs/heads/bolt/x"]);
+        g
+    }
+
     /// `main` on GitHub under `policy`, its tree holding `files` beside it.
     fn with(name: &str, policy: &str, files: &[(&str, &str)]) -> OnGitHub {
         OnGitHub::signed(name, |_| policy.to_string(), files)
@@ -2354,11 +2373,16 @@ fn submit_refuses_a_dirty_worktree() {
 /// request opened or marked ready.
 #[test]
 fn submit_refuses_a_gate_requiring_a_task_kept_out_of_ci() {
-    let g = OnGitHub::with(
+    let g = OnGitHub::signed(
         "pr-kept-out",
-        "[tests]\nrunner = \"moon\"\n\n\
-         [branches.main]\nremote = \"origin\"\nrequired = [\"app:integration\"]\n\n\
-         [branches.main.pull_requests]\n",
+        |keys| {
+            format!(
+                "[tests]\nrunner = \"moon\"\n\n{}\
+                 [branches.main]\nremote = \"origin\"\nrequired = [\"app:integration\"]\n{TRUST}\n\
+                 [branches.main.pull_requests]\n",
+                keys.tables()
+            )
+        },
         &[
             (
                 ".moon/workspace.yml",
@@ -2377,7 +2401,7 @@ fn submit_refuses_a_gate_requiring_a_task_kept_out_of_ci() {
     assert_eq!(out.status.code(), Some(2), "{}", text(&out));
     assert!(
         text(&out).contains(
-            "refused: main requires app:integration (.config/sluice.toml line 6), which the \
+            "refused: main requires app:integration (.config/sluice.toml line 15), which the \
              task runner in this worktree keeps out of CI"
         ),
         "{}",
@@ -5166,23 +5190,52 @@ impl Other<'_> {
     }
 }
 
-/// request-intake-host, "Records on each host": host A's `sluice run`
-/// holds main's intake mark, and host B's `sluice run` asks GitHub nothing
-/// about main's open pull requests and takes nothing in.
+/// pull-request-intake, "Pull requests need records on the remote" and
+/// "Status shows the refusal"; request-intake-host, "Records on each
+/// host": main's policy gives main a `pull_requests` table and `remote =
+/// "origin"`, names no `[signers]`, and gives `bolt/*` a table too. `sluice
+/// submit main` exits 2 naming main and `[signers]`, and pushes and opens
+/// nothing; `sluice step main` is refused naming `[signers]` and asks
+/// GitHub nothing of main's open pull requests; `sluice status main`
+/// prints the refusal, and `sluice overview` names main with it (137, S64;
+/// record 0103 D2).
 #[test]
-fn records_on_each_host_one_host_asks() {
-    let g = OnGitHub::new("intake-each", "");
+fn pull_requests_need_records_on_the_remote() {
+    let g = OnGitHub::unsigned("pr-unsigned");
     g.named("a", "");
-    let (n, _) = g.by_hand("unit/each", &[("e.txt", Some("e\n"))], false);
+    let refused =
+        |said: &str| said.contains("main takes pull requests") && said.contains("[signers]");
+    let (_, _) = g.by_hand("unit/hand", &[("h.txt", Some("h\n"))], false);
+    let w = g.session("refused", &[("r.txt", "r\n")]);
     g.on_main();
-    let out = g.skipping(g.repo.dir(), &["run", "--rounds", "1"]);
-    assert!(out.status.success(), "{}", text(&out));
-    assert_eq!(g.mark().unwrap().1["host"], "a");
-    let b = g.other("b", "", "");
     let lists = g.lists();
-    let said = b.run("5");
-    assert_eq!(g.lists(), lists, "{said}");
-    assert!(b.of(n).is_empty(), "{said}");
+    let out = g
+        .command(env!("CARGO_BIN_EXE_sluice"), &w)
+        .args(["submit", "main", "--no-wait"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2), "{}", text(&out));
+    assert!(refused(&text(&out)), "{}", text(&out));
+    assert_eq!(github::rev(g.bare.path(), "refs/heads/unit/refused"), None);
+    assert_eq!(
+        g.gh.forge.held().unwrap().pulls.len(),
+        1,
+        "only the one by hand"
+    );
+    g.discovery_passes();
+    let out = g.sluice(&["step", "main"]);
+    assert!(refused(&text(&out)), "{}", text(&out));
+    assert_eq!(
+        g.lists(),
+        lists,
+        "nothing asked of main's list: {}",
+        text(&out)
+    );
+    let out = g.sluice(&["status", "main"]);
+    assert!(refused(&text(&out)), "{}", text(&out));
+    let out = g.sluice(&["overview"]);
+    let said = text(&out);
+    assert!(said.contains("main") && refused(&said), "{said}");
 }
 
 /// request-intake-host, "Records on the remote": another host keeps main,
@@ -5308,36 +5361,19 @@ fn a_host_that_stopped_passes_main_on_after_its_lease() {
     }
 }
 
-/// request-intake-host, "A worktree's submission stays": host A, without
-/// the mark, has a submission to `bolt/x` from one of its worktrees, and
-/// its rounds advance it as before.
+/// pull-request-intake, "Pull requests need records on the remote": main
+/// refused for its pull request table on records each host keeps, a
+/// submission to `bolt/x` from a worktree is tested and lands as before,
+/// and main is still refused (137, S64; record 0103 D2).
 #[test]
-fn a_worktrees_submission_stays() {
-    let g = OnGitHub::with_bolt("intake-bolt");
+fn a_refused_main_leaves_a_bolt_landing() {
+    let g = OnGitHub::unsigned("intake-bolt");
     g.named("a", "");
-    let b = g.other("b", "", "");
-    b.run("1");
-    assert_eq!(g.mark().unwrap().1["host"], "b");
-    let w = g.session("bolted", &[("b.txt", "b\n")]);
-    let out = g
-        .command(env!("CARGO_BIN_EXE_sluice"), &w)
-        .args(["submit", "bolt/x", "--no-wait", "--json"])
-        .output()
-        .unwrap();
-    assert!(out.status.success(), "{}", text(&out));
-    g.step();
-    let until = Instant::now() + Duration::from_secs(60);
-    loop {
-        let out = g.sluice(&["step", "bolt/x"]);
-        assert!(out.status.success(), "{}", text(&out));
-        let out = g.sluice(&["status", "bolt/x", "--json", "--all"]);
-        let v: Value = serde_json::from_slice(&out.stdout).unwrap();
-        if v["submissions"][0]["state"] == "landed" {
-            break;
-        }
-        assert!(Instant::now() < until, "never landed: {v}");
-        std::thread::sleep(Duration::from_millis(200));
-    }
+    let before = g.bolt_on_github();
+    let landed = g.land_on_bolt("bolted", &[("b.txt", "b\n")]);
+    assert_ne!(landed, before);
+    let out = g.sluice(&["step", "main"]);
+    assert!(text(&out).contains("[signers]"), "{}", text(&out));
 }
 
 /// request-intake-host, "Read at its pace": a wait on host A follows its

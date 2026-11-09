@@ -1259,6 +1259,19 @@ pub fn run(
                 writeln!(out, "sluice submit: {why}")?;
                 return Ok(USAGE);
             }
+            // 137, S64; record 0103 D2: a branch that takes pull requests
+            // where each host keeps its records is refused alone, before
+            // anything is pushed or opened.
+            if let Some(refused) = no_intake(&s, &branch)? {
+                told::tell(
+                    out,
+                    json,
+                    Kind::Refused,
+                    &format!("refused: {refused}"),
+                    &[],
+                )?;
+                return Ok(CONFLICT);
+            }
             if worktree.len() > 1 {
                 let req = GroupRequest {
                     branch,
@@ -3949,6 +3962,19 @@ fn delivering<'s, 'a>(
             ));
             None
         }
+    }
+}
+
+/// 137, S64; record 0103 D2: the refusal of `branch`, at its revision,
+/// for a pull request table on records each host keeps; `None` where its
+/// policy refuses it for no such table.
+fn no_intake(s: &Sluice<'_>, branch: &str) -> Result<Option<sluice_core::policy::NoIntake>> {
+    match takes_pulls(s, branch) {
+        Ok(_) => Ok(None),
+        Err(e) => match e.downcast_ref::<sluice_core::policy::NoIntake>() {
+            Some(refused) => Ok(Some(refused.clone())),
+            None => Err(e),
+        },
     }
 }
 

@@ -43,7 +43,7 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, SubsecRound, Utc};
 use sluice_core::line::Line;
-use sluice_core::policy::{Policy, PullRequests as Conditions, POLICY_PATH};
+use sluice_core::policy::{NoIntake, Policy, PullRequests as Conditions, POLICY_PATH};
 use sluice_core::records::{Event, State, Submission};
 use sluice_core::{
     Clock, Forecast, GroupRequest, Requester, Seams, Sluice, SubmitHead, SubmitRefusal,
@@ -469,9 +469,17 @@ impl Pulls {
     }
 
     /// `branch`'s pull requests and where they are, at `tip`; `None` for a
-    /// branch that takes none there.
+    /// branch that takes none there, and for one its policy refuses for a
+    /// pull request table on records each host keeps, whose requests no
+    /// host takes in and whose refusal its round, status and overview say
+    /// (137, S64; record 0103 D2).
     fn target_at(&self, s: &Sluice<'_>, branch: &str, tip: Rev) -> Result<Option<Target>> {
-        let Some(rules) = s.rules_at(branch, &tip)? else {
+        let rules = match s.rules_at(branch, &tip) {
+            Ok(rules) => rules,
+            Err(e) if e.downcast_ref::<NoIntake>().is_some() => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        let Some(rules) = rules else {
             return Ok(None);
         };
         let signed = rules.signed;
@@ -2880,10 +2888,15 @@ impl crate::PullRequests for Pulls {
         names.dedup();
         let mut out = Vec::new();
         for n in names {
-            if policy
-                .rules_for(&n)?
-                .is_some_and(|r| r.pull_requests.is_some())
-            {
+            // 137, S64; record 0103 D2: a branch refused for a pull request
+            // table on records each host keeps is passed by, and every
+            // other listed.
+            let rules = match policy.rules_for(&n) {
+                Ok(rules) => rules,
+                Err(e) if e.downcast_ref::<NoIntake>().is_some() => continue,
+                Err(e) => return Err(e),
+            };
+            if rules.is_some_and(|r| r.pull_requests.is_some()) {
                 out.push(n);
             }
         }
