@@ -171,7 +171,15 @@ pub struct Peer {
     /// 87: the systems this host runs, by the policy's names; `None` for
     /// the one system it is.
     pub systems: Option<Vec<String>>,
+    /// 51: the span an outcome this host's rounds record is owed before it
+    /// expires, the host's `[deliveries] expire_after` (weir 104; record
+    /// 0102; design D9).
+    pub expire_after: std::time::Duration,
 }
+
+/// 51: an outcome's span where the host sets no `[deliveries]
+/// expire_after`: a week (design D9).
+pub const EXPIRE_AFTER: std::time::Duration = std::time::Duration::from_secs(168 * 60 * 60);
 
 impl Default for Peer {
     fn default() -> Self {
@@ -181,6 +189,7 @@ impl Default for Peer {
             alive: std::time::Duration::from_secs(120),
             signer: None,
             systems: None,
+            expire_after: EXPIRE_AFTER,
         }
     }
 }

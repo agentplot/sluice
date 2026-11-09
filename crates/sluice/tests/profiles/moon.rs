@@ -89,6 +89,7 @@ fn checks_in(common: &Path, caches: Vec<HostCache>) -> Checks {
             peers: Default::default(),
             systems: None,
             caches,
+            expire_after: sluice_core::EXPIRE_AFTER,
         },
     )
     .with_running(common.join("host-running"))

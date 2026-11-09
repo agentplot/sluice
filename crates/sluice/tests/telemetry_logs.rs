@@ -496,6 +496,7 @@ fn a_run_s_checks_join_the_round() {
             peers: Default::default(),
             systems: None,
             caches: Vec::new(),
+            expire_after: sluice_core::EXPIRE_AFTER,
         },
     )
     .with_running(repo.dir().join(".git/host-running"));

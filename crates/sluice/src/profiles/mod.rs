@@ -144,6 +144,7 @@ impl Bound {
             alive: instance.peers.alive,
             signer: instance.signing.as_ref().map(|s| s.signer.clone()),
             systems: instance.systems.clone(),
+            expire_after: instance.expire_after,
         };
         let pulls = Rc::new(github::pulls::Pulls::new(
             branch.git_dir(),
@@ -431,6 +432,7 @@ impl crate::exec::Host for Bound {
             alive: i.peers.alive,
             signer: i.signing.as_ref().map(|s| s.signer.clone()),
             systems: i.systems.clone(),
+            expire_after: i.expire_after,
         }
     }
 
