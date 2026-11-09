@@ -232,3 +232,54 @@ fn three_runs_whose_passes_nothing_proves_blame_with_why() {
     assert!(results_of(&h, "b:test").is_empty());
     assert_eq!(missing(&h).len(), 1, "one cause, however many runs");
 }
+
+/// satisfies: 114, 17; record 0105; the pass-proof spec's "A test that
+/// failed on its own beside it"
+#[test]
+fn a_check_that_failed_beside_a_pass_nothing_proves_fails_as_before() {
+    let h = rig();
+    h.fails_with("a:test", "a/lib", "broken");
+    h.w().keeps_no_proof(Some(STORE));
+    h.work(
+        "unit/a",
+        "agent-a",
+        &[("a/lib", Some("broken")), ("b/lib", Some("b2"))],
+    );
+    let one = h.submit("unit/a");
+    settle(&h);
+    assert_eq!(h.sub(one).state, State::Failed);
+    assert_eq!(h.w().started().len(), 1, "a fail of its own is a verdict");
+    let failed = &h.sub(one).failed;
+    let a = failed.iter().find(|f| f.task == "a:test").unwrap();
+    assert!(!a.hash.is_empty() && a.not_run.is_none(), "{a:?}");
+    let fail = results_of(&h, "a:test");
+    assert_eq!(fail.len(), 1, "{fail:?}");
+    assert_eq!(fail[0].outcome, Outcome::Fail);
+    assert_eq!(fail[0].hash, a.hash);
+    let b = failed.iter().find(|f| f.task == "b:test").unwrap();
+    assert_eq!(b.not_run.as_deref(), Some(WHY));
+    assert!(results_of(&h, "b:test").is_empty());
+}
+
+/// satisfies: C.6, 15; record 0105; the pass-proof spec's "A key the
+/// tree does not bear out"
+#[test]
+fn a_key_the_tree_does_not_bear_out_is_still_failed() {
+    let h = rig();
+    h.w().forges("a:test");
+    h.work(
+        "unit/a",
+        "agent-a",
+        &[("a/lib", Some("a2")), ("b/lib", Some("b2"))],
+    );
+    let one = h.submit("unit/a");
+    settle(&h);
+    assert_eq!(h.sub(one).state, State::Failed);
+    let failed = &h.sub(one).failed;
+    assert_eq!(failed.len(), 1, "{failed:?}");
+    assert_eq!(failed[0].task, "a:test");
+    assert!(!failed[0].hash.is_empty(), "under its key");
+    assert!(failed.iter().all(|f| f.not_run.is_none()), "{failed:?}");
+    assert!(lost(&h).is_empty());
+    assert!(missing(&h).is_empty());
+}
