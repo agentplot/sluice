@@ -38,7 +38,7 @@ use crate::records::{
     DecidedRecord, Event, FailedTask, Held, LandingCommitRecord, LandingIntent, OutboxItem,
     Recorded, ResultKind, ResultLine, RunState, State, SystemRun, Tested,
 };
-use crate::refused::Refusal;
+use crate::refused::{IntakeCause, Refusal};
 use crate::release::{ReleaseOutcome, Releasing};
 use crate::text::{beside_message, landing_message};
 use crate::{verdict, Sluice, OUTPUT};
@@ -3525,6 +3525,92 @@ impl Sluice<'_> {
         }
     }
 
+    /// 128, 133; record 0103 D7: an intake of `branch` that met `causes`,
+    /// each an ask of the forge for the branch on `remote`, counted in this
+    /// host's refusal of its intake, apart from its refusal of the remote;
+    /// each cause no intake of the refusal met before added, and its
+    /// `read-refused` line, marked `intake`, written in a write of its own
+    /// or the next write of the branch's log. The causes it added, which
+    /// the caller says, and only those: a cause said while the refusal
+    /// stands is not said again, whatever process meets it, until the
+    /// refusal ends (rules core.11, core.14, core.28). Where the refusal
+    /// cannot be kept, every cause is the caller's to say.
+    pub fn note_intake_refused(
+        &self,
+        branch: &str,
+        remote: &str,
+        causes: &[IntakeCause],
+    ) -> Vec<IntakeCause> {
+        if causes.is_empty() {
+            return Vec::new();
+        }
+        let noted = (|| -> Result<Vec<IntakeCause>> {
+            let standing = self.intake_refusal(branch)?;
+            let met: Vec<(String, String)> = standing
+                .iter()
+                .filter(|r| r.ended.is_none())
+                .flat_map(|r| r.causes.iter().map(|c| (c.asked.clone(), c.said.clone())))
+                .collect();
+            let r = Refusal::intake_refused(standing, remote, causes, &self.now());
+            self.keep_intake_refusal(branch, Some(&r))?;
+            if let Err(e) = self.write_intake_refusal(branch) {
+                // Kept: the next write of the branch's log carries its lines.
+                warn!(
+                    sluice.branch = branch,
+                    "writing the intake's refused reads in the log failed: {e:#}"
+                );
+            }
+            let mut new: Vec<IntakeCause> = Vec::new();
+            for c in causes {
+                let key = (c.asked.clone(), c.said.clone());
+                if !met.contains(&key) && !new.contains(c) {
+                    new.push(c.clone());
+                }
+            }
+            Ok(new)
+        })();
+        noted.unwrap_or_else(|e| {
+            warn!(
+                sluice.branch = branch,
+                "keeping the intake's refused reads failed: {e:#}"
+            );
+            causes.to_vec()
+        })
+    }
+
+    /// 128, 133; record 0103 D7: an intake of `branch` that met no failure
+    /// ends this host's refusal of its intake, and writes its end, a
+    /// `read-again` line marked `intake`; with none standing, nothing.
+    pub fn note_intake_read(&self, branch: &str) {
+        let noted = (|| {
+            let Some(mut r) = self.intake_refusal(branch)? else {
+                return Ok(());
+            };
+            if r.ended.is_none() {
+                r.read_again(&self.now());
+                self.keep_intake_refusal(branch, Some(&r))?;
+            }
+            self.write_intake_refusal(branch)
+        })();
+        if let Err(e) = noted {
+            warn!(
+                sluice.branch = branch,
+                "keeping the end of an intake's refused reads in the log failed: {e:#}"
+            );
+        }
+    }
+
+    /// Record 0103 D7: the lines of this host's refusals not yet in the
+    /// branch's log, as [`Sluice::write_refusal`] writes them, under the
+    /// branch's lock, which an intake holds none of; where a round holds it,
+    /// that round's next write carries them (rule core.14).
+    fn write_intake_refusal(&self, branch: &str) -> Result<()> {
+        let Some(_lock) = self.seams.state.lock(branch)? else {
+            return Ok(());
+        };
+        self.write_refusal(branch)
+    }
+
     /// The lines of this host's refusal not yet in the branch's log, in a
     /// write holding nothing else, when the round's read of the records
     /// reached them; otherwise they wait for the first write that can.
@@ -4010,6 +4096,87 @@ mod tests {
             .iter()
             .find(|c| c.submissions == ids)
             .cloned()
+    }
+
+    /// 128, 133; record 0103 D7: this host's refusal of a branch's intake is
+    /// kept apart from its refusal of the remote. Each distinct cause is
+    /// logged once while it stands, however many intakes meet it, each
+    /// intake counted, and the note says only the causes it added; the
+    /// round's own refusal is logged and ended on its own, its lines
+    /// marked no intake; the intake's end is logged once, with the intakes
+    /// it refused, and nothing after it.
+    #[test]
+    fn an_intake_refusal_is_logged_once_per_cause_apart_from_the_rounds() {
+        let f = Fakes::new();
+        f.world.init("main", &[(POLICY_PATH, POLICY)]);
+        let s = sluice(&f);
+        let list = IntakeCause::whole("main", "502 Bad Gateway");
+        let head = IntakeCause {
+            asked: "pull/12".into(),
+            said: "pull/12 has no head".into(),
+        };
+        let note = |causes: &[IntakeCause]| s.note_intake_refused("main", "origin", causes);
+        assert_eq!(
+            note(std::slice::from_ref(&list)),
+            std::slice::from_ref(&list)
+        );
+        for _ in 0..10 {
+            assert!(note(std::slice::from_ref(&list)).is_empty());
+        }
+        assert_eq!(
+            note(&[list.clone(), head.clone()]),
+            std::slice::from_ref(&head)
+        );
+        {
+            // The round's own, under the branch's lock as a round's is.
+            let _lock = s.seams.state.lock("main").unwrap().expect("the lock");
+            s.note_refused(
+                "main",
+                &ReadRefused {
+                    remote: "origin".into(),
+                    asked: "refs/heads/main".into(),
+                    said: "The requested URL returned error: 503".into(),
+                    note: None,
+                },
+            );
+            s.note_read_again("main");
+        }
+        let lines = |s: &Sluice<'_>| -> Vec<Event> {
+            Line::read_log(&s.seams.state.read("main").unwrap())
+                .unwrap()
+                .into_iter()
+                .map(|l| l.event)
+                .filter(|e| matches!(e, Event::ReadRefused { .. } | Event::ReadAgain { .. }))
+                .collect()
+        };
+        let refused = |e: &Event, of_intake: bool| matches!(e, Event::ReadRefused { intake, .. } if *intake == of_intake);
+        let again = |e: &Event, of_intake: bool| matches!(e, Event::ReadAgain { intake, .. } if *intake == of_intake);
+        let log = lines(&s);
+        assert_eq!(
+            log.iter().filter(|e| refused(e, true)).count(),
+            2,
+            "{log:?}"
+        );
+        assert_eq!(
+            log.iter().filter(|e| refused(e, false)).count(),
+            1,
+            "{log:?}"
+        );
+        assert_eq!(log.iter().filter(|e| again(e, false)).count(), 1, "{log:?}");
+        assert_eq!(log.iter().filter(|e| again(e, true)).count(), 0, "{log:?}");
+        let kept = s.intake_refusal("main").unwrap().expect("standing");
+        assert_eq!((kept.rounds, kept.intake), (12, true));
+        s.note_intake_read("main");
+        s.note_intake_read("main");
+        let log = lines(&s);
+        let ends: Vec<&Event> = log.iter().filter(|e| again(e, true)).collect();
+        assert!(
+            matches!(ends.as_slice(), [Event::ReadAgain { rounds: 12, .. }]),
+            "{log:?}"
+        );
+        assert_eq!(s.intake_refusal("main").unwrap(), None);
+        // A refusal after it is a new one, its cause said again.
+        assert_eq!(note(std::slice::from_ref(&list)), [list]);
     }
 
     /// Design D1, D2 (25, 81; rules core.7, core.17): a round drops the

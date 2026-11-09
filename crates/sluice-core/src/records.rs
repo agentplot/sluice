@@ -1120,6 +1120,12 @@ pub enum Event {
         remote: String,
         asked: String,
         said: String,
+        /// 128; record 0103 D7: a read of the branch's intake on the forge,
+        /// `<branch>'s pull requests` or `pull/<n>`, not the round's of its
+        /// remote; left out where false, so an older sluice reads it as it
+        /// reads any.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        intake: bool,
     },
     /// 133: the first round on `host` that read the remote again: when the
     /// refusal began, how many seconds it stood and how many rounds it
@@ -1131,6 +1137,10 @@ pub enum Event {
         since: String,
         stood: u64,
         rounds: u64,
+        /// 128; record 0103 D7: the end of a refusal of the branch's
+        /// intake; left out where false.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        intake: bool,
     },
     /// A landing that found the branch elsewhere (24; rule core.5).
     Refused {
@@ -1601,6 +1611,7 @@ mod tests {
                     said: "remote: Repository not found.\n\
                            fatal: repository 'https://github.com/acme/app.git/' not found"
                         .into(),
+                    intake: false,
                 },
             },
             LogLine {
@@ -1612,6 +1623,7 @@ mod tests {
                     since: "2026-10-26T09:16:40Z".into(),
                     stood: 1800,
                     rounds: 12,
+                    intake: false,
                 },
             },
         ];
@@ -1628,6 +1640,60 @@ mod tests {
         );
         let back: Vec<LogLine> = parse_lines(text.concat().as_bytes()).unwrap();
         assert_eq!(back, lines);
+    }
+
+    /// 128; record 0103 D7: an intake's refused read and its end are
+    /// `read-refused` and `read-again` lines marked `"intake":true`, read
+    /// back as written; a line with no `intake`, as the round writes its
+    /// own and an older sluice wrote every one, reads as the round's.
+    #[test]
+    fn an_intake_line_reads_as_a_refused_read() {
+        let lines = [
+            LogLine {
+                schema: LOG_SCHEMA.into(),
+                at: "2026-11-08T09:16:40Z".into(),
+                event: Event::ReadRefused {
+                    host: "build-1".into(),
+                    remote: "origin".into(),
+                    asked: "main's pull requests".into(),
+                    said: "502 Bad Gateway".into(),
+                    intake: true,
+                },
+            },
+            LogLine {
+                schema: LOG_SCHEMA.into(),
+                at: "2026-11-08T09:28:40Z".into(),
+                event: Event::ReadAgain {
+                    host: "build-1".into(),
+                    remote: "origin".into(),
+                    since: "2026-11-08T09:16:40Z".into(),
+                    stood: 720,
+                    rounds: 12,
+                    intake: true,
+                },
+            },
+        ];
+        let text: Vec<String> = lines
+            .iter()
+            .map(|l| String::from_utf8(to_line(l)).unwrap())
+            .collect();
+        assert_eq!(
+            text,
+            [
+                "{\"schema\":\"sluice/log@1\",\"at\":\"2026-11-08T09:16:40Z\",\"event\":\"read-refused\",\"host\":\"build-1\",\"remote\":\"origin\",\"asked\":\"main's pull requests\",\"said\":\"502 Bad Gateway\",\"intake\":true}\n",
+                "{\"schema\":\"sluice/log@1\",\"at\":\"2026-11-08T09:28:40Z\",\"event\":\"read-again\",\"host\":\"build-1\",\"remote\":\"origin\",\"since\":\"2026-11-08T09:16:40Z\",\"stood\":720,\"rounds\":12,\"intake\":true}\n",
+            ]
+        );
+        let back: Vec<LogLine> = parse_lines(text.concat().as_bytes()).unwrap();
+        assert_eq!(back, lines);
+        let older = "{\"schema\":\"sluice/log@1\",\"at\":\"t\",\"event\":\"read-refused\",\
+                     \"host\":\"build-1\",\"remote\":\"origin\",\"asked\":\"refs/heads/main\",\
+                     \"said\":\"x\"}\n";
+        let back: Vec<LogLine> = parse_lines(older.as_bytes()).unwrap();
+        assert!(matches!(
+            back[0].event,
+            Event::ReadRefused { intake: false, .. }
+        ));
     }
 
     /// 148: a branch's document written before refused writes were counted

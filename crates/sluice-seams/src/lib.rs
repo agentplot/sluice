@@ -1662,6 +1662,20 @@ pub trait State {
         Ok(())
     }
 
+    /// 128, 133; record 0103 D7: this host's document of a standing refusal
+    /// of `branch`'s intake, the reads of its pull requests on the forge,
+    /// as last kept; kept as [`State::refusal`] is, beside it and apart
+    /// from it, and never in the branch's records.
+    fn intake_refusal(&self, _branch: &str) -> Result<Option<Vec<u8>>> {
+        Ok(None)
+    }
+
+    /// Keep `doc` as this host's document of a refusal of `branch`'s
+    /// intake, in place of the one kept before, or, with `None`, remove it.
+    fn keep_intake_refusal(&self, _branch: &str, _doc: Option<&[u8]>) -> Result<()> {
+        Ok(())
+    }
+
     /// 77, 107: rewrite this host's sign of life, `beat` its document:
     /// its signer, its systems and the room it has. Only this host writes
     /// its own.

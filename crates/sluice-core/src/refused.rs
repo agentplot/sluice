@@ -29,6 +29,11 @@ pub struct Refusal {
     /// carries them, so a refusal that opens anew drops none of them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub earlier: Vec<Refusal>,
+    /// 128; record 0103 D7: a refusal of the branch's intake on the forge,
+    /// counted in intakes, whose lines are marked `intake`; the round's of
+    /// its remote otherwise.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub intake: bool,
 }
 
 /// 128; record 0103 D6: one cause an intake of a branch's pull requests
@@ -103,6 +108,7 @@ impl Refusal {
                     causes: Vec::new(),
                     ended: None,
                     earlier,
+                    intake: false,
                 }
             }
         };
@@ -122,6 +128,36 @@ impl Refusal {
         };
         r.causes.push(cause);
         r
+    }
+
+    /// 128; record 0103 D7: `standing`, this host's refusal of a branch's
+    /// intake, before an intake at `now` that met `causes`, each an ask of
+    /// the forge for the branch on `remote`: the intake counted once, and
+    /// each cause added that no intake of the refusal met before. A refusal
+    /// that ended opens anew, as [`Refusal::refused`] does.
+    pub fn intake_refused(
+        standing: Option<Refusal>,
+        remote: &str,
+        causes: &[IntakeCause],
+        now: &str,
+    ) -> Refusal {
+        let mut r: Option<Refusal> = standing;
+        for (k, c) in causes.iter().enumerate() {
+            let read = ReadRefused {
+                remote: remote.into(),
+                asked: c.asked.clone(),
+                said: c.said.clone(),
+                note: None,
+            };
+            let mut next = Refusal::refused(r.take(), &read, now);
+            next.intake = true;
+            if k > 0 {
+                // One intake, whatever it met.
+                next.rounds -= 1;
+            }
+            r = Some(next);
+        }
+        r.expect("an intake refused met a cause")
     }
 
     /// A round read the remote again at `now`: the refusal ends there.
@@ -161,6 +197,7 @@ impl Refusal {
                     remote: self.remote.clone(),
                     asked: c.asked.clone(),
                     said: c.said.clone(),
+                    intake: self.intake,
                 },
             )
         }));
@@ -173,6 +210,7 @@ impl Refusal {
                     since: self.since.clone(),
                     stood: self.stood().unwrap_or(0),
                     rounds: self.rounds,
+                    intake: self.intake,
                 },
             ));
         }
@@ -289,6 +327,7 @@ mod tests {
                     since: "2026-10-26T09:16:40Z".into(),
                     stood: 1800,
                     rounds: 12,
+                    intake: false,
                 }
             )]
         );
