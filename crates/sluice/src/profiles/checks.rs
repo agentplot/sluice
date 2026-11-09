@@ -8,10 +8,13 @@
 //!   nothing;
 //! - `"sandbox"`: on macOS, Seatbelt (`sandbox-exec`) with writes allowed
 //!   only to the place, its scratch directory, the host's cache
-//!   directories and what the runner names, and the network only as the
-//!   policy says, the host's cache sockets whatever it says; with
-//!   `[executor] docker = true`, the container engine's socket too. Not
-//!   confined: a session on the host can still write the place.
+//!   directories, the store where moon keeps what it shares for the run,
+//!   as the run's record names it, wherever the repository moves moon's
+//!   home (C.2 sandbox row; record 0105), and what the runner names, and
+//!   the network only as the policy says, the host's cache sockets
+//!   whatever it says; with `[executor] docker = true`, the container
+//!   engine's socket too. Not confined: a session on the host can still
+//!   write the place.
 //!
 //! `[tests] release`, when set, is the release command (ADR 0016): a list,
 //! the command first, or a string run by `sh -c`. It runs when the place
@@ -1250,32 +1253,46 @@ fn engine_tls_config(tls: &EngineTls) -> Result<ureq::tls::TlsConfig, String> {
     Ok(config.build())
 }
 
-/// A path by the path given and, where it resolves, the path it resolves
-/// to: Seatbelt matches resolved paths, and `/var` is `/private/var`.
+/// A path by the path given and, where it differs, the path it resolves
+/// to through its nearest directory that exists ([`resolved`]): Seatbelt
+/// matches resolved paths, and `/var` is `/private/var`, so a path not
+/// made yet under a link is matched where it will lie once made (record
+/// 0105). sluice makes nothing of it.
 fn given_and_resolved(path: &Path) -> Vec<PathBuf> {
     let mut paths = vec![path.to_path_buf()];
-    if let Ok(real) = std::fs::canonicalize(path) {
-        if real != path {
-            paths.push(real);
-        }
+    let real = resolved(path);
+    if real != path {
+        paths.push(real);
     }
     paths
 }
 
 /// The Seatbelt profile of a run in `place`: its checkout and scratch
-/// directory writable, and each `dir` of the host's `caches`; the
-/// container engine's `engines`, its sockets and its TCP addresses,
-/// reachable when `limits` allow it (ADR 0016; design D5), and each
-/// `socket` of the caches, whatever the network (35; design D4).
+/// directory writable, each `dir` of the host's `caches`, and the
+/// runner's `store`, where moon keeps what it shares for the run, where
+/// it lies outside them (C.2 sandbox row as amended at
+/// agentplot/blueprints 0c38f24; record 0105; rule core.9); the container
+/// engine's `engines`, its sockets and its TCP addresses, reachable when
+/// `limits` allow it (ADR 0016; design D5), and each `socket` of the
+/// caches, whatever the network (35; design D4).
 fn sandbox_profile(
     place: &Place,
     limits: &Limits,
     stamps: &[&str],
     caches: &[HostCache],
+    store: Option<&Path>,
     engines: Vec<Endpoint>,
 ) -> String {
-    let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
-    let mut writable = vec![canon(&place.path), canon(&place.tmp)];
+    let mut writable = vec![resolved(&place.path), resolved(&place.tmp)];
+    // Record 0105: the store the run records, the one its proof is read
+    // from; a store in the checkout or its scratch adds nothing, so such
+    // a run's profile is the one it is given with none (rule core.34).
+    if let Some(store) = store {
+        let real = resolved(store);
+        if !writable.iter().any(|w| real.starts_with(w)) {
+            writable.extend(given_and_resolved(store));
+        }
+    }
     let engines = if limits.docker { engines } else { Vec::new() };
     let mut sockets = Vec::new();
     let mut tcp = Vec::new();
@@ -1393,7 +1410,8 @@ pub fn release_request(
         };
         std::fs::write(
             &profile,
-            sandbox_profile(place, limits, &[], caches, engines),
+            // A release runs no check whose proof sluice reads.
+            sandbox_profile(place, limits, &[], caches, None, engines),
         )?;
         argv.splice(
             0..0,
@@ -1644,6 +1662,9 @@ impl Tests for Checks {
                         &request.limits,
                         &plan.stamps,
                         caches,
+                        // Record 0105: the store the run's record names,
+                        // and its release's, which runs under this profile.
+                        store.as_deref(),
                         match request.limits.docker {
                             true => self.engines(),
                             false => Vec::new(),
@@ -2150,5 +2171,88 @@ mod tests {
         ] {
             assert_eq!(switch(meta.nix_system.as_deref(), now), None, "{now:?}");
         }
+    }
+
+    /// The host-caches spec's "Only the store is opened", "A store moon has
+    /// not made yet" and "A store in the checkout" (C.2 sandbox row as
+    /// amended at agentplot/blueprints 0c38f24; record 0105; rules core.9,
+    /// core.35): a store outside the checkout is opened by its path and
+    /// where it resolves, and neither moon's home nor a directory beside
+    /// the store is; one not made yet under a link is opened where it will
+    /// resolve, and nothing of it is made; one in the checkout or its
+    /// scratch leaves the profile the one written with none.
+    #[test]
+    fn the_profile_opens_the_runners_store_outside_the_place() {
+        let root = std::env::temp_dir().join(format!("sluice-store-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let real = root.join("real");
+        let (checkout, tmp, home) = (real.join("checkout"), real.join("tmp"), real.join("home"));
+        for d in [
+            &checkout,
+            &tmp,
+            &home.join("cache/shared"),
+            &home.join("cache/beside"),
+        ] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        // The home reached through a link, as `/tmp` is `/private/tmp`.
+        let link = root.join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let canon = |p: &Path| std::fs::canonicalize(p).unwrap();
+        let place = Place {
+            name: "p".into(),
+            path: checkout.clone(),
+            tmp: tmp.clone(),
+            env: BTreeMap::new(),
+        };
+        let profile = |store: Option<&Path>| {
+            sandbox_profile(&place, &Limits::default(), &[], &[], store, Vec::new())
+        };
+        let opened = |p: &str| -> std::collections::BTreeSet<PathBuf> {
+            p.split("(subpath \"")
+                .skip(1)
+                .filter_map(|s| s.split("\")").next())
+                .map(PathBuf::from)
+                .collect()
+        };
+        let none = opened(&profile(None));
+
+        // Only the store is opened, by its path and where it resolves.
+        let store = link.join("home/cache/shared");
+        let with = opened(&profile(Some(&store)));
+        let added: Vec<_> = with.difference(&none).cloned().collect();
+        let mut want = vec![store.clone(), canon(&real).join("home/cache/shared")];
+        want.sort();
+        assert_eq!(added, want);
+        for not in [&home, &home.join("cache"), &home.join("cache/beside")] {
+            for p in [not.clone(), canon(not)] {
+                assert!(!with.contains(&p), "{} is opened", p.display());
+            }
+        }
+
+        // A store moon has not made yet, under the link.
+        let fresh = link.join("fresh/cache/shared");
+        let with = opened(&profile(Some(&fresh)));
+        let added: Vec<_> = with.difference(&none).cloned().collect();
+        let mut want = vec![fresh.clone(), canon(&real).join("fresh/cache/shared")];
+        want.sort();
+        assert_eq!(added, want);
+        assert!(!real.join("fresh").exists(), "sluice made the store");
+
+        // A store in the checkout, or in its scratch, by any path, adds
+        // nothing.
+        for inside in [
+            checkout.join(".moon/cache"),
+            link.join("checkout/.moon/cache"),
+            tmp.join("store"),
+        ] {
+            assert_eq!(
+                profile(Some(&inside)),
+                profile(None),
+                "{}",
+                inside.display()
+            );
+        }
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
