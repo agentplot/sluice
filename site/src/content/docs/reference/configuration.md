@@ -526,6 +526,9 @@ key = "~/.config/sluice/signing" # an SSH private key on this host
 lease = "5m"   # how long a quiet host keeps a branch
 alive = "2m"   # how often this host shows it is alive
 
+[deliveries]
+expire_after = "168h"  # default: 168h; how long an outcome is owed before it shows expired
+
 [[caches]]                       # a cache every run on the host shares
 dir = "~/.cache/sccache"
 ```
@@ -537,6 +540,7 @@ dir = "~/.cache/sccache"
 | [`[forge]`](#forge) | The GitHub App sluice pushes as, and how often it asks GitHub for a branch's pull requests. | It lands on a branch whose remote is on GitHub. |
 | [`[signing]`](#signing) | The signer the host signs its results as, and its key. | It runs checks for a branch whose state is on its remote. |
 | [`[peers]`](#peers) | How long a quiet host keeps a branch, how often this host shows it is alive, and its name among the hosts. | It shares a branch's remote with other hosts. |
+| [`[deliveries]`](#deliveries) | How long an outcome is owed to its worktree before it shows as expired. | Its agents confirm their outcomes sooner or later than in a week. |
 | [`[[caches]]`](#caches) | The caches every run on the host shares. | Its builds share a cache, a compile server's or the task runner's. |
 
 ### Who writes it
@@ -725,6 +729,22 @@ sets either is refused.
 | `lease` | How long this host waits, having seen a branch's state stand unchanged, before it takes the branch from a host that has gone quiet. It counts by its own clock, never by the time another host wrote. The default is `"5m"`. |
 | `alive` | How often this host rewrites its sign of life. A claim on a run lapses once its host's sign of life has stood unchanged this long, and another host runs it. It must be shorter than `lease`. The default is `"2m"`. |
 | `name` | What this host is called among the hosts that share a remote: in a branch's state as its lead, and on the runs it claims. The default is the host's own name; give two instances on one machine a name each. |
+
+### `[deliveries]`
+
+How long an outcome the host's rounds decide is owed to the worktree or
+pull request that submitted it before it shows as expired. An outcome
+stays owed, and every `sluice inbox` in its worktree hands it over
+again, until its agent confirms it with `sluice confirm <key>`. Past
+`expire_after` it is still owed: `sluice inbox` says it has expired,
+and `sluice status <branch>` lists it under its worktree, for the
+operator to confirm with `sluice confirm <key> --as operator` where the
+worktree is gone. The span is fixed by the host whose round decides the
+outcome.
+
+| key | meaning |
+|---|---|
+| `expire_after` | A duration such as `"168h"`, `"72h"` or `"90m"`, at least a second. The default is `"168h"`, a week. A value that is no such duration is refused, naming `[deliveries] expire_after`. |
 
 ### `[[caches]]`
 
