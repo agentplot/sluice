@@ -5218,6 +5218,29 @@ fn the_host_that_keeps_main_takes_its_requests_in() {
     assert_eq!(g.mark(), None, "no intake mark: {}", text(&out));
 }
 
+/// request-intake-host, "An older mark is read by nothing": the remote
+/// holds `refs/sluice/intake/main` naming host C, which an older sluice
+/// pushed, and host A keeps main: A takes main's pull requests in, leaves
+/// the mark as it was, and no fetch of main brings it (137; record 0103
+/// D3).
+#[test]
+fn an_older_mark_is_read_by_nothing() {
+    let g = OnGitHub::new("intake-older-mark", "");
+    g.named("a", "");
+    let older = g.push_mark("c", "driver");
+    let (n, _) = g.by_hand("unit/older", &[("o.txt", Some("o\n"))], false);
+    g.on_main();
+    let out = g.skipping(g.repo.dir(), &["run", "--rounds", "1"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(g.keeper().as_deref(), Some("a"), "{}", text(&out));
+    assert_eq!(g.of(n).len(), 1, "A took it in: {}", text(&out));
+    assert_eq!(g.mark().map(|(oid, _)| oid), Some(older), "left as it was");
+    let fetched = g
+        .repo
+        .git(&["for-each-ref", "refs/sluice-fetched/origin/intake/"]);
+    assert_eq!(fetched, "", "no fetch of main brought it");
+}
+
 /// request-intake-host, "Records on the remote": host B keeps main, its
 /// lease not passed by host A's observation, and A's step of main takes
 /// nothing in and asks GitHub nothing of main's open pull requests (137;

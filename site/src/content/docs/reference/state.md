@@ -117,24 +117,17 @@ every repository on the host and never pushed:
                        ready a pull request into the branch, so the next
                        round asks at once
   forge/follows/<owner>/<repository>/<branch>.json
-                       on a host that doesn't take the branch's pull
-                       requests in, each one it follows: one a submit on
-                       the host opened, updated or marked ready, one it
-                       handed over, or one a wait or status asked about,
-                       with what GitHub last said of it and of sluice's
-                       check on its head, and when
+                       on a host that doesn't keep the branch, which
+                       takes its pull requests in, each one it follows:
+                       one a submit on the host opened, updated or marked
+                       ready, or one a wait or status asked about, with
+                       what GitHub last said of it and of sluice's check
+                       on its head, and when
   forge/follows/<owner>/<repository>/<branch>.lock
                        held while that file is written
-  forge/intake/<owner>/<repository>/<branch>.json
-                       the branch's intake mark as this host last saw it on
-                       the remote, when it first saw it there, and when it
-                       last pushed it
-  forge/intake/<owner>/<repository>/<branch>.waits/<process>.hold
-                       held by each wait on the host that reads the
-                       branch's pull requests, for as long as it runs: the
-                       last of them to end removes the mark
-  forge/intake/<owner>/<repository>/<branch>.waits/.lock
-                       held while a wait's hold is made or let go
+  forge/intake/        an older sluice's view of each branch's intake mark
+                       and its waits' holds; nothing reads it now, and it
+                       may be removed
   host/lock            held by sluice's host process for as long as it runs
   host/start.lock      held by a command starting the host process, and by
                        the process as it decides to end
