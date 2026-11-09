@@ -1204,32 +1204,43 @@ hold = "5m"
     }
 
     /// sluice's own policy reads, and gates as section 9 says: bolt
-    /// branches on the fast tier from any run or the cache, `main` on
-    /// every tier from sandboxed or confined runs only, deepest first,
-    /// landed on `origin`, taking its work as pull requests that wait on
-    /// nothing beyond the gate.
+    /// branches on the fast tier, `main` on every tier, deepest first,
+    /// each counting only what deneb's `sessions` signed, its state on
+    /// `origin`, where it lands, and `main` taking its work as pull
+    /// requests that wait on nothing beyond the gate (78, 137; record
+    /// 0103).
     #[test]
     fn sluices_own_policy_reads() {
         let p = Policy::parse(include_str!("../../../.config/sluice.toml")).unwrap();
         assert_eq!(p.limits.executor.as_deref(), Some("sandbox"));
         assert_eq!(p.limits.network, Some(Network::Localhost));
         assert!(p.checkout.is_empty(), "{:?}", p.checkout);
+        assert!(p.signers.keys().eq(["sessions"]), "{:?}", p.signers.keys());
+        assert!(!p.signers["sessions"].confined);
         let bolt = p.rules_for("bolt/x").unwrap().unwrap();
         assert_eq!(bolt.required, ["#check-fast"]);
-        assert!(bolt.satisfiable_by("sandbox") && !bolt.trusts("cache"));
-        // 137; record 0103 D2: sluice's own main takes pull requests and its
-        // policy names no signers, so main is refused, naming them, until
-        // its policy does; routing still reads its remote.
-        let refused = p.rules_for("main").unwrap_err().to_string();
-        assert!(refused.contains("[signers]"), "{refused}");
-        assert_eq!(p.remote_of("main").unwrap().as_deref(), Some("origin"));
-        let main = &p.branches[p.table_for("main").unwrap().unwrap()].1;
+        assert!(
+            bolt.signed && bolt.trust == ["sessions"],
+            "{:?}",
+            bolt.trust
+        );
+        assert!(
+            bolt.trusts_signed("sessions", false, None) && !bolt.trusts_signed("box", false, None)
+        );
+        // 137; record 0103 D2: main takes pull requests, and its policy
+        // names signers, so its state is on origin and main is kept there.
+        let main = p.rules_for("main").unwrap().unwrap();
         assert_eq!(main.required, ["#check-fast", "#check-tools", "#check-e2e"]);
-        assert!(main.batch && main.satisfiable_by("sandbox") && !main.trusts("cache"));
+        assert!(
+            main.batch && main.signed && main.trust == ["sessions"],
+            "{:?}",
+            main.trust
+        );
+        assert!(!main.confined && main.trusts_signed("sessions", false, None));
         assert_eq!(main.remote.as_deref(), Some("origin"));
         assert_eq!(bolt.remote.as_deref(), Some("origin"));
         assert_eq!(main.pull_requests, Some(PullRequests::default()));
-        assert!(main.unkept);
+        assert!(!main.unkept);
         assert_eq!(bolt.pull_requests, None);
         assert!(p.rules_for("unit/x").unwrap().is_none());
     }
