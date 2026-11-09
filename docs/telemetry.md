@@ -10,6 +10,14 @@ and for logs [ADR 0022](adr/0022-telemetry-sends-a-failures-output-scrubbed-and-
 
 - **Off unless asked**: `SLUICE_OTEL=1` (or `true`, `yes`, `on`) in the
   environment of whatever runs sluice, or `--otel` on its command line.
+- **Off again**, by OpenTelemetry's own settings, read as its
+  specification reads them. `OTEL_SDK_DISABLED=true` leaves telemetry
+  off as if it were never asked for: nothing is sent, and a run's checks
+  get nothing of it. `OTEL_TRACES_EXPORTER=none` turns traces alone off:
+  metrics and logs still go, and a run's checks get the setting with
+  sluice's other `OTEL_*` and no `TRACEPARENT`. `OTEL_METRICS_EXPORTER=none`
+  and `OTEL_LOGS_EXPORTER=none` do the same for theirs. A setting only
+  turns a signal off: any other value, `otlp` among them, leaves it on.
 - **Where**: OTLP over plain HTTP, protobuf, to `OTEL_EXPORTER_OTLP_ENDPOINT`,
   by default `http://localhost:4318` (`/v1/traces`, `/v1/metrics`,
   `/v1/logs`). No TLS:
@@ -86,7 +94,10 @@ and for logs [ADR 0022](adr/0022-telemetry-sends-a-failures-output-scrubbed-and-
 
    Scrubbing lowers the chance a secret is sent; it does not rule it
    out.
-5. **No secrets in sluice's environment.** A run's checks see sluice's
+5. **`OTEL_TRACES_EXPORTER=none`** where sluice runs, for a host that
+   keeps no traces: sluice, and moon inside its runs, then send metrics
+   and logs alone.
+6. **No secrets in sluice's environment.** A run's checks see sluice's
    `OTEL_*`, `OTEL_EXPORTER_OTLP_HEADERS` included. An API key belongs to
    the receiver's own configuration.
 
