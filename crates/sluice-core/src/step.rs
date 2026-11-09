@@ -3675,6 +3675,7 @@ fn open_runs(rules: &Rules, home: Option<&str>) -> Vec<SystemRun> {
         no_replay: false,
         host: None,
         declined: BTreeMap::new(),
+        lost: None,
     };
     if by.is_empty() {
         return vec![run(None, any)];
