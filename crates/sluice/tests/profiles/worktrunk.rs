@@ -1244,6 +1244,45 @@ fn wt_submit_releases_before_it_removes() {
     let _ = std::fs::remove_file(&log);
 }
 
+/// 51; outcome-delivery spec, "wt submit removes a landed worktree" and
+/// "wt submit reports a blame": a waiting `wt submit` hands its landing
+/// over by `wait` and confirms it on receipt, since it removes the
+/// worktree, whose reader goes with it; a blame it reports, keeping the
+/// worktree, is handed over and stays owed (record 0102, design D5).
+#[test]
+fn wt_submit_confirms_a_landing_it_removes_the_worktree_of() {
+    let s = Scratch::new("wt-confirms-landing");
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let out = s.wt_submit(&a, &[]);
+    assert_eq!(out.status.code(), Some(sluice::LANDED), "{}", text(&out));
+    assert!(!a.exists(), "{}", text(&out));
+    let n = s.subs_from("a")[0]["id"].as_u64().unwrap();
+    let key = format!("{n}:landed");
+    let of = |event: &str| -> Vec<serde_json::Value> {
+        s.logged(event)
+            .into_iter()
+            .filter(|l| l["key"] == key.as_str())
+            .collect()
+    };
+    let handed_lines = of("handed");
+    assert_eq!(handed_lines.len(), 1, "{handed_lines:?}");
+    assert_eq!(handed_lines[0]["by"], "wait");
+    let confirmed = of("confirmed");
+    assert_eq!(confirmed.len(), 1, "{confirmed:?}");
+    assert_eq!(confirmed[0]["by"], "wait");
+    assert_eq!(confirmed[0]["reader"], "unit/a");
+    assert_eq!(s.status(n)["delivery"]["state"], "done");
+
+    // A blame it reports keeps the worktree, and stays owed.
+    let b = s.session("b", &[("broken", "x\n")]);
+    let out = s.wt_submit(&b, &[]);
+    assert_eq!(out.status.code(), Some(sluice::FAILED), "{}", text(&out));
+    assert!(b.exists());
+    let m = s.subs_from("b")[0]["id"].as_u64().unwrap();
+    assert_eq!(s.status(m)["delivery"]["state"], "owed");
+    assert_eq!(handed(&s, m), ["wait"]);
+}
+
 /// `sluice inbox` run in `dir`.
 fn inbox(s: &Scratch, dir: &Path, args: &[&str]) -> Output {
     s.command(env!("CARGO_BIN_EXE_sluice"), dir)
@@ -1588,14 +1627,16 @@ fn a_wait_from_another_worktree_marks_nothing() {
     assert_eq!(out.status.code(), Some(sluice::FAILED), "{}", text(&out));
     let record: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert!(record.get("delivered").is_none(), "{record}");
-    assert_eq!(s.status(n)["delivered"], serde_json::Value::Null);
-    assert!(s.logged("delivered").is_empty());
+    assert_eq!(record["delivery"]["state"], "owed", "{record}");
+    assert!(handed(&s, n).is_empty(), "{}", s.status(n));
+    assert!(s.logged("handed").is_empty());
     assert_eq!(collected_one(&s, &b)["id"], n);
 }
 
 /// 51; outcome-delivery spec, "A wait reads an outcome already
-/// delivered": a landing the pane took is reported by a later wait in its
-/// worktree with the push's `delivered_to`, unchanged.
+/// delivered": a landing the pane took and its worktree confirmed is
+/// reported by a later wait in its worktree with its delivery as it
+/// stood, and the wait records nothing (record 0102).
 #[test]
 fn a_wait_reports_an_outcome_the_pane_took_as_it_stands() {
     let s = Scratch::new("wt-wait-pushed");
@@ -1603,7 +1644,13 @@ fn a_wait_reports_an_outcome_the_pane_took_as_it_stands() {
     let (n, session) = s.submit_from_pane(&a, "w1:p2");
     let v = s.decide(n);
     assert_eq!(v["state"], "landed", "{v}");
-    assert_eq!(v["delivered_to"], session.as_str(), "{v}");
+    assert_eq!(handed(&s, n), ["notice"]);
+    let lines = s.logged("handed");
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert_eq!(lines[0]["to"], session.as_str());
+    let out = confirm(&s, &a, &[&format!("{n}:landed")]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let stood = s.status(n)["delivery"].clone();
     let out = s
         .command(env!("CARGO_BIN_EXE_sluice"), &a)
         .args(["wait", &n.to_string(), "--json"])
@@ -1611,10 +1658,9 @@ fn a_wait_reports_an_outcome_the_pane_took_as_it_stands() {
         .unwrap();
     assert_eq!(out.status.code(), Some(sluice::LANDED), "{}", text(&out));
     let record: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(record["delivered"], v["delivered"], "{record}");
-    assert_eq!(record["delivered_to"], session.as_str(), "{record}");
-    assert_eq!(s.status(n)["delivered_to"], session.as_str());
-    assert_eq!(s.logged("delivered").len(), 1);
+    assert_eq!(record["delivery"], stood, "{record}");
+    assert_eq!(s.logged("handed").len(), 1);
+    assert_eq!(s.logged("confirmed").len(), 1);
 }
 
 /// 51: a wait that runs out of time before its submission is decided
@@ -1635,10 +1681,10 @@ fn a_wait_that_runs_out_of_time_marks_nothing() {
         record["state"] == "queued" || record["state"] == "testing",
         "{record}"
     );
-    assert!(record.get("delivered").is_none(), "{record}");
-    assert!(s.logged("delivered").is_empty());
+    assert!(record.get("delivery").is_none(), "{record}");
+    assert!(s.logged("handed").is_empty());
     assert_eq!(s.decide(n)["state"], "landed");
-    assert_eq!(s.status(n)["delivered"], serde_json::Value::Null);
+    assert!(handed(&s, n).is_empty(), "{}", s.status(n));
     assert_eq!(collected_one(&s, &a)["id"], n);
 }
 
@@ -1841,13 +1887,10 @@ fn a_wait_leaves_the_resubmissions_landing_pending() {
     assert_eq!(out.status.code(), Some(sluice::LANDED), "{}", text(&out));
     let landed = s.status(second);
     assert_eq!(landed["state"], "landed", "{landed}");
-    assert!(
-        landed.get("delivered").is_none_or(|d| d.is_null()),
-        "{landed}"
-    );
-    assert!(s.logged("delivered").is_empty());
+    assert!(handed(&s, second).is_empty(), "{landed}");
+    assert!(s.logged("handed").is_empty());
     assert_eq!(collected_one(&s, &a)["id"], second);
-    assert!(s.status(second)["delivered"].is_string());
+    assert_eq!(handed(&s, second), ["inbox"]);
 }
 
 /// 2, 3, 51: a folder with no files checked out, a bare clone or a
@@ -1938,11 +1981,11 @@ fn a_wait_with_no_files_checked_out_reads_as_a_worktree_on_its_branch() {
     let said = text(&out);
     assert_eq!(out.status.code(), Some(0), "{said}");
     assert!(said.contains("landed as"), "{said}");
-    for word in ["pending", "git status", "checked out"] {
+    for word in ["pending", "owed", "git status", "checked out"] {
         assert!(!said.contains(word), "{word} in {said}");
     }
-    assert_eq!(s.status(n)["delivered"], serde_json::Value::Null);
-    assert!(s.logged("delivered").is_empty());
+    assert!(handed(&s, n).is_empty(), "{}", s.status(n));
+    assert!(s.logged("handed").is_empty());
     let out = inbox(&s, &git_dir, &["--json"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
     assert_eq!(String::from_utf8_lossy(&out.stderr), "");
@@ -1973,11 +2016,12 @@ fn own_git_dir(s: &Scratch, dir: &Path) -> PathBuf {
     ]))
 }
 
-/// 51: worktree `a`'s own git directory, whose `HEAD` names `a`'s branch,
-/// is that worktree with no path: a wait there on `a`'s landing marks it
-/// delivered to the agent the harness names, and its inbox collects `a`'s
-/// next submission, blamed, delivered to the same agent (record 0099's
-/// D3; rule core.48).
+/// 51; outcome-delivery spec, "The git directory's own landing": worktree
+/// `a`'s own git directory, whose `HEAD` names `a`'s branch, is that
+/// worktree with no path: a wait there on `a`'s landing hands it over by
+/// `wait`, the `handed` line reaching the agent the harness names, and its
+/// inbox hands over `a`'s next submission, blamed, to the same agent
+/// (record 0099's D3; record 0102; rule core.48).
 #[test]
 fn a_git_directory_delivers_its_branchs_own() {
     let s = Scratch::new("wt-gitdir-own");
@@ -1989,9 +2033,15 @@ fn a_git_directory_delivers_its_branchs_own() {
     let said = text(&out);
     assert_eq!(out.status.code(), Some(0), "{said}");
     assert!(said.contains("landed as"), "{said}");
-    let record = s.status(n);
-    assert!(record["delivered"].is_string(), "{record}");
-    assert_eq!(record["delivered_to"], "agent-a", "{record}");
+    assert_eq!(handed(&s, n), ["wait"]);
+    let to = |n: u64| -> Vec<serde_json::Value> {
+        s.logged("handed")
+            .into_iter()
+            .filter(|l| l["id"] == n)
+            .map(|l| l["to"].clone())
+            .collect()
+    };
+    assert_eq!(to(n), ["agent-a"]);
 
     std::fs::write(a.join("broken"), "x\n").unwrap();
     let dir = a.to_str().unwrap();
@@ -2002,12 +2052,15 @@ fn a_git_directory_delivers_its_branchs_own() {
     let out = as_agent_a(&s, &own, &["inbox", "--json"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    // The landing the wait handed over stays owed, so it comes again
+    // beside the blame.
     let outcomes = v["outcomes"].as_array().unwrap();
-    assert_eq!(outcomes.len(), 1, "{v}");
-    assert_eq!(outcomes[0]["id"], m, "{v}");
-    assert_eq!(outcomes[0]["state"], "failed", "{v}");
-    assert_eq!(outcomes[0]["delivered_to"], "agent-a", "{v}");
-    assert_eq!(s.status(m)["delivered_to"], "agent-a");
+    let ids: Vec<_> = outcomes.iter().map(|e| e["id"].clone()).collect();
+    assert_eq!(ids, [serde_json::json!(n), serde_json::json!(m)], "{v}");
+    assert_eq!(outcomes[1]["state"], "failed", "{v}");
+    assert_eq!(outcomes[1]["delivery"]["handed"][0]["by"], "inbox", "{v}");
+    assert_eq!(to(m), ["agent-a"]);
+    assert_eq!(to(n), ["agent-a", "agent-a"]);
 }
 
 /// 2, 51: a git directory whose `HEAD` names a branch with no commit fails
@@ -2032,10 +2085,11 @@ fn a_head_with_no_commit_fails_no_delivery_read() {
     let said = text(&out);
     assert_eq!(out.status.code(), Some(0), "{said}");
     assert!(said.contains("landed as"), "{said}");
-    for word in ["could not read", "pending", "no git", "commit:"] {
+    for word in ["could not read", "pending", "owed", "no git", "commit:"] {
         assert!(!said.contains(word), "{word} in {said}");
     }
-    assert_eq!(s.status(n)["delivered"], serde_json::Value::Null);
+    assert!(handed(&s, n).is_empty(), "{}", s.status(n));
+    assert!(s.logged("handed").is_empty());
     let out = as_agent_a(&s, &own, &["inbox", "--json"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
     assert_eq!(String::from_utf8_lossy(&out.stderr), "");
