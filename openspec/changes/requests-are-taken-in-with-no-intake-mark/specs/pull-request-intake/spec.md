@@ -1,30 +1,5 @@
 ## MODIFIED Requirements
 
-### Requirement: A branch turns pull requests on in its policy
-A branch's policy SHALL accept a `[branches."<pattern>".pull_requests]`
-table with `reviews`, a count of approving reviews, default 0, and
-`checks`, a list of check names, default empty. The table SHALL be
-refused on a branch with no `remote`, and SHALL refuse its branch alone,
-naming `[signers]`, in a policy that names no `[signers]`, whose
-branches' records each host keeps. The conditions SHALL be read from
-the branch's revision (56, 137, S64).
-
-#### Scenario: Pull requests need a remote
-- **WHEN** a branch's policy has a `pull_requests` table and no `remote`
-- **THEN** the policy is refused with a message naming the branch and `remote`
-
-#### Scenario: Pull requests need records on the remote
-- **WHEN** main's policy has a `pull_requests` table and `remote = "origin"`, names no `[signers]`, and gives `bolt/*` a table too
-- **THEN** a `sluice submit main` exits 2 naming main and `[signers]`, pushes and opens nothing, and a submission to `bolt/x` is tested and lands
-
-#### Scenario: Status shows the refusal
-- **WHEN** main is so refused
-- **THEN** `sluice status main` prints the refusal, and `sluice overview` names main with it
-
-#### Scenario: A pull request cannot loosen its own conditions
-- **WHEN** a pull request changes `.config/sluice.toml` to lower `reviews`
-- **THEN** its conditions are still the ones on the branch's revision
-
 ### Requirement: A pull request sluice cannot read holds no other
 When a round cannot fetch an open pull request's head, or cannot read
 its reviews, checks or timeline, draft or ready, it SHALL NOT submit it
@@ -65,6 +40,20 @@ the round SHALL still land what is queued.
 - **THEN** its warning says intake of `main` failed, no pull request is submitted or withdrawn, and a submission already queued is still tested and landed
 
 ## ADDED Requirements
+
+### Requirement: A pull request table on records each host keeps refuses its branch alone
+A branch's `pull_requests` table SHALL refuse that branch alone, naming
+`[signers]`, in a policy that names no `[signers]`, whose branches'
+records each host keeps; the policy's other branches SHALL be read as
+before (56, 137, S64).
+
+#### Scenario: Pull requests need records on the remote
+- **WHEN** main's policy has a `pull_requests` table and `remote = "origin"`, names no `[signers]`, and gives `bolt/*` a table too
+- **THEN** a `sluice submit main` exits 2 naming main and `[signers]`, pushes and opens nothing, and a submission to `bolt/x` is tested and lands
+
+#### Scenario: Status shows the refusal
+- **WHEN** main is so refused
+- **THEN** `sluice status main` prints the refusal, and `sluice overview` names main with it
 
 ### Requirement: A standing intake failure is said once for each cause and host
 A cause of an intake failure, what intake asked and the words it was
