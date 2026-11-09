@@ -56,6 +56,8 @@ Option 1, a, i, `sluice confirm`, the hand-overs again as above, the host's span
 - `Driver::notify` answers a hand-over with its way, where it reached and whether its reader confirmed on receipt; the core records the hand-over, and the confirmation where it was one.
 - A done delivery is let go of whole, its hand-overs and confirmations with it, by the write that moves its submission to the finished records, or the first write after it is done where its submission has moved already. A name a reader confirmed under stays known.
 - `sluice status <branch>` shows what is owed on the branch, each reader with its deliveries, owed or expired, their hand-overs and whether the name is known; `sluice status <id>` and the submission documents `sluice wait` and `sluice inbox` print hold the submission's `delivery` in place of `delivered` and `delivered_to`.
+- `wt submit` confirms a landing on receipt by passing the submit or wait it runs a hidden `--confirm-landing`, so the wait's own hand-over confirms a landing and nothing else, where it will remove the worktree. Not taken: a `sluice confirm` after the removal, which the removed worktree can no longer run for itself, and `--confirm`, which would confirm a blame it keeps the worktree for.
+- A confirmation made in the write that moves its submission to the finished records, a request's post or a resubmission's, lets the delivery go in that same write; its `handed` and `confirmed` log lines keep what was done, and the submission's `delivery` reads `done`. A finished submission whose delivery the branch no longer holds reads `done` alone; a live one decided before deliveries were recorded has none.
 
 ## Consequences
 
