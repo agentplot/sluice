@@ -84,8 +84,12 @@ Examples:
   $ sluice overview         every branch's queue
 
 Telemetry, taken by every command:
-      --otel                       Export traces and metrics over OTLP/HTTP, to
-                                   where the OTEL_EXPORTER_OTLP_* variables say
+      --otel                       Export traces, metrics and logs over
+                                   OTLP/HTTP, to where the OTEL_EXPORTER_OTLP_*
+                                   variables say; OTEL_SDK_DISABLED=true turns
+                                   them all off, and OTEL_TRACES_EXPORTER,
+                                   OTEL_METRICS_EXPORTER or OTEL_LOGS_EXPORTER at
+                                   none turns one alone off
                                    [env: SLUICE_OTEL=1|true|yes|on]
       --otel-service-name <NAME>   The service the telemetry is reported as
                                    [env: SLUICE_OTEL_SERVICE_NAME] [default: sluice]
@@ -204,8 +208,10 @@ pub struct Cli {
     pub worktree: String,
     // The telemetry flags are hidden, here and in every command, and
     // listed in ROOT_AFTER_HELP instead.
-    /// Export traces and metrics over OTLP/HTTP, to where the
-    /// OTEL_EXPORTER_OTLP_* variables say.
+    /// Export traces, metrics and logs over OTLP/HTTP, to where the
+    /// OTEL_EXPORTER_OTLP_* variables say. OTEL_SDK_DISABLED=true turns
+    /// them all off, and OTEL_TRACES_EXPORTER, OTEL_METRICS_EXPORTER or
+    /// OTEL_LOGS_EXPORTER at `none` turns that one alone off.
     /// SLUICE_OTEL takes `1`, `true`, `yes` or `on`.
     #[arg(
         long,
