@@ -1,14 +1,16 @@
 # Verify: requests-are-taken-in-with-no-intake-mark
 
 Verified on `change/requests-are-taken-in-with-no-intake-mark` at
-36ed9c37, cut from `bolt/sluice-runs-one-host-process` at 752db9a9,
-its base and gate (S66), with sluice 0.73.1, on 2026-11-08.
+476fa0a3, cut from `bolt/sluice-runs-one-host-process` at 752db9a9,
+its base and gate (S66), which has not moved since, with sluice 0.73.1,
+on 2026-11-08.
 
 ## The whole checks
 
 `sluice exec bolt/sluice-runs-one-host-process`, the bolt's gate
-`#check-fast` (`.config/sluice.toml`), run once on 36ed9c37: it ran the
-checks 36ed9c37 affects against 752db9a, and every one passed, exit 0.
+`#check-fast` (`.config/sluice.toml`), run once on 476fa0a3: it ran the
+checks 476fa0a affects against 752db9a, every one passed, and sluice
+recorded the 14 results under their keys for 476fa0a, exit 0.
 
 | Task | Outcome |
 |---|---|
@@ -21,30 +23,38 @@ checks 36ed9c37 affects against 752db9a, and every one passed, exit 0.
 | `seams:test` | passed |
 | `fakes:test` | passed |
 | `conformance:test` | passed |
-| `cli:test` | passed, 3m 2s |
+| `cli:test` | passed, 2m 38s |
 | `nix:typecheck` | passed |
 | `plugin-sluice:validate` | passed |
 | `site:rules` | passed |
 | `site:prose` | passed |
 
-sluice ran the checks and did not record them as a session run
-(core.18), since this report was written into the worktree while the run
-went on: `not recorded: after the run of 36ed9c3 the worktree holds
-openspec/changes/requests-are-taken-in-with-no-intake-mark/verify.md
-beyond its head`. Every check ran and passed on 36ed9c37. The queue
-runs the gate again when the branch is submitted.
+## The archive against the open changes
+
+Task 9.3's check, run on a copy of `openspec/` at 476fa0a3 outside the
+tree with the pinned openspec 1.14.3 (`devenv.nix`): `openspec validate
+requests-are-taken-in-with-no-intake-mark --strict` passes; `openspec
+archive requests-are-taken-in-with-no-intake-mark --yes` applies +8, ~10,
+-7 to the specs; after it, `openspec validate --specs --strict
+--no-interactive` passes 70 of 70 and `openspec validate --changes
+--strict --no-interactive` passes 7 of 7, `actions-pool` among them.
+`pull-request-intake`'s delta leaves "A branch turns pull requests on in
+its policy" as the main spec holds it, so `actions-pool`'s MODIFIED block
+of it holds every scenario the main spec has.
 
 ## Tasks
 
-Every task of `tasks.md`, 1.1 to 9.2, is ticked done, and each lands in
-a commit of its own on the branch, citing its clause, record 0103 and
-the decision it builds.
+Every task of `tasks.md`, 1.1 to 9.3, 23 in all, is ticked done, and
+each lands in a commit of its own on the branch, citing its clause,
+record 0103 and the decision it builds.
 
 - Record 0103 stands where the task named 0102: 0102 was taken on
   another branch before it was written (`6abfe546`, `3dc72bc7`), and
   the task asked for the next number free on main and every branch.
   Records 0095 and 0096 each say under their status that 0103 amends
-  them in part.
+  them in part. 0103's amendment records the build's choices, the
+  refusal as a requirement of its own (9.3) the eighth, each with the
+  path not taken.
 - Rules core.33 and core.28 carry the details 1.2 names, citing record
   0103.
 - Every test the tasks name as kept, rewritten or new is in the tree,
@@ -98,21 +108,23 @@ passes. Each scenario of the deltas is met by the test named beside it.
 
 ### pull-request-intake
 
-| Scenario | Test |
-|---|---|
-| Pull requests need a remote | `pull_requests_need_a_remote` |
-| Pull requests need records on the remote | `pull_requests_need_records_on_the_remote`, `a_refused_main_leaves_a_bolt_landing`, `a_pull_request_table_on_records_each_host_keeps_refuses_its_branch_alone`, `a_refused_branch_still_names_its_remote` |
-| Status shows the refusal | `pull_requests_need_records_on_the_remote` |
-| A pull request cannot loosen its own conditions | unchanged, as before |
-| GitHub serves no head for one of two pull requests | `s63_a_request_sluice_cannot_fetch_holds_no_other` |
-| Read again until GitHub serves its head | `s63_a_request_sluice_cannot_fetch_holds_no_other`, `a_standing_intake_failure_is_said_once_for_each_cause_and_host` |
-| Closed, it is no longer read | `s63_a_request_sluice_cannot_fetch_holds_no_other` |
-| A draft whose head cannot be fetched | `a_draft_whose_head_cannot_be_fetched_is_only_a_draft` |
-| Reviews that cannot be read | `reviews_that_cannot_be_read_hold_no_other` |
-| GitHub's list of pull requests fails | `a_failed_list_ends_intake_and_the_queue_still_lands` |
-| Forty passes refused alike | `a_standing_intake_failure_is_said_once_for_each_cause_and_host` (twenty passes, a restart among them) |
-| A step beside them | the same |
-| A submit's own intake | the same |
+| Requirement | Scenario | Test |
+|---|---|---|
+| A pull request table on records each host keeps refuses its branch alone | Pull requests need records on the remote | `pull_requests_need_records_on_the_remote`, `a_refused_main_leaves_a_bolt_landing`, `a_pull_request_table_on_records_each_host_keeps_refuses_its_branch_alone`, `a_refused_branch_still_names_its_remote` |
+| | Status shows the refusal | `pull_requests_need_records_on_the_remote` |
+| A pull request sluice cannot read holds no other | GitHub serves no head for one of two pull requests | `s63_a_request_sluice_cannot_fetch_holds_no_other` |
+| | Read again until GitHub serves its head | `s63_a_request_sluice_cannot_fetch_holds_no_other`, `a_standing_intake_failure_is_said_once_for_each_cause_and_host` |
+| | Closed, it is no longer read | `s63_a_request_sluice_cannot_fetch_holds_no_other` |
+| | A draft whose head cannot be fetched | `a_draft_whose_head_cannot_be_fetched_is_only_a_draft` |
+| | Reviews that cannot be read | `reviews_that_cannot_be_read_hold_no_other` |
+| A failure that is no one pull request's still ends intake | GitHub's list of pull requests fails | `a_failed_list_ends_intake_and_the_queue_still_lands` |
+| A standing intake failure is said once for each cause and host | Forty passes refused alike | `a_standing_intake_failure_is_said_once_for_each_cause_and_host` (twenty passes, a restart among them) |
+| | A step beside them | the same |
+| | A submit's own intake | the same |
+
+"A branch turns pull requests on in its policy", with "Pull requests
+need a remote" (`pull_requests_need_a_remote`) and "A pull request
+cannot loosen its own conditions", stands in the main spec as it was.
 
 ### remote-read-log
 
@@ -153,6 +165,7 @@ longer written.
 
 ## Verdict
 
-The whole checks pass and the work holds: every task is done, and every
+The whole checks pass and the work holds: every task is done, every
 requirement and scenario of the change's specs is met in the code, its
-tests and its docs. The change is archived with this report.
+tests and its docs, and its archive leaves every open change valid. The
+change is archived with this report.
