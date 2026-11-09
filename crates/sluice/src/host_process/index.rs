@@ -79,10 +79,10 @@ impl Index {
     }
 
     /// The host process's start lock, which the index is written under,
-    /// once whatever holds it lets go.
+    /// once whatever holds it lets go. The folder is never made here: a
+    /// command's [`super::Paths`] makes it, and a host process whose folder
+    /// is gone writes nothing there again (135; design D6).
     fn lock(&self) -> Result<File> {
-        std::fs::create_dir_all(&self.dir)
-            .with_context(|| format!("creating {}", self.dir.display()))?;
         let path = self.dir.join("start.lock");
         let file = File::create(&path).with_context(|| format!("creating {}", path.display()))?;
         file.lock()
@@ -172,6 +172,14 @@ mod tests {
         }
     }
 
+    impl Scratch {
+        /// The index in its `host/`, made as a command's `Paths` makes it.
+        fn host(&self) -> Index {
+            std::fs::create_dir_all(self.0.join("host")).unwrap();
+            Index::at(&self.0.join("host"))
+        }
+    }
+
     /// A repository with one commit under `dir`, holding `files`: its
     /// common git directory.
     fn repository(dir: &Path, files: &[(&str, &str)]) -> PathBuf {
@@ -209,7 +217,7 @@ mod tests {
     #[test]
     fn a_repository_is_listed_once() {
         let s = Scratch::new("once");
-        let index = Index::at(&s.0.join("host"));
+        let index = s.host();
         assert!(index.list().unwrap().is_empty());
         let (a, b) = (PathBuf::from("/x/a.git"), PathBuf::from("/x/b.git"));
         assert!(index.note(&a).unwrap());
@@ -230,7 +238,7 @@ mod tests {
     #[test]
     fn a_gone_repository_leaves_the_index() {
         let s = Scratch::new("gone");
-        let index = Index::at(&s.0.join("host"));
+        let index = s.host();
         let kept = repository(&s.0.join("kept"), &[(".config/sluice.toml", "")]);
         let gone = repository(&s.0.join("gone"), &[(".config/sluice.toml", "")]);
         index.note(&kept).unwrap();
@@ -246,7 +254,7 @@ mod tests {
     #[test]
     fn a_repository_with_no_sluice_leaves_the_index() {
         let s = Scratch::new("none");
-        let index = Index::at(&s.0.join("host"));
+        let index = s.host();
         let set_up = repository(&s.0.join("set-up"), &[(".config/sluice.toml", "")]);
         let none = repository(&s.0.join("none"), &[]);
         assert!(has_sluice(&set_up).unwrap());
@@ -256,5 +264,18 @@ mod tests {
         let out = index.prune(|r| !has_sluice(r).unwrap_or(false)).unwrap();
         assert_eq!(out, [none]);
         assert_eq!(index.list().unwrap(), [set_up]);
+    }
+
+    /// 135 (design D6): an index whose folder is gone is written nowhere,
+    /// and the folder is not made again.
+    #[test]
+    fn a_gone_folder_is_not_made_again() {
+        let s = Scratch::new("folder-gone");
+        let index = s.host();
+        index.note(Path::new("/x/a.git")).unwrap();
+        std::fs::remove_dir_all(s.0.join("host")).unwrap();
+        assert!(index.note(Path::new("/x/b.git")).is_err());
+        assert!(index.prune(|_| true).is_ok_and(|gone| gone.is_empty()));
+        assert!(!s.0.join("host").exists());
     }
 }

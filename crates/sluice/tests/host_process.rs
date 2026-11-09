@@ -362,6 +362,39 @@ fn the_host_process_ends_with_its_state_folder() {
     });
     within(5, "the host process ends", || !alive(pid));
     assert!(!client.paths().socket.exists());
+    assert!(
+        !client.paths().dir.exists(),
+        "the host process made its folder again"
+    );
+}
+
+/// 135 (design D6): a state folder removed and made again at its path by
+/// another is not the host process's: it ends all the same, and leaves
+/// what is there now alone.
+#[test]
+fn a_state_folder_made_again_ends_the_host_process() {
+    let d = OnDisk::new("host-folder-again", POLICY);
+    let client = d.client(d.repo.dir());
+    let repository = d.repository(d.repo.dir());
+    let follow = client
+        .follow(Path::new(&repository), FollowKind::Wait)
+        .unwrap();
+    let pid = follow.named.pid;
+    let dir = client.paths().dir.clone();
+    // The folder that takes its place, made beside it first and moved in
+    // as the old one goes, so no tick finds the path empty.
+    let again = d.state.path().with_extension("again");
+    std::fs::create_dir_all(&again).unwrap();
+    let aside = d.state.path().with_extension("aside");
+    std::fs::rename(&dir, &aside).unwrap();
+    std::fs::rename(&again, &dir).unwrap();
+    within(5, "the host process ends", || !alive(pid));
+    let left: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert!(left.is_empty(), "it wrote into the new folder: {left:?}");
+    let _ = std::fs::remove_dir_all(&aside);
 }
 
 /// 135 (design D6): a command that meets the host process ending starts

@@ -181,6 +181,19 @@ pub(crate) struct Hosting {
     pub connections: AtomicUsize,
     /// A newer sluice asked it to end, or its state folder is gone.
     pub stopping: AtomicBool,
+    /// Its folder, `host/`, as it found it when it started: the device and
+    /// inode, so a folder made again at that path is not its own.
+    pub folder: (u64, u64),
+}
+
+impl Hosting {
+    /// 135 (design D6): whether its folder is gone, or is another made
+    /// again at its path since it started.
+    fn folder_gone(&self) -> bool {
+        use std::os::unix::fs::MetadataExt;
+        !std::fs::metadata(&self.paths.dir)
+            .is_ok_and(|m| m.is_dir() && (m.dev(), m.ino()) == self.folder)
+    }
 }
 
 /// `sluice host`: run as the host process of this user's state folder,
@@ -216,6 +229,12 @@ fn run_holding(paths: Paths, _lock: File) -> Result<i32> {
     let listener = UnixListener::bind(&paths.socket)
         .with_context(|| format!("binding {}", paths.socket.display()))?;
     listener.set_nonblocking(true)?;
+    let folder = {
+        use std::os::unix::fs::MetadataExt;
+        let m = std::fs::metadata(&paths.dir)
+            .with_context(|| format!("reading {}", paths.dir.display()))?;
+        (m.dev(), m.ino())
+    };
     let instance = Instance::read()?;
     let room = Shared::new(Room::over(
         crate::host_count::HostCount::host()?,
@@ -232,6 +251,7 @@ fn run_holding(paths: Paths, _lock: File) -> Result<i32> {
         room,
         connections: AtomicUsize::new(0),
         stopping: AtomicBool::new(false),
+        folder,
     });
     log(&format!(
         "sluice host {} started, pid {}{}",
@@ -296,15 +316,19 @@ fn serve(hosting: &Arc<Hosting>, listener: &UnixListener) -> Result<i32> {
             continue;
         }
         looked = Instant::now();
-        hosting.tasks.tick();
-        if scanned.elapsed() >= SCAN && hosting.paths.dir.is_dir() {
-            scanned = Instant::now();
-            scan(hosting);
-        }
-        // 135: a state folder removed ends it, its socket with it.
-        if !hosting.paths.dir.is_dir() {
+        // 135: a state folder removed ends it, its socket with it, though
+        // another made a folder at its path again since; it reads no
+        // repository after, so nothing of it writes there again.
+        if !hosting.stopping.load(Ordering::SeqCst) && hosting.folder_gone() {
             log("sluice host: its state folder is gone; it ends");
             hosting.stopping.store(true, Ordering::SeqCst);
+        }
+        if !hosting.stopping.load(Ordering::SeqCst) {
+            hosting.tasks.tick();
+            if scanned.elapsed() >= SCAN {
+                scanned = Instant::now();
+                scan(hosting);
+            }
         }
         if hosting.stopping.load(Ordering::SeqCst) {
             hosting.tasks.stop_all();
