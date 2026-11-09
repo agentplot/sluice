@@ -240,6 +240,64 @@ impl Line {
         Ok(())
     }
 
+    /// 51: record that submission `id`'s outcome under `key` was handed to
+    /// `reader` `by` a way at `now`, reaching `to`, with weir's `hand`, and
+    /// its reader's confirmation with it where `confirms`, and log a
+    /// `handed` line, and a `confirmed` one where it confirms. An outcome
+    /// its reader has confirmed is handed over no more and records nothing;
+    /// one the branch holds no delivery of, decided before deliveries were
+    /// recorded, is logged `handed` alone (weir 103, 109; design D5, D12).
+    /// Whether it recorded the hand-over.
+    pub fn hand(
+        &mut self,
+        id: u64,
+        key: &str,
+        reader: &str,
+        by: &str,
+        to: &str,
+        confirms: bool,
+        now: &str,
+    ) -> Result<bool> {
+        let recorded = self
+            .deliveries
+            .iter()
+            .any(|r| matches!(r, weir_delivery::Record::Delivery(d) if d.key().as_str() == key));
+        if recorded {
+            let handed = weir_delivery::hand(&self.deliveries, key, reader, by, now, confirms)
+                .map_err(|refused| {
+                    anyhow!(
+                        "handing #{id}'s outcome {key} to {reader} on {}: {refused}",
+                        self.branch
+                    )
+                })?;
+            let weir_delivery::Handed::Add(records) = handed else {
+                return Ok(false);
+            };
+            self.add_deliveries(&records);
+        }
+        self.log(
+            now,
+            Event::Handed {
+                id,
+                key: key.into(),
+                by: by.into(),
+                to: to.into(),
+            },
+        );
+        if confirms && recorded {
+            self.log(
+                now,
+                Event::Confirmed {
+                    id,
+                    key: key.into(),
+                    reader: reader.into(),
+                    by: by.into(),
+                },
+            );
+        }
+        Ok(true)
+    }
+
     pub fn sub(&self, id: u64) -> Result<&Submission> {
         self.subs
             .get(&id)

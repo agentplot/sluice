@@ -227,8 +227,10 @@ impl Driver for Worktrunk {
                 &sluice_core::notice(n.submission, &n.branch, &n.decided),
                 herdr::BOUND,
             )? {
-                herdr::Answer::Took => Delivery::Delivered {
+                herdr::Answer::Took => Delivery::Handed {
+                    way: "notice".into(),
                     to: session.clone(),
+                    confirms: false,
                 },
                 herdr::Answer::Refused(why) => Delivery::Undelivered { why },
             },

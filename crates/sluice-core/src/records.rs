@@ -1205,19 +1205,40 @@ pub enum Event {
         first: String,
         last: String,
     },
-    /// 51: an outcome a carrier delivered to its session. Read under
-    /// `told` too, the name an earlier sluice wrote it under (record 0070).
+    /// 51: an outcome a carrier delivered to its session, as an earlier
+    /// sluice marked it; kept as written and read as history (record 0102;
+    /// rule core.41). Read under `told` too, the name a sluice before it
+    /// wrote it under (record 0070).
     #[serde(alias = "told")]
     Delivered {
         id: u64,
         notification: String,
     },
     /// 51: an outcome its driver did not deliver, and why in the carrier's
-    /// words; it stands decided and pending, and no round pushes it again.
+    /// words; it stays owed, and no round pushes it again.
     Pending {
         id: u64,
         notification: String,
         why: String,
+    },
+    /// 51: an outcome handed to its reader `by` a way, `notice`,
+    /// `pull-request`, `inbox` or `wait`, reaching `to` as the carrier
+    /// names it, the pane, the request, the path or the agent; it confirms
+    /// nothing by itself (weir 103; record 0102; design D5).
+    Handed {
+        id: u64,
+        key: String,
+        by: String,
+        to: String,
+    },
+    /// 51: an outcome confirmed for `reader`, `by` the way that confirmed
+    /// it on receipt, `confirm`, `operator` or `resubmission` (weir 102;
+    /// design D5, D7, D16).
+    Confirmed {
+        id: u64,
+        key: String,
+        reader: String,
+        by: String,
     },
 }
 

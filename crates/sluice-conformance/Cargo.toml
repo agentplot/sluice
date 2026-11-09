@@ -12,10 +12,10 @@ sluice-core = { path = "../sluice-core" }
 sluice-fakes = { path = "../sluice-fakes" }
 anyhow.workspace = true
 serde_json.workspace = true
+weir-delivery.workspace = true
 
 [dev-dependencies]
 chrono.workspace = true
-weir-delivery.workspace = true
 
 [lib]
 doctest = false

@@ -612,16 +612,37 @@ impl Sluice<'_> {
     }
 
     /// 50, 51: push each outcome's notice to its submission's session
-    /// alone, once: marked delivered only when its driver delivered it, and
-    /// an outcome not delivered left decided and pending, for `sluice inbox`
-    /// or a wait, with nothing pushed again. A step that stops
-    /// between a delivery and its record pushes it again, under the same id.
+    /// alone, at most once: only an outcome owed to its reader with no
+    /// hand-over and no confirmation, as `owed` reads them, is pushed, and
+    /// its item goes whatever the carrier answered (design D10). A push the
+    /// carrier took is recorded as a hand-over by its way with weir's
+    /// `hand`, confirming it only where the carrier says its reader
+    /// confirms on receipt, and logged `handed`, and `confirmed` where it
+    /// confirms; one it refused stays owed, logged `pending`, and is pushed
+    /// by no later round (weir 103, 109, 111; record 0102; design D5). A
+    /// step that stops between a push and its record pushes it again, under
+    /// the same key.
     fn perform_outbox(&self, branch: &str) -> Result<()> {
         let line = self.read_line(branch)?;
+        let now = self.now();
+        let owed = weir_delivery::owed(line.deliveries(), &now)
+            .map_err(|refused| anyhow!("reading {branch}'s deliveries: {refused}"))?;
         for item in line.doc.outbox.clone() {
             let sub = line.sub(item.submission)?;
-            let delivery = if sub.delivered.is_some() {
-                // 51: no push of an outcome already delivered.
+            let reader = sub.from.worktree.as_str();
+            // 51: no push of an outcome handed to its reader by any way, or
+            // confirmed: owed with no hand-over alone, or one decided
+            // before its delivery was recorded, which has none.
+            let recorded = line.deliveries().iter().any(
+                |r| matches!(r, weir_delivery::Record::Delivery(d) if d.key().as_str() == item.id),
+            );
+            let unhanded = owed
+                .readers
+                .iter()
+                .filter(|o| o.reader.as_str() == reader)
+                .flat_map(|o| &o.deliveries)
+                .any(|d| d.delivery.key().as_str() == item.id && d.handovers.is_empty());
+            let delivery = if recorded && !unhanded {
                 None
             } else {
                 // ADR 0044: the report as it stands, for a driver that shows
@@ -644,17 +665,8 @@ impl Sluice<'_> {
                 l.doc.outbox.remove(n);
                 match &delivery {
                     None => {}
-                    Some(Delivery::Delivered { to }) => {
-                        let s = l.sub_mut(item.submission);
-                        s.delivered = Some(now.clone());
-                        s.delivered_to = Some(to.clone());
-                        l.log(
-                            &now,
-                            Event::Delivered {
-                                id: item.submission,
-                                notification: item.id.clone(),
-                            },
-                        );
+                    Some(Delivery::Handed { way, to, confirms }) => {
+                        l.hand(item.submission, &item.id, reader, way, to, *confirms, &now)?;
                     }
                     Some(Delivery::Undelivered { why }) => {
                         l.log(
