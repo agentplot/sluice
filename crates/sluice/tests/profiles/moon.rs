@@ -14,8 +14,8 @@ use std::time::{Duration, Instant};
 use sluice::instance::{HostCache, Instance};
 use sluice::profiles::checks::Checks;
 use sluice_seams::{
-    FailedBy, Limits, Network, Outcome, Place, Progress, Reading, Reads, Rev, RunHandle, RunReport,
-    RunRequest, Setting, Settings, Source, TaskState, Tests,
+    FailedBy, Limits, Network, NotRun, Outcome, Place, Progress, Reading, Reads, Rev, RunHandle,
+    RunReport, RunRequest, Setting, Settings, Source, TaskState, Tests,
 };
 use support::Repo;
 
@@ -1142,6 +1142,45 @@ fn proven_drops_a_key_the_tree_does_not_bear_out() {
         .replace("alpha/value.txt", "alpha/other.txt");
     std::fs::write(&blob, forged).unwrap();
     assert_eq!(c.proven(&run, &report).unwrap().proven, ["beta:test"]);
+}
+
+/// Record 0105, design D2 to D4 of the change
+/// `a-pass-nothing-proves-blames-no-one` (114): a pass whose manifest is
+/// gone from the store the profile reads is neither proven nor dropped
+/// as a key the tree does not bear out. It is unkept, saying why and
+/// naming the store, read from the file's absence alone.
+#[test]
+fn a_pass_whose_manifest_is_gone_is_unkept_naming_the_store() {
+    let repo = workspace("moon-unkept");
+    let c = checks(&repo);
+    let (run, report) = finish_run(&c, &request(&repo, "p1", &["#check-fast"], None));
+    let alpha = report
+        .tasks
+        .iter()
+        .find(|t| t.task == "alpha:test")
+        .unwrap();
+    assert_eq!(alpha.outcome, Outcome::Pass);
+    let store = repo.dir().join(".moon/cache");
+    std::fs::remove_file(
+        store
+            .join("blobs")
+            .join(&alpha.hash[..2])
+            .join(&alpha.hash[2..]),
+    )
+    .unwrap();
+    let proof = c.proven(&run, &report).unwrap();
+    assert_eq!(proof.proven, ["beta:test"]);
+    assert_eq!(
+        proof.unkept,
+        [NotRun {
+            task: "alpha:test".into(),
+            reason: format!(
+                "it passed, but nothing the run kept proves it ran: \
+                 moon's manifest of it is not in {}",
+                store.display()
+            ),
+        }]
+    );
 }
 
 /// ADR 0050: before any run, moon in the worktree names each required
