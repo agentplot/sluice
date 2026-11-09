@@ -336,9 +336,16 @@ session is handed again what it never confirmed, and `sluice inbox
 is not handed over twice. It starts its turn with what sluice printed,
 the confirm line with it, and keeps no list of its own (core.31). A
 reload of the mod is a first overview and repeats what is still owed.
-Its `.claude-plugin/sluice.json` names as `from` the first release with
-`--new` and `sluice confirm`, so the board says on an older sluice that
-it needs that release and collects nothing there.
+The board takes every later `session.start` as such a load, which the
+engine fires at a reload, an enable and a respawn, so its next overview
+collects with `sluice inbox` whether or not the module's own state was
+made afresh, and a test of the board exercises a reload by a second
+start. Its `.claude-plugin/sluice.json` names as `from` the first
+release with `--new` and `sluice confirm`, so the board says on an older
+sluice that it needs that release and collects nothing there.
+
+Not taken: reading a reload from the module's state alone, which a
+second start in one module never resets, so no test reaches it.
 
 ### D15. The agent is told to confirm
 
