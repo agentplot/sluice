@@ -34,7 +34,7 @@
 //! and asks the core to submit, forecast and withdraw, as any driver does.
 
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::rc::Rc;
@@ -335,6 +335,9 @@ pub struct Pulls {
     /// of the pull requests into each branch the host follows, by branch,
     /// read again only once the kept file or the branch's lead moved.
     kept_across: RefCell<BTreeMap<String, KeptAcross>>,
+    /// 120, C.5: each branch a round delivered an outcome that did not land
+    /// onto one of its pull requests for, until the pass asks.
+    sent_back: RefCell<BTreeSet<String>>,
 }
 
 /// 137, design D5: a branch's followed pull requests as a reader's
@@ -435,6 +438,7 @@ impl Pulls {
             default_policy: RefCell::default(),
             peer,
             away: RefCell::default(),
+            sent_back: RefCell::default(),
             kept_across: RefCell::default(),
             met: RefCell::default(),
             ran: std::cell::Cell::new(false),
@@ -2973,6 +2977,10 @@ impl crate::PullRequests for Pulls {
         self.away.borrow().contains_key(branch)
     }
 
+    fn sent_back(&self, branch: &str) -> bool {
+        self.sent_back.borrow_mut().remove(branch)
+    }
+
     fn open(
         &self,
         seams: Seams<'_>,
@@ -3888,6 +3896,9 @@ impl Pulls {
         if matches!(outcome, Outcome::Landed { .. }) {
             return Ok(Delivery::Delivered { to });
         }
+        // 120, C.5: held from here, which the intake that follows this
+        // round in its pass shows, its draft and its check.
+        self.sent_back.borrow_mut().insert(n.branch.clone());
         // Its body, as intake read it this round, says whether a submit
         // opened it.
         let known = self

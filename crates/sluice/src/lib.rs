@@ -799,6 +799,16 @@ pub trait PullRequests {
         false
     }
 
+    /// 120, C.5: whether a round of `branch` delivered onto a pull request
+    /// an outcome that did not land since this was last asked, so an
+    /// intake follows that round in its pass and holds the request as its
+    /// waiting submit's next intake did: a draft, its check saying it
+    /// waits for the next submit (record 0103 as amended 2026-11-09).
+    /// Asking forgets it.
+    fn sent_back(&self, _branch: &str) -> bool {
+        false
+    }
+
     /// Open the pull request from `head`'s branch into `branch`, or update
     /// the one open, and mark it ready; `subject`, the submitter's line
     /// saying what lands, titles it, and the branch where none is given.

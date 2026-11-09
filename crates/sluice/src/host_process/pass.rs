@@ -153,6 +153,13 @@ pub fn pass(
                 crate::tell_hold(&mut out, branch, round.held.as_ref(), said)?;
             }
         }
+        // 120, C.5; record 0103 as amended 2026-11-09: a request the round
+        // sent back is held before the pass ends, so no later pass need
+        // come for its draft or its check.
+        if pulls.sent_back(branch) {
+            let met = crate::intake(pulls, s, clock, branch, false, &mut out);
+            crate::say_each(branch, &met.logged);
+        }
     }
     // 129: the reader's document every watch and wait on the host follows,
     // each pass, queue or none, read as the pass's own ask left the
@@ -218,8 +225,19 @@ pub fn step(
 ) -> Result<serde_json::Value> {
     let mut said: Vec<u8> = Vec::new();
     let met = crate::intake(pulls, s, clock, branch, false, &mut said);
-    let warnings: Vec<String> = met.causes.iter().map(|c| c.words(branch)).collect();
+    let mut warnings: Vec<String> = met.causes.iter().map(|c| c.words(branch)).collect();
     let round = s.round(branch)?;
+    // 120, C.5; record 0103 as amended 2026-11-09; rule core.14: as a
+    // pass, a request the round sent back is held before the step answers,
+    // each warning said once.
+    if pulls.sent_back(branch) {
+        let again = crate::intake(pulls, s, clock, branch, false, &mut said);
+        for w in again.causes.iter().map(|c| c.words(branch)) {
+            if !warnings.contains(&w) {
+                warnings.push(w);
+            }
+        }
+    }
     exec::tell_abandoned(&mut said, false, &round.released)?;
     preview::tell_dropped(&mut said, false, &round.previews)?;
     exec::tell_releases(&mut said, false, &round.releases)?;
