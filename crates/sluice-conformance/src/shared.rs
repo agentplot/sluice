@@ -13,7 +13,7 @@ use sluice_core::session::Recorded;
 use sluice_core::{Forecast, Lookup, Requester, Sluice, SubmitRefusal};
 use sluice_seams::{
     Changes, Decided, LastResult, Outcome, Progress, ReleasePolicy, Released, Rev, RunHandle,
-    RunKind, RunOutcome, SessionPlace, Written,
+    RunOutcome, SessionPlace, SessionRunKind, Written,
 };
 
 use crate::{Rig, BRANCH};
@@ -925,7 +925,13 @@ fn last_result(h: &impl Rig, worktree: &str) -> LastResult {
         .unwrap_or_else(|| panic!("{worktree} has no last result"))
 }
 
-fn expect_last(last: &LastResult, head: &Rev, kind: RunKind, outcome: RunOutcome, recorded: bool) {
+fn expect_last(
+    last: &LastResult,
+    head: &Rev,
+    kind: SessionRunKind,
+    outcome: RunOutcome,
+    recorded: bool,
+) {
     assert_eq!(
         (&last.head, last.kind, last.outcome, last.recorded),
         (head, kind, outcome, recorded),
@@ -946,7 +952,7 @@ pub fn a_session_runs_last_result_says_whether_it_was_recorded(h: &impl Rig) {
     expect_last(
         &last_result(h, "unit/a"),
         &head,
-        RunKind::Checks,
+        SessionRunKind::Checks,
         RunOutcome::Pass,
         true,
     );
@@ -957,7 +963,7 @@ pub fn a_session_runs_last_result_says_whether_it_was_recorded(h: &impl Rig) {
     expect_last(
         &last_result(h, "unit/a"),
         &head,
-        RunKind::Checks,
+        SessionRunKind::Checks,
         RunOutcome::Pass,
         true,
     );
@@ -969,7 +975,7 @@ pub fn a_session_runs_last_result_says_whether_it_was_recorded(h: &impl Rig) {
     expect_last(
         &last_result(h, "unit/a"),
         &failing,
-        RunKind::Checks,
+        SessionRunKind::Checks,
         RunOutcome::Fail,
         true,
     );
@@ -984,7 +990,7 @@ pub fn a_session_runs_last_result_says_whether_it_was_recorded(h: &impl Rig) {
     expect_last(
         &last_result(h, "unit/a"),
         &passing,
-        RunKind::Checks,
+        SessionRunKind::Checks,
         RunOutcome::Pass,
         false,
     );
@@ -995,7 +1001,7 @@ pub fn a_session_runs_last_result_says_whether_it_was_recorded(h: &impl Rig) {
     expect_last(
         &last_result(h, "unit/a"),
         &passing,
-        RunKind::Command,
+        SessionRunKind::Command,
         RunOutcome::Pass,
         false,
     );
@@ -1039,7 +1045,7 @@ fn last_result_of(head: &Rev) -> LastResult {
     LastResult {
         at: "2026-10-16T09:00:00Z".into(),
         head: head.clone(),
-        kind: RunKind::Checks,
+        kind: SessionRunKind::Checks,
         outcome: RunOutcome::Fail,
         recorded: false,
         tasks: Vec::new(),
@@ -1060,8 +1066,14 @@ pub fn a_worktree_that_changes_while_its_run_runs_records_nothing(h: &impl Rig) 
             .expect("the plan reads")
             .expect("the branch is managed");
         let session = s.seams().driver.session(&place).expect("a session");
+        let part = s
+            .seams()
+            .tests
+            .hold(sluice_seams::RunKind::Session)
+            .expect("the host's count reads")
+            .expect("room on the host");
         let started = s
-            .start_session(&plan, &place, &session.head, None)
+            .start_session(&plan, &place, &session.head, None, part)
             .expect("the run starts");
         match change {
             "commit" => {
@@ -1267,7 +1279,14 @@ fn preview_up(h: &impl Rig, rev: &sluice_seams::Rev) -> sluice_seams::PreviewPla
         .expect("the branch reads")
         .expect("a landed revision with a preview table");
     let (place, _) = s.make_preview(&plan).expect("the preview is made");
-    s.start_preview(&plan, place).expect("its command starts");
+    let part = s
+        .seams()
+        .tests
+        .hold(sluice_seams::RunKind::Session)
+        .expect("the host's count reads")
+        .expect("room on the host");
+    s.start_preview(&plan, place, part)
+        .expect("its command starts");
     for _ in 0..600 {
         let p = s.preview_of(rev).unwrap().expect("listed");
         match s.preview_state(&p).unwrap() {

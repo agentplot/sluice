@@ -47,10 +47,7 @@ fn sluice(f: &Fakes, args: &[&str]) -> (i32, String) {
         run(
             cli,
             f.seams(),
-            &support::FakeHost {
-                world: f.world.clone(),
-                reserved: 0,
-            },
+            &support::FakeHost::new(f.world.clone(), 0),
             &(),
             &(),
             &f.clock,
@@ -1594,10 +1591,7 @@ fn status_refuses_a_checkout_cache() {
     );
     let cli = Cli::try_parse_from(["sluice", "status", BRANCH]).unwrap();
     let mut out = Vec::new();
-    let host = support::FakeHost {
-        world: f.world.clone(),
-        reserved: 0,
-    };
+    let host = support::FakeHost::new(f.world.clone(), 0);
     let e = run(
         cli,
         f.seams(),
@@ -2482,6 +2476,8 @@ impl Pause for Between<'_> {
 #[test]
 fn overview_watch_prints_a_line_at_start_and_on_each_change() {
     let f = setup();
+    // The host process's passes start its combination, which stays.
+    f.world.hold_runs(true);
     work(
         &f,
         "unit/touches",
@@ -2506,10 +2502,7 @@ fn overview_watch_prints_a_line_at_start_and_on_each_change() {
     let code = run(
         cli,
         f.seams(),
-        &support::FakeHost {
-            world: f.world.clone(),
-            reserved: 0,
-        },
+        &support::FakeHost::new(f.world.clone(), 0),
         &(),
         &(),
         &f.clock,
@@ -2597,6 +2590,8 @@ fn seven_testing() -> serde_json::Value {
 #[test]
 fn watch_with_no_reader_writes_each_document() {
     let f = setup();
+    // The host process's passes start its combination, which stays.
+    f.world.hold_runs(true);
     work(
         &f,
         "unit/touches",
@@ -2776,10 +2771,11 @@ fn one_testing(done: usize) -> serde_json::Value {
     json(&out)
 }
 
-/// 129: a wait that finds no reader becomes it, and writes the whole
-/// overview, every branch's, not only its own.
+/// overview-reader, "A wait with no reader" (129, 135): the host process
+/// the wait reaches is the reader, and writes the whole overview, every
+/// branch's, not only the wait's own.
 #[test]
-fn wait_with_no_reader_writes_the_whole_overview() {
+fn a_wait_with_no_reader_has_the_host_process_write_the_whole_overview() {
     let f = setup();
     let other = "bolt/other";
     f.world.init(other, &[(".config/sluice.toml", POLICY)]);
@@ -2863,6 +2859,10 @@ fn followed_wait_reports_its_landing() {
     let reader = RefCell::new(reader_of(REPOSITORY, &json(&queued)));
     let between = |n: usize| {
         if n == 3 {
+            // The reader's rounds land it, and its document says so.
+            for _ in 0..8 {
+                f.sluice().step(BRANCH).unwrap();
+            }
             let (_, now) = sluice(&f, &["overview", "--json"]);
             let now = json(&now);
             assert_eq!(now["branches"][0]["submissions"], serde_json::json!([]));
@@ -2876,7 +2876,7 @@ fn followed_wait_reports_its_landing() {
     };
     let (code, out) = sluice_with(&f, &pause, &["wait", "1"]);
     assert_eq!(code, LANDED, "{out}");
-    // It waited on the document, whatever its own rounds had done.
+    // It waited on the document, and ran no round of its own.
     assert_eq!(pause.n.get(), 3, "{out}");
     let tip = f.world.tip(BRANCH);
     assert!(
@@ -2916,69 +2916,40 @@ fn followed_wait_reports_its_withdrawal() {
     assert_eq!(pause.n.get(), 2, "{out}");
 }
 
-/// 129: when the wait that is the reader ends, a watch that followed it
-/// is the reader within one pause, and printed nothing before but the
-/// documents the wait wrote.
+/// overview-reader, "The host process is killed" (129; design D7): a
+/// watch whose host process ended reaches it again at its next tick,
+/// starting it, and goes on following the last document until the new one
+/// writes the one it read from the records.
 #[test]
-fn watch_leads_once_the_readers_wait_ends() {
-    use std::sync::mpsc;
-
-    /// A pause that says it has paused and waits for the next tick; none
-    /// to come stops it.
-    struct Lockstep(mpsc::Sender<()>, mpsc::Receiver<()>);
-
-    impl Pause for Lockstep {
-        fn pause(&self) -> bool {
-            let _ = self.0.send(());
-            self.1.recv().is_ok()
+fn a_watch_follows_a_host_process_started_again() {
+    let f = one_queued();
+    f.world.hold_runs(true);
+    work(&f, "unit/b", "agent-b", &[("plugin/b", Some("b"))]);
+    let between = |n: usize| {
+        if n == 1 {
+            support::end_host_process();
+            sluice(&f, &["submit", BRANCH, "--worktree", "unit/b", "--no-wait"]);
         }
-    }
-
-    let readers = support::readers();
-    let (tick, ticks) = mpsc::channel();
-    let (paused, pauses) = mpsc::channel();
-    // Another process on the host, with fakes of its own: it reads them
-    // only once it is the reader.
-    let watch = std::thread::spawn(move || {
-        support::share_readers(readers);
-        ticks.recv().unwrap();
-        let g = setup();
-        sluice_with(
-            &g,
-            &Lockstep(paused, ticks),
-            &["overview", "--json", "--watch"],
-        )
-        .1
-    });
-
-    let f = setup();
-    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
-    sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"]);
-    let wrote = RefCell::new(Vec::new());
-    let step = Then(Cell::new(0), |_| {
-        wrote
-            .borrow_mut()
-            .push(readers_doc().expect("the wait's document"));
-        tick.send(()).unwrap();
-        pauses.recv().unwrap();
-        true
-    });
-    let (code, out) = sluice_with(&f, &step, &["wait", "1"]);
-    assert_eq!(code, LANDED, "{out}");
-    // One tick once the wait has ended, then none.
-    tick.send(()).unwrap();
-    pauses.recv().unwrap();
-    drop(tick);
-    let out = watch.join().unwrap();
+    };
+    let pause = Between {
+        n: Cell::new(0),
+        rounds: 3,
+        between: &between,
+    };
+    let (code, out) = sluice_with(&f, &pause, &["overview", "--json", "--watch"]);
+    assert_eq!(code, sluice::STOPPED, "{out}");
     let lines: Vec<serde_json::Value> = out.lines().map(json).collect();
-    let (led, followed) = lines.split_last().expect("a line");
-    assert!(!followed.is_empty(), "{out}");
-    let wrote = wrote.into_inner();
-    for l in followed {
-        assert!(wrote.contains(l), "not the wait's: {l}");
-    }
-    assert_eq!(led["branches"], serde_json::json!([]), "{out}");
-    assert_eq!(readers_doc().as_ref(), Some(led));
+    // The first process's document, which stood while none wrote; then the
+    // one the process started again wrote.
+    assert_eq!(lines.len(), 2, "{out}");
+    let queued = |doc: &serde_json::Value| {
+        doc["branches"][0]["submissions"]
+            .as_array()
+            .map_or(0, Vec::len)
+    };
+    assert_eq!(queued(&lines[0]), 1, "{out}");
+    assert_eq!(queued(&lines[1]), 2, "{out}");
+    assert_eq!(readers_doc().map(|d| queued(&d)), Some(2));
 }
 
 /// The repository's reader's part as a sluice of `version`, the test's
@@ -3216,102 +3187,55 @@ fn an_older_watch_follows_once_its_lease_is_taken() {
     assert_eq!(readers_version().as_deref(), Some("0.53.0"));
 }
 
-/// 129: a wait of an older sluice that is the reader lets go once a newer
-/// watch takes its lease, and goes on as a follower wait: it says its
-/// combination's progress from the document the newer one writes, and
-/// ends as a follower wait does.
+/// overview-reader, "An older wait lets go" (129; design D7): a wait of an
+/// older sluice that is the reader lets go once the host process takes its
+/// lease, and the newer wait follows the document the host process writes
+/// from then on, saying its combination's progress from it.
 #[test]
-fn an_older_wait_follows_once_its_lease_is_taken() {
+fn an_older_wait_follows_once_the_host_process_takes_its_lease() {
     let f = setup();
     f.world.hold_runs(true);
     work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
-    work(&f, "unit/b", "agent-b", &[("plugin/b", Some("b"))]);
     sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"]);
-    let three = one_testing(3);
-    support::set_version("0.52.0");
-    let newer = RefCell::new(None);
-    let at_lease = RefCell::new(None);
+    // The older wait, reading, before any host process; the host process
+    // and the wait are a newer sluice.
+    let older = RefCell::new(reader_as("0.52.0"));
+    support::set_version("0.53.0");
+    assert!(is_reader(&older.borrow()));
     let between = |n: usize| match n {
         1 => {
-            assert!(readers_doc().is_some(), "the wait is no reader");
-            let mut r = reader_as("0.53.0");
-            assert!(
-                soon_stepped(&mut r, |_| leased()),
-                "no lease taken of an older reader"
+            assert!(leased(), "the host process took the older reader's lease");
+            assert_eq!(
+                readers_version().as_deref(),
+                Some("0.52.0"),
+                "it reads nothing before the older reader lets go"
             );
-            *at_lease.borrow_mut() = readers_doc();
-            // What the older wait would write, were it to read again.
-            sluice(&f, &["submit", BRANCH, "--worktree", "unit/b", "--no-wait"]);
-            *newer.borrow_mut() = Some(r);
+            // The older wait's next tick: it finds its lease taken.
+            older
+                .borrow_mut()
+                .step(false, sluice::reader::Drives::Nobody)
+                .unwrap();
+            assert!(!is_reader(&older.borrow()));
         }
         2 => {
-            assert_eq!(readers_doc(), *at_lease.borrow(), "written after its lease");
-            let mut newer = newer.borrow_mut();
-            let r = newer.as_mut().unwrap();
-            assert!(soon_stepped(r, is_reader), "the older reader's lock kept");
-            write_as(r, &three);
+            assert_eq!(readers_version().as_deref(), Some("0.53.0"));
         }
         _ => {}
     };
     let pause = Between {
         n: Cell::new(0),
-        rounds: 2,
+        rounds: 3,
         between: &between,
     };
     let (code, out) = sluice_with(&f, &pause, &["wait", "1"]);
     assert_eq!(code, sluice::STOPPED, "{out}");
-    let lines: Vec<&str> = out.lines().collect();
-    let [.., progress, last] = lines[..] else {
-        panic!("{out}");
-    };
     assert!(
-        progress.starts_with(&format!(
-            "testing {BRANCH} + #1 · 3/5 tasks · running t3:test"
-        )),
+        out.lines()
+            .any(|l| l.starts_with(&format!("testing {BRANCH} + #1 · "))),
         "{out}"
     );
-    assert_eq!(last, "still waiting: sluice wait 1");
+    assert!(out.ends_with("still waiting: sluice wait 1\n"), "{out}");
     assert_eq!(readers_version().as_deref(), Some("0.53.0"));
-}
-
-/// 129: a wait of a newer sluice than the live reader's takes no lease: it
-/// follows the reader's document until it ends, and the older reader stays
-/// the reader.
-#[test]
-fn a_newer_wait_never_takes_a_lease() {
-    let f = setup();
-    f.world.hold_runs(true);
-    for i in 1..=7 {
-        let (worktree, path) = (format!("unit/{i}"), format!("plugin/{i}"));
-        work(&f, &worktree, &format!("agent-{i}"), &[(&path, Some("x"))]);
-        sluice(
-            &f,
-            &["submit", BRANCH, "--worktree", &worktree, "--no-wait"],
-        );
-    }
-    let doc = seven_testing();
-    let reader = RefCell::new(reader_as("0.52.0"));
-    write_as(&mut reader.borrow_mut(), &doc);
-    support::set_version("0.53.0");
-    let between = |_: usize| {
-        assert!(!leased(), "a wait took the lease");
-        let mut reader = reader.borrow_mut();
-        reader.step(true, sluice::reader::Drives::Nobody).unwrap();
-        assert!(is_reader(&reader));
-    };
-    let pause = Between {
-        n: Cell::new(0),
-        rounds: 49,
-        between: &between,
-    };
-    // The fakes' clock moves a second at every read: time enough for the
-    // wait to pause, and be looked at, a few times before it runs out.
-    let (code, out) = sluice_with(&f, &pause, &["wait", "7", "--timeout", "10s", "--json"]);
-    assert_eq!(code, sluice::WAITING, "{out}");
-    assert!(pause.n.get() > 1, "{out}");
-    assert_eq!(json(&out), doc["branches"][0]["submissions"][0]);
-    assert_eq!(readers_version().as_deref(), Some("0.52.0"));
-    assert_eq!(readers_doc(), Some(doc));
 }
 
 // ---------------------------------------------------------------------------
@@ -3348,6 +3272,8 @@ fn assert_failure(doc: &serde_json::Value, words: &str) {
 #[test]
 fn a_watchs_read_fails_and_then_succeeds() {
     let f = one_queued();
+    // The host process's passes start its combination, which stays.
+    f.world.hold_runs(true);
     let written = RefCell::new(Vec::new());
     let between = |n: usize| {
         written
@@ -3379,6 +3305,8 @@ fn a_watchs_read_fails_and_then_succeeds() {
 #[test]
 fn a_failed_read_under_load() {
     let f = one_queued();
+    // The host process's passes start its combination, which stays.
+    f.world.hold_runs(true);
     let between = |n: usize| match n {
         1 => f.world.fail_state_list(Some(UNREADABLE)),
         2 => f.world.fail_state_list(None),
@@ -3398,11 +3326,15 @@ fn a_failed_read_under_load() {
     assert_eq!(untimed(&lines[2]), untimed(&lines[0]), "{out}");
 }
 
-/// 129: a failure that stands with the same words is written once and
-/// printed once: what the test put in its place after the first stands.
+/// 129: a failure that stands with the same words is written once by the
+/// host process: what the test put in its place after the first stands,
+/// and the watch, which prints what the document holds, printed the
+/// failure once.
 #[test]
 fn a_standing_failure_is_written_once() {
     let f = one_queued();
+    // The host process's passes start its combination, which stays.
+    f.world.hold_runs(true);
     let put = serde_json::json!({ "put": "by the test" });
     let between = |n: usize| match n {
         1 => f.world.fail_state_list(Some(UNREADABLE)),
@@ -3421,10 +3353,11 @@ fn a_standing_failure_is_written_once() {
     let (code, out) = sluice_with(&f, &pause, &["overview", "--json", "--watch"]);
     assert_eq!(code, sluice::STOPPED, "{out}");
     assert_eq!(pause.n.get(), 6, "{out}");
-    assert_eq!(readers_doc(), Some(put));
+    assert_eq!(readers_doc(), Some(put.clone()));
     let lines: Vec<serde_json::Value> = out.lines().map(json).collect();
-    assert_eq!(lines.len(), 2, "{out}");
+    assert_eq!(lines.len(), 3, "{out}");
     assert_failure(&lines[1], UNREADABLE);
+    assert_eq!(lines[2], put, "{out}");
 }
 
 /// 129: a watch whose repository is gone ends at its next read, as a
@@ -3446,10 +3379,7 @@ fn a_watch_ends_once_its_repository_is_removed() {
     };
     let cli = Cli::try_parse_from(["sluice", "overview", "--json", "--watch"]).unwrap();
     let mut out = Vec::new();
-    let host = support::FakeHost {
-        world: f.world.clone(),
-        reserved: 0,
-    };
+    let host = support::FakeHost::new(f.world.clone(), 0);
     let e = run(cli, f.seams(), &host, &(), &(), &f.clock, &pause, &mut out).unwrap_err();
     // `main` prints it as the error document and exits 3.
     assert_failure(&failure(&format!("{e:#}")), gone);
@@ -3463,6 +3393,8 @@ fn a_watch_ends_once_its_repository_is_removed() {
 #[test]
 fn a_watch_survives_a_failed_write_of_the_readers_document() {
     let f = one_queued();
+    // The host process's passes start its combination, which stays.
+    f.world.hold_runs(true);
     work(&f, "unit/b", "agent-b", &[("plugin/b", Some("b"))]);
     let name = sluice::runs::flat_name(REPOSITORY);
     // Where the document is written before it is renamed into place: a
@@ -4117,25 +4049,54 @@ fn step_under_json() {
 }
 
 // ---------------------------------------------------------------------------
-// The host's driver: sluice run (135; ADR 0068)
+// sluice run, a follower of the host process (135; design D11)
 // ---------------------------------------------------------------------------
 
-/// The repository's driver on the fakes' host, the test's own, until
-/// dropped: a `sluice run` living in another process.
-fn driver() -> sluice::reader::Driver {
-    sluice::reader::Driver::take(&support::readers(), REPOSITORY)
-        .unwrap()
-        .expect("no driver of the repository yet")
+/// host-driver, "One pass": `sluice run --rounds 1` exits 0 after one pass
+/// of the host process, which forms the submission's combination, and the
+/// landing a later pass makes is what a run prints (135; design D11).
+#[test]
+fn sluice_run_follows_the_host_process() {
+    let f = one_queued();
+    f.world.hold_runs(true);
+    let (code, out) = sluice(&f, &["run", "--rounds", "1"]);
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(state_of(&f, 1), "testing");
+    assert_eq!(f.world.started().len(), 1, "one combination formed");
+    f.world.complete_all();
+    f.world.fail_next_release();
+    let (code, out) = sluice(&f, &["run", "--rounds", "3"]);
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(state_of(&f, 1), "landed");
+    // What the host process's pass said, printed as the pass printed it.
+    assert!(out.contains("could not release sluice/try/"), "{out}");
+    assert_eq!(f.world.started().len(), 1, "no second combination");
 }
 
-/// Whether a driver of the repository lives on the fakes' host.
-fn driver_live() -> bool {
-    sluice::reader::driver_live(&support::readers(), REPOSITORY)
+/// host-driver, "Started by hand": `sluice run` says once on stderr that
+/// nothing needs it, and `sluice --help` names no `run` (135).
+#[test]
+fn sluice_run_says_nothing_needs_it() {
+    if let Some(err) = stderr_of("sluice_run_says_nothing_needs_it") {
+        let said: Vec<&str> = err.lines().filter(|l| l.starts_with("sluice: ")).collect();
+        assert_eq!(
+            said,
+            ["sluice: sluice starts its own host process; nothing needs `sluice run`"],
+            "{err}"
+        );
+        return;
+    }
+    let f = one_queued();
+    let (code, out) = sluice(&f, &["run", "--rounds", "2"]);
+    assert_eq!(code, 0, "{out}");
+    let help = <Cli as clap::CommandFactory>::command()
+        .render_long_help()
+        .to_string();
+    assert!(
+        !help.lines().any(|l| l.trim_start().starts_with("run ")),
+        "{help}"
+    );
 }
-
-/// What a run beside a live driver says on stderr.
-const BESIDE: &str =
-    "sluice: another sluice run drives this repository on this host; this one runs nothing while it does";
 
 /// Submission `id`'s state, as its record says.
 fn state_of(f: &Fakes, id: u64) -> serde_json::Value {
@@ -4143,68 +4104,8 @@ fn state_of(f: &Fakes, id: u64) -> serde_json::Value {
     json(&out)["state"].clone()
 }
 
-/// 135: a second run beside the driver says so once on stderr, and runs
-/// no round at any pass while the driver lives.
-#[test]
-fn two_runs_at_once() {
-    if let Some(err) = stderr_of("two_runs_at_once") {
-        let said: Vec<&str> = err.lines().filter(|l| l.starts_with("sluice: ")).collect();
-        assert_eq!(said, [BESIDE], "{err}");
-        return;
-    }
-    let f = one_queued();
-    let _driver = driver();
-    let pause = Between {
-        n: Cell::new(0),
-        rounds: 1,
-        between: &|_| {},
-    };
-    let (code, out) = sluice_with(&f, &pause, &["run"]);
-    assert_eq!(code, sluice::STOPPED, "{out}");
-    assert_eq!(pause.n.get(), 2, "{out}");
-    assert_eq!(state_of(&f, 1), "queued");
-    assert!(f.world.started().is_empty());
-}
-
-/// 135: one pass from cron beside the driver exits 0, having run no
-/// round: the submission is queued still, and nothing started.
-#[test]
-fn one_pass_from_cron_beside_a_driver() {
-    let f = one_queued();
-    let _driver = driver();
-    let (code, out) = sluice(&f, &["run", "--rounds", "1"]);
-    assert_eq!((code, out.as_str()), (0, ""));
-    assert_eq!(state_of(&f, 1), "queued");
-    assert!(f.world.started().is_empty());
-    assert!(driver_live());
-}
-
-/// 135: once the driver stops, the run waiting beside it drives at its
-/// next pass, and the rounds land the submission.
-#[test]
-fn the_first_run_stops() {
-    let f = one_queued();
-    let first = RefCell::new(Some(driver()));
-    let between = |n: usize| {
-        if n == 1 {
-            assert!(f.world.started().is_empty());
-            drop(first.borrow_mut().take());
-            assert!(soon(|| !driver_live()), "the driver's lock kept");
-        }
-    };
-    let pause = Between {
-        n: Cell::new(0),
-        rounds: 6,
-        between: &between,
-    };
-    let (code, out) = sluice_with(&f, &pause, &["run"]);
-    assert_eq!(code, sluice::STOPPED, "{out}");
-    assert_eq!(state_of(&f, 1), "landed");
-    assert!(soon(|| !driver_live()));
-}
-
-/// 129, 135: the driver is the reader: with nothing queued, its pass
-/// writes the whole overview as the reader's document, as a one-shot
+/// 129, 135: the host process is the reader: with nothing queued, its
+/// pass writes the whole overview as the reader's document, as a one-shot
 /// overview reads it but for its time, naming its tick (64).
 #[test]
 fn a_driver_with_nothing_queued() {
@@ -4216,21 +4117,20 @@ fn a_driver_with_nothing_queued() {
     let (code, out) = sluice(&f, &["run", "--rounds", "1"]);
     assert_eq!((code, out.as_str()), (0, ""));
     let (_, overview) = sluice(&f, &["overview", "--json"]);
-    let doc = readers_doc().expect("the driver's document");
+    let doc = readers_doc().expect("the host process's document");
     let untimed = sluice::reader::untimed;
     let mut read = json(&overview);
     read["tick"] = 3.into();
     assert_eq!(untimed(&doc), untimed(&read));
     assert_eq!(doc["branches"][0]["branch"], BRANCH, "{doc}");
-    // It let both places go as it ended.
-    assert!(soon(|| !driver_live()));
+    // The fakes' host process lets the reader's place go with the command.
     assert!(soon(reader_free));
 }
 
-/// The host-driver spec's "The queue emptied while a run went on" (66,
-/// 129; design D4): the one submission withdrawn while its combination's
-/// run goes on and nothing else queued, the driver's next pass runs a
-/// round for the branch, which ends the run and releases its checkout.
+/// host-process, "The queue emptied while a run went on" (66, 129; design
+/// D5): the one submission withdrawn while its combination's run goes on
+/// and nothing else queued, the host process's next pass runs a round for
+/// the branch, which ends the run and releases its checkout.
 #[test]
 fn a_driver_ends_a_withdrawn_submissions_run_with_nothing_queued() {
     let f = one_queued();
@@ -4252,10 +4152,10 @@ fn a_driver_ends_a_withdrawn_submissions_run_with_nothing_queued() {
     assert!(!status.contains("\"combination\""), "{status}");
 }
 
-/// The host-driver spec's "Nothing under test and nothing queued" (129;
-/// rule core.31): with every submission landed, the driver's pass runs no
-/// round for the branch and reads no revision of it: a round's read of
-/// the branch, refused, would be said and fail the pass.
+/// host-process, "Nothing under test and nothing queued" (129; rule
+/// core.31): with every submission landed, the host process's pass runs no
+/// round for the branch and reads no revision of it: a round's read of the
+/// branch, refused, would be said and fail the pass.
 #[test]
 fn a_driver_runs_no_round_for_a_branch_with_nothing_in_play() {
     let f = setup();
@@ -4288,312 +4188,25 @@ fn reader_free() -> bool {
     )
 }
 
-/// 129, 133: a driver's read of the overview that fails is its document,
-/// in the words it was refused with; the pass goes on, and the run exits
-/// as it would.
+/// 129, 133: the host process's read of the overview that fails is its
+/// document, in the words it was refused with; the pass goes on, and the
+/// run that follows it exits as it would.
 #[test]
 fn a_driver_whose_read_fails_writes_the_failure() {
     let f = setup();
     f.world.fail_ref_list(Some(UNREADABLE));
     let (code, out) = sluice(&f, &["run", "--rounds", "1"]);
     assert_eq!((code, out.as_str()), (0, ""));
-    assert_failure(&readers_doc().expect("the driver's document"), UNREADABLE);
-}
-
-/// The reader's place, taken as the driver takes it, the place its own;
-/// its document `doc`.
-fn driver_reads(doc: &serde_json::Value) -> sluice::reader::Lead {
-    let readers = support::readers();
-    let itself = sluice::reader::Drives::Itself;
-    let taken = sluice::reader::Reader::take_given(&readers, REPOSITORY, sluice::VERSION, itself);
-    match taken.unwrap() {
-        sluice::reader::Reader::Lead(mut lead) => {
-            lead.write(doc).unwrap();
-            lead
-        }
-        sluice::reader::Reader::Follow(_) => panic!("the reader's place, held"),
-    }
-}
-
-/// 135: a watch that is the reader when a driver starts lets the place go
-/// within one tick and reads the records no more, so a submission queued
-/// then prints nothing; it follows the document the driver then writes.
-#[test]
-fn a_watch_was_the_reader() {
-    let f = one_queued();
-    work(&f, "unit/b", "agent-b", &[("plugin/b", Some("b"))]);
-    let doc = seven_testing();
-    let driving = RefCell::new(None);
-    let between = |n: usize| match n {
-        1 => {
-            *driving.borrow_mut() = Some((driver(), None));
-            sluice(&f, &["submit", BRANCH, "--worktree", "unit/b", "--no-wait"]);
-        }
-        2 => {
-            if let Some((_, reader)) = &mut *driving.borrow_mut() {
-                *reader = Some(driver_reads(&doc));
-            }
-        }
-        _ => {}
-    };
-    let pause = Between {
-        n: Cell::new(0),
-        rounds: 3,
-        between: &between,
-    };
-    let (code, out) = sluice_with(&f, &pause, &["overview", "--json", "--watch"]);
-    assert_eq!(code, sluice::STOPPED, "{out}");
-    let lines: Vec<serde_json::Value> = out.lines().map(json).collect();
-    assert_eq!(lines.len(), 2, "{out}");
-    assert_eq!(lines[0]["branches"][0]["depth"], 1, "{out}");
-    assert_eq!(lines[1], doc, "{out}");
-}
-
-/// 135: a watch that finds the reader's place free beside a live driver
-/// leaves it to the driver: it reads no records, and prints the document
-/// the driver writes once it has taken the place.
-#[test]
-fn a_watch_with_no_reader_beside_a_driver() {
-    let f = one_queued();
-    let doc = seven_testing();
-    let _driver = driver();
-    let reader = RefCell::new(None);
-    let between = |n: usize| {
-        if n == 2 {
-            assert_eq!(readers_doc(), None);
-            *reader.borrow_mut() = Some(driver_reads(&doc));
-        }
-    };
-    let pause = Between {
-        n: Cell::new(0),
-        rounds: 3,
-        between: &between,
-    };
-    let (code, out) = sluice_with(&f, &pause, &["overview", "--json", "--watch"]);
-    assert_eq!(code, sluice::STOPPED, "{out}");
-    let lines: Vec<serde_json::Value> = out.lines().map(json).collect();
-    assert_eq!(lines, [doc], "{out}");
-}
-
-/// 135: a wait beside a driver that has not reached its submission runs
-/// no round: out of time, its record is queued still, and nothing started.
-#[test]
-fn a_wait_beside_a_driver_that_has_not_reached_it() {
-    let f = one_queued();
-    let _driver = driver();
-    let (code, out) = sluice(&f, &["wait", "1", "--timeout", "2s", "--json"]);
-    assert_eq!(code, sluice::WAITING, "{out}");
-    assert_eq!(json(&out)["state"], "queued", "{out}");
-    assert!(f.world.started().is_empty());
-}
-
-/// 129, 135: where the reader is the driver, a wait follows its document
-/// and runs no round: out of time, it prints its record as the driver's
-/// document holds it.
-#[test]
-fn a_follower_wait_beside_a_driver() {
-    let f = one_queued();
-    let _driver = driver();
-    let (_, overview) = sluice(&f, &["overview", "--json"]);
-    let mut doc = json(&overview);
-    doc["branches"][0]["submissions"][0]["priority"] = 9.into();
-    let _reader = driver_reads(&doc);
-    let (code, out) = sluice(&f, &["wait", "1", "--timeout", "2s", "--json"]);
-    assert_eq!(code, sluice::WAITING, "{out}");
-    let held = &doc["branches"][0]["submissions"][0];
-    assert_eq!(json(&out), *held);
-    assert_eq!(held["state"], "queued");
-    assert!(f.world.started().is_empty());
-    assert_eq!(state_of(&f, 1), "queued");
-}
-
-/// 135: a wait that is the reader and runs rounds when the driver starts
-/// runs no round from its next tick and lets the reader's place go; it
-/// reports the outcome once the driver has decided it and written so.
-#[test]
-fn a_wait_was_the_reader() {
-    let f = one_queued();
-    f.world.hold_runs(true);
-    let driving = RefCell::new(None);
-    let between = |n: usize| match n {
-        1 => {
-            // Its own round started the combination, whose run then ends.
-            assert_eq!(f.world.started().len(), 1);
-            *driving.borrow_mut() = Some((driver(), None));
-            f.world.complete_all();
-        }
-        2 => {
-            // No round of the wait's read the run's result, and the place
-            // is the driver's to take.
-            assert_eq!(state_of(&f, 1), "testing");
-            assert!(soon(reader_free));
-            for _ in 0..3 {
-                sluice(&f, &["step", BRANCH]);
-            }
-            assert_eq!(state_of(&f, 1), "landed");
-            let (_, overview) = sluice(&f, &["overview", "--json"]);
-            if let Some((_, reader)) = &mut *driving.borrow_mut() {
-                *reader = Some(driver_reads(&json(&overview)));
-            }
-        }
-        _ => {}
-    };
-    let pause = Between {
-        n: Cell::new(0),
-        rounds: 4,
-        between: &between,
-    };
-    let (code, out) = sluice_with(&f, &pause, &["wait", "1"]);
-    assert_eq!(code, LANDED, "{out}");
-    assert_eq!(pause.n.get(), 2, "{out}");
-    assert_eq!(f.world.started().len(), 1);
-    let tip = f.world.tip(BRANCH);
-    assert!(
-        out.ends_with(&format!("passed · landed as {}\n", &tip.0[..7])),
-        "{out}"
+    assert_failure(
+        &readers_doc().expect("the host process's document"),
+        UNREADABLE,
     );
 }
 
-/// 135: a wait beside `sluice run` runs no round, and reports the outcome
-/// the run's rounds decide. The run's passes come between the wait's
-/// ticks, and the test's hold of the driver's lock stands for the run's
-/// process living on between them.
-#[test]
-fn a_wait_beside_a_driver_that_lands_it() {
-    let f = one_queued();
-    f.world.hold_runs(true);
-    let (code, out) = sluice(&f, &["run", "--rounds", "1"]);
-    assert_eq!(code, 0, "{out}");
-    assert_eq!(state_of(&f, 1), "testing");
-    let held = RefCell::new(Some(driver()));
-    let between = |n: usize| {
-        if n == 1 {
-            // The wait's first tick ran no round of its own.
-            assert_eq!(f.world.started().len(), 1);
-            drop(held.borrow_mut().take());
-            f.world.complete_all();
-            for _ in 0..6 {
-                if state_of(&f, 1) == "landed" {
-                    break;
-                }
-                let (code, out) = sluice(&f, &["run", "--rounds", "1"]);
-                assert_eq!(code, 0, "{out}");
-            }
-            assert_eq!(state_of(&f, 1), "landed");
-            *held.borrow_mut() = Some(driver());
-        }
-    };
-    let pause = Between {
-        n: Cell::new(0),
-        rounds: 10,
-        between: &between,
-    };
-    let (code, out) = sluice_with(&f, &pause, &["wait", "1"]);
-    assert_eq!(code, LANDED, "{out}");
-    assert_eq!(pause.n.get(), 1, "{out}");
-    assert!(
-        out.starts_with(&format!("testing {BRANCH} + #1 · ")),
-        "{out}"
-    );
-    let tip = f.world.tip(BRANCH);
-    assert!(
-        out.ends_with(&format!("passed · landed as {}\n", &tip.0[..7])),
-        "{out}"
-    );
-}
-
-/// 135: once the driver a wait follows stops, the wait runs rounds again
-/// from its next tick, and its own round lands the submission.
-#[test]
-fn the_driver_stops_while_a_wait_follows_it() {
-    let f = one_queued();
-    let first = RefCell::new(Some(driver()));
-    let between = |n: usize| {
-        if n == 1 {
-            assert!(f.world.started().is_empty());
-            assert_eq!(state_of(&f, 1), "queued");
-            drop(first.borrow_mut().take());
-            assert!(soon(|| !driver_live()), "the driver's lock kept");
-        }
-    };
-    let pause = Between {
-        n: Cell::new(0),
-        rounds: 10,
-        between: &between,
-    };
-    let (code, out) = sluice_with(&f, &pause, &["wait", "1"]);
-    assert_eq!(code, LANDED, "{out}");
-    assert!(!f.world.started().is_empty());
-    let tip = f.world.tip(BRANCH);
-    assert!(
-        out.ends_with(&format!("passed · landed as {}\n", &tip.0[..7])),
-        "{out}"
-    );
-}
-
-/// 135: a waiting submit beside a driver writes its submission and waits
-/// on it, running no round.
-#[test]
-fn a_waiting_submit_beside_a_driver() {
-    let f = setup();
-    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
-    let _driver = driver();
-    let pause = Between {
-        n: Cell::new(0),
-        rounds: 2,
-        between: &|_| {},
-    };
-    let (code, out) = sluice_with(
-        &f,
-        &pause,
-        &["submit", BRANCH, "--worktree", "unit/a", "--json"],
-    );
-    assert_eq!(code, sluice::STOPPED, "{out}");
-    assert_eq!(json(&out)["state"], "queued", "{out}");
-    assert_eq!(state_of(&f, 1), "queued");
-    assert!(f.world.started().is_empty());
-}
-
-/// 125, 135: a group's waiting submit beside a driver queues every
-/// submission and waits on them, running no round.
-#[test]
-fn a_waiting_group_submit_beside_a_driver() {
-    let f = setup();
-    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
-    work(&f, "unit/b", "agent-b", &[("plugin/b", Some("b"))]);
-    let _driver = driver();
-    let pause = Between {
-        n: Cell::new(0),
-        rounds: 2,
-        between: &|_| {},
-    };
-    let (code, out) = sluice_with(
-        &f,
-        &pause,
-        &[
-            "submit",
-            BRANCH,
-            "--worktree",
-            "unit/a",
-            "--worktree",
-            "unit/b",
-            "--json",
-        ],
-    );
-    assert_eq!(code, sluice::STOPPED, "{out}");
-    let doc = json(&out);
-    let states: Vec<&serde_json::Value> = doc["submissions"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|x| &x["state"])
-        .collect();
-    assert_eq!(states, ["queued", "queued"], "{out}");
-    assert!(f.world.started().is_empty());
-}
-
-/// 129, 135: with no driver, a wait that follows a watch's document runs
-/// rounds between its reads, as it always has.
+/// 129, 135 (design D7, D9): a wait follows the reader's document as it
+/// finds it, and runs no round of its own: while a reader of the same
+/// version holds the place, the host process follows it too, and nothing
+/// moves.
 #[test]
 fn a_wait_follows_a_watch() {
     let f = one_queued();
@@ -4606,8 +4219,8 @@ fn a_wait_follows_a_watch() {
     };
     let (code, out) = sluice_with(&f, &pause, &["wait", "1"]);
     assert_eq!(code, sluice::STOPPED, "{out}");
-    assert!(!f.world.started().is_empty());
-    assert_ne!(state_of(&f, 1), "queued");
+    assert!(f.world.started().is_empty());
+    assert_eq!(state_of(&f, 1), "queued");
 }
 
 // ---------------------------------------------------------------------------
@@ -4630,10 +4243,7 @@ fn exec_with(f: &Fakes, reserved: usize, pause: &dyn Pause, args: &[&str]) -> (i
     let cli =
         Cli::try_parse_from(["sluice", "exec"].into_iter().chain(args.iter().copied())).unwrap();
     let mut out = Vec::new();
-    let host = support::FakeHost {
-        world: f.world.clone(),
-        reserved,
-    };
+    let host = support::FakeHost::new(f.world.clone(), reserved);
     let code = run(cli, f.seams(), &host, &(), &(), &f.clock, pause, &mut out).unwrap();
     (code, String::from_utf8(out).unwrap())
 }
@@ -4756,6 +4366,111 @@ fn exec_waits_for_room() {
     assert_eq!(f.world.started().len(), 1);
 }
 
+/// 150, S75 (record 0087; design D12): an agent's check waiting while a
+/// combination's run waits too says `a combination's run starts first`
+/// once the host has a free run, which the combination's run takes; the
+/// agent's check starts in the next run to come free.
+#[test]
+fn exec_waits_for_a_combinations_run() {
+    let f = setup();
+    f.world.host_limit(1);
+    f.world.hold_runs(true);
+    f.world.session_run("/w/other", true);
+    work(
+        &f,
+        "unit/a",
+        "agent-a",
+        &[("plugin/lib/plan.py", Some("p2"))],
+    );
+    work(&f, "unit/q", "agent-q", &[("plugin/q", Some("q"))]);
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/q", "--no-wait"]);
+    // The round finds the host full: the combination's run waits.
+    sluice(&f, &["step", BRANCH]);
+    assert!(f.world.started().is_empty());
+    let pause = Then(Cell::new(0), |n| {
+        match n {
+            1 => f.world.kill_session("/w/other"),
+            2 => {
+                // The combination's round asks for the free run, and takes it.
+                sluice(&f, &["step", BRANCH]);
+                assert_eq!(f.world.started().len(), 1, "the combination's run");
+            }
+            3 => {
+                // Runs end from now, the agent's own among them.
+                f.world.hold_runs(false);
+                f.world.complete_all();
+                sluice(&f, &["step", BRANCH]);
+            }
+            _ => {}
+        }
+        true
+    });
+    let (code, out) = exec_with(&f, 0, &pause, &[BRANCH, "--worktree", "unit/a"]);
+    assert_eq!(code, LANDED, "{out}");
+    assert!(out.contains("waiting: the host is at its bound\n"), "{out}");
+    assert!(
+        out.contains("waiting: a combination's run starts first\n"),
+        "{out}"
+    );
+    assert_eq!(
+        f.world.started().len(),
+        2,
+        "the combination's, then the agent's"
+    );
+}
+
+/// host-process, "A session's check waits behind a combination" (150;
+/// design D12): the overview's room names the runs waiting by kind and
+/// whose turn the next contested run is, and its host process; `sluice
+/// status` with no target says the same room.
+#[test]
+fn the_overview_names_the_runs_waiting_and_the_turn() {
+    let f = one_queued();
+    f.world.host_limit(1);
+    f.world.hold_runs(true);
+    sluice(&f, &["step", BRANCH]);
+    assert_eq!(f.world.started().len(), 1, "the combination's run holds it");
+    work(
+        &f,
+        "unit/a",
+        "agent-a",
+        &[("plugin/lib/plan.py", Some("p2"))],
+    );
+    let seen = RefCell::new(None);
+    let said = RefCell::new(String::new());
+    let pause = Then(Cell::new(0), |n| {
+        match n {
+            1 => {
+                *seen.borrow_mut() = Some(overview_doc(&f, 0));
+                *said.borrow_mut() = sluice(&f, &["status"]).1;
+            }
+            2 => {
+                f.world.hold_runs(false);
+                f.world.complete_all();
+                sluice(&f, &["step", BRANCH]);
+            }
+            _ => {}
+        }
+        true
+    });
+    let (code, out) = exec_with(&f, 0, &pause, &[BRANCH, "--worktree", "unit/a"]);
+    assert_eq!(code, LANDED, "{out}");
+    let doc = seen.into_inner().expect("read while the check waited");
+    assert_eq!(
+        doc["room"]["waiting"],
+        serde_json::json!({ "queue": 0, "sessions": 1 }),
+        "{doc}"
+    );
+    assert_eq!(doc["room"]["turn"], "queue", "{doc}");
+    assert_eq!(doc["host_process"]["pid"], std::process::id(), "{doc}");
+    assert_eq!(doc["host_process"]["version"], sluice::VERSION, "{doc}");
+    let said = said.into_inner();
+    assert!(
+        said.contains("host: 1 of 1 runs · 1 queue · waiting: 1 agent\n"),
+        "{said}"
+    );
+}
+
 /// 71: a start the check seam refuses at the host's bound, another
 /// repository's run having taken the last one after the count was read,
 /// waits as one the count refused, says so once, and starts on the next
@@ -4838,7 +4553,7 @@ fn the_counts_say_when_agents_checks_hold_the_queue_back() {
     let (_, text) = sluice(&f, &["overview"]);
     assert!(text.lines().next().unwrap().ends_with(clause), "{text}");
     assert!(
-        text.contains("\nhost: 2 of 2 runs · 1 queue · 1 agent\n"),
+        text.contains("\nhost: 2 of 2 runs · 1 queue · 1 agent · waiting: 1 combination\n"),
         "{text}"
     );
     let (_, text) = sluice(&f, &["status", BRANCH]);
@@ -4860,10 +4575,7 @@ fn the_counts_say_when_agents_checks_hold_the_queue_back() {
 fn overview_doc(f: &Fakes, reserved: usize) -> serde_json::Value {
     let cli = Cli::try_parse_from(["sluice", "overview", "--json"]).unwrap();
     let mut out = Vec::new();
-    let host = support::FakeHost {
-        world: f.world.clone(),
-        reserved,
-    };
+    let host = support::FakeHost::new(f.world.clone(), reserved);
     let pause = Rounds(Cell::new(0));
     run(cli, f.seams(), &host, &(), &(), &f.clock, &pause, &mut out).unwrap();
     serde_json::from_slice(&out).unwrap()
@@ -4922,7 +4634,10 @@ fn overview_shows_an_agents_check_and_the_hosts_room() {
     assert_eq!(w["run"]["tasks"][0]["state"], "running");
     assert_eq!(
         during["room"],
-        serde_json::json!({"bound": 3, "queue": 0, "sessions": 1, "reserve": 1})
+        serde_json::json!({
+            "bound": 3, "queue": 0, "sessions": 1, "reserve": 1,
+            "waiting": {"queue": 0, "sessions": 0}, "turn": "queue",
+        })
     );
     assert_eq!(
         f.world.version(BRANCH),
@@ -5069,10 +4784,7 @@ fn overview_watch_prints_when_a_checks_task_moves() {
     };
     let cli = Cli::try_parse_from(["sluice", "overview", "--json", "--watch"]).unwrap();
     let mut out = Vec::new();
-    let host = support::FakeHost {
-        world: f.world.clone(),
-        reserved: 0,
-    };
+    let host = support::FakeHost::new(f.world.clone(), 0);
     run(cli, f.seams(), &host, &(), &(), &f.clock, &pause, &mut out).unwrap();
     let out = String::from_utf8(out).unwrap();
     let docs: Vec<serde_json::Value> = out
@@ -5455,10 +5167,7 @@ fn release(f: &Fakes, args: &[&str]) -> (i32, String) {
     )
     .unwrap();
     let mut out = Vec::new();
-    let host = support::FakeHost {
-        world: f.world.clone(),
-        reserved: 0,
-    };
+    let host = support::FakeHost::new(f.world.clone(), 0);
     let code = run(
         cli,
         f.seams(),
@@ -5837,10 +5546,7 @@ fn status_and_overview_carry_a_worktrees_last_result() {
     run(
         cli,
         f.seams(),
-        &support::FakeHost {
-            world: f.world.clone(),
-            reserved: 0,
-        },
+        &support::FakeHost::new(f.world.clone(), 0),
         &(),
         &(),
         &f.clock,
@@ -5970,10 +5676,7 @@ fn a_held_place_is_one_entry() {
 fn sluice_with(f: &Fakes, pause: &dyn Pause, args: &[&str]) -> (i32, String) {
     let cli = Cli::try_parse_from(std::iter::once("sluice").chain(args.iter().copied())).unwrap();
     let mut out = Vec::new();
-    let host = support::FakeHost {
-        world: f.world.clone(),
-        reserved: 0,
-    };
+    let host = support::FakeHost::new(f.world.clone(), 0);
     let code = settled(|| run(cli, f.seams(), &host, &(), &(), &f.clock, pause, &mut out)).unwrap();
     (code, String::from_utf8(out).unwrap())
 }
@@ -6199,67 +5902,35 @@ impl Pause for Unpaused {
     }
 }
 
-/// 134: a round whose call the forge could not answer for the retry
-/// policy's time, so that its seam answers 5xx once the policy is spent,
-/// ends `sluice wait` and a waiting submit at once: each says it could not
-/// read, on stderr with how long and the forge's words and on stdout with
-/// how to wait again, and exits 3, no outcome. The wait never reads again
-/// of its own (rule core.29); nothing was decided of the submission, which
-/// lands once the forge answers.
+/// 134, 133 (design D9): a round of the host process's whose call the
+/// forge could not answer for the retry policy's time is said once on
+/// stderr, in its words, and `sluice wait` goes on following: the round
+/// after lands the submission, and the wait reports it, exit 0.
 #[test]
-fn a_wait_whose_round_the_forge_could_not_answer_says_it_could_not_read() {
-    const TEST: &str = "a_wait_whose_round_the_forge_could_not_answer_says_it_could_not_read";
+fn a_round_the_forge_could_not_answer_is_said_once_and_the_wait_goes_on() {
+    const TEST: &str = "a_round_the_forge_could_not_answer_is_said_once_and_the_wait_goes_on";
     if let Some(err) = stderr_of(TEST) {
         let said: Vec<&str> = err
             .lines()
-            .filter(|l| l.starts_with("sluice: could not read #"))
+            .filter(|l| l.starts_with(&format!("sluice: {BRANCH}: ")))
             .collect();
-        assert_eq!(said.len(), 3, "{err}");
-        for line in said {
-            assert!(
-                line.contains(" for 0s, so whether it landed is not known: starting a run in ")
-                    && line.ends_with(": 503 Service Unavailable"),
-                "{err}"
-            );
-        }
+        assert_eq!(said.len(), 1, "{err}");
+        assert!(said[0].ends_with(": 503 Service Unavailable"), "{err}");
+        assert!(!err.contains("could not read #"), "{err}");
         return;
     }
     let f = setup();
     work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
     sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"]);
     f.world.unanswer_starts(1);
-    let (code, out) = sluice_with(&f, &Unpaused, &["wait", "1"]);
-    assert_eq!(code, sluice::INTERNAL, "{out}");
-    assert!(out.ends_with("could not read #1: sluice wait 1\n"), "{out}");
+    let stop = Then(Cell::new(0), |n| n < 40);
+    let (code, out) = sluice_with(&f, &stop, &["wait", "1"]);
+    assert_eq!(code, LANDED, "{out}");
+    let tip = f.world.tip(BRANCH);
     assert!(
-        !out.contains("landed as") && !out.contains("failed"),
+        out.ends_with(&format!("passed · landed as {}\n", &tip.0[..7])),
         "{out}"
     );
-
-    f.world.unanswer_starts(1);
-    let (code, out) = sluice_with(&f, &Unpaused, &["wait", "1", "--json"]);
-    assert_eq!(code, sluice::INTERNAL, "{out}");
-    let v = json(&out);
-    assert_eq!(v["error"]["kind"], "internal");
-    assert_eq!(v["error"]["next"], serde_json::json!(["sluice wait 1"]));
-    let message = v["error"]["message"].as_str().unwrap();
-    assert!(
-        message.starts_with("could not read #1 for 0s, so whether it landed is not known: "),
-        "{message}"
-    );
-    assert!(message.ends_with(": 503 Service Unavailable"), "{message}");
-    let (_, out) = sluice(&f, &["status", "1", "--json"]);
-    assert_ne!(json(&out)["state"], "failed");
-
-    work(&f, "unit/b", "agent-b", &[("plugin/b", Some("b"))]);
-    f.world.unanswer_starts(1);
-    let (code, out) = sluice_with(&f, &Unpaused, &["submit", BRANCH, "--worktree", "unit/b"]);
-    assert_eq!(code, sluice::INTERNAL, "{out}");
-    assert!(out.ends_with("could not read #2: sluice wait 2\n"), "{out}");
-
-    assert_eq!(sluice(&f, &["wait", "2"]).0, LANDED);
-    let (_, out) = sluice(&f, &["status", "1", "--json"]);
-    assert_eq!(json(&out)["state"], "landed");
 }
 
 /// 134: Ctrl-C while a wait's call to a remote is between tries ends the
@@ -6340,9 +6011,11 @@ impl sluice::PullRequests for Pull7 {
         _: sluice_core::Seams<'_>,
         _: &dyn sluice_core::Clock,
         _: &str,
-        _: sluice::Taker,
-    ) -> anyhow::Result<bool> {
-        Ok(true)
+    ) -> anyhow::Result<sluice::Intake> {
+        Ok(sluice::Intake {
+            takes: true,
+            ..sluice::Intake::default()
+        })
     }
 
     fn open(
@@ -6397,10 +6070,20 @@ impl sluice::PullRequests for Pull7 {
 /// The branch, taking pull requests.
 fn pulls_setup() -> Fakes {
     let f = Fakes::new();
-    let policy = POLICY.replace(
-        "[branches.\"bolt/*\"]\n",
-        "[branches.\"bolt/*\"]\nremote = \"origin\"\n",
-    ) + "\n[branches.\"bolt/*\".pull_requests]\n";
+    // 137; record 0103 D2: a branch that takes pull requests keeps its
+    // records on its remote, so its policy names a signer, whose runs its
+    // gate trusts.
+    let policy = "[signers.a]\nssh = \".config/sluice.keys\"\n\n".to_string()
+        + &POLICY
+            .replace(
+                "[branches.\"bolt/*\"]\n",
+                "[branches.\"bolt/*\"]\nremote = \"origin\"\n",
+            )
+            .replace(
+                "trust = [\"open\", \"sandbox\", \"container\"]\n",
+                "trust = [\"a\"]\n",
+            )
+        + "\n[branches.\"bolt/*\".pull_requests]\n";
     f.world.init(
         BRANCH,
         &[(".config/sluice.toml", &policy), ("plugin/a", "a")],
@@ -6418,10 +6101,7 @@ fn sluice_pulls(
 ) -> (i32, String) {
     let cli = Cli::try_parse_from(std::iter::once("sluice").chain(args.iter().copied())).unwrap();
     let mut out = Vec::new();
-    let host = support::FakeHost {
-        world: f.world.clone(),
-        reserved: 0,
-    };
+    let host = support::FakeHost::new(f.world.clone(), 0);
     let code =
         settled(|| run(cli, f.seams(), &host, &(), pulls, &f.clock, pause, &mut out)).unwrap();
     (code, String::from_utf8(out).unwrap())
@@ -7406,16 +7086,14 @@ fn a_release_failing_after_the_landing_leaves_it_landed() {
     assert!(f.world.live_places().is_empty());
 }
 
-/// 122: pushing the outcome fails after the landing, in the round
-/// `sluice wait` ran: landed, exit 0, and the push's failure on stderr.
+/// 122 (rule core.48; design D9): pushing the outcome fails after the
+/// landing, in the host process's round `sluice wait` follows: landed,
+/// exit 0, and nothing said of what failed after it, which is the host
+/// process's.
 #[test]
 fn a_push_failing_after_the_landing_leaves_it_landed() {
     if let Some(err) = stderr_of("a_push_failing_after_the_landing_leaves_it_landed") {
-        assert_eq!(
-            after_the_landing(&err),
-            ["sluice: after the landing: crashed after delivering 1:landed"],
-            "{err}"
-        );
+        assert!(after_the_landing(&err).is_empty(), "{err}");
         return;
     }
     let f = setup();
@@ -7456,13 +7134,14 @@ fn a_landing_whose_release_fails_is_one_document_under_json() {
     assert_eq!(v["landed_as"], f.world.tip(BRANCH).0);
 }
 
-/// 122, 24: the round a waiting submit ran moves the branch and fails
-/// writing that it landed: the submission is reported landed as the
-/// landing's commit, and the next round records it so.
+/// 122, 24 (design D9): the host process's round a waiting submit follows
+/// moves the branch and fails writing that it landed: the submission is
+/// reported landed as the landing's commit, and the next round records it
+/// so.
 #[test]
 fn a_landing_the_round_did_not_record_is_reported_landed() {
     if let Some(err) = stderr_of("a_landing_the_round_did_not_record_is_reported_landed") {
-        assert_eq!(after_the_landing(&err).len(), 1, "{err}");
+        assert!(after_the_landing(&err).is_empty(), "{err}");
         return;
     }
     let f = setup();
@@ -7502,10 +7181,23 @@ fn a_landing_the_round_did_not_record_is_reported_landed() {
     );
 }
 
-/// 122: a round that fails before the branch moved is sluice failing
-/// itself, as before: the submission is not reported landed.
+/// 122 (design D9): a round of the host process's that fails before the
+/// branch moved is said once on stderr, in its words, and the waiting
+/// submit goes on: the submission is not reported landed by it, and the
+/// round after, finishing the landing, lands it.
 #[test]
-fn a_round_failing_before_the_landing_is_an_error() {
+fn a_round_failing_before_the_landing_is_said_and_the_wait_goes_on() {
+    const TEST: &str = "a_round_failing_before_the_landing_is_said_and_the_wait_goes_on";
+    if let Some(err) = stderr_of(TEST) {
+        let said = err
+            .lines()
+            .filter(|l| {
+                l.starts_with(&format!("sluice: {BRANCH}: ")) && l.contains("crashed before moving")
+            })
+            .count();
+        assert_eq!(said, 1, "{err}");
+        return;
+    }
     let f = setup();
     work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
     let between = |n: usize| {
@@ -7518,18 +7210,11 @@ fn a_round_failing_before_the_landing_is_an_error() {
         rounds: 5,
         between: &between,
     };
-    let cli = Cli::try_parse_from(["sluice", "submit", BRANCH, "--worktree", "unit/a"]).unwrap();
-    let mut out = Vec::new();
-    let host = support::FakeHost {
-        world: f.world.clone(),
-        reserved: 0,
-    };
-    let e = run(cli, f.seams(), &host, &(), &(), &f.clock, &pause, &mut out).unwrap_err();
-    assert!(format!("{e:#}").contains("crashed before moving"), "{e:#}");
-    let out = String::from_utf8(out).unwrap();
-    assert!(!out.contains("landed as"), "{out}");
+    let (code, out) = sluice_with(&f, &pause, &["submit", BRANCH, "--worktree", "unit/a"]);
+    assert_eq!(code, LANDED, "{out}");
+    assert_eq!(out.matches("landed as").count(), 1, "{out}");
     let (_, out) = sluice(&f, &["status", "1", "--json"]);
-    assert_eq!(json(&out)["state"], "landing");
+    assert_eq!(json(&out)["state"], "landed");
 }
 
 // ---------------------------------------------------------------------------
@@ -8946,6 +8631,10 @@ mod refused_alone {
             self.host.readers()
         }
 
+        fn host_process(&self) -> &dyn sluice::host_process::HostProcess {
+            self.host.host_process()
+        }
+
         fn default_branch(&self) -> anyhow::Result<Option<sluice_core::overview::OrderFrom>> {
             self.host.default_branch()
         }
@@ -8977,10 +8666,7 @@ mod refused_alone {
             )],
         );
         let host = Naming {
-            host: support::FakeHost {
-                world: f.world.clone(),
-                reserved: 0,
-            },
+            host: support::FakeHost::new(f.world.clone(), 0),
             systems: vec!["linux-x64".into()],
         };
         let cli = Cli::try_parse_from(["sluice", "run", "--rounds", "1"]).unwrap();
@@ -9029,10 +8715,7 @@ mod read_once {
         let cli =
             Cli::try_parse_from(std::iter::once("sluice").chain(args.iter().copied())).unwrap();
         let mut out = Vec::new();
-        let host = support::FakeHost {
-            world: f.world.clone(),
-            reserved: 0,
-        };
+        let host = support::FakeHost::new(f.world.clone(), 0);
         let code = run(cli, seams, &host, &(), &(), &f.clock, pause, &mut out).unwrap();
         (code, String::from_utf8(out).unwrap())
     }

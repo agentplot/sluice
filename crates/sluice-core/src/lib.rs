@@ -68,20 +68,9 @@ pub struct Seams<'a> {
     pub state: &'a dyn State,
 }
 
-/// The branches an instance serves, whose runs count against its bound
-/// (71).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Serves {
-    /// The branch it steps: a waiting submit's rounds, or `sluice step`.
-    Stepped,
-    /// Every branch with records: `sluice run`.
-    Every,
-}
-
 pub struct Sluice<'a> {
     seams: Seams<'a>,
     clock: &'a dyn Clock,
-    serves: Serves,
     peer: Peer,
     /// 124: whether it reads the policy only as far as guarding needs.
     guarding: bool,
@@ -192,7 +181,6 @@ impl<'a> Sluice<'a> {
         Sluice {
             seams,
             clock,
-            serves: Serves::Stepped,
             peer: Peer::default(),
             guarding: false,
             policies: Keeping::Own(Policies::default()),
@@ -219,11 +207,6 @@ impl<'a> Sluice<'a> {
     /// records are on its remote (72 to 74).
     pub fn as_peer(self, peer: Peer) -> Self {
         Sluice { peer, ..self }
-    }
-
-    /// The same sluice, serving `serves` (71).
-    pub fn serving(self, serves: Serves) -> Self {
-        Sluice { serves, ..self }
     }
 
     /// The same sluice, for branch protection: it reads the policy only as
@@ -276,16 +259,23 @@ impl<'a> Sluice<'a> {
                     .any(|c| !refused_writes::stands(c, now))
             }),
         };
+        // 133; record 0103 D7: this host's refusal of the remote, and its
+        // refusal of the branch's intake, each its lines not yet written.
         let refusal = self.refusal(&line.branch)?;
         let carried = refusal
             .as_ref()
             .map(|r| r.unwritten(&self.peer.name))
             .unwrap_or_default();
-        let changes = if carried.is_empty() && ending.is_none() {
+        let intake = self.intake_refusal(&line.branch)?;
+        let carried_intake = intake
+            .as_ref()
+            .map(|r| r.unwritten(&self.peer.name))
+            .unwrap_or_default();
+        let changes = if carried.is_empty() && carried_intake.is_empty() && ending.is_none() {
             own
         } else {
             let mut with = line.clone();
-            for (at, event) in carried.iter().cloned() {
+            for (at, event) in carried.iter().chain(&carried_intake).cloned() {
                 with.log(&at, event);
             }
             if let Some(now) = &ending {
@@ -300,14 +290,22 @@ impl<'a> Sluice<'a> {
             .seams
             .state
             .write(&line.branch, line.version, changes)?;
-        if let (Written::Written(_), Some(r)) = (written, refusal) {
-            if !carried.is_empty() {
-                // The write stands whatever this does: a line not marked is
-                // written again by the next write, which decides nothing.
+        if let Written::Written(_) = written {
+            // The write stands whatever this does: a line not marked is
+            // written again by the next write, which decides nothing.
+            if let (Some(r), false) = (refusal, carried.is_empty()) {
                 if let Err(e) = self.keep_refusal(&line.branch, r.written().as_ref()) {
                     tracing::warn!(
                         sluice.branch = line.branch,
                         "noting the refusal's lines as written failed: {e:#}"
+                    );
+                }
+            }
+            if let (Some(r), false) = (intake, carried_intake.is_empty()) {
+                if let Err(e) = self.keep_intake_refusal(&line.branch, r.written().as_ref()) {
+                    tracing::warn!(
+                        sluice.branch = line.branch,
+                        "noting the intake refusal's lines as written failed: {e:#}"
                     );
                 }
             }
@@ -343,6 +341,25 @@ impl<'a> Sluice<'a> {
     fn keep_refusal(&self, branch: &str, refusal: Option<&Refusal>) -> Result<()> {
         let bytes = refusal.map(Refusal::to_bytes);
         self.seams.state.keep_refusal(branch, bytes.as_deref())
+    }
+
+    /// Record 0103 D7: this host's refusal of `branch`'s intake, as the
+    /// records seam keeps it beside its refusal of the remote.
+    pub fn intake_refusal(&self, branch: &str) -> Result<Option<Refusal>> {
+        self.seams
+            .state
+            .intake_refusal(branch)?
+            .map(|b| Refusal::parse(&b))
+            .transpose()
+    }
+
+    /// Keep `refusal` as this host's refusal of `branch`'s intake, or,
+    /// with `None`, remove it.
+    fn keep_intake_refusal(&self, branch: &str, refusal: Option<&Refusal>) -> Result<()> {
+        let bytes = refusal.map(Refusal::to_bytes);
+        self.seams
+            .state
+            .keep_intake_refusal(branch, bytes.as_deref())
     }
 
     /// Read, change and write a branch's records, reading again when the

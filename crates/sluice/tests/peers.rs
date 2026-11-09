@@ -60,10 +60,14 @@ impl Host {
         }
     }
 
+    /// The binary in `dir`, this setup's host. The host process its
+    /// commands start passes only when asked, so the rounds that run are
+    /// the ones the test's commands ask for (design D13).
     fn command(&self, dir: &Path) -> Command {
         let mut c = Command::new(env!("CARGO_BIN_EXE_sluice"));
         support::isolated(&mut c)
             .current_dir(dir)
+            .env("SLUICE_ROUND_SLEEP", "record")
             .env("XDG_CONFIG_HOME", self.config.path())
             .env("XDG_STATE_HOME", self.state.path())
             .env_remove("SLUICE_AGENT")

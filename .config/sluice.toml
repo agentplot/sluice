@@ -14,22 +14,29 @@ network = "localhost"
 # their own limit (66; ADR 0016).
 docker = true
 
+# The hosts whose runs count, each by the public half of the key its own
+# [signing] names. Naming any keeps the state of every branch with a remote
+# on that remote (C.6), where the host that keeps main takes main's pull
+# requests in (137; record 0103). sessions is deneb, where the sessions work:
+# it runs agents, so nothing it signs is confined (79).
+[signers.sessions]
+ssh = "deneb ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHGx/Ip3yodP/Rg3DdMAjJXoYuBmMxTLpPrka3ei69M/ sluice deneb"
+
 [branches."bolt/*"]
 required = ["#check-fast"]
-# A replay counts when a run this gate trusts recorded a pass for its key
-# (108).
-trust = ["open", "sandbox", "container"]
+# A run counts, and a replay through a pass recorded for its key (108), only
+# where sessions signed it (78).
+trust = ["sessions"]
 # Bolts live on GitHub, as main does: crew pushes each new one there, and
 # sluice lands on it by a leased push, so agents on any host share it.
 remote = "origin"
 
-# On one Mac, until runs are confined, main accepts sandboxed runs too. A
-# replay counts only when a sandboxed or confined run recorded a pass for its
-# key (108): the cache also holds what open shells ran.
+# Until a confined signer is named, main counts what sessions signed, as the
+# bolts do (78, 108).
 [branches.main]
 required = ["#check-fast", "#check-tools", "#check-e2e"]
 batch = true
-trust = ["confined", "sandbox"]
+trust = ["sessions"]
 # main lives on GitHub: fetched every round, landed by a leased push.
 remote = "origin"
 

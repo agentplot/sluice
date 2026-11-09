@@ -15,8 +15,9 @@ use anyhow::{Context as _, Result};
 /// How long herdr has to take a prompt before the push is given up.
 pub const BOUND: Duration = Duration::from_secs(10);
 
-const PANE: &str = "HERDR_PANE_ID";
-const SOCKET: &str = "HERDR_SOCKET_PATH";
+/// The variables a pane herdr runs names its session by.
+pub const PANE: &str = "HERDR_PANE_ID";
+pub const SOCKET: &str = "HERDR_SOCKET_PATH";
 const PREFIX: &str = "herdr:";
 
 /// 51: the session this process runs in, or `None` outside any herdr

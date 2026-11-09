@@ -175,6 +175,24 @@ mod tests {
         assert!(allowed("just-a-name\n").is_err());
     }
 
+    /// 78: every signer sluice's own policy names reads as one key, so a
+    /// key mistyped there fails here rather than every run it signs.
+    #[test]
+    fn sluices_own_signers_each_read_as_one_key() {
+        use sluice_core::policy::Policy;
+        use sluice_seams::Setting;
+        let p = Policy::parse(include_str!("../../../../.config/sluice.toml")).unwrap();
+        assert!(!p.signers.is_empty());
+        for (name, s) in &p.signers {
+            let Setting::Text(text) = &s.identity.1 else {
+                panic!("[signers.{name}] names no key: {:?}", s.identity);
+            };
+            assert_eq!(s.identity.0, "ssh", "[signers.{name}]");
+            let keys = allowed(text).unwrap_or_else(|e| panic!("[signers.{name}]: {e:#}"));
+            assert_eq!(keys.len(), 1, "[signers.{name}]");
+        }
+    }
+
     #[test]
     fn a_key_file_reads_back_as_its_key() {
         let dir = std::env::temp_dir().join(format!("sluice-ssh-{}", std::process::id()));

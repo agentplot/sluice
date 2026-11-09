@@ -306,7 +306,7 @@ fn is_own(dir: &Path, meta: &std::fs::Metadata) -> Result<()> {
 /// where it is there, refused with its path unless it is so (35 as
 /// amended, rule core.30): nothing of one refused is changed or removed.
 /// One another process of the user made first is no error.
-fn make_own(dir: &Path) -> Result<()> {
+pub(crate) fn make_own(dir: &Path) -> Result<()> {
     use std::os::unix::fs::DirBuilderExt as _;
     match std::fs::DirBuilder::new().mode(0o700).create(dir) {
         Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => {
@@ -1912,7 +1912,7 @@ mod tests {
         Made, Places,
     };
     use crate::runs::{dir_name, Runs};
-    use sluice_seams::{Checkout, LastResult, Rev, RunKind, RunOutcome};
+    use sluice_seams::{Checkout, LastResult, Rev, RunOutcome, SessionRunKind};
     use std::collections::BTreeMap;
     use std::path::Path;
 
@@ -1920,7 +1920,7 @@ mod tests {
         LastResult {
             at: "2026-10-16T09:00:00Z".into(),
             head: Rev("a".into()),
-            kind: RunKind::Checks,
+            kind: SessionRunKind::Checks,
             outcome: RunOutcome::Pass,
             recorded: true,
             tasks: Vec::new(),

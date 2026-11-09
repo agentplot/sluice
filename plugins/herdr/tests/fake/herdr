@@ -5,9 +5,18 @@
 # down there is a server that no longer answers, no-agent one whose agents
 # cannot be focused. Each call is logged in $FAKE/herdr-calls after the
 # socket's name. A server whose socket is gone answers nothing, as herdr's
-# command does once its server has stopped.
+# command does once its server has stopped. While <socket>.d/stall is
+# there, a report-metadata call, once logged, waits up to 30 seconds for
+# it to go, so a test can act while a run's calls are going out.
 sock=${HERDR_SOCKET_PATH:-}
 printf '%s: %s\n' "${sock##*/}" "$*" >>"$FAKE/herdr-calls"
+if [ "$1 $2" = "pane report-metadata" ] || [ "$1 $2" = "workspace report-metadata" ]; then
+  n=30
+  while [ -f "$sock.d/stall" ] && [ "$n" -gt 0 ]; do
+    sleep 1
+    n=$((n - 1))
+  done
+fi
 [ -n "$sock" ] && [ -e "$sock" ] || exit 1
 files=$sock.d
 [ -f "$files/down" ] && exit 1

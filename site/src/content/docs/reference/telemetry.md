@@ -54,8 +54,9 @@ back: the queue never depends on it
 1. **A receiver on `localhost:4318`**, OTLP/HTTP. It must listen on
    localhost: sluice's sandboxed runs reach localhost and nothing else.
 2. **`SLUICE_OTEL=1`** where sluice runs: the shell or role environment
-   of every session that runs `wt submit` or `sluice submit`, and the
-   service or timer that runs `sluice run` or `sluice step`, if any.
+   of every session that runs `wt submit` or `sluice submit`. sluice's own
+   process on the host, which runs the rounds, keeps it from the command
+   that started it.
 3. **`OTEL_RESOURCE_ATTRIBUTES`** naming the host
    (`host.name=…,deployment.environment=…`), so hosts sending to one
    backend can be told apart.

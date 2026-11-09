@@ -19,17 +19,14 @@
 //! its head, its last change on GitHub, its draft mark or its entry moved,
 //! or, out of draft and still short of its conditions, at each asking.
 //!
-//! One host at a time takes a branch's pull requests in (137; rule
-//! core.33): where its records are on its remote, the instance that keeps
-//! the branch; where each host keeps its own, the holder of its intake
-//! mark, `refs/sluice/intake/<branch>` on its remote, or, where none
-//! stands, the host that finds none. `sluice run` pushes the mark when it
-//! starts and renews it when a third of the lease has passed, never at each
-//! pass; a wait on a host where `sluice run` does not live pushes it the
-//! same way where none stands, and lets it go when it ends; a step pushes
-//! none. A host that does not take the branch's pull requests in asks
-//! GitHub nothing about them, and withdraws its own submissions of them,
-//! naming the host that does, which takes each in again.
+//! One host takes a branch's pull requests in (137; rule core.33): the
+//! instance that keeps the branch on its remote (72), any of its processes
+//! under intake's lock, a pass, a step or a submit's own first intake
+//! alike. A host that does not keep the branch asks GitHub nothing about
+//! its open pull requests, withdraws nothing, and follows its own by
+//! GitHub's word and sluice's check on their heads. A branch whose records
+//! each host keeps takes none in. No intake mark is kept, read or written
+//! (record 0103 D1, D3).
 //!
 //! The driver's `session("pull/<n>")` fetches `refs/pull/<n>/head`; its
 //! `notify` posts the outcome and, when a pull request is sent back,
@@ -46,8 +43,9 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, SubsecRound, Utc};
 use sluice_core::line::Line;
-use sluice_core::policy::{Policy, PullRequests as Conditions, POLICY_PATH};
+use sluice_core::policy::{NoIntake, Policy, PullRequests as Conditions, POLICY_PATH};
 use sluice_core::records::{Event, State, Submission};
+use sluice_core::refused::IntakeCause;
 use sluice_core::{
     Clock, Forecast, GroupRequest, Requester, Seams, Sluice, SubmitHead, SubmitRefusal,
     SubmitRequest, SubmittedHead, Withdrew,
@@ -61,15 +59,14 @@ use super::app::Repo;
 use super::forge::{
     approvals, Check, Forge, Posted, Posting, Pull, Request, Review, Standing, Status, SLUICE_CHECK,
 };
-use super::kept::Observed;
-use super::kept::{Follow, Hold, Kept, Reading, Readings};
+use super::kept::{Follow, Kept, Reading, Readings};
 use super::render;
 use crate::identity::Identity;
 use crate::profiles::local_refs::LocalRefs;
-use crate::profiles::pushed_refs::{Holder, Mark, PushedRefs};
+use crate::profiles::pushed_refs::PushedRefs;
 use crate::retry;
 use crate::{
-    Across, AcrossRow, Ahead, Followed, GroupRefused, Opened, Queue, Short, TakenInBy, Taker,
+    Across, AcrossRow, Ahead, Followed, GroupRefused, Intake, Opened, Queue, Short, TakenInBy,
 };
 use sluice_core::verdict_view::{Standing as Stands, VerdictView};
 
@@ -323,25 +320,29 @@ pub struct Pulls {
     default_policy: RefCell<Option<(Rev, std::result::Result<Option<Policy>, String>)>>,
     /// This host as its peers name it, and its lease (72, 73, 137).
     peer: sluice_core::Peer,
-    /// 137: this process's hold among its host's waits on each branch's
-    /// intake mark, by branch, with the branch's remote: let go when the
-    /// wait ends, the host's last wait letting the mark go.
-    holds: RefCell<BTreeMap<String, (String, Hold)>>,
-    /// The host that takes each branch's pull requests in, by branch, as
-    /// this process's last intake found it, where that is another host.
+    /// The host that keeps each branch on its remote, by branch, as this
+    /// process last took its pull requests in or followed one, where that
+    /// is another host; empty where no host keeps it yet.
     away: RefCell<BTreeMap<String, String>>,
+    /// 128; record 0103 D6: each cause the intake under way met, given to
+    /// its caller when it ends, and nothing said meanwhile.
+    met: RefCell<Vec<IntakeCause>>,
+    /// Record 0103 D7: whether the intake under way decided this host's
+    /// intake of its branch, and the branch's remote, where it read it.
+    ran: std::cell::Cell<bool>,
+    remote: RefCell<Option<String>>,
     /// 137, design D5: what this process's reader's documents last carried
     /// of the pull requests into each branch the host follows, by branch,
-    /// read again only once the kept file or the mark moved.
+    /// read again only once the kept file or the branch's lead moved.
     kept_across: RefCell<BTreeMap<String, KeptAcross>>,
 }
 
 /// 137, design D5: a branch's followed pull requests as a reader's
 /// document carries them, and the kept file's modified time and the
-/// mark's commit they were read at.
+/// branch's lead they were read at (record 0103 D5).
 struct KeptAcross {
     modified: std::time::SystemTime,
-    mark: Option<Rev>,
+    lead: Option<String>,
     across: Option<Across>,
 }
 
@@ -392,11 +393,9 @@ enum Taking {
     /// It does, and asks GitHub at once: a pass decides it only once it is
     /// due or the branch moved (129, 136).
     Here,
-    /// Another host does, by its name.
-    Elsewhere(String),
-    /// The mark moved under two pushes of this host's and names no other
-    /// host: this pass takes nothing in and hands nothing over.
-    Undecided,
+    /// The host the branch's records name as keeping it does, by its name;
+    /// `None` where none does, or each host keeps the branch's records.
+    Elsewhere(Option<String>),
 }
 
 impl Pulls {
@@ -435,9 +434,11 @@ impl Pulls {
             policies: sluice_core::Policies::default(),
             default_policy: RefCell::default(),
             peer,
-            holds: RefCell::default(),
             away: RefCell::default(),
             kept_across: RefCell::default(),
+            met: RefCell::default(),
+            ran: std::cell::Cell::new(false),
+            remote: RefCell::default(),
         }
     }
 
@@ -481,9 +482,17 @@ impl Pulls {
     }
 
     /// `branch`'s pull requests and where they are, at `tip`; `None` for a
-    /// branch that takes none there.
+    /// branch that takes none there, and for one its policy refuses for a
+    /// pull request table on records each host keeps, whose requests no
+    /// host takes in and whose refusal its round, status and overview say
+    /// (137, S64; record 0103 D2).
     fn target_at(&self, s: &Sluice<'_>, branch: &str, tip: Rev) -> Result<Option<Target>> {
-        let Some(rules) = s.rules_at(branch, &tip)? else {
+        let rules = match s.rules_at(branch, &tip) {
+            Ok(rules) => rules,
+            Err(e) if e.downcast_ref::<NoIntake>().is_some() => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        let Some(rules) = rules else {
             return Ok(None);
         };
         let signed = rules.signed;
@@ -505,236 +514,20 @@ impl Pulls {
         }))
     }
 
-    /// 137: whether this host takes `t`'s pull requests in this pass, as
-    /// `taker`, at `now`. Where the branch's records are on its remote, the
-    /// instance that keeps it does (72). Where each host keeps its own, the
-    /// holder of the intake mark does, read from the branch's last fetch:
-    ///
-    /// - none stands: a driver or a wait pushes it, leased on its absence,
-    ///   and takes them in; a step takes them in and pushes none;
-    /// - this host's: a driver or a wait renews it when a third of the
-    ///   lease has passed since it last did, or at once to name itself its
-    ///   holder; a step takes them in;
-    /// - another host's wait's, and this is a driver: it takes it at once;
-    /// - another host's, unchanged for the lease since this host first saw
-    ///   it, by this host's own observation: a driver or a wait takes it;
-    /// - otherwise another host takes them in.
-    ///
-    /// A push refused at its lease is decided again, once, on the mark the
-    /// branch's fetch then brings: this host's own, which another of its
-    /// processes moved, is held; none standing, which the process that
-    /// held it let go, is pushed again leased on its absence; another
-    /// host's is that host's. Only a mark naming another host hands the
-    /// requests over; a second refusal leaves this pass taking nothing in
-    /// and handing nothing over (137; rule core.33).
-    fn takes(
-        &self,
-        s: &Sluice<'_>,
-        t: &Target,
-        pushed: &PushedRefs,
-        branch: &str,
-        taker: Taker,
-        now: DateTime<Utc>,
-    ) -> Result<Taking> {
-        if t.signed {
-            return Ok(match s.keeps(branch)? {
-                true => Taking::Here,
-                false => Taking::Elsewhere(format!("the host that keeps {branch}")),
-            });
+    /// 137; record 0103 D1: whether this host takes `t`'s pull requests in
+    /// this pass: where the branch's records are on its remote and this
+    /// instance keeps it, taking it where no one does or the lead's lease
+    /// has passed by this host's own observation (72, 73); otherwise the
+    /// host the records name as its lead does. A branch whose records each
+    /// host keeps is taken in by none.
+    fn takes(&self, s: &Sluice<'_>, t: &Target, branch: &str) -> Result<Taking> {
+        if !t.signed {
+            return Ok(Taking::Elsewhere(None));
         }
-        let holder = match taker {
-            Taker::Driver => Some(Holder::Driver),
-            Taker::Wait => Some(Holder::Wait),
-            Taker::Step => None,
-        };
-        for _ in 0..2 {
-            if let Some(taking) = self.decide(t, pushed, branch, holder, now)? {
-                return Ok(taking);
-            }
-            pushed.read(branch)?;
+        if s.keeps(branch)? {
+            return Ok(Taking::Here);
         }
-        Ok(Taking::Undecided)
-    }
-
-    /// 137: [`Pulls::takes`] on the mark as the branch's last fetch brought
-    /// it, as `holder`, or as a step where it is `None`; `None` when a push
-    /// of the mark was refused at its lease.
-    fn decide(
-        &self,
-        t: &Target,
-        pushed: &PushedRefs,
-        branch: &str,
-        holder: Option<Holder>,
-        now: DateTime<Utc>,
-    ) -> Result<Option<Taking>> {
-        let lease = chrono::TimeDelta::from_std(self.peer.lease).unwrap_or(chrono::TimeDelta::MAX);
-        let seen = self.kept.observed(&t.repo, branch);
-        let Some((rev, mark)) = pushed.intake_mark(branch)? else {
-            return match holder {
-                None => Ok(Some(Taking::Here)),
-                // The host there alone: what it read stands.
-                Some(h) => self.put_mark(t, pushed, branch, None, h, now),
-            };
-        };
-        if mark.host == self.peer.name {
-            let Some(h) = holder else {
-                return Ok(Some(Taking::Here));
-            };
-            let renewed = seen
-                .filter(|o| o.seen == rev.0)
-                .and_then(|o| o.renewed)
-                .filter(|r| now - *r < lease / 3);
-            if mark.holder == h && renewed.is_some() {
-                return Ok(Some(Taking::Here));
-            }
-            return self.put_mark(t, pushed, branch, Some(&rev), h, now);
-        }
-        if holder == Some(Holder::Driver) && mark.holder == Holder::Wait {
-            return self.put_mark(t, pushed, branch, Some(&rev), Holder::Driver, now);
-        }
-        let since = match seen.filter(|o| o.seen == rev.0) {
-            Some(o) => o.since,
-            None => {
-                let first = Observed {
-                    seen: rev.0.clone(),
-                    since: now,
-                    renewed: None,
-                };
-                self.kept.observe(&t.repo, branch, Some(&first))?;
-                return Ok(Some(Taking::Elsewhere(mark.host)));
-            }
-        };
-        match holder {
-            Some(h) if now - since >= lease => self.put_mark(t, pushed, branch, Some(&rev), h, now),
-            _ => Ok(Some(Taking::Elsewhere(mark.host))),
-        }
-    }
-
-    /// 137: push this host's mark as `holder` over `from`, leased on it:
-    /// [`Taking::Here`] once pushed, kept as seen and renewed now; `None`
-    /// when the push was refused at its lease, which names no holder until
-    /// the branch is read again.
-    #[allow(clippy::too_many_arguments)]
-    fn put_mark(
-        &self,
-        t: &Target,
-        pushed: &PushedRefs,
-        branch: &str,
-        from: Option<&Rev>,
-        holder: Holder,
-        now: DateTime<Utc>,
-    ) -> Result<Option<Taking>> {
-        let mark = Mark {
-            host: self.peer.name.clone(),
-            holder,
-            sluice: crate::VERSION.to_string(),
-        };
-        let Some(rev) = pushed.put_intake_mark(branch, from, &mark)? else {
-            return Ok(None);
-        };
-        let seen = Observed {
-            seen: rev.0.clone(),
-            since: now,
-            renewed: Some(now),
-        };
-        self.kept.observe(&t.repo, branch, Some(&seen))?;
-        Ok(Some(Taking::Here))
-    }
-
-    /// 137: hold `t`'s mark of `branch` among this host's waits, once, for
-    /// this process's life: the host's last wait to end lets it go.
-    fn hold(&self, t: &Target, branch: &str) -> Result<()> {
-        if self.holds.borrow().contains_key(branch) {
-            return Ok(());
-        }
-        let hold = self.kept.hold(&t.repo, branch)?;
-        self.holds
-            .borrow_mut()
-            .insert(branch.to_string(), (t.remote.clone(), hold));
-        Ok(())
-    }
-
-    /// 122, 137: on a host that finds another host's mark, withdraw every
-    /// submission of its own records taken from a pull request, neither out
-    /// of the queue nor landing, the log naming `host`, which takes each in
-    /// again; nothing is posted on the pull requests, which `host` posts.
-    /// One whose head the branch at `tip`, as this pass fetched it, holds
-    /// has landed, whichever host landed it: it is never withdrawn, and the
-    /// round lands it (rule core.48). Submissions from the host's own
-    /// worktrees stay. This host's runs of the combinations the withdrawals
-    /// made obsolete end in this pass, and their checkouts are released,
-    /// whether or not a round follows (design D5). The host follows each
-    /// request it withdrew (design D3).
-    fn hand_over(&self, s: &Sluice<'_>, t: &Target, branch: &str, host: &str) -> Result<()> {
-        let by = Requester::HandOver {
-            to: host.to_string(),
-            words: handed_over_to(host, branch),
-        };
-        let mut withdrew = Vec::new();
-        for sub in s.status(branch)?.submissions {
-            let Some(n) = number(&sub.from.worktree) else {
-                continue;
-            };
-            if sub.state.is_out()
-                || sub.state == State::Landing
-                || s.seams().branch.contains(&t.tip, &sub.head)?
-            {
-                continue;
-            }
-            // Landing since: it lands, and nothing of it is withdrawn.
-            if let Ok(Withdrew::Now) = s.withdraw(sub.id, &by)? {
-                withdrew.push((
-                    n,
-                    known(
-                        &sub.head.0,
-                        false,
-                        sub.subject.as_deref().unwrap_or_default(),
-                        sub.from.head.as_deref().unwrap_or_default(),
-                    ),
-                ));
-            }
-        }
-        if !withdrew.is_empty() {
-            self.follow_known(&t.repo, branch, withdrew);
-            // 123: a release that failed is held in the records, and said.
-            let mut said = Vec::new();
-            crate::exec::tell_releases(&mut said, false, &s.drop_obsolete(branch)?)?;
-            for line in String::from_utf8_lossy(&said).lines() {
-                crate::telemetry::warn(&format!("sluice: warning: {line}"));
-            }
-        }
-        Ok(())
-    }
-
-    /// 137: let go of every hold this process keeps among its host's waits;
-    /// where it was the host's last wait holding a branch's mark, remove the
-    /// mark, as this repository last read or wrote it, when it names this
-    /// host and a wait, by a push leased on that value. A mark another of
-    /// the host's waits still holds stays theirs; one another host has
-    /// taken since is left, and one that could not be let go lapses after
-    /// the lease.
-    pub fn let_go_marks(&self) {
-        let holds = std::mem::take(&mut *self.holds.borrow_mut());
-        for (branch, (remote, hold)) in holds {
-            let let_go = || -> Result<()> {
-                if self.kept.let_go(hold)? {
-                    return Ok(());
-                }
-                let pushed = self.pushed(&remote)?;
-                if let Some((rev, mark)) = pushed.intake_mark(&branch)? {
-                    if mark.host == self.peer.name && mark.holder == Holder::Wait {
-                        pushed.drop_intake_mark(&branch, &rev)?;
-                    }
-                }
-                Ok(())
-            };
-            if let Err(e) = let_go() {
-                crate::telemetry::warn(&format!(
-                    "sluice: warning: letting go of {branch}'s intake mark: {e:#}; \
-                     it lapses after the lease"
-                ));
-            }
-        }
+        Ok(Taking::Elsewhere(s.keeper(branch)?))
     }
 
     /// Each open pull request's latest submission among `open`, past one
@@ -885,35 +678,18 @@ impl Pulls {
     /// pull requests, or the branch as the host holds it or its records
     /// moved since (136). Whether any did is read with no fetch; the
     /// branch is fetched only once one did (129).
-    fn take_in(
-        &self,
-        s: &Sluice<'_>,
-        clock: &dyn Clock,
-        branch: &str,
-        taker: Taker,
-    ) -> Result<bool> {
+    fn take_in(&self, s: &Sluice<'_>, clock: &dyn Clock, branch: &str) -> Result<bool> {
         let Some(held) = self.target(s, branch)? else {
             return Ok(false);
         };
-        // 137: a wait holds the branch's mark among its host's waits from
-        // its first pass, whether or not that pass is due.
-        if taker == Taker::Wait && !held.signed {
-            self.hold(&held, branch)?;
-        }
+        self.remote.replace(Some(held.remote.clone()));
         let forge = self.forge(branch)?;
+        // 137: another process of the host takes this pass (rule core.14),
+        // and decides this host's intake of it.
         let Some(_lock) = self.lock(branch)? else {
-            // 137: another process of the host takes this pass; this one
-            // follows the requests as the host the mark the branch's last
-            // fetch brought names takes them, where that is another host,
-            // so its wait reads them as the host's kept follows allow
-            // (design D4).
-            if !held.signed {
-                if let Some(host) = self.taker_elsewhere(&held, branch) {
-                    self.away.borrow_mut().insert(branch.to_string(), host);
-                }
-            }
             return Ok(true);
         };
+        self.ran.set(true);
         self.log_lines
             .borrow_mut()
             .insert(branch.to_string(), held.conditions.log_lines);
@@ -928,6 +704,9 @@ impl Pulls {
         let still =
             kept.tip.as_deref() == Some(held.tip.0.as_str()) && kept.version == Some(version);
         if !due && still {
+            // 128; record 0103 D6: what the intake that last asked met
+            // stands, and its caller says it again.
+            self.met.borrow_mut().extend(kept.met.iter().cloned());
             // A notification of this round finds its pull request.
             let line = Line::load(branch, records)?;
             let subs: Vec<Submission> = line.subs.into_values().collect();
@@ -946,33 +725,23 @@ impl Pulls {
                 None => return Ok(false),
             },
         };
-        let pushed = self.pushed(&t.remote)?;
-        // 137: whether this host takes the branch's pull requests in, by the
-        // mark the branch's fetch brought, before anything is asked of
-        // GitHub; one that does not asks nothing. One that does asks at
-        // once, the pass being due or the branch moved.
-        match self.takes(s, &t, &pushed, branch, taker, now)? {
+        // 137: whether this host keeps the branch and takes its pull
+        // requests in, before anything is asked of GitHub; one that does not
+        // asks nothing and withdraws nothing. One that does asks at once,
+        // the pass being due or the branch moved.
+        match self.takes(s, &t, branch)? {
             Taking::Here => {}
             Taking::Elsewhere(host) => {
-                self.away
-                    .borrow_mut()
-                    .insert(branch.to_string(), host.clone());
-                if !t.signed {
-                    self.hand_over(s, &t, branch, &host)?;
+                if t.signed {
+                    self.away
+                        .borrow_mut()
+                        .insert(branch.to_string(), host.unwrap_or_default());
                 }
                 self.register(&t.repo, &s.status(branch)?.submissions);
                 return Ok(true);
             }
-            Taking::Undecided => {
-                crate::telemetry::warn(&format!(
-                    "sluice: warning: {branch}'s intake mark moved under two pushes of this \
-                     host's and names no other host: this pass takes none of its pull requests \
-                     in and hands none over"
-                ));
-                self.register(&t.repo, &s.status(branch)?.submissions);
-                return Ok(true);
-            }
         }
+        let pushed = self.pushed(&t.remote)?;
         self.away.borrow_mut().remove(branch);
         let at_tip = kept.tip.as_deref() == Some(t.tip.0.as_str());
         let still = at_tip && kept.version == Some(version);
@@ -1063,9 +832,12 @@ impl Pulls {
                     return Err(e);
                 }
                 // Refused otherwise: each is read alone this pass.
-                Err(e) => crate::telemetry::warn(&format!(
-                    "sluice: warning: taking in {branch}'s pull requests: GitHub refused the \
-                     query that reads them whole, so each is read alone this pass: {e:#}"
+                Err(e) => self.met.borrow_mut().push(IntakeCause::whole(
+                    branch,
+                    format!(
+                        "GitHub refused the query that reads them whole, so each is read \
+                         alone this pass: {e:#}"
+                    ),
                 )),
             }
         }
@@ -1138,10 +910,10 @@ impl Pulls {
             };
             match stepped {
                 Ok(None) => {}
-                Ok(Some(e)) | Err(e) => crate::telemetry::warn(&format!(
-                    "sluice: warning: taking in {branch}'s pull requests: {}: {e:#}",
-                    place(p.number)
-                )),
+                Ok(Some(e)) | Err(e) => self.met.borrow_mut().push(IntakeCause {
+                    asked: place(p.number),
+                    said: format!("{e:#}"),
+                }),
             }
         }
         self.keep_readings(s, &t, branch, now, &open, work.into_inner())?;
@@ -1173,10 +945,17 @@ impl Pulls {
             .filter(|(n, r)| latest.get(&place(**n)).is_some_and(|e| e.head.0 == r.head))
             .map(|(n, _)| *n)
             .collect();
-        self.unfollow(&t.repo, branch, &here);
+        // 128; record 0103 D6: a follow that could not be let go is one
+        // of the intake's causes, said by its caller.
+        if let Err(e) = self.unfollowed(&t.repo, branch, &here) {
+            self.met
+                .borrow_mut()
+                .push(IntakeCause::whole(branch, format!("{e:#}")));
+        }
         let version = s.seams().state.read(branch)?.version;
         self.kept.change_readings(&t.repo, branch, |kept| {
             kept.asked = Some(asked);
+            kept.met = self.met.borrow().clone();
             kept.tip = Some(t.tip.0.clone());
             kept.version = Some(version);
             kept.requests = work;
@@ -1337,11 +1116,12 @@ impl Pulls {
         // refuses holds it all the same, and the next pass tries again.
         if held && !p.draft {
             if let Err(e) = forge.set_draft(&t.repo, p.number, true) {
-                crate::telemetry::warn(&format!(
-                    "sluice: warning: #{} waits for the next submit, and GitHub would not mark \
-                     it a draft: {e:#}",
-                    p.number
-                ));
+                self.met.borrow_mut().push(IntakeCause {
+                    asked: place(p.number),
+                    said: format!(
+                        "it waits for the next submit, and GitHub would not mark it a draft: {e:#}"
+                    ),
+                });
             }
         }
         // Who withdrew a hand-opened pull request, when it was someone
@@ -2135,12 +1915,6 @@ fn removal(log: &[sluice_core::records::LogLine], id: u64) -> Option<DateTime<Ut
         .map(|t| t.with_timezone(&Utc))
 }
 
-/// 137: who a hand-over's withdrawal names: the host that takes
-/// `branch`'s pull requests in.
-fn handed_over_to(host: &str, branch: &str) -> String {
-    format!("{host} takes {branch}'s pull requests in")
-}
-
 /// 120, 137: whether `e` was withdrawn by its host's hand-over of its
 /// branch's pull requests to another host, which holds no request: its
 /// withdrawal's record names the host it handed over to (record 0088 as
@@ -2217,9 +1991,9 @@ fn withdrawer(by: &str) -> String {
 }
 
 /// Out of the queue without landing: withdrawn, blamed or conflicting;
-/// never withdrawn for a hand-over of intake, which is none of these and
-/// holds no request: whichever host holds the mark takes it in again as
-/// its conditions hold, the host that withdrew it included (120, 137).
+/// never withdrawn for an older sluice's hand-over of intake, which is
+/// none of these and holds no request: the host that keeps the branch
+/// takes it in again as its conditions hold (120, 137; record 0103 D4).
 fn left_unlanded(e: &Submission) -> bool {
     matches!(e.state, State::Withdrawn | State::Failed | State::Conflict) && !handed_over(e)
 }
@@ -3015,9 +2789,12 @@ impl crate::PullRequests for Pulls {
 
     fn across(&self, seams: Seams<'_>, clock: &dyn Clock, branch: &str) -> Result<Option<Across>> {
         let s = Sluice::new(seams, clock);
-        // 26, 80: where the branch's records are on its remote, every host
-        // reads the request's submission from them, as its queue shows it.
-        let Some(t) = self.target(&s, branch)?.filter(|t| !t.signed) else {
+        // Record 0103 D5: a branch another host keeps on its remote; the
+        // host that keeps it shows its requests in its queue.
+        let Some(t) = self.target(&s, branch)? else {
+            return Ok(None);
+        };
+        let Some(keeper) = self.kept_elsewhere(&s, &t, branch)? else {
             return Ok(None);
         };
         let repo = &t.repo;
@@ -3048,7 +2825,7 @@ impl crate::PullRequests for Pulls {
         let (rows, gone) = self.across_rows(&s, branch, follows, read)?;
         // Design D3: one read merged or closed is said once, here.
         self.unfollow(repo, branch, &gone);
-        Ok(self.across_of(&t, branch, rows))
+        Ok(across_of(keeper, rows))
     }
 
     fn kept_across(
@@ -3060,7 +2837,7 @@ impl crate::PullRequests for Pulls {
         // 129: the branch's policy read from git once while its revision
         // stands, across the reader's ticks.
         let s = Sluice::new(seams, clock).keeping(&self.policies);
-        let target = self.target(&s, branch)?.filter(|t| !t.signed);
+        let target = self.target(&s, branch)?.filter(|t| t.signed);
         let Some((t, modified)) = target.and_then(|t| {
             let modified = self.kept.follows_modified(&t.repo, branch)?;
             Some((t, modified))
@@ -3068,22 +2845,28 @@ impl crate::PullRequests for Pulls {
             self.kept_across.borrow_mut().remove(branch);
             return Ok(None);
         };
-        // The mark's commit, read with no process: what it says is read
-        // again only once it moved (rule core.31).
-        let mark = self.pushed(&t.remote)?.intake_mark_at(branch)?;
+        // The branch's lead, read from its records as last fetched, with no
+        // process while they stand: the rows are read again only once it or
+        // the kept file moved (rule core.31; record 0103 D5).
+        let lead = s.keeper(branch)?;
         if let Some(k) = self.kept_across.borrow().get(branch) {
-            if k.modified == modified && k.mark == mark {
+            if k.modified == modified && k.lead == lead {
                 return Ok(k.across.clone());
             }
         }
-        let follows = self.kept.follows(&t.repo, branch).requests;
-        let (rows, _) = self.across_rows(&s, branch, follows, |_, kept| kept)?;
-        let across = self.across_of(&t, branch, rows);
+        let across = match lead.as_deref() == Some(self.peer.name.as_str()) {
+            true => None,
+            false => {
+                let follows = self.kept.follows(&t.repo, branch).requests;
+                let (rows, _) = self.across_rows(&s, branch, follows, |_, kept| kept)?;
+                across_of(lead.clone(), rows)
+            }
+        };
         self.kept_across.borrow_mut().insert(
             branch.to_string(),
             KeptAcross {
                 modified,
-                mark,
+                lead,
                 across: across.clone(),
             },
         );
@@ -3135,23 +2918,22 @@ impl crate::PullRequests for Pulls {
         names.dedup();
         let mut out = Vec::new();
         for n in names {
-            if policy
-                .rules_for(&n)?
-                .is_some_and(|r| r.pull_requests.is_some())
-            {
+            // 137, S64; record 0103 D2: a branch refused for a pull request
+            // table on records each host keeps is passed by, and every
+            // other listed.
+            let rules = match policy.rules_for(&n) {
+                Ok(rules) => rules,
+                Err(e) if e.downcast_ref::<NoIntake>().is_some() => continue,
+                Err(e) => return Err(e),
+            };
+            if rules.is_some_and(|r| r.pull_requests.is_some()) {
                 out.push(n);
             }
         }
         Ok(out)
     }
 
-    fn intake(
-        &self,
-        seams: Seams<'_>,
-        clock: &dyn Clock,
-        branch: &str,
-        taker: Taker,
-    ) -> Result<bool> {
+    fn intake(&self, seams: Seams<'_>, clock: &dyn Clock, branch: &str) -> Result<Intake> {
         let memo = ReadOnce {
             branch: seams.branch,
             read: RefCell::default(),
@@ -3159,16 +2941,36 @@ impl crate::PullRequests for Pulls {
         let s = Sluice::new(once(seams, &memo), clock)
             .keeping(&self.policies)
             .as_peer(self.peer.clone());
-        self.take_in(&s, clock, branch, taker)
-            .with_context(|| format!("taking in {branch}'s pull requests"))
+        self.met.borrow_mut().clear();
+        self.ran.set(false);
+        self.remote.replace(None);
+        let takes = self.take_in(&s, clock, branch);
+        let mut causes = std::mem::take(&mut *self.met.borrow_mut());
+        let remote = self.remote.take();
+        match takes {
+            Ok(takes) => Ok(Intake {
+                takes,
+                ran: self.ran.get(),
+                remote,
+                causes,
+            }),
+            // A spent allowance is its caller's to say, by its pause (134).
+            Err(e) if retry::limited(&e).is_some() => Err(e),
+            // 128: the branch's whole intake ended, said beside the rest.
+            Err(e) => {
+                causes.push(IntakeCause::whole(branch, format!("{e:#}")));
+                Ok(Intake {
+                    takes: true,
+                    ran: true,
+                    remote,
+                    causes,
+                })
+            }
+        }
     }
 
-    fn elsewhere(&self, branch: &str) -> Option<String> {
-        self.away.borrow().get(branch).cloned()
-    }
-
-    fn let_go(&self) {
-        self.let_go_marks();
+    fn elsewhere(&self, branch: &str) -> bool {
+        self.away.borrow().contains_key(branch)
     }
 
     fn open(
@@ -3263,9 +3065,15 @@ impl crate::PullRequests for Pulls {
         // 136: GitHub is asked about the request no more often than once
         // in a quarter of the host's interval; between, what it last said.
         let now = clock.now();
-        let away = self.away.borrow().get(branch).cloned();
-        if let Some(host) = away {
-            return self.follow_across(forge, &t, branch, n, now, &host);
+        // Record 0103 D5: a branch another host keeps on its remote is
+        // followed by GitHub's word and sluice's check on the request's
+        // head, naming the host that keeps it.
+        if let Some(keeper) = self.kept_elsewhere(&s, &t, branch)? {
+            self.away
+                .borrow_mut()
+                .insert(branch.to_string(), keeper.clone().unwrap_or_default());
+            let by = keeper.map(|host| TakenInBy { host });
+            return self.follow_across(forge, &t, branch, n, now, by);
         }
         let fresh = self
             .seen
@@ -3388,13 +3196,18 @@ impl crate::PullRequests for Pulls {
 /// conflict sent back. Held for the next submit is sent back while the
 /// pull request is a draft, which only a ready mark ends, the next
 /// submit's or a person's; once one has, the request has had its
-/// submitter's act and waits for `host`, which the branch's intake mark
-/// names, to take it in again (120, C.5). Anything else is open as the
-/// check says, with the queue it carries and its words beneath, the first
-/// line, which says the same as the queue, left out (design D2, D5); no
-/// check is open and `waiting`. Its `taken_in_by` is left for the caller,
-/// which reads the mark.
-fn as_its_check_says(posting: Option<Posting>, head: &str, draft: bool, host: &str) -> Followed {
+/// submitter's act and waits for `host`, which keeps the branch, to take
+/// it in again (120, C.5). Anything else is open as the check says, with
+/// the queue it carries and its words beneath, the first line, which says
+/// the same as the queue, left out (design D2, D5); no check is open and
+/// `waiting`. Its `taken_in_by` is left for the caller, which reads the
+/// branch's records (record 0103 D5).
+fn as_its_check_says(
+    posting: Option<Posting>,
+    head: &str,
+    draft: bool,
+    host: Option<&str>,
+) -> Followed {
     let open = |title: String, lines: Vec<String>, queue: Option<Queue>| Followed::Open {
         title,
         lines,
@@ -3421,7 +3234,10 @@ fn as_its_check_says(posting: Option<Posting>, head: &str, draft: bool, host: &s
         Told::SentBack { conflict } => sent_back(conflict, posting),
         Told::Held if draft => sent_back(false, posting),
         Told::Held => open(
-            format!("waiting to be taken in by {host}"),
+            match host {
+                Some(host) => format!("waiting to be taken in by {host}"),
+                None => "waiting to be taken in".into(),
+            },
             Vec::new(),
             queue,
         ),
@@ -3437,6 +3253,15 @@ fn as_its_check_says(posting: Option<Posting>, head: &str, draft: bool, host: &s
             open(posting.title, lines, queue)
         }
     }
+}
+
+/// 137, design D2: `rows` with `keeper`, the host that keeps their
+/// branch; `None` where there are none (record 0103 D5).
+fn across_of(keeper: Option<String>, rows: Vec<AcrossRow>) -> Option<Across> {
+    (!rows.is_empty()).then(|| Across {
+        taken_in_by: keeper.map(|host| TakenInBy { host }),
+        pull_requests: rows,
+    })
 }
 
 /// 137: a pull request at `head` landed, while another host takes its
@@ -3465,7 +3290,7 @@ fn landed_as_it_says(posting: Option<Posting>, head: &str, draft: bool) -> Follo
 /// 0096).
 fn sent_back_or_held(posting: Option<Posting>, head: &str) -> bool {
     matches!(
-        as_its_check_says(posting, head, true, ""),
+        as_its_check_says(posting, head, true, None),
         Followed::SentBack { .. }
     )
 }
@@ -3479,9 +3304,8 @@ impl Pulls {
     /// Merged is landed, and closed and not merged is closed; otherwise it
     /// is as [`as_its_check_says`] reads the check, never as the conclusion
     /// GitHub keeps for it (record 0096). A request said to be landed or
-    /// closed is followed no longer (design D3). One still open names the
-    /// host the intake mark names, as the branch's last fetch brought it
-    /// (design D2).
+    /// closed is followed no longer (design D3). One still open names `by`,
+    /// the host that takes the branch's pull requests in (record 0103 D5).
     fn follow_across(
         &self,
         forge: &dyn Forge,
@@ -3489,7 +3313,7 @@ impl Pulls {
         branch: &str,
         n: u64,
         now: DateTime<Utc>,
-        host: &str,
+        by: Option<TakenInBy>,
     ) -> Result<Followed> {
         let repo = &t.repo;
         let Some(f) = self.read_followed(forge, repo, branch, n, now)? else {
@@ -3499,7 +3323,12 @@ impl Pulls {
         let mut followed = if f.merged {
             landed_as_it_says(posting, &f.head, f.draft)
         } else {
-            match as_its_check_says(posting, &f.head, f.draft, host) {
+            match as_its_check_says(
+                posting,
+                &f.head,
+                f.draft,
+                by.as_ref().map(|b| b.host.as_str()),
+            ) {
                 landed @ Followed::Landed { .. } => landed,
                 _ if !f.open => Followed::Closed,
                 other => other,
@@ -3507,9 +3336,7 @@ impl Pulls {
         };
         match &mut followed {
             Followed::Landed { .. } | Followed::Closed => self.unfollow(repo, branch, &[n]),
-            Followed::Open { taken_in_by, .. } => {
-                *taken_in_by = self.taken_in_by(&t.remote, branch);
-            }
+            Followed::Open { taken_in_by, .. } => *taken_in_by = by,
             _ => {}
         }
         Ok(followed)
@@ -3669,61 +3496,43 @@ impl Pulls {
         Ok((rows, gone))
     }
 
-    /// 137, design D2: `rows` with the host `t`'s intake mark names for
-    /// `branch`; `None` where there are none.
-    fn across_of(&self, t: &Target, branch: &str, rows: Vec<AcrossRow>) -> Option<Across> {
-        (!rows.is_empty()).then(|| Across {
-            taken_in_by: self.taken_in_by(&t.remote, branch),
-            pull_requests: rows,
-        })
+    /// Record 0103 D5: where `t`'s branch's records are on its remote and
+    /// this host does not keep it, the host the records name as keeping
+    /// it, as this host last fetched them, `None` where none does; `None`
+    /// (the outer) where this host keeps it or each host keeps its own.
+    fn kept_elsewhere(
+        &self,
+        s: &Sluice<'_>,
+        t: &Target,
+        branch: &str,
+    ) -> Result<Option<Option<String>>> {
+        if !t.signed {
+            return Ok(None);
+        }
+        let keeper = s.keeper(branch)?;
+        Ok((keeper.as_deref() != Some(self.peer.name.as_str())).then_some(keeper))
     }
 
     /// 137, design D3: follow `numbers` into `branch` no longer, writing
     /// the kept follows only where they hold one of them; one that could
     /// not be let go is warned of.
     fn unfollow(&self, repo: &Repo, branch: &str, numbers: &[u64]) {
-        let follows = self.kept.follows(repo, branch);
-        if !numbers.iter().any(|n| follows.requests.contains_key(n)) {
-            return;
-        }
-        let kept = self.kept.change_follows(repo, branch, |follows| {
-            for n in numbers {
-                follows.requests.remove(n);
-            }
-        });
-        if let Err(e) = kept {
+        if let Err(e) = self.unfollowed(repo, branch, numbers) {
             crate::telemetry::warn(&format!("sluice: warning: {e:#}"));
         }
     }
 
-    /// 137, design D2: the host `branch`'s intake mark names and whether
-    /// its `sluice run` or a wait holds it, as the branch's last fetch from
-    /// `remote` brought it, with no fetch of its own (129); `None` where no
-    /// mark stands, or where it could not be read, which is warned of.
-    fn taken_in_by(&self, remote: &str, branch: &str) -> Option<TakenInBy> {
-        match self.pushed(remote).and_then(|p| p.intake_mark(branch)) {
-            Ok(mark) => mark.map(|(_, m)| TakenInBy {
-                host: m.host,
-                holder: m.holder,
-            }),
-            Err(e) => {
-                crate::telemetry::warn(&format!("sluice: warning: {e:#}"));
-                None
+    /// [`Pulls::unfollow`], what could not be let go its error.
+    fn unfollowed(&self, repo: &Repo, branch: &str, numbers: &[u64]) -> Result<()> {
+        let follows = self.kept.follows(repo, branch);
+        if !numbers.iter().any(|n| follows.requests.contains_key(n)) {
+            return Ok(());
+        }
+        self.kept.change_follows(repo, branch, |follows| {
+            for n in numbers {
+                follows.requests.remove(n);
             }
-        }
-    }
-
-    /// 137: the other host that takes `branch`'s pull requests in, as this
-    /// process's intake last found it, or else as the intake mark the
-    /// branch's last fetch brought names it, with no fetch of its own (129);
-    /// `None` where no mark stands or it names this host.
-    fn taker_elsewhere(&self, t: &Target, branch: &str) -> Option<String> {
-        if let Some(host) = self.away.borrow().get(branch) {
-            return Some(host.clone());
-        }
-        self.taken_in_by(&t.remote, branch)
-            .map(|by| by.host)
-            .filter(|host| *host != self.peer.name)
+        })
     }
 
     /// 125: every head read before anything is pushed, and a refusal for
@@ -3948,9 +3757,10 @@ impl Pulls {
             ));
         }
         // 137, design D3: where another host takes the branch's pull
-        // requests in, as the mark this host last fetched names it, the host
-        // follows each request the act opened, updated or marked ready.
-        if !t.signed && self.taker_elsewhere(&t, branch).is_some() {
+        // requests in, the host that keeps it on its remote, the host
+        // follows each request the act opened, updated or marked ready
+        // (record 0103 D5).
+        if self.kept_elsewhere(&s, &t, branch)?.is_some() {
             let follows = acted
                 .iter()
                 .map(|(p, _)| {
@@ -5149,7 +4959,7 @@ mod tests {
             posting.clone(),
             "h",
             draft,
-            "b",
+            Some("b"),
         ) {
             Followed::SentBack {
                 conflict,
@@ -5243,7 +5053,7 @@ mod tests {
             Some(queued("main", &[], on_b(Some("queued"))).posting),
             "h",
             false,
-            "b",
+            Some("b"),
         ) {
             Followed::Open { lines, queue, .. } => {
                 assert_eq!(

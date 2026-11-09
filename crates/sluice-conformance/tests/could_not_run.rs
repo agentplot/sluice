@@ -628,8 +628,14 @@ fn session_exec_switched(
     let place = h.place(worktree);
     let plan = s.session_plan(BRANCH).unwrap().expect("managed");
     let session = s.seams().driver.session(&place).unwrap();
+    let part = s
+        .seams()
+        .tests
+        .hold(sluice_seams::RunKind::Session)
+        .unwrap()
+        .expect("room on the host");
     let started = s
-        .start_session(&plan, &place, &session.head, command)
+        .start_session(&plan, &place, &session.head, command, part)
         .unwrap();
     h.w().nix_system(Some(to));
     let report = match s.seams().tests.progress(&started.run).unwrap() {
