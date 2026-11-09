@@ -1735,7 +1735,10 @@ fn the_check_names_its_host_and_queue() {
     assert_eq!(g.posts_on(&b_head), on_b, "{:?}", g.posted(&b_head));
     assert_eq!(g.posts_on(&c_head), on_c, "{:?}", g.posted(&c_head));
     if let Ok(process) = std::fs::read_to_string(&pid) {
-        let _ = Command::new("kill").arg(process.trim()).status();
+        let _ = Command::new("kill")
+            .arg(process.trim())
+            .stderr(Stdio::null())
+            .status();
     }
 }
 
@@ -5284,7 +5287,10 @@ fn a_host_that_stopped_passes_main_on_after_its_lease() {
     }
     // A stops: nothing of it runs, and its check is ended under it.
     let process = std::fs::read_to_string(&pid).unwrap();
-    let _ = Command::new("kill").arg(process.trim()).status();
+    let _ = Command::new("kill")
+        .arg(process.trim())
+        .stderr(Stdio::null())
+        .status();
     std::fs::remove_file(&pid).unwrap();
     let b = g.other("b", "lease = \"30s\"\nalive = \"10s\"", &g.signing("b"));
     let said = b.run("3");
@@ -5295,7 +5301,10 @@ fn a_host_that_stopped_passes_main_on_after_its_lease() {
     assert_eq!(block(&summary)["host"], "b", "{summary}");
     assert_eq!(g.mark(), None, "no intake mark");
     if let Ok(process) = std::fs::read_to_string(&pid) {
-        let _ = Command::new("kill").arg(process.trim()).status();
+        let _ = Command::new("kill")
+            .arg(process.trim())
+            .stderr(Stdio::null())
+            .status();
     }
 }
 
@@ -6043,7 +6052,10 @@ fn queued_on_the_other_host() {
     assert!(!said.contains("takes in:"), "{said}");
     assert!(!g.ever_kept("a"), "A took nothing in");
     if let Ok(process) = std::fs::read_to_string(&pid) {
-        let _ = Command::new("kill").arg(process.trim()).status();
+        let _ = Command::new("kill")
+            .arg(process.trim())
+            .stderr(Stdio::null())
+            .status();
     }
 }
 /// request-intake-host, "Waiting for a review there": host B keeps main,
@@ -6166,7 +6178,10 @@ fn the_keeper_and_the_check_name_different_hosts() {
     );
     assert!(said.contains(&line), "{said}");
     if let Ok(process) = std::fs::read_to_string(&pid) {
-        let _ = Command::new("kill").arg(process.trim()).status();
+        let _ = Command::new("kill")
+            .arg(process.trim())
+            .stderr(Stdio::null())
+            .status();
     }
 }
 
@@ -6816,6 +6831,161 @@ fn a_submit_leaves_a_request_queued_on_another_host() {
 // 0103 D4; rule core.33)
 // ---------------------------------------------------------------------------
 
+impl OnGitHub {
+    /// Rewrite the file `path` of main's records on the remote as `change`
+    /// gives it from what it holds, in a commit on `refs/sluice/state/main`
+    /// as sluice writes one, its version one more: as an older sluice, or
+    /// another host's, left them.
+    fn rewrite_on_the_remote(&self, path: &str, change: impl FnOnce(Value) -> Value) {
+        let scratch = Scratch::new("rewrite-records");
+        let index = scratch.path().join("index");
+        let git = |args: &[&str], input: Option<&str>| -> String {
+            let mut c = support::git_command();
+            c.arg("--git-dir")
+                .arg(self.bare.path())
+                .args(args)
+                .env("GIT_INDEX_FILE", &index)
+                .env("GIT_AUTHOR_NAME", "sluice")
+                .env("GIT_AUTHOR_EMAIL", "sluice@localhost")
+                .env("GIT_COMMITTER_NAME", "sluice")
+                .env("GIT_COMMITTER_EMAIL", "sluice@localhost")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            let mut child = c.spawn().unwrap();
+            if let Some(text) = input {
+                use std::io::Write as _;
+                child
+                    .stdin
+                    .take()
+                    .unwrap()
+                    .write_all(text.as_bytes())
+                    .unwrap();
+            }
+            drop(child.stdin.take());
+            let out = child.wait_with_output().unwrap();
+            assert!(out.status.success(), "git {args:?}: {}", text(&out));
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        let held = self
+            .on_the_remote(path)
+            .unwrap_or_else(|| panic!("no {path}"));
+        let changed = change(serde_json::from_str(&held).unwrap());
+        let version: u64 = self
+            .on_the_remote("version")
+            .expect("a version")
+            .trim()
+            .parse()
+            .unwrap();
+        let old = git(&["rev-parse", "refs/sluice/state/main"], None);
+        git(&["read-tree", &old], None);
+        let blob = git(
+            &["hash-object", "-w", "--stdin"],
+            Some(&changed.to_string()),
+        );
+        let next = git(
+            &["hash-object", "-w", "--stdin"],
+            Some(&format!("{}\n", version + 1)),
+        );
+        git(
+            &[
+                "update-index",
+                "--cacheinfo",
+                &format!("100644,{blob},{path}"),
+            ],
+            None,
+        );
+        git(
+            &[
+                "update-index",
+                "--cacheinfo",
+                &format!("100644,{next},version"),
+            ],
+            None,
+        );
+        let tree = git(&["write-tree"], None);
+        let commit = git(&["commit-tree", &tree, "-m", "an older sluice's"], None);
+        git(
+            &["update-ref", "refs/sluice/state/main", &commit, &old],
+            None,
+        );
+    }
+
+    /// Rewrite submission `id` in main's records on the remote as an older
+    /// sluice withdrew it for a hand-over to host `to` (record 0088 as
+    /// amended).
+    fn handed_over_before(&self, id: u64, to: &str) {
+        self.rewrite_on_the_remote(&format!("submissions/{id}.json"), |mut sub| {
+            sub["state"] = "withdrawn".into();
+            sub["withdrawn"] = serde_json::json!({
+                "by": format!("{to} takes main's pull requests in"),
+                "at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                "handed_over_to": to,
+            });
+            sub
+        });
+    }
+}
+
+/// request-intake-host, "Carried onto the remote": main's records hold a
+/// pull request's submission an older sluice withdrew for a hand-over to
+/// host `b`, and host A, which keeps main, reads the request open and ready
+/// at that head: A takes it in again, and nothing marks it a draft (120;
+/// record 0088 as amended; record 0103 D4).
+#[test]
+fn an_older_hand_over_carried_onto_the_remote_is_taken_in_again() {
+    let g = OnGitHub::new("intake-older-hand-over", "");
+    g.named("a", "");
+    let (n, head) = g.by_hand("unit/carried", &[("c.txt", Some("c\n"))], false);
+    g.on_main();
+    let out = g.skipping(g.repo.dir(), &["run", "--rounds", "1"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let id = g.of(n)[0]["id"].as_u64().expect("taken in");
+    g.handed_over_before(id, "b");
+    let drafts = mutations(&g, "convertPullRequestToDraft");
+    g.discovery_passes();
+    let out = g.skipping(g.repo.dir(), &["run", "--rounds", "1"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let subs = g.of(n);
+    assert_eq!(subs.len(), 2, "taken in again: {subs:?}");
+    let old = subs.iter().find(|s| s["id"] == id).unwrap();
+    assert_eq!(old["withdrawn"]["handed_over_to"], "b", "{subs:?}");
+    let again = subs.iter().find(|s| s["id"] != id).unwrap();
+    assert_eq!(again["head"], head.as_str(), "{subs:?}");
+    assert_ne!(again["state"], "withdrawn", "{subs:?}");
+    assert_eq!(mutations(&g, "convertPullRequestToDraft"), drafts);
+    assert!(!g.pull_from("unit/carried").draft);
+}
+
+/// request-intake-host, "A wait on a submission handed over follows its
+/// pull request": host B keeps main, and main's records hold host A's
+/// submission of its pull request, withdrawn for a hand-over to `b` by an
+/// older sluice, the request open and no draft. A's `sluice wait <id>
+/// --timeout 2s` exits 5, naming the request it follows, which A's follows
+/// name (122, 137; rule core.48; record 0103 D4).
+#[test]
+fn a_wait_on_an_older_hand_over_follows_its_pull_request() {
+    let g = OnGitHub::new("wait-older-hand-over", "");
+    g.named("a", "");
+    let b = g.other("b", "", &g.signing("b"));
+    b.run("1");
+    assert_eq!(g.keeper().as_deref(), Some("b"));
+    let w = g.session("handed", &[("h.txt", "h\n")]);
+    let out = g.wt_submit(&w, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let n = g.pull_from("unit/handed").number;
+    b.discovery_passes();
+    b.run("1");
+    let id = g.of(n)[0]["id"].as_u64().expect("B took it in");
+    g.handed_over_before(id, "b");
+    // What A's submit followed is forgotten: the wait follows it afresh.
+    let _ = std::fs::remove_file(g.state.path().join("sluice/forge/follows/o/r/main.json"));
+    let out = g.skipping(g.repo.dir(), &["wait", &id.to_string(), "--timeout", "2s"]);
+    assert_eq!(out.status.code(), Some(sluice::WAITING), "{}", text(&out));
+    assert!(text(&out).contains(&format!("#{n}")), "{}", text(&out));
+    assert!(g.follows()[n.to_string()].is_object(), "{}", g.follows());
+}
+
 /// request-intake-host, "An older operator's withdrawal" beside it: host
 /// A keeps main and took in the pull request a session's submit opened;
 /// a person closes it. It is withdrawn, naming no host, and opened again it
@@ -6849,7 +7019,10 @@ fn a_request_closed_and_opened_again_waits_as_a_draft() {
     assert_eq!(a.len(), 1, "never taken in again: {a:?}");
     assert!(g.pull_from("unit/closed").draft);
     if let Ok(process) = std::fs::read_to_string(&pid) {
-        let _ = Command::new("kill").arg(process.trim()).status();
+        let _ = Command::new("kill")
+            .arg(process.trim())
+            .stderr(Stdio::null())
+            .status();
     }
 }
 
@@ -6904,7 +7077,10 @@ fn a_request_closed_under_test_drops_its_combination() {
     assert_eq!(a[0]["state"], "withdrawn", "{a:?}");
     assert_eq!(g.combinations_holding(id), 0, "{}", text(&out));
     if let Ok(process) = std::fs::read_to_string(&pid) {
-        let _ = Command::new("kill").arg(process.trim()).status();
+        let _ = Command::new("kill")
+            .arg(process.trim())
+            .stderr(Stdio::null())
+            .status();
     }
 }
 
