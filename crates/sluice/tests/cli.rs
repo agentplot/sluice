@@ -6014,7 +6014,7 @@ impl sluice::PullRequests for Pull7 {
     ) -> anyhow::Result<sluice::Intake> {
         Ok(sluice::Intake {
             takes: true,
-            causes: Vec::new(),
+            ..sluice::Intake::default()
         })
     }
 

@@ -67,6 +67,25 @@ impl IntakeCause {
     }
 }
 
+/// `said` without the retry policy's count of its tries and how long they
+/// took, `tried 5 times over 28s: `, which differ from one call to the next
+/// of one standing cause (134; record 0103 D7).
+pub fn steady(said: &str) -> &str {
+    let Some(rest) = said.strip_prefix("tried ") else {
+        return said;
+    };
+    let Some((count, rest)) = rest.split_once(" times over ") else {
+        return said;
+    };
+    if count.is_empty() || !count.bytes().all(|b| b.is_ascii_digit()) {
+        return said;
+    }
+    match rest.split_once(": ") {
+        Some((_, words)) => words,
+        None => said,
+    }
+}
+
 /// One ref asked for and what git said of its refusal (133).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Cause {
@@ -116,7 +135,7 @@ impl Refusal {
         let met = r
             .causes
             .iter()
-            .position(|c| c.asked == read.asked && c.said == read.said);
+            .position(|c| c.asked == read.asked && steady(&c.said) == steady(&read.said));
         let cause = match met {
             Some(i) => r.causes.remove(i),
             None => Cause {

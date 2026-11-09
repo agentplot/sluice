@@ -327,6 +327,10 @@ pub struct Pulls {
     /// 128; record 0103 D6: each cause the intake under way met, given to
     /// its caller when it ends, and nothing said meanwhile.
     met: RefCell<Vec<IntakeCause>>,
+    /// Record 0103 D7: whether the intake under way decided this host's
+    /// intake of its branch, and the branch's remote, where it read it.
+    ran: std::cell::Cell<bool>,
+    remote: RefCell<Option<String>>,
     /// 137, design D5: what this process's reader's documents last carried
     /// of the pull requests into each branch the host follows, by branch,
     /// read again only once the kept file or the branch's lead moved.
@@ -433,6 +437,8 @@ impl Pulls {
             away: RefCell::default(),
             kept_across: RefCell::default(),
             met: RefCell::default(),
+            ran: std::cell::Cell::new(false),
+            remote: RefCell::default(),
         }
     }
 
@@ -676,11 +682,14 @@ impl Pulls {
         let Some(held) = self.target(s, branch)? else {
             return Ok(false);
         };
+        self.remote.replace(Some(held.remote.clone()));
         let forge = self.forge(branch)?;
-        // 137: another process of the host takes this pass (rule core.14).
+        // 137: another process of the host takes this pass (rule core.14),
+        // and decides this host's intake of it.
         let Some(_lock) = self.lock(branch)? else {
             return Ok(true);
         };
+        self.ran.set(true);
         self.log_lines
             .borrow_mut()
             .insert(branch.to_string(), held.conditions.log_lines);
@@ -2933,10 +2942,18 @@ impl crate::PullRequests for Pulls {
             .keeping(&self.policies)
             .as_peer(self.peer.clone());
         self.met.borrow_mut().clear();
+        self.ran.set(false);
+        self.remote.replace(None);
         let takes = self.take_in(&s, clock, branch);
         let mut causes = std::mem::take(&mut *self.met.borrow_mut());
+        let remote = self.remote.take();
         match takes {
-            Ok(takes) => Ok(Intake { takes, causes }),
+            Ok(takes) => Ok(Intake {
+                takes,
+                ran: self.ran.get(),
+                remote,
+                causes,
+            }),
             // A spent allowance is its caller's to say, by its pause (134).
             Err(e) if retry::limited(&e).is_some() => Err(e),
             // 128: the branch's whole intake ended, said beside the rest.
@@ -2944,6 +2961,8 @@ impl crate::PullRequests for Pulls {
                 causes.push(IntakeCause::whole(branch, format!("{e:#}")));
                 Ok(Intake {
                     takes: true,
+                    ran: true,
+                    remote,
                     causes,
                 })
             }

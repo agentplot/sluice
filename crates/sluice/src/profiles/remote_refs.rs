@@ -546,9 +546,16 @@ impl RemoteRefs {
     }
 
     /// Where this host keeps a refusal of its intake of `branch`'s pull
-    /// requests, beside its refusal of the remote (record 0103 D7).
+    /// requests, beside its refusal of the remote, in the repository's
+    /// common directory, so that every worktree's command reads the one
+    /// refusal its host's intake met (record 0103 D7).
     fn intake_refusal_file(&self, branch: &str) -> Result<PathBuf> {
-        self.own_file("intake", branch)
+        state_ref(branch)?;
+        Ok(self
+            .own
+            .root()
+            .join("intake")
+            .join(format!("{branch}.json")))
     }
 
     /// `branch`'s file under `what` in what this host keeps of the remote.

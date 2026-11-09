@@ -290,6 +290,12 @@ impl GitHub {
         self.failing.lock().unwrap().pulls = fail;
     }
 
+    /// Answer every call as GitHub does again: each trouble given by
+    /// [`GitHub::trouble`] ends.
+    pub fn calm(&self) {
+        self.troubles.lock().unwrap().clear();
+    }
+
     /// Answer the next `n` reads of a pull request 503, as GitHub does
     /// while it cannot answer.
     pub fn unavailable(&self, n: usize) {

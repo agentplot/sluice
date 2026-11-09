@@ -1522,14 +1522,69 @@ fn a_failed_list_ends_intake_and_the_queue_still_lands() {
     );
 }
 
-/// deneb, 2026-11-05: GitHub renamed the repository, and its old address,
-/// which the remote still names, finds no installation of the app. A
-/// running driver says so with what to do once, never every pass: its
-/// intake on stderr, `main`'s round on stdout, and the refused read once
-/// in `main`'s log, in GitHub's words (133; rules core.28, core.29).
+impl OnGitHub {
+    /// What this host's host process said on its log, the one before its
+    /// own first: `log.1`, then `log` (135).
+    fn host_logs(&self) -> String {
+        let dir = self.state.path().join("sluice/host");
+        ["log.1", "log"]
+            .iter()
+            .map(|f| std::fs::read_to_string(dir.join(f)).unwrap_or_default())
+            .collect()
+    }
+
+    /// End this host's host process at once, as a host that restarts it
+    /// does; the next command starts another.
+    fn restart_host(&self) {
+        let version = self.state.path().join("sluice/host/version");
+        let Ok(bytes) = std::fs::read(&version) else {
+            return;
+        };
+        let named: Value = serde_json::from_slice(&bytes).unwrap();
+        let pid = named["pid"].as_u64().unwrap().to_string();
+        let _ = Command::new("kill")
+            .args(["-9", &pid])
+            .stderr(Stdio::null())
+            .status();
+        let until = Instant::now() + Duration::from_secs(10);
+        while Command::new("kill")
+            .args(["-0", &pid])
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success())
+        {
+            assert!(Instant::now() < until, "the host process goes on");
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
+    /// main's `read-refused` lines, marked `intake` or not.
+    fn refused_lines(&self, intake: bool) -> Vec<Value> {
+        self.log()
+            .into_iter()
+            .filter(|l| l["event"] == "read-refused" && (l["intake"] == true) == intake)
+            .collect()
+    }
+
+    /// main's `read-again` lines, marked `intake` or not.
+    fn read_again_lines(&self, intake: bool) -> Vec<Value> {
+        self.log()
+            .into_iter()
+            .filter(|l| l["event"] == "read-again" && (l["intake"] == true) == intake)
+            .collect()
+    }
+}
+
+/// 133, rule core.28: GitHub finds no installation of the App on the
+/// repository, as after a rename. Three passes of the host process say
+/// the intake's failure on its log once, with what to do; once GitHub
+/// answers again, main's log holds the intake's `read-refused` line once,
+/// marked `intake`, beside the round's of main's records (record 0103
+/// D7).
 #[test]
 fn a_repository_github_no_longer_finds_is_said_once_with_what_to_do() {
     let g = OnGitHub::new("pr-renamed", "");
+    g.named("a", "");
     let (n, _) = g.by_hand("unit/renamed", &[("slow", Some("x\n"))], false);
     g.step();
     assert_eq!(g.of(n).len(), 1, "{:?}", g.subs());
@@ -1540,34 +1595,139 @@ fn a_repository_github_no_longer_finds_is_said_once_with_what_to_do() {
         github::Trouble::Status(404),
     );
     g.discovery_passes();
-    let out = g.skipping(g.repo.dir(), &["run", "--rounds", "3"]);
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let stderr = String::from_utf8_lossy(&out.stderr);
+    g.on_main();
+    // The step's host process ended, so the passes are the run's own, each
+    // asked, which reach GitHub afresh.
+    g.restart_host();
+    // Each pass passes main by, its read refused.
+    g.skipping(g.repo.dir(), &["run", "--rounds", "3"]);
     let said = "GET /repos/o/r/installation: 404 Not Found";
     let todo = format!(
         "GitHub finds no installation of app {} on o/r: if the repository was renamed or \
          transferred, point the remote that names it at its new address",
         github::APP
     );
+    let log = g.host_logs();
     let intake = "sluice: warning: taking in main's pull requests: ";
-    assert_eq!(stderr.matches(intake).count(), 1, "{}", text(&out));
-    let warned = &stderr[stderr.find(intake).unwrap()..];
+    assert_eq!(log.matches(intake).count(), 1, "{log}");
+    let warned = &log[log.find(intake).unwrap()..];
+    assert!(warned.contains(&format!("{said}\n{todo}")), "{log}");
+    // GitHub answers again: what was kept on the host is written.
+    g.gh.calm();
+    g.discovery_passes();
+    g.skipping(g.repo.dir(), &["run", "--rounds", "1"]);
+    let round = g.refused_lines(false);
+    assert_eq!(round.len(), 1, "{round:?}");
+    // main's records on its remote, the round's first read.
+    assert_eq!(round[0]["asked"], "refs/sluice/state/main");
+    assert_eq!(round[0]["said"], said);
+    let taking = g.refused_lines(true);
+    assert_eq!(taking.len(), 1, "{taking:?}");
+    assert_eq!(taking[0]["asked"], "main's pull requests");
     assert!(
-        warned.contains(&format!("{said}\n{todo}")),
-        "{}",
-        text(&out)
+        taking[0]["said"].as_str().unwrap().contains(said),
+        "{taking:?}"
     );
-    let passed = "main could not be read, passed by: ";
-    assert_eq!(stdout.matches(passed).count(), 1, "{}", text(&out));
-    assert_eq!(stdout.matches(&todo).count(), 1, "{}", text(&out));
-    let refused: Vec<Value> = g
-        .log()
-        .into_iter()
-        .filter(|l| l["event"] == "read-refused")
-        .collect();
-    assert_eq!(refused.len(), 1, "{refused:?}");
-    assert_eq!(refused[0]["asked"], "refs/heads/main");
-    assert_eq!(refused[0]["said"], said);
+}
+
+/// pull-request-intake, "A standing intake failure is said once for each
+/// cause and host": GitHub serves no head for a pull request into main,
+/// which host A keeps, for twenty passes of A's host process, which
+/// restarts once among them. Its log says the cause once, and main's log
+/// holds one `read-refused` line marked `intake` for it. Two steps beside
+/// them each print it, and a submit's own intake prints it, main's log
+/// gaining no line for any (128; record 0103 D7; rules core.11, core.14,
+/// core.28).
+#[test]
+fn a_standing_intake_failure_is_said_once_for_each_cause_and_host() {
+    let g = OnGitHub::new("intake-said-once", "");
+    g.named("a", "");
+    g.discovery("10s");
+    let (n, _) = g.by_hand("unit/gone", &[("g.txt", Some("g\n"))], false);
+    g.no_head(n);
+    g.on_main();
+    let warning = format!("sluice: warning: taking in main's pull requests: pull/{n}: ");
+    let out = g.skipping(g.repo.dir(), &["run", "--rounds", "10"]);
+    assert!(out.status.success(), "{}", text(&out));
+    g.restart_host();
+    let out = g.skipping(g.repo.dir(), &["run", "--rounds", "10"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let said = g.host_logs();
+    assert_eq!(said.matches(&warning).count(), 1, "{said}");
+    assert_eq!(g.refused_lines(true).len(), 1, "{:?}", g.log());
+    for _ in 0..2 {
+        let out = g.skipping(g.repo.dir(), &["step", "main"]);
+        assert!(out.status.success(), "{}", text(&out));
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains(&warning), "{}", text(&out));
+    }
+    let w = g.session("beside", &[("b.txt", "b\n")]);
+    let out = g
+        .command(env!("CARGO_BIN_EXE_sluice"), &w)
+        .env("SLUICE_ROUND_SLEEP", "record")
+        .args(["submit", "main", "--no-wait"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", text(&out));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains(&warning), "{}", text(&out));
+    assert_eq!(g.refused_lines(true).len(), 1, "{:?}", g.log());
+}
+
+/// remote-read-log, "A list GitHub refuses" and "A round reads the branch
+/// meanwhile": host A keeps main, and GitHub refuses main's open pull
+/// requests for twelve passes while A's rounds read main and its records,
+/// then answers the list. It refuses with an answer, which no call tries
+/// again (134), so the passes take no backoff. main's log holds one `read-refused` line
+/// marked `intake`, asking for main's pull requests in GitHub's words,
+/// no `read-again` so marked while the refusal stands, and then one, with
+/// `rounds` 12 (133; record 0103 D7).
+#[test]
+fn an_intake_refusal_ends_with_its_own_read_again() {
+    let g = OnGitHub::new("intake-read-again", "");
+    g.named("a", "");
+    g.discovery("10s");
+    let pid = g.repo.dir().join(".git/hang.pid");
+    let hang = format!("{}\n", pid.display());
+    let (n, _) = g.by_hand("unit/tested", &[("hang", Some(&hang))], false);
+    g.on_main();
+    let out = g.skipping(g.repo.dir(), &["run", "--rounds", "1"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(g.keeper().as_deref(), Some("a"), "{}", text(&out));
+    assert_eq!(g.of(n).len(), 1, "under test, so each round reads main");
+    g.gh.trouble(
+        "GET",
+        "/repos/o/r/pulls?state=open",
+        usize::MAX,
+        github::Trouble::Status(422),
+    );
+    let out = g.skipping(g.repo.dir(), &["run", "--rounds", "12"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let refused = g.refused_lines(true);
+    assert_eq!(refused.len(), 1, "{:?}", g.log());
+    assert_eq!(refused[0]["asked"], "main's pull requests");
+    assert_eq!(refused[0]["host"], "a");
+    assert!(
+        refused[0]["said"].as_str().unwrap().contains("422"),
+        "{refused:?}"
+    );
+    assert!(g.read_again_lines(true).is_empty(), "{:?}", g.log());
+    g.gh.calm();
+    let out = g.skipping(g.repo.dir(), &["run", "--rounds", "1"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let again = g.read_again_lines(true);
+    assert_eq!(again.len(), 1, "{:?}", g.log());
+    assert_eq!(again[0]["rounds"], 12, "{again:?}");
+    assert!(
+        g.read_again_lines(false).is_empty(),
+        "the round's read stood"
+    );
+    if let Ok(process) = std::fs::read_to_string(&pid) {
+        let _ = Command::new("kill")
+            .arg(process.trim())
+            .stderr(Stdio::null())
+            .status();
+    }
 }
 
 // ---------------------------------------------------------------------------

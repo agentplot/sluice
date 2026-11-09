@@ -100,6 +100,11 @@ impl LocalFiles {
 
     /// Records under `root`, for what a host keeps of a remote's records:
     /// its locks, its runs' tasks and the logs it kept.
+    /// The directory the records are kept in.
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
     pub fn at(root: PathBuf) -> Self {
         LocalFiles {
             root,

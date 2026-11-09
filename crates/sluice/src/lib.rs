@@ -764,6 +764,13 @@ pub enum Followed {
 pub struct Intake {
     /// Whether the branch takes pull requests.
     pub takes: bool,
+    /// Whether this host's intake of the branch was decided this pass: it
+    /// took the requests in, or found another host keeps the branch; not
+    /// where another process of the host held intake's lock (record 0103
+    /// D7).
+    pub ran: bool,
+    /// The branch's remote, where the intake read it.
+    pub remote: Option<String>,
     /// Each cause the intake met, in the order met, which it says to no
     /// one: its caller does.
     pub causes: Vec<sluice_core::refused::IntakeCause>,
@@ -919,23 +926,30 @@ impl PullRequests for () {
 }
 
 /// What [`intake`] gives its caller: each cause the branch's intake met,
-/// its whole intake's failure among them, which the caller says, and a
+/// its whole intake's failure among them, which a step and a submit say;
+/// those its note logged anew, which a pass says (record 0103 D7); and a
 /// spent allowance of GitHub's calls, the error, said as below.
 pub(crate) struct Intaken {
     pub causes: Vec<sluice_core::refused::IntakeCause>,
+    pub logged: Vec<sluice_core::refused::IntakeCause>,
     pub limited: Option<anyhow::Error>,
 }
 
 /// Take in `branch`'s pull requests before its round. What it met is
 /// given to the caller, who says it, and the round goes on, landing what
-/// is queued (128; record 0103 D6). A spent allowance of GitHub's calls is
-/// the error returned: one the retry policy stopped on at once, a round's,
-/// is said once for its pause on `out`, or on stderr under `--json` (133,
-/// 134; ADR 0071); one it waited out to its end, a wait's deadline or
-/// Ctrl-C, carries how long, and was said on stderr as the wait began.
+/// is queued (128; record 0103 D6). What it met is noted in this host's
+/// refusal of the branch's intake, which logs each cause once while it
+/// stands and its end at the first intake that meets none, read from
+/// what the records seam keeps and from no process's memory (133; record
+/// 0103 D7; rules core.11, core.28). A spent allowance of GitHub's calls
+/// is the error returned: one the retry policy stopped on at once, a
+/// round's, is said once for its pause on `out`, or on stderr under
+/// `--json` (133, 134; ADR 0071); one it waited out to its end, a wait's
+/// deadline or Ctrl-C, carries how long, and was said on stderr as the
+/// wait began.
 fn intake(
     pulls: &dyn PullRequests,
-    seams: Seams<'_>,
+    s: &Sluice<'_>,
     clock: &dyn Clock,
     branch: &str,
     json: bool,
@@ -946,21 +960,37 @@ fn intake(
         static SAID: std::cell::Cell<Option<chrono::DateTime<chrono::Utc>>> =
             const { std::cell::Cell::new(None) };
     }
-    let e = match pulls.intake(seams, clock, branch) {
+    let e = match pulls.intake(s.seams(), clock, branch) {
         Ok(taken) => {
+            let logged = match (taken.takes && taken.ran, taken.causes.is_empty()) {
+                (false, _) => Vec::new(),
+                (true, true) => {
+                    s.note_intake_read(branch);
+                    Vec::new()
+                }
+                (true, false) => {
+                    let remote = taken.remote.or_else(|| remote_of(s, branch));
+                    s.note_intake_refused(branch, remote.as_deref().unwrap_or(""), &taken.causes)
+                }
+            };
             return Intaken {
                 causes: taken.causes,
+                logged,
                 limited: None,
-            }
+            };
         }
         Err(e) => e,
     };
     let Some(limited) = retry::limited(&e) else {
+        let causes = vec![sluice_core::refused::IntakeCause::whole(
+            branch,
+            format!("{e:#}"),
+        )];
+        let remote = remote_of(s, branch);
+        let logged = s.note_intake_refused(branch, remote.as_deref().unwrap_or(""), &causes);
         return Intaken {
-            causes: vec![sluice_core::refused::IntakeCause::whole(
-                branch,
-                format!("{e:#}"),
-            )],
+            causes,
+            logged,
             limited: None,
         };
     };
@@ -974,37 +1004,26 @@ fn intake(
     }
     Intaken {
         causes: Vec::new(),
+        logged: Vec::new(),
         limited: Some(e),
     }
 }
 
-/// Say on stderr each cause a pass's intake of `branch` met, once while
-/// its words stand in this process (26, 133).
-fn say_once(branch: &str, causes: &[sluice_core::refused::IntakeCause]) {
-    thread_local! {
-        /// Each branch's intake failure as last said, while it stands.
-        static FAILED: std::cell::RefCell<BTreeMap<String, String>> =
-            std::cell::RefCell::default();
-    }
-    if causes.is_empty() {
-        FAILED.with_borrow_mut(|f| f.remove(branch));
-        return;
-    }
-    let words: Vec<String> = causes
-        .iter()
-        .map(|c| format!("sluice: warning: {}", c.words(branch)))
-        .collect();
-    let joined = words.join("\n");
-    let said = FAILED.with_borrow_mut(|f| f.insert(branch.to_string(), joined.clone()));
-    if said.as_ref() != Some(&joined) {
-        for w in &words {
-            telemetry::warn(w);
-        }
-    }
+/// The remote `branch`'s policy names, at its revision as the host holds
+/// it, for its intake's refusal where the intake did not read it.
+fn remote_of(s: &Sluice<'_>, branch: &str) -> Option<String> {
+    let rev = s.seams().branch.held(branch).ok().flatten()?;
+    s.policy_at(&rev)
+        .ok()
+        .flatten()?
+        .remote_of(branch)
+        .ok()
+        .flatten()
 }
 
-/// Say on stderr each cause a submit's own intake of `branch` met (128;
-/// record 0103 D6).
+/// Say on stderr each of `causes` of `branch`'s intake: a submit's and a
+/// step's every one it met, a pass's those its note logged anew (128;
+/// record 0103 D6, D7).
 fn say_each(branch: &str, causes: &[sluice_core::refused::IntakeCause]) {
     for c in causes {
         telemetry::warn(&format!("sluice: warning: {}", c.words(branch)));
@@ -4363,7 +4382,7 @@ fn submit_pull(
         if first && !mode.waits() {
             // The user, 2026-10-28: a submit that does not wait fails at
             // once on a spent allowance, naming when it ends (134).
-            let met = intake(pulls, seams, clock, branch, json, out);
+            let met = intake(pulls, s, clock, branch, json, out);
             say_each(branch, &met.causes);
             match met.limited {
                 Some(e) if no_wait => return Err(e),
@@ -4776,7 +4795,7 @@ fn submit_pull_group(
         // 135: as `submit_pull`, the first pass's intake the submit's own,
         // and the host process told of it; every other its own.
         if first {
-            let met = intake(pulls, seams, clock, branch, json, out);
+            let met = intake(pulls, s, clock, branch, json, out);
             say_each(branch, &met.causes);
             match met.limited {
                 Some(e) if no_wait => return Err(e),

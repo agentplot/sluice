@@ -38,7 +38,7 @@ use crate::records::{
     DecidedRecord, Event, FailedTask, Held, LandingCommitRecord, LandingIntent, OutboxItem,
     Recorded, ResultKind, ResultLine, RunState, State, SystemRun, Tested,
 };
-use crate::refused::{IntakeCause, Refusal};
+use crate::refused::{steady, IntakeCause, Refusal};
 use crate::release::{ReleaseOutcome, Releasing};
 use crate::text::{beside_message, landing_message};
 use crate::{verdict, Sluice, OUTPUT};
@@ -3549,7 +3549,11 @@ impl Sluice<'_> {
             let met: Vec<(String, String)> = standing
                 .iter()
                 .filter(|r| r.ended.is_none())
-                .flat_map(|r| r.causes.iter().map(|c| (c.asked.clone(), c.said.clone())))
+                .flat_map(|r| {
+                    r.causes
+                        .iter()
+                        .map(|c| (c.asked.clone(), steady(&c.said).to_string()))
+                })
                 .collect();
             let r = Refusal::intake_refused(standing, remote, causes, &self.now());
             self.keep_intake_refusal(branch, Some(&r))?;
@@ -3561,9 +3565,11 @@ impl Sluice<'_> {
                 );
             }
             let mut new: Vec<IntakeCause> = Vec::new();
+            let mut seen = met;
             for c in causes {
-                let key = (c.asked.clone(), c.said.clone());
-                if !met.contains(&key) && !new.contains(c) {
+                let key = (c.asked.clone(), steady(&c.said).to_string());
+                if !seen.contains(&key) {
+                    seen.push(key);
                     new.push(c.clone());
                 }
             }
