@@ -1,7 +1,7 @@
 //! A branch's records, parsed from a snapshot and written back as changes
 //! (61, 62; rule core.14).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{anyhow, Context, Result};
 use sluice_seams::{Changes, Rev, Snapshot};
@@ -411,7 +411,28 @@ impl Line {
         if !index.is_empty() {
             changes.append.insert(FINISHED_INDEX.into(), index);
         }
-        if !added.is_empty() {
+        let moving: BTreeSet<u64> = self
+            .subs
+            .values()
+            .filter(|s| changed && self.done_with(s))
+            .map(|s| s.id)
+            .collect();
+        let let_go = match changed {
+            true => self.let_go(&moving),
+            false => BTreeSet::new(),
+        };
+        if !let_go.is_empty() {
+            let kept: Vec<weir_delivery::Record> = self
+                .deliveries
+                .iter()
+                .filter(|r| key_of(r).is_none_or(|key| !let_go.contains(key)))
+                .cloned()
+                .collect();
+            changes.put.insert(
+                DELIVERIES_FILE.into(),
+                weir_delivery::json::write_lines(&kept).into_bytes(),
+            );
+        } else if !added.is_empty() {
             changes.append.insert(
                 DELIVERIES_FILE.into(),
                 weir_delivery::json::write_lines(added).into_bytes(),
@@ -419,6 +440,49 @@ impl Line {
         }
         changes
     }
+
+    /// 51: the keys of the deliveries a write that moves `moving` to the
+    /// finished records lets go of: each done, every reader confirmed it
+    /// as `owed` reads them (weir 107, 111), whose submission this write
+    /// moves, or that was done as read and whose submission has moved
+    /// already. A delivery not done stays whatever becomes of its
+    /// submission, and a key that names no submission is never let go of
+    /// (I9; design D3).
+    fn let_go(&self, moving: &BTreeSet<u64>) -> BTreeSet<String> {
+        // `owed` reads what is done from the records alone; the time it
+        // asks for decides only what has expired.
+        let done = |records: &[weir_delivery::Record]| -> BTreeSet<String> {
+            weir_delivery::owed(records, "1970-01-01T00:00:00Z")
+                .map(|owed| owed.done.iter().map(|k| k.to_string()).collect())
+                .unwrap_or_default()
+        };
+        let was_done = done(&self.deliveries[..self.deliveries_read]);
+        done(&self.deliveries)
+            .into_iter()
+            .filter(|key| {
+                let Some(id) = submission_of(key) else {
+                    return false;
+                };
+                moving.contains(&id) || (was_done.contains(key) && !self.subs.contains_key(&id))
+            })
+            .collect()
+    }
+}
+
+/// The key a delivery's record names; `None` for a reader's known name,
+/// which names none and is never let go of (weir 106).
+fn key_of(record: &weir_delivery::Record) -> Option<&str> {
+    match record {
+        weir_delivery::Record::Delivery(d) => Some(d.key().as_str()),
+        weir_delivery::Record::Handover(h) => Some(h.key.as_str()),
+        weir_delivery::Record::Confirmation(c) => Some(c.key.as_str()),
+        weir_delivery::Record::Known(_) => None,
+    }
+}
+
+/// 51: the submission an outcome's key `<id>:<outcome>` names (design D2).
+pub fn submission_of(key: &str) -> Option<u64> {
+    key.split_once(':')?.0.parse().ok()
 }
 
 /// 51: a branch's deliveries as `deliveries.jsonl` holds them, one record

@@ -146,3 +146,124 @@ fn a_withdrawal_records_no_delivery() {
     assert!(of(&h, first).is_empty(), "{:?}", of(&h, first));
     assert_eq!(under(&h, &format!("{second}:landed")).len(), 1);
 }
+
+/// Add to the branch's deliveries what `call` gives over them, under the
+/// branch's lock, as a carrier or a reader would.
+fn by_hand(h: &Harness, call: impl FnOnce(&[Record]) -> Vec<Record>) {
+    use sluice_seams::Written;
+    let s = h.sluice();
+    let state = s.seams().state;
+    let _lock = state.lock(BRANCH).unwrap().expect("the lock");
+    let mut line = Line::load(BRANCH, state.read(BRANCH).unwrap()).unwrap();
+    let records = call(line.deliveries());
+    line.add_deliveries(&records);
+    let written = state.write(BRANCH, line.version, line.changes()).unwrap();
+    assert!(matches!(written, Written::Written(_)));
+}
+
+fn confirmed(records: &[Record], key: &str, reader: &str) -> Vec<Record> {
+    match weir_delivery::confirm(records, key, reader, "2026-11-08T10:40:12Z").unwrap() {
+        weir_delivery::Confirmed::Add(add) => add,
+        weir_delivery::Confirmed::Already(_) => Vec::new(),
+    }
+}
+
+fn handed(records: &[Record], key: &str, reader: &str) -> Vec<Record> {
+    match weir_delivery::hand(
+        records,
+        key,
+        reader,
+        "notice",
+        "2026-11-08T10:02:01Z",
+        false,
+    )
+    .unwrap()
+    {
+        weir_delivery::Handed::Add(add) => add,
+        weir_delivery::Handed::Confirmed(_) => Vec::new(),
+    }
+}
+
+fn known(h: &Harness, reader: &str) -> bool {
+    deliveries(h)
+        .iter()
+        .any(|r| matches!(r, Record::Known(k) if k.reader.as_str() == reader))
+}
+
+/// A landing decided and pushed, whose step stops before the outbox lets
+/// it go, so its submission stays among the live records until a later
+/// round moves it.
+fn landed_and_held(h: &Harness) -> u64 {
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let one = h.submit("unit/a");
+    h.step();
+    h.w().crash_after_next_notify();
+    for _ in 0..8 {
+        if h.sluice().step(BRANCH).is_err() {
+            break;
+        }
+    }
+    assert_eq!(h.doc().outbox.len(), 1, "its outcome still queued");
+    one
+}
+
+/// weir 107, I9: a delivery leaves the branch's records only once every
+/// reader has confirmed it, and then whole, in the write that moves its
+/// submission to the finished records or the first write after; a known
+/// name stays, and a delivery nobody confirmed stays with its hand-over.
+///
+/// satisfies: 51, 130, core.41
+#[test]
+fn only_a_done_delivery_leaves() {
+    // A landing confirmed.
+    let h = Harness::bolt();
+    let one = landed_and_held(&h);
+    let key = format!("{one}:landed");
+    by_hand(&h, |r| confirmed(r, &key, "unit/a"));
+    assert_eq!(
+        under(&h, &key).len(),
+        1,
+        "kept while its submission is live"
+    );
+    h.settle();
+    assert!(h.doc().outbox.is_empty());
+    assert!(of(&h, one).is_empty(), "let go of whole: {:?}", of(&h, one));
+    assert!(known(&h, "unit/a"), "the reader's name stays known");
+
+    // A landing nobody confirms.
+    let h = Harness::bolt();
+    let one = landed_and_held(&h);
+    let key = format!("{one}:landed");
+    by_hand(&h, |r| handed(r, &key, "unit/a"));
+    h.settle();
+    assert!(h.doc().outbox.is_empty());
+    let left = of(&h, one);
+    assert!(
+        left.iter().any(|r| matches!(r, Record::Delivery(_))),
+        "{left:?}"
+    );
+    assert!(
+        left.iter()
+            .any(|r| matches!(r, Record::Handover(o) if o.by.as_str() == "notice")),
+        "{left:?}"
+    );
+
+    // A landing confirmed once its submission has moved: let go of by the
+    // first write after.
+    let h = Harness::bolt();
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let one = h.submit("unit/a");
+    h.settle();
+    let key = format!("{one}:landed");
+    by_hand(&h, |r| confirmed(r, &key, "unit/a"));
+    assert_eq!(
+        under(&h, &key).len(),
+        1,
+        "kept by the write that confirms it"
+    );
+    h.work("unit/b", "agent-b", &[("b/lib", Some("b2"))]);
+    h.submit("unit/b");
+    h.settle();
+    assert!(of(&h, one).is_empty(), "{:?}", of(&h, one));
+    assert!(known(&h, "unit/a"));
+}
