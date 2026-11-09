@@ -94,6 +94,11 @@ pub struct Readings {
     pub version: Option<u64>,
     #[serde(default)]
     pub requests: BTreeMap<u64, Reading>,
+    /// 128; record 0103 D6: each cause the intake that last asked met,
+    /// which an intake that asks nothing meanwhile gives its caller as
+    /// standing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub met: Vec<sluice_core::refused::IntakeCause>,
 }
 
 /// What was last read and posted of one pull request (128, 136).

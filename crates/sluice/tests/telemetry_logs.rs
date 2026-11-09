@@ -137,7 +137,7 @@ impl PullRequests for Unreadable {
         Ok(Vec::new())
     }
 
-    fn intake(&self, _: Seams<'_>, _: &dyn Clock, _: &str) -> anyhow::Result<bool> {
+    fn intake(&self, _: Seams<'_>, _: &dyn Clock, _: &str) -> anyhow::Result<sluice::Intake> {
         anyhow::bail!("the forge refused ghp_0123456789abcdefghijABCDEFGHIJ012345")
     }
 
@@ -302,9 +302,12 @@ fn a_summary_says_where_the_output_is_kept_and_a_warning_is_sent_whole() {
         .filter(|r| r.severity_number() == Some(Severity::Warn))
         .collect();
     assert_eq!(warnings.len(), 1, "{records:?}");
+    // 128; record 0103 D6: the branch's whole intake, said by the step.
     assert_eq!(
         body(warnings[0]),
-        "sluice: warning: the forge refused [redacted]"
+        format!(
+            "sluice: warning: taking in {BRANCH}'s pull requests: the forge refused [redacted]"
+        )
     );
     telemetry.finish();
 }

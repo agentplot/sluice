@@ -759,6 +759,16 @@ pub enum Followed {
     Closed,
 }
 
+/// 128; record 0103 D6: what one intake of a branch came to.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Intake {
+    /// Whether the branch takes pull requests.
+    pub takes: bool,
+    /// Each cause the intake met, in the order met, which it says to no
+    /// one: its caller does.
+    pub causes: Vec<sluice_core::refused::IntakeCause>,
+}
+
 /// A branch whose work arrives as pull requests on its remote (C.5 pull
 /// request, C.7 `pull_requests`): the driver that takes them into its
 /// queue and opens them for `submit`.
@@ -770,9 +780,11 @@ pub trait PullRequests {
 
     /// Before a round of `branch`: submit each pull request ready, withdraw
     /// each changed, and post each one's state, where this host keeps the
-    /// branch on its remote and takes its pull requests in (137). `false`
-    /// for a branch that takes no pull requests.
-    fn intake(&self, seams: Seams<'_>, clock: &dyn Clock, branch: &str) -> Result<bool>;
+    /// branch on its remote and takes its pull requests in (137); each
+    /// cause it met beside whether the branch takes pull requests, which it
+    /// prints nowhere (128; record 0103 D6). An error is the branch's whole
+    /// intake's.
+    fn intake(&self, seams: Seams<'_>, clock: &dyn Clock, branch: &str) -> Result<Intake>;
 
     /// 137: whether another host takes `branch`'s pull requests in, as
     /// this process last took them in or followed one of them.
@@ -882,8 +894,8 @@ impl PullRequests for () {
         Ok(Vec::new())
     }
 
-    fn intake(&self, _: Seams<'_>, _: &dyn Clock, _: &str) -> Result<bool> {
-        Ok(false)
+    fn intake(&self, _: Seams<'_>, _: &dyn Clock, _: &str) -> Result<Intake> {
+        Ok(Intake::default())
     }
 
     fn open(
@@ -906,15 +918,21 @@ impl PullRequests for () {
     }
 }
 
-/// Take in `branch`'s pull requests before its round. One that cannot be
-/// read is said and the round goes on, landing what is queued; a failure
-/// that stands is said once, as a round's is, until intake reads again or
-/// it fails in other words (26, 133). A spent
-/// allowance of GitHub's calls is the error returned: one the retry
-/// policy stopped on at once, a round's, is said once for its pause on
-/// `out`, or on stderr under `--json` (133, 134; ADR 0071); one it waited
-/// out to its end, a wait's deadline or Ctrl-C, carries how long, and
-/// was said on stderr as the wait began.
+/// What [`intake`] gives its caller: each cause the branch's intake met,
+/// its whole intake's failure among them, which the caller says, and a
+/// spent allowance of GitHub's calls, the error, said as below.
+pub(crate) struct Intaken {
+    pub causes: Vec<sluice_core::refused::IntakeCause>,
+    pub limited: Option<anyhow::Error>,
+}
+
+/// Take in `branch`'s pull requests before its round. What it met is
+/// given to the caller, who says it, and the round goes on, landing what
+/// is queued (128; record 0103 D6). A spent allowance of GitHub's calls is
+/// the error returned: one the retry policy stopped on at once, a round's,
+/// is said once for its pause on `out`, or on stderr under `--json` (133,
+/// 134; ADR 0071); one it waited out to its end, a wait's deadline or
+/// Ctrl-C, carries how long, and was said on stderr as the wait began.
 fn intake(
     pulls: &dyn PullRequests,
     seams: Seams<'_>,
@@ -922,29 +940,29 @@ fn intake(
     branch: &str,
     json: bool,
     out: &mut dyn Write,
-) -> Option<anyhow::Error> {
+) -> Intaken {
     thread_local! {
         /// The end of the last pause a round said it passed by.
         static SAID: std::cell::Cell<Option<chrono::DateTime<chrono::Utc>>> =
             const { std::cell::Cell::new(None) };
-        /// Each branch's intake failure as last said, while it stands.
-        static FAILED: std::cell::RefCell<BTreeMap<String, String>> =
-            std::cell::RefCell::default();
     }
     let e = match pulls.intake(seams, clock, branch) {
-        Ok(_) => {
-            FAILED.with_borrow_mut(|f| f.remove(branch));
-            return None;
+        Ok(taken) => {
+            return Intaken {
+                causes: taken.causes,
+                limited: None,
+            }
         }
         Err(e) => e,
     };
     let Some(limited) = retry::limited(&e) else {
-        let words = format!("sluice: warning: {e:#}");
-        let said = FAILED.with_borrow_mut(|f| f.insert(branch.to_string(), words.clone()));
-        if said.as_ref() != Some(&words) {
-            telemetry::warn(&words);
-        }
-        return None;
+        return Intaken {
+            causes: vec![sluice_core::refused::IntakeCause::whole(
+                branch,
+                format!("{e:#}"),
+            )],
+            limited: None,
+        };
     };
     let waited = e.downcast_ref::<retry::Spent>().is_some();
     if !waited && SAID.get() != Some(limited.until) {
@@ -954,7 +972,43 @@ fn intake(
             telemetry::warn(&format!("sluice: {line}"));
         }
     }
-    Some(e)
+    Intaken {
+        causes: Vec::new(),
+        limited: Some(e),
+    }
+}
+
+/// Say on stderr each cause a pass's intake of `branch` met, once while
+/// its words stand in this process (26, 133).
+fn say_once(branch: &str, causes: &[sluice_core::refused::IntakeCause]) {
+    thread_local! {
+        /// Each branch's intake failure as last said, while it stands.
+        static FAILED: std::cell::RefCell<BTreeMap<String, String>> =
+            std::cell::RefCell::default();
+    }
+    if causes.is_empty() {
+        FAILED.with_borrow_mut(|f| f.remove(branch));
+        return;
+    }
+    let words: Vec<String> = causes
+        .iter()
+        .map(|c| format!("sluice: warning: {}", c.words(branch)))
+        .collect();
+    let joined = words.join("\n");
+    let said = FAILED.with_borrow_mut(|f| f.insert(branch.to_string(), joined.clone()));
+    if said.as_ref() != Some(&joined) {
+        for w in &words {
+            telemetry::warn(w);
+        }
+    }
+}
+
+/// Say on stderr each cause a submit's own intake of `branch` met (128;
+/// record 0103 D6).
+fn say_each(branch: &str, causes: &[sluice_core::refused::IntakeCause]) {
+    for c in causes {
+        telemetry::warn(&format!("sluice: warning: {}", c.words(branch)));
+    }
 }
 
 #[derive(Subcommand, Debug)]
@@ -1438,6 +1492,12 @@ pub fn run(
                 clock,
             };
             let stepped = host.host_process().step(&here, &branch)?;
+            // 128; record 0103 D6: every warning its round's intake met,
+            // each step, on stderr.
+            let warnings = stepped["warnings"].as_array().cloned().unwrap_or_default();
+            for w in warnings.iter().filter_map(|w| w.as_str()) {
+                telemetry::warn(&format!("sluice: warning: {w}"));
+            }
             let said = stepped["said"].as_array().cloned().unwrap_or_default();
             for line in said.iter().filter_map(|l| l.as_str()) {
                 if json {
@@ -4303,7 +4363,9 @@ fn submit_pull(
         if first && !mode.waits() {
             // The user, 2026-10-28: a submit that does not wait fails at
             // once on a spent allowance, naming when it ends (134).
-            match intake(pulls, seams, clock, branch, json, out) {
+            let met = intake(pulls, seams, clock, branch, json, out);
+            say_each(branch, &met.causes);
+            match met.limited {
                 Some(e) if no_wait => return Err(e),
                 Some(_) if INTERRUPTED.load(Ordering::SeqCst) => return Ok(STOPPED),
                 _ => {}
@@ -4714,7 +4776,9 @@ fn submit_pull_group(
         // 135: as `submit_pull`, the first pass's intake the submit's own,
         // and the host process told of it; every other its own.
         if first {
-            match intake(pulls, seams, clock, branch, json, out) {
+            let met = intake(pulls, seams, clock, branch, json, out);
+            say_each(branch, &met.causes);
+            match met.limited {
                 Some(e) if no_wait => return Err(e),
                 Some(_) if INTERRUPTED.load(Ordering::SeqCst) => break 'wait Some(STOPPED),
                 _ => {}

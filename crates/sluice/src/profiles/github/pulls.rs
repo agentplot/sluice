@@ -45,6 +45,7 @@ use chrono::{DateTime, SubsecRound, Utc};
 use sluice_core::line::Line;
 use sluice_core::policy::{NoIntake, Policy, PullRequests as Conditions, POLICY_PATH};
 use sluice_core::records::{Event, State, Submission};
+use sluice_core::refused::IntakeCause;
 use sluice_core::{
     Clock, Forecast, GroupRequest, Requester, Seams, Sluice, SubmitHead, SubmitRefusal,
     SubmitRequest, SubmittedHead, Withdrew,
@@ -64,7 +65,9 @@ use crate::identity::Identity;
 use crate::profiles::local_refs::LocalRefs;
 use crate::profiles::pushed_refs::PushedRefs;
 use crate::retry;
-use crate::{Across, AcrossRow, Ahead, Followed, GroupRefused, Opened, Queue, Short, TakenInBy};
+use crate::{
+    Across, AcrossRow, Ahead, Followed, GroupRefused, Intake, Opened, Queue, Short, TakenInBy,
+};
 use sluice_core::verdict_view::{Standing as Stands, VerdictView};
 
 /// The place a pull request's entry is submitted from.
@@ -321,6 +324,9 @@ pub struct Pulls {
     /// process last took its pull requests in or followed one, where that
     /// is another host; empty where no host keeps it yet.
     away: RefCell<BTreeMap<String, String>>,
+    /// 128; record 0103 D6: each cause the intake under way met, given to
+    /// its caller when it ends, and nothing said meanwhile.
+    met: RefCell<Vec<IntakeCause>>,
     /// 137, design D5: what this process's reader's documents last carried
     /// of the pull requests into each branch the host follows, by branch,
     /// read again only once the kept file or the branch's lead moved.
@@ -426,6 +432,7 @@ impl Pulls {
             peer,
             away: RefCell::default(),
             kept_across: RefCell::default(),
+            met: RefCell::default(),
         }
     }
 
@@ -688,6 +695,9 @@ impl Pulls {
         let still =
             kept.tip.as_deref() == Some(held.tip.0.as_str()) && kept.version == Some(version);
         if !due && still {
+            // 128; record 0103 D6: what the intake that last asked met
+            // stands, and its caller says it again.
+            self.met.borrow_mut().extend(kept.met.iter().cloned());
             // A notification of this round finds its pull request.
             let line = Line::load(branch, records)?;
             let subs: Vec<Submission> = line.subs.into_values().collect();
@@ -813,9 +823,12 @@ impl Pulls {
                     return Err(e);
                 }
                 // Refused otherwise: each is read alone this pass.
-                Err(e) => crate::telemetry::warn(&format!(
-                    "sluice: warning: taking in {branch}'s pull requests: GitHub refused the \
-                     query that reads them whole, so each is read alone this pass: {e:#}"
+                Err(e) => self.met.borrow_mut().push(IntakeCause::whole(
+                    branch,
+                    format!(
+                        "GitHub refused the query that reads them whole, so each is read \
+                         alone this pass: {e:#}"
+                    ),
                 )),
             }
         }
@@ -888,10 +901,10 @@ impl Pulls {
             };
             match stepped {
                 Ok(None) => {}
-                Ok(Some(e)) | Err(e) => crate::telemetry::warn(&format!(
-                    "sluice: warning: taking in {branch}'s pull requests: {}: {e:#}",
-                    place(p.number)
-                )),
+                Ok(Some(e)) | Err(e) => self.met.borrow_mut().push(IntakeCause {
+                    asked: place(p.number),
+                    said: format!("{e:#}"),
+                }),
             }
         }
         self.keep_readings(s, &t, branch, now, &open, work.into_inner())?;
@@ -923,10 +936,17 @@ impl Pulls {
             .filter(|(n, r)| latest.get(&place(**n)).is_some_and(|e| e.head.0 == r.head))
             .map(|(n, _)| *n)
             .collect();
-        self.unfollow(&t.repo, branch, &here);
+        // 128; record 0103 D6: a follow that could not be let go is one
+        // of the intake's causes, said by its caller.
+        if let Err(e) = self.unfollowed(&t.repo, branch, &here) {
+            self.met
+                .borrow_mut()
+                .push(IntakeCause::whole(branch, format!("{e:#}")));
+        }
         let version = s.seams().state.read(branch)?.version;
         self.kept.change_readings(&t.repo, branch, |kept| {
             kept.asked = Some(asked);
+            kept.met = self.met.borrow().clone();
             kept.tip = Some(t.tip.0.clone());
             kept.version = Some(version);
             kept.requests = work;
@@ -1087,11 +1107,12 @@ impl Pulls {
         // refuses holds it all the same, and the next pass tries again.
         if held && !p.draft {
             if let Err(e) = forge.set_draft(&t.repo, p.number, true) {
-                crate::telemetry::warn(&format!(
-                    "sluice: warning: #{} waits for the next submit, and GitHub would not mark \
-                     it a draft: {e:#}",
-                    p.number
-                ));
+                self.met.borrow_mut().push(IntakeCause {
+                    asked: place(p.number),
+                    said: format!(
+                        "it waits for the next submit, and GitHub would not mark it a draft: {e:#}"
+                    ),
+                });
             }
         }
         // Who withdrew a hand-opened pull request, when it was someone
@@ -2903,7 +2924,7 @@ impl crate::PullRequests for Pulls {
         Ok(out)
     }
 
-    fn intake(&self, seams: Seams<'_>, clock: &dyn Clock, branch: &str) -> Result<bool> {
+    fn intake(&self, seams: Seams<'_>, clock: &dyn Clock, branch: &str) -> Result<Intake> {
         let memo = ReadOnce {
             branch: seams.branch,
             read: RefCell::default(),
@@ -2911,8 +2932,22 @@ impl crate::PullRequests for Pulls {
         let s = Sluice::new(once(seams, &memo), clock)
             .keeping(&self.policies)
             .as_peer(self.peer.clone());
-        self.take_in(&s, clock, branch)
-            .with_context(|| format!("taking in {branch}'s pull requests"))
+        self.met.borrow_mut().clear();
+        let takes = self.take_in(&s, clock, branch);
+        let mut causes = std::mem::take(&mut *self.met.borrow_mut());
+        match takes {
+            Ok(takes) => Ok(Intake { takes, causes }),
+            // A spent allowance is its caller's to say, by its pause (134).
+            Err(e) if retry::limited(&e).is_some() => Err(e),
+            // 128: the branch's whole intake ended, said beside the rest.
+            Err(e) => {
+                causes.push(IntakeCause::whole(branch, format!("{e:#}")));
+                Ok(Intake {
+                    takes: true,
+                    causes,
+                })
+            }
+        }
     }
 
     fn elsewhere(&self, branch: &str) -> bool {
@@ -3463,18 +3498,22 @@ impl Pulls {
     /// the kept follows only where they hold one of them; one that could
     /// not be let go is warned of.
     fn unfollow(&self, repo: &Repo, branch: &str, numbers: &[u64]) {
+        if let Err(e) = self.unfollowed(repo, branch, numbers) {
+            crate::telemetry::warn(&format!("sluice: warning: {e:#}"));
+        }
+    }
+
+    /// [`Pulls::unfollow`], what could not be let go its error.
+    fn unfollowed(&self, repo: &Repo, branch: &str, numbers: &[u64]) -> Result<()> {
         let follows = self.kept.follows(repo, branch);
         if !numbers.iter().any(|n| follows.requests.contains_key(n)) {
-            return;
+            return Ok(());
         }
-        let kept = self.kept.change_follows(repo, branch, |follows| {
+        self.kept.change_follows(repo, branch, |follows| {
             for n in numbers {
                 follows.requests.remove(n);
             }
-        });
-        if let Err(e) = kept {
-            crate::telemetry::warn(&format!("sluice: warning: {e:#}"));
-        }
+        })
     }
 
     /// 125: every head read before anything is pushed, and a refusal for

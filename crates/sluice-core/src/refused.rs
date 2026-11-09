@@ -31,6 +31,37 @@ pub struct Refusal {
     pub earlier: Vec<Refusal>,
 }
 
+/// 128; record 0103 D6: one cause an intake of a branch's pull requests
+/// met: what it asked, `<branch>'s pull requests` or `pull/<n>`, and the
+/// words it was refused with.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IntakeCause {
+    pub asked: String,
+    pub said: String,
+}
+
+impl IntakeCause {
+    /// A cause of the branch's whole intake, one that is no one pull
+    /// request's (128).
+    pub fn whole(branch: &str, said: impl Into<String>) -> IntakeCause {
+        IntakeCause {
+            asked: format!("{branch}'s pull requests"),
+            said: said.into(),
+        }
+    }
+
+    /// Its words after `sluice: warning: `: `taking in main's pull
+    /// requests: pull/12: <said>`, or, for the branch's whole intake,
+    /// `taking in main's pull requests: <said>`.
+    pub fn words(&self, branch: &str) -> String {
+        let whole = format!("{branch}'s pull requests");
+        match self.asked == whole {
+            true => format!("taking in {whole}: {}", self.said),
+            false => format!("taking in {whole}: {}: {}", self.asked, self.said),
+        }
+    }
+}
+
 /// One ref asked for and what git said of its refusal (133).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Cause {

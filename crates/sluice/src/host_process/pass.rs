@@ -112,7 +112,8 @@ pub fn pass(
     branches.sort();
     branches.dedup();
     for branch in &branches {
-        crate::intake(pulls, seams, clock, branch, false, &mut out);
+        let met = crate::intake(pulls, seams, clock, branch, false, &mut out);
+        crate::say_once(branch, &met.causes);
         // 26, rule core.14: a branch whose records' read or round fails is
         // that branch's alone; the pass goes on to every other branch. 129:
         // one with nothing in play costs the pass its records' read alone.
@@ -204,7 +205,9 @@ pub fn in_play(s: &Sluice<'_>) -> bool {
 /// `sluice step`'s round of `branch`, as the host process runs it between
 /// its passes (rule core.14; design D10): its intake as today, then the
 /// round, answered as the document `sluice step --json` prints, with what
-/// the round said beside it and the line a step prints without `--json`.
+/// the round said beside it, each warning its intake met, which the step
+/// prints on stderr (128; record 0103 D6), and the line a step prints
+/// without `--json`.
 pub fn step(
     s: &Sluice<'_>,
     pulls: &dyn PullRequests,
@@ -212,7 +215,8 @@ pub fn step(
     branch: &str,
 ) -> Result<serde_json::Value> {
     let mut said: Vec<u8> = Vec::new();
-    crate::intake(pulls, s.seams(), clock, branch, false, &mut said);
+    let met = crate::intake(pulls, s.seams(), clock, branch, false, &mut said);
+    let warnings: Vec<String> = met.causes.iter().map(|c| c.words(branch)).collect();
     let round = s.round(branch)?;
     exec::tell_abandoned(&mut said, false, &round.released)?;
     preview::tell_dropped(&mut said, false, &round.previews)?;
@@ -251,5 +255,10 @@ pub fn step(
         .lines()
         .map(str::to_string)
         .collect();
-    Ok(serde_json::json!({ "document": document, "said": said, "line": line }))
+    Ok(serde_json::json!({
+        "document": document,
+        "said": said,
+        "warnings": warnings,
+        "line": line,
+    }))
 }

@@ -640,6 +640,34 @@ fn text(out: &Output) -> String {
 // pull-request-intake
 // ---------------------------------------------------------------------------
 
+/// host-process, "A step whose intake met a request it cannot read": host
+/// A keeps main, and GitHub serves no head for a pull request into it.
+/// Each `sluice step main --json` prints the warning on stderr, naming the
+/// request and the failed fetch, and its document on stdout (128; record
+/// 0103 D6).
+#[test]
+fn a_step_prints_what_its_intake_met() {
+    let g = OnGitHub::new("pr-step-warns", "");
+    g.named("a", "");
+    let (n, _) = g.by_hand("unit/gone", &[("g.txt", Some("g\n"))], false);
+    g.no_head(n);
+    for _ in 0..2 {
+        g.discovery_passes();
+        let out = g.sluice(&["step", "main", "--json"]);
+        assert!(out.status.success(), "{}", text(&out));
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            err.contains(&format!(
+                "sluice: warning: taking in main's pull requests: pull/{n}: "
+            )) && err.contains(&format!("pull/{n} has no head")),
+            "{err}"
+        );
+        let doc: Value =
+            serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
+        assert_eq!(doc["branch"], "main", "{doc}");
+    }
+}
+
 /// C.7: a policy with `pull_requests` and no `remote` is refused, naming
 /// the branch and `remote`.
 #[test]
