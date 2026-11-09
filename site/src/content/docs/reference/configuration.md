@@ -469,8 +469,12 @@ on its `remote`. A pull request joins the queue only once it is out of
 draft and meets these conditions on its latest commit.
 
 ```toml
+[signers.box]
+ssh = ".config/sluice.boxes" # one line per host's key
+
 [branches.main]
 remote = "origin"
+trust = ["box"]
 
 [branches.main.pull_requests]
 reviews = 1                  # approving reviews on the current head
@@ -488,8 +492,20 @@ The conditions are read from the branch itself, so a pull request that
 changes `.config/sluice.toml` can't loosen its own. They decide when
 sluice takes a pull request, never what it tests: that is `required`.
 The table needs `remote`, and sluice refuses a policy that has it
-without one. Without the table, `sluice submit` puts work straight into
-the queue. The guide [Pull requests](/sluice/guides/pull-requests/) sets
+without one. It needs
+[`[signers]`](#signersname-who-may-sign-results) too: then the branch's
+state is on its remote, and the host that keeps the branch there takes
+its pull requests in. In a policy with no `[signers]`, each host keeps
+its own state, so sluice refuses the branch alone, and reads every other
+branch as before:
+
+```text
+main takes pull requests, which only the host that keeps it on origin takes in, and its state is each host's own: name [signers] in .config/sluice.toml so its state is kept on origin (137)
+```
+
+A submit to it exits 2 before anything is pushed or opened, and status,
+a step and the overview show it. Without the table, `sluice submit` puts
+work straight into the queue. The guide [Pull requests](/sluice/guides/pull-requests/) sets
 it up.
 
 No key covers operator approval: that is the caller's business, and

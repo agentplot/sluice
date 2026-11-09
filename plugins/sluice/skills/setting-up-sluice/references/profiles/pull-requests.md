@@ -9,9 +9,13 @@ deployment), or so each landing has a page. Needs
 ## Keys
 
 ```toml
+[signers.box]
+ssh = ".config/sluice.boxes"   # one line per host's key; see peers.md
+
 [branches.main]
 remote = "origin"
 required = ["#check-fast", "#check-tools"]   # what sluice tests
+trust = ["box"]                              # the signers whose runs count
 
 [branches.main.pull_requests]
 reviews = 1                  # approving reviews on the latest commit
@@ -24,6 +28,11 @@ log_lines = 40               # optional: post the end of a failed test's output
 - They are read from the branch itself, so a pull request cannot loosen its
   own.
 - The table needs `remote`; sluice refuses it without one.
+- The policy needs `[signers]` ([peers](peers.md)): the branch's state is
+  then on its remote, and the host that keeps it there takes its pull
+  requests in. Without them each host keeps its own state, and sluice
+  refuses that branch alone, a submit to it exiting 2 before anything is
+  pushed or opened: `main takes pull requests, which only the host that keeps it on origin takes in, and its state is each host's own: name [signers] in .config/sluice.toml so its state is kept on origin (137)`.
 - `log_lines` posts that many last lines of a failed test's output in the
   pull request's report, scrubbed of what looks like a secret. Leave it out
   unless the tests' output is safe for every reader of the repository: the

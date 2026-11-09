@@ -79,9 +79,13 @@ Everything in the queue is ready to land as soon as it passes.
 ## The policy
 
 ```toml
+[signers.box]
+ssh = ".config/sluice.boxes"   # one line per host's key
+
 [branches.main]
 remote = "origin"
 required = ["#check-fast", "#check-tools"]
+trust = ["box"]                # the signers whose runs count on main
 
 [branches.main.pull_requests]
 reviews = 1                  # approving reviews on the current head
@@ -100,6 +104,22 @@ request's report, with anything shaped like a token or a key replaced by
 on the host instead. Anyone who can read the repository reads the pull
 request, and scrubbing catches the common shapes of a secret, not every
 one, so turn it on only where the tests' output is safe to show.
+
+A branch that takes pull requests names
+[`[signers]`](/sluice/reference/configuration/#signersname-who-may-sign-results),
+so its state is kept on its `remote` and the host that keeps it there
+takes its pull requests in. A policy with no `[signers]` keeps every
+branch's state on each host, where no host takes the pull requests in
+for the others, so sluice refuses that branch alone and every other goes
+on. `sluice submit main` exits 2, and pushes and opens nothing:
+
+```console
+$ sluice submit main
+refused: main takes pull requests, which only the host that keeps it on origin takes in, and its state is each host's own: name [signers] in .config/sluice.toml so its state is kept on origin (137)
+```
+
+`sluice status main`, `sluice step main` and `sluice overview` say the
+same.
 
 With no `[branches.main.pull_requests]` table, there are no pull
 requests and work goes straight into the queue, as in the previous
