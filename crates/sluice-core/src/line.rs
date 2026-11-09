@@ -24,9 +24,6 @@ pub struct Line {
     /// The submissions moved to the finished records, as the live index
     /// keeps them (130).
     pub finished: BTreeMap<u64, FinishedLine>,
-    /// Finished submissions changed in this write, each put back at its
-    /// finished record whole; their index lines stand as they are (130).
-    pub rewritten: BTreeMap<u64, Submission>,
     /// 51: the branch's deliveries, weir's records as read and then as
     /// added, in the order added (record 0102; design D3).
     deliveries: Vec<weir_delivery::Record>,
@@ -70,7 +67,6 @@ impl Line {
             doc,
             subs,
             finished,
-            rewritten: BTreeMap::new(),
             deliveries_read: deliveries.len(),
             deliveries,
             original: snapshot.files,
@@ -438,9 +434,6 @@ impl Line {
                 }
             }
         }
-        for s in self.rewritten.values() {
-            changes.put.insert(finished_file(s.id), to_document(s));
-        }
         // A write that changes nothing moves nothing: it is no write. A
         // submission done with in this very write is a change.
         let added = &self.deliveries[self.deliveries_read..];
@@ -610,37 +603,6 @@ mod tests {
              \"subject\":\"Batch review cards\"}\n\
              {\"id\":13,\"state\":\"landed\",\"worktree\":\"unit/forecast\"}\n"
         );
-    }
-
-    /// 51, 130: a finished submission marked delivered is put back at its
-    /// finished record, and the index and the live files are left as read.
-    #[test]
-    fn a_finished_submission_marked_delivered_is_one_put_of_its_record() {
-        let index = "{\"id\":12,\"state\":\"landed\",\"worktree\":\"unit/review\"}\n";
-        let files = [
-            (
-                BRANCH_FILE.to_string(),
-                to_document(&BranchDoc::new("main")),
-            ),
-            (FINISHED_INDEX.to_string(), index.as_bytes().to_vec()),
-        ];
-        let mut line = Line::load(
-            "main",
-            Snapshot {
-                version: 1,
-                files: files.into_iter().collect(),
-            },
-        )
-        .unwrap();
-        let mut s: Submission = serde_json::from_slice(&landed(12, "unit/review", None)).unwrap();
-        s.delivered = Some("2026-10-28T09:00:00Z".into());
-        s.delivered_to = Some("/w/review".into());
-        line.rewritten.insert(12, s.clone());
-        let changes = line.changes();
-        assert_eq!(changes.put.keys().collect::<Vec<_>>(), [&finished_file(12)]);
-        assert_eq!(changes.put[&finished_file(12)], to_document(&s));
-        assert!(changes.remove.is_empty());
-        assert!(changes.append.is_empty());
     }
 
     const DELIVERY: &str = "{\"format\": \"weir-delivery/1\", \"key\": \"12:landed\", \

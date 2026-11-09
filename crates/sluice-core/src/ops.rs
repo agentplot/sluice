@@ -1586,8 +1586,6 @@ fn admit(
             failed: Vec::new(),
             conflict: None,
             withdrawn: None,
-            delivered: None,
-            delivered_to: None,
             landed_as: None,
             landed_elsewhere: false,
             was: None,

@@ -1325,8 +1325,6 @@ impl Sluice<'_> {
                     failed: Vec::new(),
                     conflict: None,
                     withdrawn: None,
-                    delivered: None,
-                    delivered_to: None,
                     landed_as: None,
                     was: Some(old.id),
                     ..old

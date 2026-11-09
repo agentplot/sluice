@@ -257,16 +257,6 @@ pub struct Submission {
     pub conflict: Option<ConflictRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub withdrawn: Option<Withdrawal>,
-    /// 51: when its outcome was delivered to its session; `None` while it
-    /// stands pending. Read under `told` too, the name an earlier sluice
-    /// wrote it under (record 0070).
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "told")]
-    pub delivered: Option<String>,
-    /// 51: the session its outcome was delivered to, as its carrier named
-    /// it; `None` while pending, and in records delivered before it was
-    /// kept. Read under `told_to` too (record 0070).
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "told_to")]
-    pub delivered_to: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub landed_as: Option<Rev>,
     /// 122: landed by a landing this queue did not make, found when the
@@ -1916,46 +1906,25 @@ mod tests {
         assert_eq!(serde_json::from_str::<Submitter>(&text).unwrap(), both);
     }
 
-    /// 51, record 0070: a submission an earlier sluice marked under `told`
-    /// and `told_to` reads them as `delivered` and `delivered_to`, and
-    /// writes them back under the new names.
+    /// 51, record 0102 (D12): a submission holds no `delivered` mark; one
+    /// an earlier sluice wrote, under that name or `told`, is passed over
+    /// and written back without it.
     #[test]
-    fn a_submission_marked_told_reads_as_delivered() {
+    fn a_submission_holds_no_delivered_mark() {
         let old = submission(None);
         let doc = String::from_utf8(to_document(&old)).unwrap();
-        let earlier = doc.replacen(
-            "\"state\": \"queued\"",
+        let landed = doc.replacen("\"state\": \"queued\"", "\"state\": \"landed\"", 1);
+        for marked in [
+            "\"state\": \"landed\",\n  \"delivered\": \"2026-10-27T10:00:00Z\",\n  \"delivered_to\": \"/w/review\"",
             "\"state\": \"landed\",\n  \"told\": \"2026-10-27T10:00:00Z\",\n  \"told_to\": \"/w/review\"",
-            1,
-        );
-        let read: Submission = serde_json::from_str(&earlier).unwrap();
-        assert_eq!(read.delivered.as_deref(), Some("2026-10-27T10:00:00Z"));
-        assert_eq!(read.delivered_to.as_deref(), Some("/w/review"));
-        let written = String::from_utf8(to_document(&read)).unwrap();
-        assert_eq!(
-            written,
-            earlier
-                .replace("\"told\":", "\"delivered\":")
-                .replace("\"told_to\":", "\"delivered_to\":")
-        );
-        assert!(!written.contains("told"), "{written}");
-    }
-
-    /// 51: a submission delivered before `delivered_to` was kept reads with
-    /// none and writes back unchanged.
-    #[test]
-    fn a_submission_delivered_before_its_session_reads_as_it_was() {
-        let old = submission(None);
-        let mut doc = String::from_utf8(to_document(&old)).unwrap();
-        doc = doc.replacen(
-            "\"state\": \"queued\"",
-            "\"state\": \"landed\",\n  \"delivered\": \"2026-10-27T10:00:00Z\"",
-            1,
-        );
-        let read: Submission = serde_json::from_str(&doc).unwrap();
-        assert_eq!(read.delivered.as_deref(), Some("2026-10-27T10:00:00Z"));
-        assert_eq!(read.delivered_to, None);
-        assert_eq!(String::from_utf8(to_document(&read)).unwrap(), doc);
+        ] {
+            let earlier = doc.replacen("\"state\": \"queued\"", marked, 1);
+            let read: Submission = serde_json::from_str(&earlier).unwrap();
+            let written = String::from_utf8(to_document(&read)).unwrap();
+            assert_eq!(written, landed);
+            assert!(!written.contains("delivered"), "{written}");
+            assert!(!written.contains("told"), "{written}");
+        }
     }
 
     /// 51, record 0070: a `told` line an earlier sluice wrote reads as

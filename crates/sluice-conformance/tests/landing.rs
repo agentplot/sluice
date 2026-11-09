@@ -78,7 +78,7 @@ fn a_notification_repeated_after_a_crash_carries_the_same_id_and_outcome() {
     assert_eq!(delivered[0], delivered[1]);
     assert_eq!(delivered[0].id, format!("{one}:landed"));
     assert_eq!(h.sub(one).state, State::Landed);
-    assert!(h.sub(one).delivered.is_some());
+    assert_eq!(h.handed(&format!("{one}:landed")), ["notice"]);
 }
 
 /// satisfies: 65, 12
