@@ -60,5 +60,5 @@ written in that task, for the delta's scenario it names.
 
 ## 9. The unfinished changes built on the mark
 
-- [ ] 9.1 `openspec/changes/a-host-hands-over-only-to-the-host-its-mark-names/` and `openspec/changes/a-hand-overs-withdrawal-holds-no-request/` are removed: their deltas describe the mark and were never archived, and what of them stands is this change's `request-intake-host` delta (D8). True when `sluice exec bolt/sluice-runs-one-host-process -- moon run root:changes` passes.
+- [x] 9.1 `openspec/changes/a-host-hands-over-only-to-the-host-its-mark-names/` and `openspec/changes/a-hand-overs-withdrawal-holds-no-request/` are removed: their deltas describe the mark and were never archived, and what of them stands is this change's `request-intake-host` delta (D8). True when `sluice exec bolt/sluice-runs-one-host-process -- moon run root:changes` passes.
 - [ ] 9.2 `request-intake-host`'s Purpose, which no delta carries, says the host that keeps a branch on its remote takes its requests in and how any other host follows them, in place of the mark, in this change's branch as OpenSpec has a Purpose changed. True when `sluice exec bolt/sluice-runs-one-host-process -- moon run root:specs` passes.
