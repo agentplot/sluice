@@ -70,7 +70,7 @@ Deciders: the user, 2026-11-08, in agentplot-ops's pane, as agentplot-ops relaye
 4. **Not taken.** A forge's jobs taking requests in and landing them while machines run the checks, the split the user called a band-aid. A branch on GitHub Actions runs its checks there too, and the change that built the split is reverted whole on its bolt (`sluice-runs-one-host-process--takes-out-the-forge-round`).
 5. **What stands.** Everything else above stands: one host process per user, started when work arrives and gone when idle, as the no-daemon way, with nothing installed on a machine that uses it. So does the removal of the intake mark, its renewal, its lease and its hand-overs. Whatever executes a branch takes its requests in.
 6. **Consequences.**
-   - sluice runs standing only as a daemon its branch's policy chooses, on this machine or another. That settles wldn's question of a machine whose signature a branch's tests need: that branch executes by a daemon on that machine, which stays up.
+   - sluice runs standing only as a daemon a machine keeps running by its own choice, on this machine or another (point 3). That settles wldn's question of a machine whose signature a branch's tests need: that branch executes by a daemon on that machine, which stays up.
    - Rules core.31 and core.33 are amended to match, each marked proposed.
    - The statement's clauses 135 and 137 and C.8's table follow, marked proposed (agentplot/blueprints, design/sluice/requirements.md).
    - Left to the build, within points 2 and 3 (agentplot-design's choice): how a machine's service manager keeps `sluice daemon` running, and what a machine whose signature a branch does not accept starts when it submits. Units are queued from this amendment.
