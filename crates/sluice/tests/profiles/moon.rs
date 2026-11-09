@@ -1183,6 +1183,50 @@ fn a_pass_whose_manifest_is_gone_is_unkept_naming_the_store() {
     );
 }
 
+/// Design D3 of the change `a-pass-nothing-proves-blames-no-one` (114):
+/// only a pass is unkept. A check that failed and whose manifest is gone
+/// from the store is named neither proven nor unkept, read as before.
+#[test]
+fn a_failed_task_whose_manifest_is_gone_is_not_unkept() {
+    let repo = workspace("moon-failed-unkept");
+    change(
+        &repo,
+        &[(
+            "gamma/moon.yml",
+            "tasks:\n  test:\n    command: 'sh -c \"exit 1\"'\n    inputs: ['value.txt']\n    tags: [check-tools]\n",
+        )],
+    );
+    let c = checks(&repo);
+    let (run, report) = finish_run(
+        &c,
+        &request(&repo, "p1", &["#check-fast", "gamma:test"], None),
+    );
+    let gamma = report
+        .tasks
+        .iter()
+        .find(|t| t.task == "gamma:test")
+        .unwrap();
+    assert_eq!(gamma.outcome, Outcome::Fail);
+    assert!(matches!(gamma.source, Source::Ran { .. }));
+    let blob = repo
+        .dir()
+        .join(".moon/cache/blobs")
+        .join(&gamma.hash[..2])
+        .join(&gamma.hash[2..]);
+    if blob.exists() {
+        std::fs::remove_file(&blob).unwrap();
+    }
+    let proof = c.proven(&run, &report).unwrap();
+    assert!(!proof.proven.iter().any(|t| t == "gamma:test"), "{proof:?}");
+    assert!(
+        !proof.unkept.iter().any(|n| n.task == "gamma:test"),
+        "{proof:?}"
+    );
+    let mut proven = proof.proven.clone();
+    proven.sort();
+    assert_eq!(proven, ["alpha:test", "beta:test"]);
+}
+
 /// ADR 0050: before any run, moon in the worktree names each required
 /// task it keeps out of CI, with the entry that requires it: one by its
 /// name, one through a tag. A task in CI is not named, and nothing runs.
