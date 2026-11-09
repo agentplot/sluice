@@ -614,42 +614,22 @@ pub struct Ahead {
     pub pull_request: Option<u64>,
 }
 
-/// 137: which process of its host holds a branch's intake mark.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Holder {
-    /// The host's `sluice run`, the holder of its driver's lock.
-    Driver,
-    /// A `sluice wait` or a waiting submit.
-    Wait,
-}
-
-/// 137, design D2: the host a branch's intake mark names, as this host's
-/// last fetch brought it, and whether that host's `sluice run` or a wait
-/// holds it.
+/// 137; record 0103 D5: the host a branch's records name as keeping it
+/// on its remote, as this host last fetched them, which takes its pull
+/// requests in.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TakenInBy {
     pub host: String,
-    pub holder: Holder,
 }
 
-impl TakenInBy {
-    /// Its holder in words: `b's sluice run`, or `a wait on b`.
-    pub fn said(&self) -> String {
-        match self.holder {
-            Holder::Driver => format!("{}'s sluice run", self.host),
-            Holder::Wait => format!("a wait on {}", self.host),
-        }
-    }
-}
-
-/// 137, design D5: the pull requests into a branch this host follows and
-/// its queue does not hold at their heads, each as the host that takes
-/// them in shows it, for `sluice status <branch>`.
+/// 137, design D5: the pull requests into a branch another host keeps
+/// that this host follows and the branch's queue does not hold at their
+/// heads, each as the host that keeps it shows it, for `sluice status
+/// <branch>`.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Across {
-    /// The host the branch's intake mark names and its holder, as this
-    /// host's last fetch brought it; `None` where no mark stands.
+    /// The host the branch's records name as keeping it, as this host last
+    /// fetched them; `None` where none does (record 0103 D5).
     pub taken_in_by: Option<TakenInBy>,
     pub pull_requests: Vec<AcrossRow>,
 }
@@ -682,25 +662,20 @@ pub const ACROSS_LANDED: &str = "landed";
 pub const ACROSS_CLOSED: &str = "closed without landing";
 
 impl Across {
-    /// Design D5: the heading of the rows in words: the host that takes
-    /// `branch`'s pull requests in and its holder, or that no host holds
-    /// the mark.
-    pub fn heading(&self, branch: &str) -> String {
+    /// Record 0103 D5: the heading of the rows in words: the host that
+    /// keeps the branch, which takes its pull requests in, or the host's
+    /// own follows where none keeps it.
+    pub fn heading(&self) -> String {
         match &self.taken_in_by {
-            Some(by) if by.holder == Holder::Driver => {
-                format!("pull requests {} takes in, by its sluice run:", by.host)
-            }
-            Some(by) => format!("pull requests {} takes in, by {}:", by.host, by.said()),
-            None => {
-                format!("pull requests this host follows; no host holds {branch}'s intake mark:")
-            }
+            Some(by) => format!("pull requests {} takes in:", by.host),
+            None => "pull requests this host follows:".into(),
         }
     }
 
     /// Design D2, D5: one row in words: its number and title (26), then
     /// the submission the check names on the host that posted it and
-    /// where it stands there, or that it waits to be taken in by the mark's
-    /// host and on what.
+    /// where it stands there, or that it waits to be taken in by the host
+    /// that keeps the branch and on what.
     pub fn line(&self, row: &AcrossRow) -> String {
         let mark = self.taken_in_by.as_ref().map(|by| by.host.as_str());
         let held = row
@@ -733,10 +708,10 @@ pub enum Followed {
     Open {
         title: String,
         lines: Vec<String>,
-        /// 137, design D2: where another host takes its branch's pull
-        /// requests in, the host the intake mark names and its holder, as
-        /// this host's last fetch brought it; `None` where no mark stands,
-        /// and on the host that takes them in.
+        /// 137; record 0103 D5: where another host keeps its branch, the
+        /// host the branch's records name as keeping it, as this host last
+        /// fetched them; `None` where none does, and on the host that takes
+        /// them in.
         taken_in_by: Option<TakenInBy>,
         /// 137, design D2: where another host takes its branch's pull
         /// requests in, the queue sluice's check on its current head
@@ -818,10 +793,10 @@ pub trait PullRequests {
         taker: Taker,
     ) -> Result<bool>;
 
-    /// 137: the host that takes `branch`'s pull requests in, as this
-    /// process's last intake found it, where that is another host.
-    fn elsewhere(&self, _branch: &str) -> Option<String> {
-        None
+    /// 137: whether another host takes `branch`'s pull requests in, as
+    /// this process last took them in or followed one of them.
+    fn elsewhere(&self, _branch: &str) -> bool {
+        false
     }
 
     /// 137: let go of the intake marks this process holds as a wait.
@@ -882,11 +857,12 @@ pub trait PullRequests {
     ) -> Result<Followed>;
 
     /// 137, design D5: the pull requests into `branch` this host follows
-    /// whose submissions its queue does not hold at their heads, each read
-    /// as the host's one bound allows (design D4), with the host the
-    /// branch's intake mark names; one read merged or closed is given once
-    /// and followed no longer (design D3). `None` where it follows none, or
-    /// the branch's records are on its remote (26, 80).
+    /// whose submissions the branch's queue does not hold at their heads,
+    /// each read as the host's one bound allows (design D4), with the host
+    /// the branch's records name as keeping it; one read merged or closed
+    /// is given once and followed no longer (design D3). `None` where it
+    /// follows none, this host keeps the branch, or its records are each
+    /// host's (26, 80; record 0103 D5).
     fn across(
         &self,
         _seams: Seams<'_>,
@@ -899,8 +875,8 @@ pub trait PullRequests {
     /// 137, design D5: as [`PullRequests::across`], as the host last kept
     /// them, reading GitHub for none of them and following none no longer:
     /// for a reader's document, which reads them again only once what the
-    /// host keeps of them, or the intake mark, moved (129; rules core.25,
-    /// core.31).
+    /// host keeps of them, or the branch's lead, moved (129; rules core.25,
+    /// core.31; record 0103 D5).
     fn kept_across(
         &self,
         _seams: Seams<'_>,
@@ -1696,7 +1672,7 @@ pub fn run(
                             )?;
                         }
                         if let Some(a) = &across {
-                            writeln!(out, "{}", a.heading(&target))?;
+                            writeln!(out, "{}", a.heading())?;
                             for row in &a.pull_requests {
                                 writeln!(out, "  {}", a.line(row))?;
                             }
@@ -4481,7 +4457,7 @@ fn submit_pull(
                 // again only when it changes.
                 there = pulls
                     .elsewhere(branch)
-                    .map(|_| There { taken_in_by, queue });
+                    .then_some(There { taken_in_by, queue });
                 if let (false, Some(t)) = (json, &there) {
                     let line = t.line(number, branch);
                     if said_there.as_ref() != Some(&line) {
@@ -4769,7 +4745,7 @@ fn submit_pull_group(
                     // 137, design D5: as `submit_pull`'s.
                     there[i] = pulls
                         .elsewhere(branch)
-                        .map(|_| There { taken_in_by, queue });
+                        .then_some(There { taken_in_by, queue });
                     if let (false, Some(t)) = (json, &there[i]) {
                         let line = t.line(o.number, branch);
                         if said_there[i].as_ref() != Some(&line) {
@@ -4879,9 +4855,9 @@ fn submit_pull_group(
 }
 
 /// 137, design D2: where a pull request another host takes in stands, as
-/// a wait last read it: the host its branch's intake mark names, as this
-/// host's last fetch brought it, and the queue sluice's check on its head
-/// carries.
+/// a wait last read it: the host its branch's records name as keeping it,
+/// as this host last fetched them, and the queue sluice's check on its
+/// head carries.
 #[derive(Clone, Debug, PartialEq)]
 struct There {
     taken_in_by: Option<TakenInBy>,
@@ -4889,23 +4865,27 @@ struct There {
 }
 
 impl There {
-    /// Design D5: pull request `n` into `branch` in words: the submission
-    /// the check names on the host that posted it, taken in by the host the
-    /// mark names; or that it waits to be taken in by the mark's host.
+    /// Record 0103 D5: pull request `n` into `branch` in words: the
+    /// submission the check names on the host that posted it, and the host
+    /// that keeps the branch where that is another; or that it waits to be
+    /// taken in by the host that keeps the branch.
     fn line(&self, n: u64, branch: &str) -> String {
         let held = self
             .queue
             .as_ref()
             .filter(|q| q.taken_in)
             .and_then(|q| Some((q.submission?, &q.host)));
-        let by = self.taken_in_by.as_ref().map(TakenInBy::said);
-        let none = format!("no host holds {branch}'s intake mark");
-        match (held, by) {
-            (Some((id, host)), Some(by)) => {
-                format!("#{n} is submission {id} on {host}, taken in by {by}")
+        let keeper = self.taken_in_by.as_ref().map(|by| &by.host);
+        let none = format!("no host keeps {branch}");
+        match (held, keeper) {
+            (Some((id, host)), Some(keeper)) if host == keeper => {
+                format!("#{n} is submission {id} on {host}")
+            }
+            (Some((id, host)), Some(keeper)) => {
+                format!("#{n} is submission {id} on {host}; {keeper} keeps {branch}")
             }
             (Some((id, host)), None) => format!("#{n} is submission {id} on {host}; {none}"),
-            (None, Some(by)) => format!("#{n} waits to be taken in by {by}"),
+            (None, Some(keeper)) => format!("#{n} waits to be taken in by {keeper}"),
             (None, None) => format!("#{n} waits to be taken in; {none}"),
         }
     }
@@ -5658,6 +5638,74 @@ fn worktree_json(p: &SessionPlace) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Record 0103 D5: the rows of a host that does not keep a branch, and
+    /// a wait's words, name the host the branch's records name as keeping
+    /// it, which takes its pull requests in, with no holder; where none
+    /// keeps it, the host's own follows.
+    #[test]
+    fn the_rows_heading_names_the_host_that_keeps_the_branch() {
+        let row = AcrossRow {
+            pull_request: 13,
+            title: "Fix the cards".into(),
+            from: "unit/cards".into(),
+            head: "h".into(),
+            draft: false,
+            state: "waiting: needs 1 review".into(),
+            queue: None,
+            read_at: None,
+        };
+        let by = |host: &str| Some(TakenInBy { host: host.into() });
+        let kept = Across {
+            taken_in_by: by("b"),
+            pull_requests: vec![row.clone()],
+        };
+        assert_eq!(kept.heading(), "pull requests b takes in:");
+        assert_eq!(
+            kept.line(&row),
+            "#13 Fix the cards · waiting to be taken in by b: needs 1 review"
+        );
+        assert_eq!(
+            serde_json::to_value(&kept.taken_in_by).unwrap(),
+            serde_json::json!({ "host": "b" })
+        );
+        let none = Across {
+            taken_in_by: None,
+            ..kept
+        };
+        assert_eq!(none.heading(), "pull requests this host follows:");
+        assert_eq!(
+            none.line(&row),
+            "#13 Fix the cards · waiting to be taken in: needs 1 review"
+        );
+
+        let on = |host: &str, id: u64| Queue {
+            host: host.into(),
+            taken_in: true,
+            submission: Some(id),
+            state: Some("queued".into()),
+            ahead: Vec::new(),
+            waits_for: Vec::new(),
+        };
+        let there =
+            |taken_in_by: Option<TakenInBy>, queue: Option<Queue>| There { taken_in_by, queue };
+        assert_eq!(
+            there(by("b"), None).line(13, "main"),
+            "#13 waits to be taken in by b"
+        );
+        assert_eq!(
+            there(by("b"), Some(on("b", 1406))).line(12, "main"),
+            "#12 is submission 1406 on b"
+        );
+        assert_eq!(
+            there(by("c"), Some(on("b", 1406))).line(12, "main"),
+            "#12 is submission 1406 on b; c keeps main"
+        );
+        assert_eq!(
+            there(None, None).line(13, "main"),
+            "#13 waits to be taken in; no host keeps main"
+        );
+    }
 
     fn names() -> Names {
         let mut names = Names::default();

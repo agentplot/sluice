@@ -280,6 +280,17 @@ impl Sluice<'_> {
         Ok(Step::Stepped)
     }
 
+    /// 72, 137: the instance `branch`'s records name as keeping it, as
+    /// the host last fetched them, with no fetch and no write; `None` where
+    /// none does, or the branch is in this host's own files. A host that
+    /// does not keep the branch names it as the host that takes its pull
+    /// requests in (record 0103 D5).
+    pub fn keeper(&self, branch: &str) -> Result<Option<String>> {
+        Ok(Line::load(branch, self.seams.state.read_held(branch)?)?
+            .doc
+            .lead)
+    }
+
     /// 72, 73: whether this instance keeps `branch`, taking it when no one
     /// does, or when the instance that does has written nothing for the
     /// lease by this host's own observation and there is work to do.
