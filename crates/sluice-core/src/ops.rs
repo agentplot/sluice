@@ -1646,9 +1646,9 @@ mod tests {
     use sluice_seams::{
         Adopted, Branch, Changes, CheckedOut, Checkout, Delivery, Driver, GoneRelease, Guard,
         HostRun, LandingCommit, LastResult, Moved, Notification, Place, Platform, PreviewPlace,
-        Progress, ReleasePolicy, Released, RunHandle, RunReport, RunRequest, Running, SessionPlace,
-        Settings, Snapshot, State as Records, Submitter, TaskLog, TaskProgress, Tests, Written,
-        FINISHED,
+        Progress, Proof, ReleasePolicy, Released, RunHandle, RunReport, RunRequest, Running,
+        SessionPlace, Settings, Snapshot, State as Records, Submitter, TaskLog, TaskProgress,
+        Tests, Written, FINISHED,
     };
 
     use super::*;
@@ -2043,7 +2043,7 @@ mod tests {
             unreachable!("a submit runs nothing")
         }
 
-        fn proven(&self, _: &RunHandle, _: &RunReport) -> Result<Vec<String>> {
+        fn proven(&self, _: &RunHandle, _: &RunReport) -> Result<Proof> {
             unreachable!("a submit runs nothing")
         }
 

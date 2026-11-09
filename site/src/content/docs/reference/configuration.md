@@ -111,6 +111,16 @@ nobody. After three runs in a row in which its tests could not run, its
 newest submission is blamed, and each test is named with why. A command
 given to `sluice exec` after `--` is not held to `not_run`.
 
+On a branch whose state is on its remote, a test that passed counts only
+where moon's manifest of it is in the store moon keeps it in. The same
+holds for the manifest of each task it depends on. A test that passed in
+a run that kept no such manifest has no result and blames nobody. Its
+combination is tested again, and the run counts as one whose tests could
+not run. While a combination is tested again for any of these reasons,
+`sluice status` and `sluice wait` say which host's run had no outcome
+and why. The branch's log names the host and the store once, as the
+[state page](/sluice/reference/state/#the-log) shows.
+
 On a host whose system Nix manages, NixOS or nix-darwin, sluice notes
 the system `/run/current-system` links to as a run begins. A test that
 did not pass in a run during which the host's system was switched has no

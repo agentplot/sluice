@@ -206,7 +206,11 @@ impl Tests for RecordedChecks {
         self.inner.running()
     }
 
-    fn proven(&self, run: &RunHandle, report: &sluice_seams::RunReport) -> Result<Vec<String>> {
+    fn proven(
+        &self,
+        run: &RunHandle,
+        report: &sluice_seams::RunReport,
+    ) -> Result<sluice_seams::Proof> {
         self.inner.proven(run, report)
     }
 

@@ -21,7 +21,7 @@ use sluice_seams::{Rev, Snapshot, Submitter, TaskProgress};
 use crate::line::Line;
 use crate::policy::{Policy, Rules};
 use crate::records::{
-    parse_lines, BranchHold, CandidateState, Event, FailedRelease, FailedTask, LogLine,
+    parse_lines, BranchHold, CandidateState, Event, FailedRelease, FailedTask, LogLine, LostRun,
     RefusedWrite, RunState, Submission, LOG_FILE,
 };
 use crate::Sluice;
@@ -221,6 +221,13 @@ pub struct CandidateView {
     /// the combination waits for.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub waiting: BTreeMap<String, String>,
+    /// 114, record 0105 (design D7 of the change
+    /// `a-pass-nothing-proves-blames-no-one`): each of its runs whose last
+    /// run had no outcome, until that run's next report is read: the host
+    /// that read it, its system, and each check it left not run with why,
+    /// whatever the cause. None in a document from before it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lost: Vec<LostRun>,
 }
 
 /// One branch's part of the overview, from what was read of it.
@@ -272,6 +279,7 @@ pub fn branch_view(read: BranchRead) -> Result<BranchView> {
                 .filter(|r| r.state == RunState::Open && r.host.is_none())
                 .flat_map(|r| r.declined.clone())
                 .collect(),
+            lost: c.runs.iter().filter_map(|r| r.lost.clone()).collect(),
         })
         .collect();
     let submissions: Vec<Submission> = in_queue(line.subs.values()).cloned().collect();

@@ -475,6 +475,24 @@ pub struct SystemRun {
     /// that answers, with why; a host's entry goes when it claims the run.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub declined: BTreeMap<String, String>,
+    /// 114, record 0105 (design D7 of the change
+    /// `a-pass-nothing-proves-blames-no-one`): why its last run had no
+    /// outcome, for every cause 114 gives, kept from the read that opened
+    /// it again until its next report is read; `None` otherwise, and in
+    /// records written before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lost: Option<LostRun>,
+}
+
+/// 114, record 0105 (design D7): a run that left checks not run and
+/// judged nothing, read on `host`, the run's system where the policy names
+/// one, and each check it left not run with why, in the run's order.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LostRun {
+    pub host: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system: Option<String>,
+    pub not_run: Vec<NotRun>,
 }
 
 /// A run's state, from open to its own verdict.
@@ -604,6 +622,7 @@ impl From<CandidateForm> for Candidate {
                 no_replay: false,
                 host: None,
                 declined: BTreeMap::new(),
+                lost: None,
             });
         }
         Candidate {
@@ -819,6 +838,25 @@ pub struct BranchDoc {
     /// per host, ref and command; each host writes its own.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub refused_writes: Vec<RefusedWrite>,
+    /// 114, record 0105 (design D6 of the change
+    /// `a-pass-nothing-proves-blames-no-one`): each cause of passes a
+    /// host's runs kept no proof of, standing until that host's next run
+    /// proves its passes; one entry per host and reason, each host's
+    /// written by the round that reads its run. No round, gate or landing
+    /// reads it (rule core.14).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub proof_missing: Vec<ProofMissing>,
+}
+
+/// 114, record 0105 (design D6): a cause of passes `host`'s runs kept no
+/// proof of, in the check profile's words `why`, since the run that first
+/// met it, and how many of that host's runs it touched.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProofMissing {
+    pub host: String,
+    pub why: String,
+    pub since: String,
+    pub runs: u64,
 }
 
 /// 121: a branch read at a revision that lacks the landing its records
@@ -885,6 +923,7 @@ impl BranchDoc {
             held: None,
             copies: BTreeMap::new(),
             refused_writes: Vec::new(),
+            proof_missing: Vec::new(),
         }
     }
 }
@@ -1125,6 +1164,27 @@ pub enum Event {
         since: String,
         stood: u64,
         rounds: u64,
+    },
+    /// 114, record 0105 (design D6 of the change
+    /// `a-pass-nothing-proves-blames-no-one`; rule core.28's way): a run
+    /// read on `host` kept no proof of a pass, for the reason `why`; once
+    /// per host and reason while it stands, never once per run.
+    #[serde(rename = "proof-missing")]
+    ProofMissing {
+        host: String,
+        why: String,
+    },
+    /// 114, record 0105 (design D6): the first run on `host` that proved
+    /// its passes and left none without proof, ending the cause `why`:
+    /// when it began, how many seconds it stood and how many of the host's
+    /// runs it touched.
+    #[serde(rename = "proof-kept")]
+    ProofKept {
+        host: String,
+        why: String,
+        since: String,
+        stood: u64,
+        runs: u64,
     },
     /// A landing that found the branch elsewhere (24; rule core.5).
     Refused {
@@ -1643,6 +1703,112 @@ mod tests {
         );
         let back: Vec<LogLine> = parse_lines(text.concat().as_bytes()).unwrap();
         assert_eq!(back, lines);
+    }
+
+    /// 114, record 0105 (design D6, D7): a missing proof and its end are
+    /// the spec's lines, and a branch's document and a run written before
+    /// `proof_missing` and `lost` read with none and write back without
+    /// them.
+    #[test]
+    fn a_missing_proof_and_its_end_are_log_lines() {
+        let why = "it passed, but nothing the run kept proves it ran: \
+                   moon's manifest of it is not in /repo/.moon/cache";
+        let lines = [
+            LogLine {
+                schema: LOG_SCHEMA.into(),
+                at: "2026-11-09T09:16:40Z".into(),
+                event: Event::ProofMissing {
+                    host: "build-1".into(),
+                    why: why.into(),
+                },
+            },
+            LogLine {
+                schema: LOG_SCHEMA.into(),
+                at: "2026-11-09T09:46:40Z".into(),
+                event: Event::ProofKept {
+                    host: "build-1".into(),
+                    why: why.into(),
+                    since: "2026-11-09T09:16:40Z".into(),
+                    stood: 1800,
+                    runs: 3,
+                },
+            },
+        ];
+        let text: Vec<String> = lines
+            .iter()
+            .map(|l| String::from_utf8(to_line(l)).unwrap())
+            .collect();
+        assert_eq!(
+            text,
+            [
+                format!("{{\"schema\":\"sluice/log@1\",\"at\":\"2026-11-09T09:16:40Z\",\"event\":\"proof-missing\",\"host\":\"build-1\",\"why\":\"{why}\"}}\n"),
+                format!("{{\"schema\":\"sluice/log@1\",\"at\":\"2026-11-09T09:46:40Z\",\"event\":\"proof-kept\",\"host\":\"build-1\",\"why\":\"{why}\",\"since\":\"2026-11-09T09:16:40Z\",\"stood\":1800,\"runs\":3}}\n"),
+            ]
+        );
+        let back: Vec<LogLine> = parse_lines(text.concat().as_bytes()).unwrap();
+        assert_eq!(back, lines);
+
+        // A branch's document written before `proof_missing`.
+        let old = r#"{
+  "schema": "sluice/branch@1",
+  "branch": "main",
+  "log": "sluice/log@1",
+  "base": "c43609b",
+  "verified": true,
+  "window": 4,
+  "next_place": 3,
+  "next_candidate": 5,
+  "candidates": [],
+  "landing": null,
+  "release": [],
+  "outbox": []
+}
+"#;
+        let doc: BranchDoc = serde_json::from_str(old).unwrap();
+        assert!(doc.proof_missing.is_empty());
+        assert_eq!(String::from_utf8(to_document(&doc)).unwrap(), old);
+        let mut standing = doc.clone();
+        standing.proof_missing.push(ProofMissing {
+            host: "build-1".into(),
+            why: why.into(),
+            since: "2026-11-09T09:16:40Z".into(),
+            runs: 3,
+        });
+        let v = serde_json::to_value(&standing).unwrap();
+        assert_eq!(
+            v["proof_missing"],
+            serde_json::json!([{
+                "host": "build-1",
+                "why": why,
+                "since": "2026-11-09T09:16:40Z",
+                "runs": 3,
+            }])
+        );
+        assert_eq!(serde_json::from_value::<BranchDoc>(v).unwrap(), standing);
+
+        // A run written before `lost`.
+        let run = r#"{"checks":["a:test"],"state":"open"}"#;
+        let read: SystemRun = serde_json::from_str(run).unwrap();
+        assert_eq!(read.lost, None);
+        assert_eq!(serde_json::to_string(&read).unwrap(), run);
+        let mut lost = read.clone();
+        lost.lost = Some(LostRun {
+            host: "build-1".into(),
+            system: None,
+            not_run: vec![NotRun {
+                task: "a:test".into(),
+                reason: why.into(),
+            }],
+        });
+        let v = serde_json::to_value(&lost).unwrap();
+        assert_eq!(
+            v["lost"],
+            serde_json::json!({
+                "host": "build-1",
+                "not_run": [{"task": "a:test", "reason": why}],
+            })
+        );
+        assert_eq!(serde_json::from_value::<SystemRun>(v).unwrap(), lost);
     }
 
     /// 148: a branch's document written before refused writes were counted
