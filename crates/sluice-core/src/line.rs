@@ -554,4 +554,51 @@ mod tests {
         assert!(why.contains("`format`"), "{why}");
         assert!(why.contains("weir-delivery/2"), "{why}");
     }
+
+    /// A branch's line on the fakes' records seam as a store: each add one
+    /// write of the line under the branch's lock, each read the line read
+    /// afresh, so what the pack reads back is what the records hold.
+    struct OnTheRecords(sluice_fakes::Fakes);
+
+    impl weir_delivery::Store for OnTheRecords {
+        type Error = anyhow::Error;
+
+        fn read(&self) -> Result<Vec<weir_delivery::Record>> {
+            use sluice_seams::State;
+            Ok(Line::load("main", self.0.state.read("main")?)?
+                .deliveries()
+                .to_vec())
+        }
+
+        fn add(&mut self, records: &[weir_delivery::Record]) -> Result<()> {
+            use sluice_seams::{State, Written};
+            let _held = self
+                .0
+                .state
+                .lock("main")?
+                .ok_or_else(|| anyhow!("main's lock is held"))?;
+            let mut line = Line::load("main", self.0.state.read("main")?)?;
+            line.add_deliveries(records);
+            match self.0.state.write("main", line.version, line.changes())? {
+                Written::Written(_) => Ok(()),
+                Written::Refused => Err(anyhow!("main's records moved under the add")),
+            }
+        }
+    }
+
+    /// 51, 112, 113: the branch's store of deliveries holds every delivery
+    /// case of weir's pack, each through a fresh branch's line on the
+    /// fakes' records seam (S25; record 0102; design D4).
+    #[test]
+    fn a_branchs_deliveries_pass_weirs_pack() {
+        let verdicts = weir_pack::conform_deliveries(&weir_pack::Pack::embedded(), || {
+            OnTheRecords(sluice_fakes::Fakes::new())
+        });
+        assert!(!verdicts.is_empty(), "the pack holds delivery cases");
+        let failed: Vec<_> = verdicts
+            .iter()
+            .filter_map(|(id, verdict)| verdict.as_ref().err().map(|why| format!("{id}: {why:?}")))
+            .collect();
+        assert!(failed.is_empty(), "{}", failed.join("\n"));
+    }
 }
