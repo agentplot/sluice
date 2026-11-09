@@ -13,6 +13,14 @@ back: the queue never depends on it
 
 - **Off unless asked**: `SLUICE_OTEL=1` (or `true`, `yes`, `on`) in the
   environment of whatever runs sluice, or `--otel` on its command line.
+- **Off again**, by OpenTelemetry's own settings, read as its
+  specification reads them. `OTEL_SDK_DISABLED=true` leaves telemetry
+  off as if it were never asked for: nothing is sent, and a run's checks
+  get nothing of it. `OTEL_TRACES_EXPORTER=none` turns traces alone off:
+  metrics and logs still go, and a run's checks get the setting with
+  sluice's other `OTEL_*` and no `TRACEPARENT`. `OTEL_METRICS_EXPORTER=none`
+  and `OTEL_LOGS_EXPORTER=none` do the same for theirs. A setting only
+  turns a signal off: any other value, `otlp` among them, leaves it on.
 - **Where**: OTLP over plain HTTP, protobuf, to
   `OTEL_EXPORTER_OTLP_ENDPOINT`, by default `http://localhost:4318`
   (`/v1/traces`, `/v1/metrics`). No TLS: something on the host receives

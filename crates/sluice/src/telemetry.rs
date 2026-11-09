@@ -4,6 +4,12 @@
 //! `OTEL_EXPORTER_OTLP_*` variables say. Telemetry decides nothing: an
 //! exporter that fails is silent, and nothing reads it back.
 //!
+//! OpenTelemetry's own settings turn it, or one signal, off again, as its
+//! SDK environment variables specification reads them: `OTEL_SDK_DISABLED`
+//! at `true` every signal, and `OTEL_TRACES_EXPORTER`,
+//! `OTEL_METRICS_EXPORTER` or `OTEL_LOGS_EXPORTER` at `none` that one
+//! alone. A signal turned off is never built.
+//!
 //! A run's checks get sluice's `OTEL_*` and, in `OTEL_RESOURCE_ATTRIBUTES`,
 //! the trace and span of the round that started them, so what they export
 //! is found beside the round; and the W3C `TRACEPARENT`, for a tool that
@@ -53,27 +59,78 @@ pub enum Logs {
     Tail,
 }
 
-/// The exporters, flushed by [`Telemetry::finish`] before sluice exits.
+/// Which signals OpenTelemetry's own settings leave on, as its SDK
+/// environment variables specification reads them (ADR 0014):
+/// `OTEL_SDK_DISABLED` at `true` turns every signal off, and
+/// `OTEL_TRACES_EXPORTER`, `OTEL_METRICS_EXPORTER` or `OTEL_LOGS_EXPORTER`
+/// at `none` turns that one alone off, each value read trimmed and without
+/// its ASCII case. Any other value, or none, leaves a signal on: the
+/// environment only turns a signal off, never on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Signals {
+    traces: bool,
+    metrics: bool,
+    logs: bool,
+}
+
+impl Signals {
+    /// The signals `env`, as name and value pairs, leaves on.
+    fn read(env: impl Iterator<Item = (String, String)>) -> Signals {
+        let mut on = Signals {
+            traces: true,
+            metrics: true,
+            logs: true,
+        };
+        let mut disabled = false;
+        for (name, value) in env {
+            let is = |word: &str| value.trim().eq_ignore_ascii_case(word);
+            match name.as_str() {
+                "OTEL_SDK_DISABLED" => disabled = is("true"),
+                "OTEL_TRACES_EXPORTER" => on.traces = !is("none"),
+                "OTEL_METRICS_EXPORTER" => on.metrics = !is("none"),
+                "OTEL_LOGS_EXPORTER" => on.logs = !is("none"),
+                _ => {}
+            }
+        }
+        if disabled {
+            return Signals {
+                traces: false,
+                metrics: false,
+                logs: false,
+            };
+        }
+        on
+    }
+}
+
+/// The exporters, flushed by [`Telemetry::finish`] before sluice exits:
+/// a provider for each signal left on, and none for a signal turned off.
 pub struct Telemetry {
-    traces: SdkTracerProvider,
-    metrics: SdkMeterProvider,
+    traces: Option<SdkTracerProvider>,
+    metrics: Option<SdkMeterProvider>,
     logs: Option<SdkLoggerProvider>,
 }
 
 impl Telemetry {
     /// Export from here on, as `service`, with `logs` of a failure's
-    /// output and at most `limit` bytes of it.
+    /// output and at most `limit` bytes of it, each signal only as
+    /// OpenTelemetry's own settings leave it on ([`Signals`]).
     pub fn start(service: &str, logs: Logs, limit: usize) -> Result<Telemetry> {
+        let on = Signals::read(std::env::vars());
+        let spans = match on.traces {
+            true => Some(SpanExporter::builder().with_http().build()?),
+            false => None,
+        };
         let exporter = match logs {
+            _ if !on.logs => None,
             Logs::Off => None,
             _ => Some(LogExporter::builder().with_http().build()?),
         };
-        let spans = SpanExporter::builder().with_http().build()?;
-        Telemetry::start_with(service, logs, limit, spans, exporter)
+        Telemetry::begin(service, logs, limit, on, spans, exporter)
     }
 
     /// [`Telemetry::start`], with the spans sent to `spans` and the logs
-    /// to `exporter`.
+    /// to `exporter`, each dropped where its signal is off.
     pub fn start_with<S, E>(
         service: &str,
         logs: Logs,
@@ -85,6 +142,38 @@ impl Telemetry {
         S: opentelemetry_sdk::trace::SpanExporter + 'static,
         E: logs::LogExporter + 'static,
     {
+        let on = Signals::read(std::env::vars());
+        Telemetry::begin(service, logs, limit, on, Some(spans), exporter)
+    }
+
+    /// The providers of the signals `on` leaves on, and a subscriber that
+    /// layers only theirs: a signal turned off is never built, so nothing
+    /// of it is made or sent. With traces off no span has a trace, so a
+    /// run gets no `TRACEPARENT` and a failure's record names no span.
+    /// With none left on, telemetry is off as if never asked for: no
+    /// subscriber, [`on`] false and nothing said, since the host turned
+    /// it off itself.
+    fn begin<S, E>(
+        service: &str,
+        logs: Logs,
+        limit: usize,
+        on: Signals,
+        spans: Option<S>,
+        exporter: Option<E>,
+    ) -> Result<Telemetry>
+    where
+        S: opentelemetry_sdk::trace::SpanExporter + 'static,
+        E: logs::LogExporter + 'static,
+    {
+        let spans = spans.filter(|_| on.traces);
+        let exporter = exporter.filter(|_| on.logs && logs != Logs::Off);
+        if spans.is_none() && !on.metrics && exporter.is_none() {
+            return Ok(Telemetry {
+                traces: None,
+                metrics: None,
+                logs: None,
+            });
+        }
         let resource = Resource::builder()
             .with_service_name(service.to_string())
             .with_attribute(opentelemetry::KeyValue::new(
@@ -92,15 +181,22 @@ impl Telemetry {
                 crate::VERSION,
             ))
             .build();
-        let traces = SdkTracerProvider::builder()
-            .with_batch_exporter(spans)
-            .with_resource(resource.clone())
-            .build();
-        let metrics = SdkMeterProvider::builder()
-            .with_periodic_exporter(MetricExporter::builder().with_http().build()?)
-            .with_resource(resource.clone())
-            .build();
-        let logs = exporter.filter(|_| logs != Logs::Off).map(|e| {
+        let traces = spans.map(|spans| {
+            SdkTracerProvider::builder()
+                .with_batch_exporter(spans)
+                .with_resource(resource.clone())
+                .build()
+        });
+        let metrics = match on.metrics {
+            true => Some(
+                SdkMeterProvider::builder()
+                    .with_periodic_exporter(MetricExporter::builder().with_http().build()?)
+                    .with_resource(resource.clone())
+                    .build(),
+            ),
+            false => None,
+        };
+        let logs = exporter.map(|e| {
             SdkLoggerProvider::builder()
                 .with_log_processor(Scrub::new(logs, limit, std::env::vars()))
                 .with_batch_exporter(e)
@@ -115,8 +211,12 @@ impl Telemetry {
             }))
         });
         let subscriber = tracing_subscriber::registry()
-            .with(tracing_opentelemetry::layer().with_tracer(traces.tracer("sluice")))
-            .with(MetricsLayer::new(metrics.clone()))
+            .with(
+                traces
+                    .as_ref()
+                    .map(|t| tracing_opentelemetry::layer().with_tracer(t.tracer("sluice"))),
+            )
+            .with(metrics.clone().map(MetricsLayer::new))
             .with(bridge);
         tracing::subscriber::set_global_default(subscriber)?;
         ON.store(true, Ordering::SeqCst);
@@ -129,7 +229,9 @@ impl Telemetry {
 
     /// Send what is held so far, and go on.
     pub fn flush(&self) {
-        let _ = self.traces.force_flush();
+        if let Some(t) = &self.traces {
+            let _ = t.force_flush();
+        }
         if let Some(l) = &self.logs {
             let _ = l.force_flush();
         }
@@ -137,8 +239,12 @@ impl Telemetry {
 
     /// Send what is left. A collector that cannot be reached loses it.
     pub fn finish(self) {
-        let _ = self.traces.shutdown();
-        let _ = self.metrics.shutdown();
+        if let Some(t) = self.traces {
+            let _ = t.shutdown();
+        }
+        if let Some(m) = self.metrics {
+            let _ = m.shutdown();
+        }
         if let Some(l) = self.logs {
             let _ = l.shutdown();
         }
@@ -370,6 +476,61 @@ mod tests {
         assert_eq!(s.body(OUTPUT, "abcdéf", |_| None), "f");
         assert_eq!(s.body(OUTPUT, "abcdefgh", |_| None), "gh");
         assert_eq!(scrub(Logs::Tail, 1 << 30, &[]).limit, LOG_LIMIT);
+    }
+
+    fn signals(env: &[(&str, &str)]) -> Signals {
+        let env = env.iter().map(|(k, v)| (k.to_string(), v.to_string()));
+        Signals::read(env.collect::<Vec<_>>().into_iter())
+    }
+
+    #[test]
+    fn the_standard_settings_are_read_as_opentelemetry_reads_them() {
+        let all = Signals {
+            traces: true,
+            metrics: true,
+            logs: true,
+        };
+        let none = Signals {
+            traces: false,
+            metrics: false,
+            logs: false,
+        };
+        assert_eq!(signals(&[]), all);
+        for value in ["none", "NONE", " None "] {
+            let only = Signals {
+                traces: false,
+                ..all
+            };
+            assert_eq!(
+                signals(&[("OTEL_TRACES_EXPORTER", value)]),
+                only,
+                "{value:?}"
+            );
+        }
+        for value in ["otlp", "console"] {
+            assert_eq!(
+                signals(&[("OTEL_TRACES_EXPORTER", value)]),
+                all,
+                "{value:?}"
+            );
+        }
+        for value in ["true", " TRUE "] {
+            assert_eq!(signals(&[("OTEL_SDK_DISABLED", value)]), none, "{value:?}");
+        }
+        for value in ["1", "false", ""] {
+            assert_eq!(signals(&[("OTEL_SDK_DISABLED", value)]), all, "{value:?}");
+        }
+        assert_eq!(
+            signals(&[("OTEL_METRICS_EXPORTER", "none")]),
+            Signals {
+                metrics: false,
+                ..all
+            }
+        );
+        assert_eq!(
+            signals(&[("OTEL_LOGS_EXPORTER", "none")]),
+            Signals { logs: false, ..all }
+        );
     }
 
     #[test]

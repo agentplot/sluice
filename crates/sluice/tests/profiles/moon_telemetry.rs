@@ -35,6 +35,17 @@ fn moon_runs_with_otel_while_telemetry_is_on() {
     let nobody = format!("http://{}", free.local_addr().unwrap());
     drop(free);
     std::env::set_var("OTEL_EXPORTER_OTLP_ENDPOINT", nobody);
+    // This binary runs with the host's environment: a host, or a sluice
+    // run, that turns OpenTelemetry's signals off would leave telemetry
+    // off here.
+    for setting in [
+        "OTEL_SDK_DISABLED",
+        "OTEL_TRACES_EXPORTER",
+        "OTEL_METRICS_EXPORTER",
+        "OTEL_LOGS_EXPORTER",
+    ] {
+        std::env::remove_var(setting);
+    }
     let telemetry = Telemetry::start_with(
         "sluice",
         Logs::Off,
