@@ -1283,6 +1283,96 @@ fn wt_submit_confirms_a_landing_it_removes_the_worktree_of() {
     assert_eq!(handed(&s, m), ["wait"]);
 }
 
+/// 51, S77; owed-outcomes spec, "An expired blame of a removed worktree"
+/// and "One owed landing": a branch's status shows, after its queue, what
+/// its readers are owed. On a host whose span is a second, a blame the
+/// round pushed into its pane, of a worktree removed before it confirmed
+/// anything, is shown under its reader marked `never confirmed`, expired,
+/// with its hand-over by `notice`; under `--json`, a landing handed over
+/// by `inbox` to a worktree that confirmed an earlier outcome is its
+/// reader's one delivery, owed, and the reader known; nothing owed shows
+/// no section (weir 104 to 106; record 0102).
+#[test]
+fn status_shows_an_expired_blame_with_its_reader_never_confirmed() {
+    let s = Scratch::new("wt-owed-expired");
+    std::fs::write(
+        s.config.join("sluice/config.toml"),
+        "[runs]\nmax = 2\n\n[deliveries]\nexpire_after = \"1s\"\n",
+    )
+    .unwrap();
+    let b = s.session("b", &[("broken", "x\n")]);
+    let (n, _) = s.submit_from_pane(&b, "w1:p3");
+    assert_eq!(s.decide(n)["state"], "failed");
+    assert_eq!(handed(&s, n), ["notice"]);
+    s.repo
+        .git(&["worktree", "remove", "--force", b.to_str().unwrap()]);
+    std::thread::sleep(Duration::from_millis(1500));
+
+    let out = s.sluice(&["status", "bolt/x"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let said = text(&out);
+    let owed = said
+        .split_once("OWED\n")
+        .unwrap_or_else(|| panic!("no OWED section: {said}"))
+        .1;
+    let mut lines = owed.lines();
+    assert_eq!(lines.next(), Some("  unit/b · never confirmed"), "{said}");
+    let row = lines.next().unwrap_or_default();
+    let expires_at = s.status(n)["delivery"]["expires_at"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    for word in [
+        format!("{n}:failed"),
+        format!("#{n}"),
+        format!("expired at {expires_at}"),
+        "notice at".to_string(),
+    ] {
+        assert!(row.contains(&word), "{word} not in {said}");
+    }
+    assert_eq!(s.status(n)["delivery"]["state"], "expired");
+
+    // One owed landing, to a reader that confirmed an earlier outcome.
+    let s = Scratch::new("wt-owed-landing");
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let first = id(&s.wt_submit(&a, &["--no-wait", "--json"]));
+    s.land(first);
+    let out = confirm(&s, &a, &[&format!("{first}:landed")]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let out = s.sluice(&["status", "bolt/x"]);
+    assert!(!text(&out).contains("OWED"), "{}", text(&out));
+    let v: serde_json::Value =
+        serde_json::from_slice(&s.sluice(&["status", "bolt/x", "--json"]).stdout).unwrap();
+    assert_eq!(v["owed"], serde_json::json!([]), "{v}");
+
+    std::fs::write(a.join("more.txt"), "more\n").unwrap();
+    let dir = a.to_str().unwrap();
+    s.repo.git(&["-C", dir, "add", "-A"]);
+    s.repo.git(&["-C", dir, "commit", "-q", "-m", "more"]);
+    let n = id(&s.wt_submit(&a, &["--no-wait", "--json"]));
+    s.land(n);
+    let out = inbox(&s, &a, &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    for all in [false, true] {
+        let mut args = vec!["status", "bolt/x", "--json"];
+        if all {
+            args.push("--all");
+        }
+        let v: serde_json::Value = serde_json::from_slice(&s.sluice(&args).stdout).unwrap();
+        let owed = v["owed"].as_array().unwrap();
+        assert_eq!(owed.len(), 1, "{v}");
+        assert_eq!(owed[0]["reader"], "unit/a", "{v}");
+        assert_eq!(owed[0]["known"], true, "{v}");
+        let d = &owed[0]["deliveries"];
+        assert_eq!(d.as_array().unwrap().len(), 1, "{v}");
+        assert_eq!(d[0]["key"], format!("{n}:landed").as_str(), "{v}");
+        assert_eq!(d[0]["id"], n, "{v}");
+        assert_eq!(d[0]["state"], "owed", "{v}");
+        assert!(d[0]["expires_at"].is_string(), "{v}");
+        assert_eq!(d[0]["handed"][0]["by"], "inbox", "{v}");
+    }
+}
+
 /// `sluice inbox` run in `dir`.
 fn inbox(s: &Scratch, dir: &Path, args: &[&str]) -> Output {
     s.command(env!("CARGO_BIN_EXE_sluice"), dir)
