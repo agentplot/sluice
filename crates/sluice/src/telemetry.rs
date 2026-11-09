@@ -150,6 +150,9 @@ impl Telemetry {
     /// layers only theirs: a signal turned off is never built, so nothing
     /// of it is made or sent. With traces off no span has a trace, so a
     /// run gets no `TRACEPARENT` and a failure's record names no span.
+    /// With none left on, telemetry is off as if never asked for: no
+    /// subscriber, [`on`] false and nothing said, since the host turned
+    /// it off itself.
     fn begin<S, E>(
         service: &str,
         logs: Logs,
@@ -162,6 +165,15 @@ impl Telemetry {
         S: opentelemetry_sdk::trace::SpanExporter + 'static,
         E: logs::LogExporter + 'static,
     {
+        let spans = spans.filter(|_| on.traces);
+        let exporter = exporter.filter(|_| on.logs && logs != Logs::Off);
+        if spans.is_none() && !on.metrics && exporter.is_none() {
+            return Ok(Telemetry {
+                traces: None,
+                metrics: None,
+                logs: None,
+            });
+        }
         let resource = Resource::builder()
             .with_service_name(service.to_string())
             .with_attribute(opentelemetry::KeyValue::new(
@@ -169,7 +181,7 @@ impl Telemetry {
                 crate::VERSION,
             ))
             .build();
-        let traces = spans.filter(|_| on.traces).map(|spans| {
+        let traces = spans.map(|spans| {
             SdkTracerProvider::builder()
                 .with_batch_exporter(spans)
                 .with_resource(resource.clone())
@@ -184,7 +196,7 @@ impl Telemetry {
             ),
             false => None,
         };
-        let logs = exporter.filter(|_| on.logs && logs != Logs::Off).map(|e| {
+        let logs = exporter.map(|e| {
             SdkLoggerProvider::builder()
                 .with_log_processor(Scrub::new(logs, limit, std::env::vars()))
                 .with_batch_exporter(e)

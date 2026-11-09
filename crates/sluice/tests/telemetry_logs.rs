@@ -693,6 +693,30 @@ fn with_logs_off_traces_and_metrics_still_go_to_the_endpoint() {
     sent_to(&seen, &["/v1/traces", "/v1/metrics"], "/v1/logs");
 }
 
+/// `OTEL_SDK_DISABLED=true` leaves telemetry off as if it were never asked
+/// for: nothing is sent, a run gets nothing of it, and a failure fails as
+/// it does with telemetry off.
+#[test]
+fn with_the_sdk_disabled_nothing_is_sent() {
+    if !alone("with_the_sdk_disabled_nothing_is_sent") {
+        return;
+    }
+    std::env::set_var("OTEL_SDK_DISABLED", "true");
+    let collector = support::http::Fake::start(|_| (200, Vec::new(), String::new()));
+    std::env::set_var("OTEL_EXPORTER_OTLP_ENDPOINT", collector.url());
+    let telemetry = Telemetry::start("sluice", Logs::Tail, 8192).unwrap();
+    assert!(!sluice::telemetry::on());
+    assert!(sluice::telemetry::run_env(&[("sluice.place", "p")]).is_empty());
+    let f = setup();
+    assert_eq!(
+        submit(&f, "unit/a", &[("tests/t_a.py", Some("broken"))]),
+        FAILED
+    );
+    telemetry.finish();
+    let seen = collector.requests();
+    assert!(seen.is_empty(), "{seen:?}");
+}
+
 /// With traces off no span is made, so a failure's record goes with no
 /// trace or span id.
 #[test]
