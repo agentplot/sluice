@@ -6924,12 +6924,12 @@ fn run_again_marks_ready_a_draft_another_host_sent_back() {
     let g = OnGitHub::new("intake-again-draft", "");
     let (b, w, pull) = held_on_b(&g, "redrafted", &[("broken", "b\n")]);
     let n = pull.number;
-    // Beside its state, the mark's host and holder and the queue B's check
+    // Beside its state, the host that keeps main and the queue B's check
     // carries, B's submission of it failed and held for the next submit
     // (record 0095 D5).
     let waiting = serde_json::json!({
         "pull_request": n, "branch": "main", "state": "waiting to be taken in by b",
-        "taken_in_by": { "host": "b", "holder": "driver" },
+        "taken_in_by": { "host": "b" },
         "queue": {
             "host": "b", "taken_in": true, "submission": b.of(n)[0]["id"],
             "state": "failed", "ahead": [], "waits_for": ["the next submit"],
@@ -7013,8 +7013,10 @@ fn mutations(g: &OnGitHub, mutation: &str) -> usize {
 fn a_submit_marks_ready_a_request_another_host_sent_back_not_a_draft() {
     let g = OnGitHub::new("intake-sent-back-ready", "");
     g.named("a", "");
-    let b = g.other("b", "", "");
+    // B's pass runs first, so B keeps main and A does not.
+    let b = g.other("b", "", &g.signing("b"));
     b.run("1");
+    assert_eq!(g.keeper().as_deref(), Some("b"));
     let w = g.session("review", &[("broken", "b\n")]);
     g.repo
         .git(&["push", "-q", "origin", "unit/review:refs/heads/unit/review"]);
@@ -7094,8 +7096,10 @@ fn a_submit_marks_ready_a_request_another_host_sent_back_not_a_draft() {
 fn a_submit_leaves_a_request_queued_on_another_host() {
     let g = OnGitHub::new("intake-still-queued", "");
     g.named("a", "");
-    let b = g.other("b", "", "");
+    // B's pass runs first, so B keeps main and A does not.
+    let b = g.other("b", "", &g.signing("b"));
     b.run("1");
+    assert_eq!(g.keeper().as_deref(), Some("b"));
     let w = g.session("queued", &[("q.txt", "q\n")]);
     let out = g.wt_submit(&w, &["--no-wait"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
