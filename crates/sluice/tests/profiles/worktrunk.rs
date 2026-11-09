@@ -620,9 +620,11 @@ impl Scratch {
     }
 }
 
-/// 50, 51: a landing submitted from a pane is typed into that pane once,
-/// on the server the submit ran under, and the submission is marked
-/// delivered to it.
+/// 50, 51; outcome-delivery spec, "A landing is pushed into the
+/// submitting pane" and "A notice taken into the pane": a landing
+/// submitted from a pane is typed into that pane once, on the server the
+/// submit ran under, ending with the key it is confirmed by, and is handed
+/// over by `notice` to the pane, staying owed (record 0102, D10).
 #[test]
 fn a_landing_is_pushed_into_the_pane_it_was_submitted_from() {
     let s = Scratch::new("wt-push");
@@ -636,7 +638,8 @@ fn a_landing_is_pushed_into_the_pane_it_was_submitted_from() {
     assert_eq!(
         calls[0][0],
         format!(
-            "call <agent> <prompt> <w1:p2> <[sluice] #{n} landed on bolt/x as {}.>",
+            "call <agent> <prompt> <w1:p2> <[sluice] #{n} landed on bolt/x as {}. \
+             sluice confirm {n}:landed once you have read it.>",
             &landed[..7]
         )
     );
@@ -646,11 +649,17 @@ fn a_landing_is_pushed_into_the_pane_it_was_submitted_from() {
 
     let out = s.sluice(&["wait", &n.to_string(), "--json"]);
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert!(v["delivered"].is_string(), "{v}");
-    assert_eq!(v["delivered_to"], session.as_str(), "{v}");
+    assert!(v.get("delivered").is_none(), "{v}");
+    assert_eq!(v["delivery"]["state"], "owed", "{v}");
+    assert_eq!(v["delivery"]["handed"][0]["by"], "notice", "{v}");
+    let handed = s.logged("handed");
+    assert_eq!(handed.len(), 1, "{handed:?}");
+    assert_eq!(handed[0]["to"], session.as_str());
 }
 
-/// 50: a blamed submission's line names its failure and the check.
+/// 50; outcome-delivery spec, "A failure is pushed with its failed checks":
+/// a blamed submission's line names its failure, the check and the key it
+/// is confirmed by.
 #[test]
 fn a_failure_is_pushed_with_its_check() {
     let s = Scratch::new("wt-push-failed");
@@ -668,11 +677,18 @@ fn a_failure_is_pushed_with_its_check() {
         "{line}"
     );
     assert!(line.contains("sh check.sh"), "{line}");
-    assert_eq!(v["delivered_to"], session.as_str(), "{v}");
+    assert!(
+        line.contains(&format!("sluice confirm {n}:failed")),
+        "{line}"
+    );
+    let handed = s.logged("handed");
+    assert_eq!(handed.len(), 1, "{handed:?}");
+    assert_eq!(handed[0]["to"], session.as_str());
 }
 
-/// 51: a prompt herdr refuses marks nothing delivered, and the log says why
-/// once, in herdr's words; no later round pushes it again.
+/// 51; outcome-delivery spec, "A refused prompt records nothing": a prompt
+/// herdr refuses records no hand-over, and the log says why once, in
+/// herdr's words; no later round pushes it again.
 #[test]
 fn a_refused_prompt_leaves_the_outcome_pending() {
     let s = Scratch::new("wt-push-refused");
@@ -684,10 +700,7 @@ fn a_refused_prompt_leaves_the_outcome_pending() {
     let (n, _) = s.submit_from_pane(&a, "w1:p2");
     let v = s.decide(n);
     assert_eq!(v["state"], "landed", "{v}");
-    assert!(
-        v.get("delivered").is_none() && v.get("delivered_to").is_none(),
-        "{v}"
-    );
+    assert!(handed(&s, n).is_empty(), "{v}");
     for _ in 0..3 {
         let out = s.sluice(&["step", "bolt/x"]);
         assert!(out.status.success(), "{}", text(&out));
@@ -699,8 +712,9 @@ fn a_refused_prompt_leaves_the_outcome_pending() {
     assert_eq!(pending[0]["why"], "agent is blocked");
 }
 
-/// 51: a submit in no pane lands with nothing pushed and nothing delivered,
-/// and the log says once that it is pending.
+/// 51; outcome-delivery spec, "A submission outside any multiplexer": a
+/// submit in no pane lands with nothing pushed, owed with no hand-over, and
+/// the log says once that it is pending.
 #[test]
 fn a_submit_in_no_pane_is_pushed_nothing() {
     let s = Scratch::new("wt-push-none");
@@ -709,10 +723,8 @@ fn a_submit_in_no_pane_is_pushed_nothing() {
     let v = s.decide(n);
     assert_eq!(v["state"], "landed", "{v}");
     assert!(s.herdr.calls().is_empty());
-    assert!(
-        v.get("delivered").is_none() && v.get("delivered_to").is_none(),
-        "{v}"
-    );
+    assert_eq!(s.status(n)["delivery"]["state"], "owed");
+    assert!(handed(&s, n).is_empty(), "{v}");
     let pending = s.logged("pending");
     assert_eq!(pending.len(), 1, "{pending:?}");
     assert_eq!(pending[0]["id"], n);
@@ -738,7 +750,7 @@ fn a_submission_from_another_host_is_not_pushed() {
     let v = s.decide(n);
     assert_eq!(v["state"], "landed", "{v}");
     assert!(s.herdr.calls().is_empty());
-    assert!(v.get("delivered").is_none(), "{v}");
+    assert!(handed(&s, n).is_empty(), "{v}");
     let pending = s.logged("pending");
     assert!(
         pending[0]["why"].as_str().unwrap().contains("box-1"),
