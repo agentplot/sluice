@@ -123,6 +123,21 @@ fn only_the_root_help_names_the_telemetry_flags() {
     }
 }
 
+/// Record 0014: the root help names OpenTelemetry's own settings, which
+/// turn telemetry, or one signal of it, off.
+#[test]
+fn the_root_help_names_opentelemetrys_off_switches() {
+    let text = help(&["--help"]);
+    for setting in [
+        "OTEL_SDK_DISABLED=true",
+        "OTEL_TRACES_EXPORTER",
+        "OTEL_METRICS_EXPORTER",
+        "OTEL_LOGS_EXPORTER",
+    ] {
+        assert!(text.contains(setting), "{setting:?} in {text}");
+    }
+}
+
 #[test]
 fn a_command_still_takes_the_telemetry_flags() {
     // Outside any repository: read past the command line, it fails as
