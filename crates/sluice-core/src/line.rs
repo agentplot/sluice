@@ -294,6 +294,29 @@ impl Line {
         Ok(true)
     }
 
+    /// 51, 67: confirm for `reader`, at `now`, submission `id`'s outcome
+    /// under `key`, which the worktree that submits again has acted on,
+    /// with weir's `confirm`, logged `confirmed` `by` `resubmission`; an
+    /// outcome with no delivery, or confirmed already, records nothing
+    /// (weir 102; record 0102; design D16).
+    pub fn confirm_resubmitted(&mut self, id: u64, key: &str, reader: &str, now: &str) {
+        let Ok(weir_delivery::Confirmed::Add(add)) =
+            weir_delivery::confirm(&self.deliveries, key, reader, now)
+        else {
+            return;
+        };
+        self.add_deliveries(&add);
+        self.log(
+            now,
+            Event::Confirmed {
+                id,
+                key: key.into(),
+                reader: reader.into(),
+                by: "resubmission".into(),
+            },
+        );
+    }
+
     pub fn sub(&self, id: u64) -> Result<&Submission> {
         self.subs
             .get(&id)

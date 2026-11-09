@@ -267,3 +267,44 @@ fn only_a_done_delivery_leaves() {
     assert!(of(&h, one).is_empty(), "{:?}", of(&h, one));
     assert!(known(&h, "unit/a"));
 }
+
+/// 67, weir 102: a worktree that submits again has acted on the blame it
+/// withdraws, so the same write confirms it for its reader, logged by
+/// `resubmission` (design D16).
+///
+/// satisfies: 51, 67
+#[test]
+fn a_resubmission_confirms_the_outcome_it_withdraws() {
+    use sluice_core::records::{Event, State};
+    let h = Harness::bolt();
+    h.fails_with("a:test", "a/lib", "broken");
+    let first = h.work("unit/a", "agent-a", &[("a/lib", Some("broken"))]);
+    h.w().not_delivering("agent-a");
+    let blamed = h.submit("unit/a");
+    h.settle();
+    assert_eq!(h.sub(blamed).state, State::Failed);
+    let key = format!("{blamed}:failed");
+    assert!(h.confirmed(&key).is_empty());
+
+    h.work_on("unit/a", &first, &[("a/lib", Some("fixed"))]);
+    let again = h.submit("unit/a");
+    assert_eq!(h.sub(blamed).state, State::Withdrawn);
+    // Done, and withdrawn with nothing left to do, it leaves the records
+    // whole in the same write, its confirmation with it.
+    let owed = weir_delivery::owed(&deliveries(&h), "2026-10-11T09:00:00Z").unwrap();
+    assert!(
+        owed.readers
+            .iter()
+            .flat_map(|r| &r.deliveries)
+            .all(|d| d.delivery.key().as_str() != key),
+        "owed no more"
+    );
+    assert!(of(&h, blamed).is_empty(), "{:?}", of(&h, blamed));
+    assert!(h.events().iter().any(|e| matches!(
+        e,
+        Event::Confirmed { id, key: k, reader, by }
+            if *id == blamed && *k == key && reader == "unit/a" && by == "resubmission"
+    )));
+    h.settle();
+    assert_eq!(h.sub(again).state, State::Landed);
+}

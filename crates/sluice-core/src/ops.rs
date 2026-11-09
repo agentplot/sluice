@@ -1546,9 +1546,18 @@ fn admit(
         .collect();
     let attempt = l.from_worktree(&session.from.worktree) as u32 + 1;
     let mut withdrew = Vec::new();
+    let mut acted_on = Vec::new();
     for &old in &mine {
         let s = l.sub_mut(old);
         if !s.state.is_final() && s.state != State::Landing {
+            // 67, D16: a blame or a conflict submitted again is its reader
+            // acting on it, which confirms it (weir 102).
+            if matches!(s.state, State::Failed | State::Conflict) {
+                acted_on.extend(
+                    s.notification()
+                        .map(|key| (old, key, s.from.worktree.clone())),
+                );
+            }
             s.state = State::Withdrawn;
             s.withdrawn = Some(Withdrawal {
                 by: "resubmission".into(),
@@ -1567,6 +1576,9 @@ fn admit(
                 handed_over_to: None,
             },
         );
+    }
+    for (old, key, reader) in acted_on {
+        l.confirm_resubmitted(old, &key, &reader, now);
     }
     l.subs.insert(
         id,
