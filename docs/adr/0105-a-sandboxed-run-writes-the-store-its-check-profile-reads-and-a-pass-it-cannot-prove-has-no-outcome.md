@@ -9,7 +9,7 @@ decision-makers:
 
 # A sandboxed run writes the store its check profile reads, and a pass it cannot prove has no outcome
 
-Status: accepted on 2026-11-09 by agentplot-design. It is the design agent's own choice, made on the statement and the rules written, and cheap to change. Amended 2026-11-09 by the construct stage of the change `a-sandboxed-run-writes-its-runners-store`, its own choice under the C.2 sandbox row, which grants the store a run's environment resolves with no exception for a cold run: a cold run whose repository's own moon workspace shares moon's cache is granted the store that workspace puts outside its checkout.
+Status: accepted on 2026-11-09 by agentplot-design. It is the design agent's own choice, made on the statement and the rules written, and cheap to change. Amended 2026-11-09 by the construct stage of the change `a-sandboxed-run-writes-its-runners-store`, its own choice under the C.2 sandbox row, which grants the store a run's environment resolves with no exception for a cold run: a cold run whose repository's own moon workspace shares moon's cache is granted the store that workspace puts outside its checkout. agentplot-design took the amendment as its own that day.
 
 Deciders: agentplot-design, on the question of the fix place `fix--sluice-runs-one-host-process--passes-mains-checks-954d21e`, 2026-11-09: "Needed: one family design for where moon's shared worktree cache lives in a run. Either the host stops declaring MOON_CACHE_SHARED_WORKTREE_CACHE, or the repositories stop moving MOON_HOME [...], or sluice equips moon's store as a declared cache. Also needed: whether a run whose every check passed but whose manifests moon couldn't store should blame the submission for every check."
 
