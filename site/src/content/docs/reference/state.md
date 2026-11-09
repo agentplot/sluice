@@ -351,6 +351,16 @@ written as `<revision>`. `from` and `to` are the last refused write's,
 show those refused in the last day; read them there, since this form
 is sluice's own. The field is left out when it is empty.
 
+`proof_missing` holds, on a branch whose state is on its remote, each
+reason a host's runs kept no proof of a test that passed, while it
+stands, one for each host and reason: `[{"host": "build-1", "why": "it
+passed, but nothing the run kept proves it ran: moon's manifest of it
+is not in /home/me/app/.moon/cache", "since": "2026-11-09T09:16:40Z",
+"runs": 3}]`. `since` is when the first such run was read, and `runs`
+counts that host's runs it touched. A reason leaves the list with its
+`proof-kept` event. No round, gate or landing reads it. The field is
+left out when it is empty, and an older sluice passes over it.
+
 ## A submission
 
 ```json
@@ -616,6 +626,22 @@ that host's rounds it refused:
 ```json
 {"schema":"sluice/log@1","event":"read-refused","host":"build-1","remote":"origin","asked":"refs/heads/main","said":"remote: Repository not found.\nfatal: repository 'https://github.com/acme/app.git/' not found"}
 {"schema":"sluice/log@1","event":"read-again","host":"build-1","remote":"origin","since":"2026-10-26T09:16:40Z","stood":1800,"rounds":12}
+```
+
+`proof-missing` is logged when a run on a branch whose state is on its
+remote passed a test and kept no proof of it, so the pass has no result.
+It names the host that read the run and why, which names the store the
+proof was looked for in. It's logged once for each reason while that
+host's runs keep no proof, never once a run, and each host logs its
+own. The first run on that host that proves a test that passed, and
+leaves none without proof, logs `proof-kept`. `since` is when the first
+such run was read, `stood` how many seconds since then, and `runs` how
+many of that host's runs it touched. A run that passed nothing ends
+nothing:
+
+```json
+{"schema":"sluice/log@1","event":"proof-missing","host":"build-1","why":"it passed, but nothing the run kept proves it ran: moon's manifest of it is not in /home/me/app/.moon/cache"}
+{"schema":"sluice/log@1","event":"proof-kept","host":"build-1","why":"it passed, but nothing the run kept proves it ran: moon's manifest of it is not in /home/me/app/.moon/cache","since":"2026-11-09T09:16:40Z","stood":1800,"runs":3}
 ```
 
 `protected` is logged once for each command a host's protection

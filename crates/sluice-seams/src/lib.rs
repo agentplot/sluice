@@ -665,6 +665,18 @@ pub struct NotRun {
     pub reason: String,
 }
 
+/// Design D1 and D3 of the change `a-pass-nothing-proves-blames-no-one`
+/// (114, C.6; record 0105): what a finished run's place proves of it.
+/// `proven` holds the tasks whose keys the candidate's tree bears out, its
+/// checks and the tasks a check was failed by alike (149). `unkept` holds
+/// each ran check that passed whose proof the run kept none of, with why:
+/// it has no outcome, never a fail. A task in neither list is no pass.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Proof {
+    pub proven: Vec<String>,
+    pub unkept: Vec<NotRun>,
+}
+
 /// 149: a required check the runner skipped because the tasks `by` it
 /// depends on ran and failed; its outcome is theirs.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -860,12 +872,17 @@ pub trait Tests {
     /// counts it beside the bound and the records never hold the count.
     fn running(&self) -> Result<Running>;
 
-    /// Design D9 (C.6): the tasks of a finished run whose keys the
-    /// candidate's tree bears out, its checks and the tasks a check was
-    /// failed by alike (149), read while its place still exists, running
-    /// nothing. A signer signs only these, so no check signs a pass under
-    /// a key it does not hold.
-    fn proven(&self, run: &RunHandle, report: &RunReport) -> Result<Vec<String>>;
+    /// Design D9 (C.6): what a finished run's place proves of it, read
+    /// while its place still exists, running nothing, in one walk of what
+    /// the run kept. `proven` names the tasks whose keys the candidate's
+    /// tree bears out, its checks and the tasks a check was failed by alike
+    /// (149); a signer signs only these, so no check signs a pass under a
+    /// key it does not hold. `unkept` names each ran check that passed
+    /// whose proof the run kept none of, with why read from that fact, in
+    /// the profile's words: it has no outcome (114; record 0105). A fail,
+    /// a task a check was failed by and a replay are never unkept, and a
+    /// task in neither list is no pass.
+    fn proven(&self, run: &RunHandle, report: &RunReport) -> Result<Proof>;
 
     /// ADR 0035: the session runs running on this host, as `running`
     /// counts them, each with what its `sluice exec` kept of it: for a

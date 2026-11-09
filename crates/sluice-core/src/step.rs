@@ -35,13 +35,13 @@ use crate::overview::Room;
 use crate::policy::{Rules, POLICY_PATH};
 use crate::records::{
     Beside, BesideWhy, BranchHold, Candidate, CandidateState, ConflictRecord, CopyBehind,
-    DecidedRecord, Event, FailedTask, Held, LandingCommitRecord, LandingIntent, OutboxItem,
-    Recorded, ResultKind, ResultLine, RunState, State, SystemRun, Tested,
+    DecidedRecord, Event, FailedTask, Held, LandingCommitRecord, LandingIntent, LostRun,
+    OutboxItem, Recorded, ResultKind, ResultLine, RunState, State, SystemRun, Tested,
 };
 use crate::refused::Refusal;
 use crate::release::{ReleaseOutcome, Releasing};
 use crate::text::{beside_message, landing_message};
-use crate::{verdict, Serves, Sluice, OUTPUT};
+use crate::{proof, verdict, Serves, Sluice, OUTPUT};
 
 /// Could-not-run-1 115: the deployment's bound on a candidate's runs in a
 /// row that leave a check not run and fail none on its own result.
@@ -954,7 +954,8 @@ impl Sluice<'_> {
             }
             let system = xr.system.clone();
             let system = system.as_deref().or(home);
-            if let Some(named) = read_not_run(l, c, i, &report.not_run, false, system, &now) {
+            let host = &self.peer.name;
+            if let Some(named) = read_not_run(l, c, i, &report.not_run, false, system, host, &now) {
                 let x = l.candidate_mut(&c.id).expect("a read candidate");
                 let xr = &mut x.runs[i];
                 xr.state = RunState::Failed;
@@ -1576,12 +1577,17 @@ impl Sluice<'_> {
         c: &Candidate,
         i: usize,
         run: &RunHandle,
-        report: sluice_seams::RunReport,
+        mut report: sluice_seams::RunReport,
         rules: &Rules,
         home: Option<&str>,
         now: &str,
     ) -> Result<()> {
         let r = &c.runs[i];
+        // Design D7 (114; record 0105): why its last run had no outcome
+        // goes once its next report is read, whatever that says.
+        if let Some(xr) = line.candidate_mut(&c.id).and_then(|x| x.runs.get_mut(i)) {
+            xr.lost = None;
+        }
         let system = r.system.as_deref().or(home);
         let span = info_span!(
             "sluice.verdict",
@@ -1602,7 +1608,35 @@ impl Sluice<'_> {
         // result is recorded signed, and only for a key the candidate's
         // tree bears out, a task a check was failed by as a check (149).
         let proven: Option<Vec<String>> = if rules.signed {
-            Some(self.seams.tests.proven(run, &report)?)
+            let proof = self.seams.tests.proven(run, &report)?;
+            // 114, 16, record 0105 (design D5, D6 of the change
+            // `a-pass-nothing-proves-blames-no-one`; rule core.35): a pass
+            // the run kept no proof of has no outcome. It leaves the
+            // checks the run judged for those it did not, with the
+            // profile's words, before anything is recorded, so nothing is
+            // recorded under its key and no verdict reads it; the reading
+            // of what the run left not run does the rest. Its cause is
+            // noted on the host that read the run, which ran it, before
+            // anything returns early.
+            let proved = report.tasks.iter().any(|t| {
+                matches!(t.source, Source::Ran { .. })
+                    && t.outcome == Outcome::Pass
+                    && proof.proven.contains(&t.task)
+            });
+            for event in proof::note(
+                &mut line.doc.proof_missing,
+                &self.peer.name,
+                &proof.unkept,
+                proved,
+                now,
+            ) {
+                line.log(now, event);
+            }
+            report
+                .tasks
+                .retain(|t| !proof.unkept.iter().any(|n| n.task == t.task));
+            report.not_run.extend(proof.unkept);
+            Some(proof.proven)
         } else {
             None
         };
@@ -1733,7 +1767,8 @@ impl Sluice<'_> {
         let not_run: Vec<NotRun> = report.not_run.iter().chain(&v.unjudged).cloned().collect();
         if !not_run.is_empty() {
             let judged = !v.failed.is_empty() || v.timed_out;
-            let Some(named) = read_not_run(line, c, i, &not_run, judged, system, now) else {
+            let host = &self.peer.name;
+            let Some(named) = read_not_run(line, c, i, &not_run, judged, system, host, now) else {
                 return Ok(());
             };
             v.passed = false;
@@ -3516,8 +3551,13 @@ impl Sluice<'_> {
 /// `judged` says a check failed on its own result or the time limit ended
 /// the run. Unjudged and under the bound, the run is open again for any
 /// host, its place to be released and its loss logged, and nobody is
-/// blamed: `None`. Past the bound, or judged, each check is returned
-/// named with why, to be read as failed.
+/// blamed: `None`; the run keeps, until its next report is read, that
+/// `host`, the host reading it, had no outcome of it, on the run's system,
+/// and each check not run with why (design D7 of the change
+/// `a-pass-nothing-proves-blames-no-one`; record 0105). Past the bound,
+/// or judged, each check is returned named with why, to be read as
+/// failed.
+#[allow(clippy::too_many_arguments)]
 fn read_not_run(
     line: &mut Line,
     c: &Candidate,
@@ -3525,6 +3565,7 @@ fn read_not_run(
     not_run: &[NotRun],
     judged: bool,
     system: Option<&str>,
+    host: &str,
     now: &str,
 ) -> Option<Vec<FailedTask>> {
     let x = line.candidate_mut(&c.id).expect("a read candidate");
@@ -3535,6 +3576,11 @@ fn read_not_run(
             xr.state = RunState::Open;
             xr.run = None;
             xr.host = None;
+            xr.lost = Some(LostRun {
+                host: host.to_string(),
+                system: xr.system.clone(),
+                not_run: not_run.to_vec(),
+            });
             if let Some(p) = xr.place.take() {
                 line.doc.release.push(p);
             }
@@ -3675,6 +3721,7 @@ fn open_runs(rules: &Rules, home: Option<&str>) -> Vec<SystemRun> {
         no_replay: false,
         host: None,
         declined: BTreeMap::new(),
+        lost: None,
     };
     if by.is_empty() {
         return vec![run(None, any)];

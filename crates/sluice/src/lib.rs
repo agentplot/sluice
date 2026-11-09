@@ -36,7 +36,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use overview::Follows;
 use reader::{Driver, Drives, Reader};
-use sluice_core::overview::{in_queue, BranchView, Held};
+use sluice_core::overview::{in_queue, BranchView, CandidateView, Held};
 use sluice_core::records::{Beside, BranchHold, CopyBehind, Event, FailedTask, State, Submission};
 use sluice_core::{
     Accepted, AmendRefusal, Clock, Collect, CopyDiffers, Forecast, Forecasted, GroupRequest,
@@ -3001,7 +3001,7 @@ fn await_submission(
     said: Option<State>,
     out: &mut dyn Write,
 ) -> Result<i32> {
-    let (sub, by, code, waits) = match wait_on(s, waiting, sub, said, out)? {
+    let (sub, by, code, tested) = match wait_on(s, waiting, sub, said, out)? {
         Waited::Decided(sub, by, after) => {
             let branch = sub.branch.clone();
             let names = BTreeMap::new();
@@ -3054,15 +3054,16 @@ fn await_submission(
                 out,
             );
         }
-        Waited::Undecided(sub, by, code, waits) => (sub, by, code, waits),
+        Waited::Undecided(sub, by, code, tested) => (sub, by, code, tested),
     };
     if waiting.json {
         let doc = with_copy(serde_json::to_value(&sub)?, waiting.copy)?;
         let mut doc = with_carried(doc, by.as_ref());
-        // 84, record 0074: what its combination waits for, as the view
-        // the wait followed has it (rule core.25).
-        if !waits.is_empty() {
-            doc["waiting"] = serde_json::json!(waits);
+        // 84, record 0074; 114, record 0105: what its combination waits
+        // for and why its last run had no outcome, as the view the wait
+        // followed has it (rule core.25).
+        if let Some(c) = &tested {
+            under_test(&mut doc, c);
         }
         writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
     } else {
@@ -3088,17 +3089,32 @@ fn decided_document(sub: &Submission, decided: Option<&Decided>) -> Result<serde
     Ok(doc)
 }
 
-/// 84, record 0074: `doc`, `sub`'s record, with what its combination under
-/// test waits for, the hosts that turned its run down each with why, where
-/// any did. It decides nothing, so a read that fails adds nothing.
+/// 84, record 0074; 114, record 0105: `doc`, `sub`'s record, with what its
+/// combination under test waits for and why its last run had no outcome,
+/// as [`under_test`] gives them. It decides nothing, so a read that fails
+/// adds nothing.
 fn with_waiting(s: &Sluice<'_>, sub: &Submission, mut doc: serde_json::Value) -> serde_json::Value {
     let view = s.branch_view_of(&sub.branch).ok();
     if let Some(c) = view.as_ref().and_then(|v| progress::own(v, sub.id)) {
-        if !c.waiting.is_empty() {
-            doc["waiting"] = serde_json::json!(c.waiting);
-        }
+        under_test(&mut doc, c);
     }
     doc
+}
+
+/// What `doc`, a submission's document, gives of `c`, its combination
+/// under test: under `waiting`, the hosts that turned its run down each
+/// with why, where any did (84, record 0074); under `lost`, each run whose
+/// last run had no outcome, its host, its system where the policy names
+/// one and each check it left not run with why, whatever the cause, until
+/// that run's next result (114; record 0105, design D7 of the change
+/// `a-pass-nothing-proves-blames-no-one`).
+fn under_test(doc: &mut serde_json::Value, c: &CandidateView) {
+    if !c.waiting.is_empty() {
+        doc["waiting"] = serde_json::json!(c.waiting);
+    }
+    if !c.lost.is_empty() {
+        doc["lost"] = serde_json::json!(c.lost);
+    }
 }
 
 /// 51: report `sub`, decided, as [`report`] does, its document giving its
@@ -3161,9 +3177,10 @@ enum Waited {
     /// that then failed, what failed after the landing (122).
     Decided(Submission, Option<CarriedBy>, Option<anyhow::Error>),
     /// As it stands when the wait's time ran out ([`WAITING`]) or it was
-    /// stopped ([`STOPPED`]), with what its combination, or that of what
-    /// it follows, waits for as last read (84, record 0074).
-    Undecided(Submission, Option<CarriedBy>, i32, BTreeMap<String, String>),
+    /// stopped ([`STOPPED`]), with its combination under test, or that of
+    /// what it follows, as last read: what it waits for (84, record 0074)
+    /// and why its last run had no outcome (114, record 0105).
+    Undecided(Submission, Option<CarriedBy>, i32, Option<CandidateView>),
     /// As last read, when a round failed as the forge could not answer
     /// for the retry policy's time.
     Unread(Submission, anyhow::Error),
@@ -3491,8 +3508,8 @@ fn wait_on(
         // As it stands, with what it follows as it stands.
         let undecided = |code: i32, reading: &Reading| {
             let by = following.clone().map(CarriedBy::Entry);
-            let waits = reading.waits(following.as_ref().unwrap_or(&own).id);
-            Waited::Undecided(own.clone(), by, code, waits)
+            let combination = reading.combination(following.as_ref().unwrap_or(&own).id);
+            Waited::Undecided(own.clone(), by, code, combination)
         };
         let id = sub.id;
         if !waiting.json {
@@ -3618,15 +3635,14 @@ struct Reading {
 }
 
 impl Reading {
-    /// 84, record 0074: what submission `id`'s combination under test
-    /// waits for, as last read: each host that turned its run down, with
-    /// why.
-    fn waits(&self, id: u64) -> BTreeMap<String, String> {
+    /// Submission `id`'s combination under test, as last read: what it
+    /// waits for (84, record 0074) and why its last run had no outcome
+    /// (114, record 0105).
+    fn combination(&self, id: u64) -> Option<CandidateView> {
         self.view
             .as_ref()
             .and_then(|v| progress::own(v, id))
-            .map(|c| c.waiting.clone())
-            .unwrap_or_default()
+            .cloned()
     }
 
     fn take(host: &dyn exec::Host) -> Result<Reading> {

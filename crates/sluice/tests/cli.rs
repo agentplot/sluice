@@ -9321,6 +9321,66 @@ mod read_once {
     }
 }
 
+/// 114, record 0105 (design D7 of the change
+/// `a-pass-nothing-proves-blames-no-one`); the run-outcome spec's "Status
+/// and wait", "A submission's status and its wait" and "Its next run has a
+/// result": a combination tested again after a run that left a check not
+/// run says on which host and why, in `status`, its `--json` and
+/// `wait --json`, until its next run has a result.
+#[test]
+fn status_and_wait_say_why_a_combinations_last_run_had_no_outcome() {
+    let why = "the engine is down";
+    let f = Fakes::new();
+    f.world.init(
+        BRANCH,
+        &[
+            (".config/sluice.toml", POLICY),
+            ("plugin/lib/plan.py", "plan"),
+        ],
+    );
+    f.world.task("plugin:test", "plugin/");
+    f.world.cannot_run("plugin:test", Some(why));
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"]);
+
+    let said =
+        format!("its last run, on this-host, had no outcome: plugin:test could not run: {why}");
+    let testing = |text: &str| {
+        text.lines()
+            .find(|l| l.starts_with(&format!("  testing {BRANCH} + #1 ")))
+            .map(str::to_string)
+    };
+    for _ in 0..8 {
+        sluice(&f, &["step", BRANCH]);
+        let (_, text) = sluice(&f, &["status", BRANCH]);
+        if testing(&text).is_some_and(|l| l.contains("had no outcome")) {
+            break;
+        }
+    }
+    let (_, text) = sluice(&f, &["status", BRANCH]);
+    assert!(testing(&text).is_some_and(|l| l.ends_with(&said)), "{text}");
+    let lost = serde_json::json!([{
+        "host": "this-host",
+        "not_run": [{ "task": "plugin:test", "reason": why }],
+    }]);
+    let (_, one) = sluice(&f, &["status", "1", "--json"]);
+    assert_eq!(json(&one)["lost"], lost, "{one}");
+    let (code, out) = sluice(&f, &["wait", "1", "--timeout", "2s", "--json"]);
+    assert_eq!(code, sluice::WAITING, "{out}");
+    assert_eq!(json(&out)["lost"], lost, "{out}");
+
+    // Its next run has a result: nothing is said of the one that had none.
+    f.world.cannot_run("plugin:test", None);
+    let (code, out) = sluice(&f, &["wait", "1", "--timeout", "60s"]);
+    assert_eq!(code, 0, "{out}");
+    let (_, text) = sluice(&f, &["status", BRANCH]);
+    assert!(!text.contains("had no outcome"), "{text}");
+    let (_, one) = sluice(&f, &["status", "1", "--json"]);
+    let one = json(&one);
+    assert_eq!(one["state"], "landed", "{one}");
+    assert!(one.get("lost").is_none(), "{one}");
+}
+
 /// 84, record 0074; the host-requirements spec's "Status says what it
 /// waits for": a combination whose run this host turned down for its
 /// container engine says so in `status`, its `--json` and `wait --json`,

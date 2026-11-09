@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use sluice_core::overview::{BranchView, CandidateView};
-use sluice_core::records::CandidateState;
+use sluice_core::records::{CandidateState, LostRun};
 use sluice_core::Sluice;
 use sluice_seams::TaskState;
 
@@ -56,8 +56,8 @@ pub fn own(view: &BranchView, id: u64) -> Option<&CandidateView> {
 }
 
 /// What a waiting command prints a line again for: the combination, how
-/// many of its tasks have ended, which are running and what it waits for;
-/// never its times.
+/// many of its tasks have ended, which are running, what it waits for and
+/// why its last run had no outcome; never its times.
 pub fn moved(c: &CandidateView) -> Moved {
     let tasks = c.tasks.as_deref().unwrap_or_default();
     (
@@ -69,11 +69,18 @@ pub fn moved(c: &CandidateView) -> Moved {
             .map(|t| t.target.clone())
             .collect(),
         c.waiting.clone(),
+        c.lost.clone(),
     )
 }
 
 /// What [`moved`] reads of a combination.
-pub type Moved = (Vec<u64>, usize, Vec<String>, BTreeMap<String, String>);
+pub type Moved = (
+    Vec<u64>,
+    usize,
+    Vec<String>,
+    BTreeMap<String, String>,
+    Vec<LostRun>,
+);
 
 /// 84, 87, record 0074: `waiting for a host that can run its tests as its
 /// policy asks: build-box: no container engine answers: no socket at
@@ -89,6 +96,56 @@ pub fn waiting(c: &CandidateView) -> Option<String> {
         "waiting for a host that can run its tests as its policy asks: {}",
         hosts.join("; ")
     ))
+}
+
+/// 114, record 0105 (design D7 of the change
+/// `a-pass-nothing-proves-blames-no-one`): `its last run, on build-1, had
+/// no outcome: a:test, b:test, c:test and 25 more could not run: <why>;
+/// d:test could not run: <other>`, for each run of a combination tested
+/// again after a run that left checks not run and judged nothing, whatever
+/// the cause, its system after its host where the policy names one, the
+/// runs joined by ` · `; `None` for one whose runs each had an outcome.
+pub fn lost(c: &CandidateView) -> Option<String> {
+    if c.lost.is_empty() {
+        return None;
+    }
+    let runs: Vec<String> = c
+        .lost
+        .iter()
+        .map(|run| {
+            let host = match &run.system {
+                Some(system) => format!("{} ({system})", run.host),
+                None => run.host.clone(),
+            };
+            let mut reasons: Vec<(&str, Vec<&str>)> = Vec::new();
+            for n in &run.not_run {
+                match reasons.iter_mut().find(|(why, _)| *why == n.reason) {
+                    Some((_, tasks)) => tasks.push(&n.task),
+                    None => reasons.push((&n.reason, vec![&n.task])),
+                }
+            }
+            let parts: Vec<String> = reasons
+                .iter()
+                .map(|(why, tasks)| {
+                    let mut named = tasks
+                        .iter()
+                        .take(NAMED)
+                        .copied()
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    if tasks.len() > NAMED {
+                        named.push_str(&format!(" and {} more", tasks.len() - NAMED));
+                    }
+                    format!("{named} could not run: {why}")
+                })
+                .collect();
+            format!(
+                "its last run, on {host}, had no outcome: {}",
+                parts.join("; ")
+            )
+        })
+        .collect();
+    Some(runs.join(" · "))
 }
 
 /// 84, record 0074: what each combination of `view` under test waits for,
@@ -117,7 +174,7 @@ pub fn testing_line(
     names: Option<&Names>,
 ) -> String {
     let named = combination(branch, &c.submissions, names, &mut BTreeSet::new());
-    let p = [Some(line(c, now)), waiting(c)]
+    let p = [Some(line(c, now)), waiting(c), lost(c)]
         .into_iter()
         .flatten()
         .filter(|p| !p.is_empty())
@@ -231,6 +288,7 @@ mod tests {
             failed: Vec::new(),
             tasks,
             waiting: BTreeMap::new(),
+            lost: Vec::new(),
         }
     }
 
@@ -317,6 +375,65 @@ mod tests {
              build-box: [executor] memory = 4294967296 bytes: the sandbox executor on macOS \
              cannot hold a memory limit"
         );
+    }
+
+    /// 114, record 0105 (design D7; the run-outcome spec's "Many tests
+    /// under one reason"): a combination tested again after a run that had
+    /// no outcome says on which host, each reason once with up to three of
+    /// its checks in the run's order and how many more, and a run on a
+    /// system names it after its host.
+    #[test]
+    fn a_combination_whose_last_run_had_no_outcome_says_why() {
+        let gone = "it passed, but nothing the run kept proves it ran: \
+                    moon's manifest of it is not in /repo/.moon/cache";
+        let mut not_run: Vec<sluice_seams::NotRun> = (1..=28)
+            .map(|n| sluice_seams::NotRun {
+                task: format!("p{n:02}:test"),
+                reason: gone.into(),
+            })
+            .collect();
+        not_run.insert(
+            1,
+            sluice_seams::NotRun {
+                task: "e2e:test".into(),
+                reason: "exited 77, which [tests] not_run names: it could not run here".into(),
+            },
+        );
+        let mut c = candidate(None, Some(1800));
+        c.lost = vec![LostRun {
+            host: "build-1".into(),
+            system: None,
+            not_run,
+        }];
+        assert_eq!(
+            testing_line("main", &c, now(), None),
+            format!(
+                "testing main + #12 · 26m10s of 30m · its last run, on build-1, had no \
+                 outcome: p01:test, p02:test, p03:test and 25 more could not run: {gone}; \
+                 e2e:test could not run: exited 77, which [tests] not_run names: it could not \
+                 run here"
+            )
+        );
+        c.started = None;
+        c.lost.push(LostRun {
+            host: "mac-1".into(),
+            system: Some("macos".into()),
+            not_run: vec![sluice_seams::NotRun {
+                task: "a:test".into(),
+                reason: "the engine is down".into(),
+            }],
+        });
+        assert!(
+            testing_line("main", &c, now(), None).ends_with(
+                " · its last run, on mac-1 (macos), had no outcome: a:test could not run: \
+                 the engine is down"
+            ),
+            "{}",
+            testing_line("main", &c, now(), None)
+        );
+        let before = moved(&c);
+        c.lost.pop();
+        assert_ne!(moved(&c), before, "a wait prints the line again");
     }
 
     #[test]
