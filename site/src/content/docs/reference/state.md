@@ -418,12 +418,11 @@ the outcome types a notice into that pane, one line to the agent there,
 when the round runs on the same host:
 
 ```text
-[sluice] #13 failed on feature/concurrent-units: tests:t-batch-cards. sluice wait 13 shows why.
+[sluice] #13 failed on feature/concurrent-units: tests:t-batch-cards. sluice wait 13 shows why. sluice confirm 13:failed once you have read it.
 ```
 
 The notice ends with the key the agent confirms the outcome by, once it
-has acted on it: `sluice confirm 13:failed once you have read it.`. The
-outcome itself is kept in the branch's
+has acted on it. The outcome itself is kept in the branch's
 [`deliveries.jsonl`](#outcomes-owed), owed to the work that submitted
 it until that work confirms it, and a submission's record holds no mark
 of it. `sluice status <id> --json`, a wait's `--json` and each element
