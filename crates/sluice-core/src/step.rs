@@ -1602,7 +1602,7 @@ impl Sluice<'_> {
         // result is recorded signed, and only for a key the candidate's
         // tree bears out, a task a check was failed by as a check (149).
         let proven: Option<Vec<String>> = if rules.signed {
-            Some(self.seams.tests.proven(run, &report)?)
+            Some(self.seams.tests.proven(run, &report)?.proven)
         } else {
             None
         };

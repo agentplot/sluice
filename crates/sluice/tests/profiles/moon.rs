@@ -1124,7 +1124,7 @@ fn proven_drops_a_key_the_tree_does_not_bear_out() {
     let repo = workspace("moon-proven");
     let c = checks(&repo);
     let (run, report) = finish_run(&c, &request(&repo, "p1", &["#check-fast"], None));
-    let mut all = c.proven(&run, &report).unwrap();
+    let mut all = c.proven(&run, &report).unwrap().proven;
     all.sort();
     assert_eq!(all, ["alpha:test", "beta:test"]);
     let alpha = report
@@ -1141,7 +1141,7 @@ fn proven_drops_a_key_the_tree_does_not_bear_out() {
         .unwrap()
         .replace("alpha/value.txt", "alpha/other.txt");
     std::fs::write(&blob, forged).unwrap();
-    assert_eq!(c.proven(&run, &report).unwrap(), ["beta:test"]);
+    assert_eq!(c.proven(&run, &report).unwrap().proven, ["beta:test"]);
 }
 
 /// ADR 0050: before any run, moon in the worktree names each required
@@ -1375,5 +1375,5 @@ fn a_key_is_read_under_the_home_the_toolchain_gives_moon() {
         !manifest(&worktree.join(".moon/cache")).exists(),
         "no manifest in the worktree"
     );
-    assert_eq!(c.proven(&run, &report).unwrap(), ["alpha:test"]);
+    assert_eq!(c.proven(&run, &report).unwrap().proven, ["alpha:test"]);
 }

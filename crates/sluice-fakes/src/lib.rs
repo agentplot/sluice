@@ -20,7 +20,7 @@ use sluice_seams::{
     Adopted, AtBound, Branch, Changes, CheckedOut, Checkout, Delivery, Driver, Enforced, Equip,
     EquipStep, Equipped, Formed, GoneRelease, Guard, HostCopy, HostRun, KeptOutTask, LandingCommit,
     LastResult, Moved, Network, NotRun, Notification, Outcome, Place, PreviewPlace, Progress,
-    ReadRefused, Reading, Reads, ReleaseFailure, ReleasePolicy, Released, Rev, RunHandle,
+    Proof, ReadRefused, Reading, Reads, ReleaseFailure, ReleasePolicy, Released, Rev, RunHandle,
     RunReport, RunRequest, Running, Session, SessionPlace, Settings, Snapshot, Source, State,
     Submitter, TaskLog, TaskProgress, TaskResult, Tests, Unanswered, Written,
 };
@@ -2320,15 +2320,18 @@ impl Tests for FakeTests {
             .collect())
     }
 
-    fn proven(&self, _run: &RunHandle, report: &RunReport) -> Result<Vec<String>> {
+    fn proven(&self, _run: &RunHandle, report: &RunReport) -> Result<Proof> {
         let inner = self.0 .0.borrow();
-        Ok(report
-            .tasks
-            .iter()
-            .chain(&report.dependencies)
-            .filter(|t| !inner.forged.contains(&t.task))
-            .map(|t| t.task.clone())
-            .collect())
+        Ok(Proof {
+            proven: report
+                .tasks
+                .iter()
+                .chain(&report.dependencies)
+                .filter(|t| !inner.forged.contains(&t.task))
+                .map(|t| t.task.clone())
+                .collect(),
+            unkept: Vec::new(),
+        })
     }
 
     fn logs(&self, run: &RunHandle, tasks: &[String]) -> Result<Vec<TaskLog>> {
@@ -3449,7 +3452,7 @@ mod tests {
         );
         let logs = f.tests.logs(&h, &["api:integration".into()]).unwrap();
         assert!(logs[0].text.starts_with("api:integration failed"));
-        assert_eq!(f.tests.proven(&h, &r).unwrap(), ["api:integration"]);
+        assert_eq!(f.tests.proven(&h, &r).unwrap().proven, ["api:integration"]);
 
         // A dependency that is itself a check is reported as one.
         let (_, r) = run(&["api:integration", "root:integration"]);

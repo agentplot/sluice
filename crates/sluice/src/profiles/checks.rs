@@ -60,7 +60,7 @@ use anyhow::{anyhow, bail, Context as _, Result};
 use serde::{Deserialize, Serialize};
 use sluice_seams::{
     log_tail, AtBound, Enforced, Equip, EquipStep, Equipped, HostRun, KeptOutTask, Limits, Network,
-    NotRun, Outcome, Place, Progress, Reading, Reads, Rev, RunHandle, RunReport, RunRequest,
+    NotRun, Outcome, Place, Progress, Proof, Reading, Reads, Rev, RunHandle, RunReport, RunRequest,
     Running, Setting, Settings, Source, TaskLog, TaskProgress, TaskResult, Tests, Through,
 };
 
@@ -1872,12 +1872,15 @@ impl Tests for Checks {
 
     /// A command runner's one key is sluice's own; a moon task's is
     /// checked against the candidate's tree by its manifest (design D9).
-    fn proven(&self, run: &RunHandle, report: &RunReport) -> Result<Vec<String>> {
+    fn proven(&self, run: &RunHandle, report: &RunReport) -> Result<Proof> {
         let meta: Meta = serde_json::from_value(self.runs.request(&run.0)?.meta)
             .with_context(|| format!("reading run {}", run.0))?;
         let tasks = report.tasks.iter().chain(&report.dependencies);
         if meta.runner != "moon" {
-            return Ok(tasks.map(|t| t.task.clone()).collect());
+            return Ok(Proof {
+                proven: tasks.map(|t| t.task.clone()).collect(),
+                unkept: Vec::new(),
+            });
         }
         let store = meta
             .store
@@ -1896,7 +1899,10 @@ impl Tests for Checks {
                 ),
             }
         }
-        Ok(out)
+        Ok(Proof {
+            proven: out,
+            unkept: Vec::new(),
+        })
     }
 
     fn session_runs(&self) -> Result<Vec<HostRun>> {
