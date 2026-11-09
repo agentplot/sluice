@@ -298,3 +298,53 @@ fn a_branch_in_one_hosts_files_reads_no_proof() {
     assert!(!h.events().iter().any(|e| matches!(e, Event::Lost { .. })));
     assert!(h.doc().proof_missing.is_empty());
 }
+
+/// satisfies: 114; record 0105; rule core.28; the pass-proof spec's "Two
+/// combinations on one host" and "Three runs touched"
+#[test]
+fn the_cause_is_logged_once_across_runs_and_combinations() {
+    let h = rig();
+    h.w().keeps_no_proof(Some(STORE));
+    let until = |n: usize| {
+        for _ in 0..16 {
+            if lost(&h).len() >= n {
+                break;
+            }
+            step(&h);
+        }
+        assert_eq!(lost(&h).len(), n);
+    };
+    // #1's combination starts alone, then #1 and #2's beside its second
+    // run: three runs in all, none at the bound.
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    h.submit("unit/a");
+    for _ in 0..8 {
+        if h.events()
+            .iter()
+            .any(|e| matches!(e, Event::Testing { .. }))
+        {
+            break;
+        }
+        step(&h);
+    }
+    h.work("unit/b", "agent-b", &[("b/lib", Some("b2"))]);
+    h.submit("unit/b");
+    until(3);
+    let combinations: std::collections::BTreeSet<_> = h
+        .events()
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::Lost { combination, .. } => Some(combination),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(combinations.len(), 2, "two combinations");
+    assert_eq!(missing(&h), [("fake-host".to_string(), WHY.to_string())]);
+    let standing: Vec<(String, String, u64)> = h
+        .doc()
+        .proof_missing
+        .into_iter()
+        .map(|p| (p.host, p.why, p.runs))
+        .collect();
+    assert_eq!(standing, [("fake-host".to_string(), WHY.to_string(), 3)]);
+}
