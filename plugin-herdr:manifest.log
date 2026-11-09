@@ -1,0 +1,884 @@
+vers in one repository
+                 cli:test | test a_command_over_its_limit_times_out ... ok
+                 cli:test | test a_run_that_runs_a_check_is_set_up ... ok
+                 cli:test | test a_run_whose_system_was_switched_says_from_what_to_what ... ok
+                 cli:test | test a_run_that_runs_nothing_is_never_set_up ... ok
+                 cli:test | test a_run_whose_working_copy_could_not_be_equipped_could_not_start ... ok
+                 cli:test | test a_toolchain_that_fails_runs_nothing_after_it ... ok
+                 cli:test | test an_engine_at_a_tcp_address_is_looked_for_there ... ok
+                 cli:test | test a_second_repositorys_start_waits_for_the_hosts_bound ... ok
+                 cli:test | test an_engine_over_tls_is_found_with_the_clients_certificate ... ok
+                 cli:test | test an_engine_that_answers_meets_a_run_that_asks_for_one ... ok
+                 cli:test | test a_run_with_a_command_is_equipped_by_its_branchs_runner ... ok
+                 cli:test | test cannot_start_probe ... ok
+                 cli:test | test docker_host_names_a_unix_socket_or_a_tcp_address ... ok
+                 cli:test | test env_probe ... ok
+                 cli:test | test equip_env_probe ... ok
+                 cli:test | test an_unknown_runner_is_refused ... ok
+                 cli:test | test an_exit_the_policy_names_records_no_fail ... ok
+                 cli:test | test equip_installs_only_what_is_pinned ... ok
+                 cli:test | 
+                 cli:test | running 1 test
+                 cli:test | test equip_keeps_nothing ... ok
+                 cli:test | test equip_env_probe ... ok
+                 cli:test | 
+                 cli:test | test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 47 filtered out; finished in 0.08s
+                 cli:test | 
+                 cli:test | test equip_steps_get_a_runs_environment ... ok
+                 cli:test | test equip_under_the_command_runner_runs_the_toolchain_alone ... ok
+                 cli:test | 
+                 cli:test | running 1 test
+                 cli:test | test equip_runs_the_sequence_in_order ... ok
+                 cli:test | test hosts_cache_env_probe ... ok
+                 cli:test | test a_toolchain_that_fails_could_not_start_the_tests ... ok
+                 cli:test | test the_bound_is_the_instances ... ok
+                 cli:test | test equip_stops_at_the_step_that_failed ... ok
+                 cli:test | test hosts_cache_env_probe ... ok
+                 cli:test | 
+                 cli:test | test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 47 filtered out; finished in 0.20s
+                 cli:test | 
+                 cli:test | test every_run_gets_the_hosts_cache_environment ... ok
+                 cli:test | test the_open_executor_refuses_what_it_cannot_hold ... ok
+                 cli:test | test the_submitters_read_is_never_set_up ... ok
+                 cli:test | 
+                 cli:test | test result: ok. 44 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 3.52s
+                 cli:test | 
+                 cli:test |      Running tests/cli.rs (target/debug/deps/cli-2e32dd047e3d4bd0)
+                 cli:test | 
+                 cli:test | running 204 tests
+     plugin-herdr:test-sh | ok   watch: panes of two servers in one repository
+                 cli:test | test a_dirty_place_is_refused_with_exit_two ... ok
+                 cli:test | test a_check_the_host_could_not_run_is_submitted_again_by_the_agent_in_its_worktree ... ok
+                 cli:test | test a_driver_whose_read_fails_writes_the_failure ... ok
+                 cli:test | test a_conflict_exits_two_and_check_says_so_first ... ok
+                 cli:test | test a_driver_runs_no_round_for_a_branch_with_nothing_in_play ... ok
+                 cli:test | test a_driver_with_nothing_queued ... ok
+                 cli:test | test a_driver_ends_a_withdrawn_submissions_run_with_nothing_queued ... ok
+                 cli:test | test a_failure_names_its_system ... ok
+                 cli:test | test a_finished_check_says_whether_it_is_reused ... ok
+                 cli:test | test a_fail_set_aside_lets_the_same_head_land ... ok
+                 cli:test | test a_flaky_failure_says_so ... ok
+                 cli:test | test a_follower_ends_on_a_document_saying_the_repository_has_no_sluice ... ok
+                 cli:test | test a_follower_prints_the_readers_failure ... ok
+                 cli:test | test a_failed_check_of_the_branches_is_a_read_refused ... ok
+                 cli:test | test a_failed_read_under_load ... ok
+                 cli:test | test a_forecast_lacking_a_head_reads_as_a_round ... ok
+                 cli:test | test a_forecast_of_a_bolt_takes_both_from_the_reader ... ok
+                 cli:test | test a_forecast_takes_the_branch_from_a_current_reader ... ok
+                 cli:test | test a_forecast_with_no_revision_reads_as_a_round ... ok
+                 cli:test | test a_group_is_numbered_in_the_order_given ... ok
+                 cli:test | test a_group_is_queued_whole_or_not_at_all ... ok
+                 cli:test | test a_held_place_is_one_entry ... ok
+                 cli:test | test a_group_keeps_its_order_behind_after_and_priority ... ok
+                 cli:test | test a_landed_submission_is_not_withdrawn ... ok
+                 cli:test | test a_landing_leaves_a_sessions_place_alone ... ok
+                 cli:test | test a_follower_wait_out_of_time_on_a_failure ... ok
+                 cli:test | test a_landed_submission_moves_to_the_finished_records ... ok
+                 cli:test | test a_landing_whose_release_fails_is_one_document_under_json ... ok
+                 cli:test | test a_push_failing_after_the_landing_leaves_it_landed ... ok
+                 cli:test | test a_reader_in_a_slow_read_is_current ... ok
+                 cli:test | test a_follower_wait_passes_over_the_readers_failure ... ok
+                 cli:test | test a_refusal_under_json_is_an_error_document ... ok
+                 cli:test | test a_refusal_under_json_names_the_agent_and_keeps_its_next ... ok
+                 cli:test | test a_release_failing_after_the_landing_leaves_it_landed ... ok
+                 cli:test | test a_report_waited_on_elsewhere_names_the_agent_in_the_worktree_it_came_from ... ok
+                 cli:test | test a_result_not_kept_changes_nothing_of_the_run ... ok
+                 cli:test | test a_round_beside_a_group_forms_none_of_it_alone ... ok
+                 cli:test | test a_newer_watch_takes_an_older_readers_lease ... ok
+▮▮▮▮ plugin-herdr:test-sh (running for 120s)
+   plugin-herdr:test-dash | ok   watch: the last pane leaves
+▮▮▮▮ plugin-herdr:test-dash (running for 120s)
+                 cli:test | test a_landing_the_round_did_not_record_is_reported_landed ... ok
+                 cli:test | test a_stalled_reader_is_read_past ... ok
+                 cli:test | test a_reader_wait_shows_a_branch_it_could_not_read ... ok
+                 cli:test | test a_subject_for_each_names_each_landing ... ok
+                 cli:test | test a_subject_is_handed_to_the_pull_request_opened ... ok
+                 cli:test | test a_subject_is_one_line ... ok
+                 cli:test | test a_subject_on_a_branch_with_no_pull_requests_names_its_landing ... ok
+                 cli:test | test a_subject_takes_neither_check_nor_status ... ok
+                 cli:test | test a_round_failing_before_the_landing_is_said_and_the_wait_goes_on ... ok
+                 cli:test | test a_submission_the_runner_could_not_check_is_taken_with_a_warning ... ok
+                 cli:test | test a_submission_whose_gate_requires_a_check_kept_out_of_ci_is_refused_with_exit_two ... ok
+                 cli:test | test a_timed_out_submission_names_the_test_the_limit_ended ... ok
+     plugin-herdr:test-sh | ok   watch: the last pane leaves
+                 cli:test | test a_round_the_forge_could_not_answer_is_said_once_and_the_wait_goes_on ... ok
+                 cli:test | test a_wait_with_no_reader_has_the_host_process_write_the_whole_overview ... ok
+                 cli:test | test a_waiting_group_exits_with_the_first_that_did_not_land ... ok
+                 cli:test | test a_waiting_group_lands_together_and_reports_each_in_order ... ok
+                 cli:test | test a_wait_follows_a_watch ... ok
+                 cli:test | test a_standing_failure_is_written_once ... ok
+                 cli:test | test a_waiting_submit_from_a_bolt_carries_its_copy_under_json ... ok
+                 cli:test | test a_waiting_submit_says_a_held_checkout_once ... ok
+                 cli:test | test a_waiting_submit_says_a_removed_worktree_was_freed_once ... ok
+                 cli:test | test a_watch_ends_once_its_repository_is_removed ... ok
+                 cli:test | test a_wait_stopped_between_tries_is_a_stopped_wait ... ok
+▮▮▮▮ cli:test (running for 60s)
+   plugin-herdr:test-dash | ok   watch: three servers, two repositories, six processes
+                 cli:test | test a_watch_ends_where_sluice_was_never_set_up ... ok
+                 cli:test | test a_watch_follows_a_host_process_started_again ... ok
+                 cli:test | test a_waiting_group_stopped_says_where_each_stands ... ok
+                 cli:test | test a_waiting_submission_says_its_branchs_hold_once ... ok
+     plugin-herdr:test-sh | ok   watch: three servers, two repositories, six processes
+                 cli:test | test a_watch_goes_on_over_records_with_no_policy ... ok
+   plugin-herdr:test-dash | ok   watch: a source of the user's
+                 cli:test | test a_watch_goes_on_where_sluice_is_set_up_with_nothing_submitted ... ok
+   plugin-herdr:test-dash | ok   watch: configuration it cannot read
+                 cli:test | test a_watch_goes_on_where_the_policy_is_only_on_a_remotes_branch ... ok
+                 cli:test | test a_watch_of_the_same_version_follows ... ok
+   plugin-herdr:test-dash | ok   watch: two documents
+                 cli:test | test a_watch_goes_on_once_sluice_is_set_up_after_one_ended ... ok
+                 cli:test | test a_watch_survives_a_failed_try_of_the_readers_lock ... ok
+   plugin-herdr:test-dash | ok   watch: a large document costs what a small one does
+                 cli:test | test a_watch_stopped_while_a_failure_stands ... ok
+                 cli:test | test a_worktree_holding_a_branch_sluice_lands_on_is_warned_of ... ok
+                 cli:test | test a_worktree_that_exists_is_held_however_old_its_last_run ... ok
+                 cli:test | test a_watch_that_starts_while_the_new_reader_reads_follows_it ... ok
+                 cli:test | test amend_and_withdraw ... ok
+                 cli:test | test an_older_record_reads_as_before ... ok
+                 cli:test | test amend_and_withdraw_under_json ... ok
+                 cli:test | test a_watch_survives_a_failed_write_of_the_readers_document ... ok
+     plugin-herdr:test-sh | ok   watch: a source of the user's
+   plugin-herdr:test-dash | ok   watch: read by every server
+                 cli:test | test branch_accept_exits_as_create_and_delete ... ok
+                 cli:test | test branch_accept_says_what_it_recorded ... ok
+                 cli:test | test check_forecasts_a_branch_with_no_worktree ... ok
+                 cli:test | running the checks 1894e34 affects against bolt/concurrent-units (a68c374)
+                 cli:test | failed: api:integration
+                 cli:test |   root:integration failed by api:integration, a task it depends on
+                 cli:test | recorded 1 result under its key for 1894e34
+                 cli:test | running the checks 118371f affects against bolt/concurrent-units (aa4d7cc)
+                 cli:test | passed: 1 task
+                 cli:test | recorded 1 result under its key for 118371f
+                 cli:test | running the checks 118371f affects against bolt/concurrent-units (aa4d7cc)
+                 cli:test | passed: 1 task
+                 cli:test | not recorded: worktree is not clean
+                 cli:test | test each_of_a_group_is_withdrawn_and_waited_on_alone ... ok
+                 cli:test | test exec_json_gives_dependencies_and_failed_by ... ok
+                 cli:test | test exec_json_is_one_document ... ok
+                 cli:test | test exec_names_a_check_failed_by_its_dependency ... ok
+                 cli:test | test exec_never_takes_the_reserve ... ok
+                 cli:test | test exec_outside_a_worktree_is_refused ... ok
+                 cli:test | test exec_past_its_time_limit_is_timed_out_and_unrecorded ... ok
+                 cli:test | test exec_records_a_clean_run_and_not_a_dirty_one ... ok
+                 cli:test | test exec_release_releases_after_the_run ... ok
+                 cli:test | test exec_runs_a_command_and_records_nothing ... ok
+                 cli:test | test exec_runs_the_affected_checks_against_the_branch ... ok
+                 cli:test | test exec_takes_a_branch_and_a_command ... ok
+                 cli:test | test exec_waits_for_a_combinations_run ... ok
+                 cli:test | test exec_waits_for_room ... ok
+                 cli:test | test exec_waits_on_a_start_refused_at_the_bound ... ok
+     plugin-herdr:test-sh | ok   watch: configuration it cannot read
+   plugin-herdr:test-dash | ok   watch: a document missing fields
+                 cli:test | test an_older_wait_follows_once_the_host_process_takes_its_lease ... ok
+                 cli:test | test a_watchs_read_fails_and_then_succeeds ... ok
+                 cli:test | test following_a_pull_request_the_forge_could_not_answer_says_it_could_not_read ... ok
+                 cli:test | test head_takes_a_branch_by_name_and_says_it ... ok
+                 cli:test | test head_takes_no_worktree_and_no_status ... ok
+     plugin-herdr:test-sh | ok   watch: two documents
+   plugin-herdr:test-dash | ok   watch: a document it cannot read
+                 cli:test | test head_takes_only_a_branch_sluice_lands_on ... ok
+                 cli:test | test followed_wait_reports_its_landing ... ok
+                 cli:test | test home_finds_a_landed_or_failed_submission_through_recent ... ok
+                 cli:test | test home_outside_a_worktree_says_so ... ok
+                 cli:test | test home_shows_a_pull_requests_submission_to_the_worktree_it_was_opened_from ... ok
+                 cli:test | test home_names_its_submission_with_its_subject ... ok
+                 cli:test | test home_shows_the_worktrees_submission_by_its_path ... ok
+                 cli:test | test neither_status_nor_the_overview_shows_a_cause_a_day_after_its_last ... ok
+                 cli:test | test nothing_found_under_json_is_an_error_document ... ok
+                 cli:test | test one_shot_overview_reads_the_records_beside_a_reader ... ok
+                 cli:test | test overview_names_a_commands_check_and_counts_another_repositorys ... ok
+                 cli:test | test one_subject_for_two_worktrees_is_refused ... ok
+                 cli:test | test overview_names_a_held_worktree_of_a_branch_with_no_records ... ok
+   plugin-herdr:test-dash | ok   watch: what a held place failed is kept to its last line
+                 cli:test | test followed_wait_reports_its_withdrawal ... ok
+                 cli:test | test an_older_watch_follows_once_its_lease_is_taken ... ok
+                 cli:test | test overview_names_a_held_checkout_under_its_branch ... ok
+                 cli:test | test overview_names_a_held_worktree_under_its_branch ... ok
+                 cli:test | test overview_of_a_repository_with_no_records_says_so ... ok
+                 cli:test | test overview_names_the_subjects_of_recent_submissions ... ok
+     plugin-herdr:test-sh | ok   watch: a large document costs what a small one does
+                 cli:test | test overview_names_where_recent_submissions_came_from ... ok
+                 cli:test | test overview_orders_branches_as_the_policy_names_them ... ok
+                 cli:test | test overview_orders_branches_by_the_revision_this_host_holds ... ok
+                 cli:test | test overview_shows_an_agents_check_and_the_hosts_room ... ok
+                 cli:test | test overview_names_each_submission_with_its_subject ... ok
+                 cli:test | test overview_watch_prints_a_line_at_start_and_on_each_change ... ok
+                 cli:test | test overview_watch_prints_when_a_checks_task_moves ... ok
+                 cli:test | test read_once::a_refused_policy_stays_refused_at_its_revision ... ok
+                 cli:test | test overview_shows_a_combinations_tasks ... ok
+                 cli:test | test overview_shows_a_branch_whose_policy_is_refused_and_every_other ... ok
+                 cli:test | test overview_shows_every_branch_at_a_glance ... ok
+                 cli:test | test read_once::the_policy_is_read_once_while_the_revision_stands ... ok
+                 cli:test | test refused_alone::a_number_on_no_branch_when_every_branch_reads_is_no_submission ... ok
+                 cli:test | test refused_alone::a_wait_follows_its_submission_past_a_branch_that_cannot_be_read ... ok
+                 cli:test | test refused_alone::a_number_on_the_branch_that_cannot_be_read_names_it ... ok
+                 cli:test | test refused_alone::sluice_run_on_a_host_naming_its_systems_runs_past_a_refused_policy ... ok
+                 cli:test | test refused_alone::sluice_run_passes_a_branch_by_and_lands_the_rest ... ok
+                 cli:test | test read_once::a_submission_written_mid_tick_is_not_lost ... ok
+                 cli:test | test read_once::records_are_read_again_once_they_moved ... ok
+     plugin-herdr:test-sh | ok   watch: read by every server
+                 cli:test | test release_accepting_the_failure_frees_a_held_checkout ... ok
+                 cli:test | test release_accepting_the_failure_frees_a_worktrees_place ... ok
+                 cli:test | freed unit/a without its release command: its runs ended, its ports free; the worktree stays
+                 cli:test | released sluice/try/bolt/concurrent-units/1: the release command run, its checkout removed, its ports free
+                 cli:test | test release_by_name_releases_a_held_checkout ... ok
+                 cli:test | test release_falls_back_to_the_last_runs_command_and_says_so ... ok
+                 cli:test | test refused_alone::status_amend_and_withdraw_answer_as_when_every_branch_reads ... ok
+                 cli:test | test release_runs_the_policys_release_command_once ... ok
+                 cli:test | test release_under_json ... ok
+                 cli:test | nothing to release
+                 cli:test | released unit/a: its runs ended, the release command run, its ports free
+                 cli:test | test release_of_an_unknown_checkout_is_nothing ... ok
+                 cli:test | test several_worktrees_take_neither_check_nor_status ... ok
+                 cli:test | test sluice_run_follows_the_host_process ... ok
+                 cli:test | test sluice_run_says_nothing_needs_it ... ok
+                 cli:test | test status_and_overview_carry_a_worktrees_last_result ... ok
+                 cli:test | test status_and_overview_show_a_hold_while_it_lasts ... ok
+     plugin-herdr:test-sh | ok   watch: a document missing fields
+                 cli:test | test status_and_wait_say_a_combination_waits_for_a_host_whose_engine_answers ... ok
+   plugin-herdr:test-dash | ok   watch: source exits
+                 cli:test | test status_lists_the_queue ... ok
+                 cli:test | test status_lists_the_worktrees_held ... ok
+                 cli:test | test status_marks_a_worktree_whose_release_failed ... ok
+                 cli:test | test status_names_a_refused_deletion ... ok
+                 cli:test | test status_names_each_submission_with_its_subject ... ok
+     plugin-herdr:test-sh | ok   watch: a document it cannot read
+                 cli:test | test status_names_what_a_submission_waits_on ... ok
+                 cli:test | test status_of_an_unknown_branch_says_so ... ok
+▮▮▮▮ plugin-herdr:test-sh (running for 150s)
+                 cli:test | test status_reads_the_revision_the_records_saw ... ok
+                 cli:test | test status_refuses_a_checkout_cache ... ok
+                 cli:test | test refused_alone::sluice_run_read_by_its_last_round_exits_0 ... ok
+                 cli:test | test status_says_nothing_of_no_refused_writes ... ok
+▮▮▮▮ plugin-herdr:test-dash (running for 150s)
+                 cli:test | test status_sends_the_remotes_revision_from_a_bolt ... ok
+                 cli:test | test status_sends_the_worktrees_head_from_its_own_branch ... ok
+                 cli:test | test refused_alone::sluice_run_says_a_branch_refused_anew_again ... ok
+   plugin-herdr:test-dash | ok   watch: the watcher only reads
+                 cli:test | test status_shows_a_subject_on_one_line ... ok
+                 cli:test | test status_shows_the_writes_its_protection_refused ... ok
+     plugin-herdr:test-sh | ok   watch: what a held place failed is kept to its last line
+                 cli:test | test status_shows_this_hosts_copy_behind_while_it_lasts ... ok
+                 cli:test | test status_shows_a_combinations_progress ... ok
+                 cli:test | test status_tells_a_local_branchs_refused_writes_what_to_do ... ok
+                 cli:test | test status_shows_this_hosts_refusal_while_it_stands ... ok
+                 cli:test | test status_warns_of_cache_in_trust ... ok
+                 cli:test | test step_under_json ... ok
+                 cli:test | test submit_fails_and_names_the_combination ... ok
+                 cli:test | test step_says_a_branch_is_held ... ok
+                 cli:test | test submit_waits_and_lands ... ok
+                 cli:test | test the_next_exec_frees_a_removed_worktrees_place ... ok
+                 cli:test | test the_next_round_frees_a_removed_worktrees_place ... ok
+                 cli:test | test submit_from_a_bolt_says_how_its_copy_stands ... ok
+                 cli:test | test run_says_a_hold_once ... ok
+                 cli:test | test the_overview_shows_three_and_how_many_more ... ok
+                 cli:test | test the_overview_names_the_runs_waiting_and_the_turn ... ok
+                 cli:test | test the_counts_say_when_agents_checks_hold_the_queue_back ... ok
+                 cli:test | test the_overviews_document_carries_every_cause ... ok
+                 cli:test | test the_record_names_a_failed_check_with_its_key ... ok
+                 cli:test | test wait_finds_what_it_waits_on ... ok
+                 cli:test | test wait_names_the_task_a_check_was_failed_by ... ok
+   plugin-herdr:test-dash | ok   status: testing
+                 cli:test | test the_overview_names_each_combinations_base_and_the_landed_afters ... ok
+                 cli:test | test wait_out_of_time_prints_the_readers_record ... ok
+                 cli:test | test wait_runs_to_the_outcome ... ok
+   plugin-herdr:test-dash | ok   status: a combination names its submissions
+                 cli:test | test wait_follows_the_readers_progress ... ok
+   plugin-herdr:test-dash | ok   status: a landing of two names both
+     plugin-herdr:test-sh | ok   watch: source exits
+   plugin-herdr:test-dash | ok   status: a document that names no subjects names numbers
+                 cli:test | test watch_follows_each_change_once ... ok
+                 cli:test | test wait_returns_at_its_timeout_with_the_record ... ok
+                 cli:test | test wait_says_progress_when_it_moves ... ok
+                 cli:test | test watch_needs_json ... ok
+     plugin-herdr:test-sh | ok   watch: the watcher only reads
+▮▮▮▮ cli:test (running for 90s)
+   plugin-herdr:test-dash | ok   status: a subject with control characters stays on its line
+     plugin-herdr:test-sh | ok   status: testing
+                 cli:test | test watch_follows_the_readers_document ... ok
+                 cli:test | test watch_leads_once_the_reader_stops ... ok
+                 cli:test | test with_no_subject_a_landing_is_named_by_its_branch ... ok
+     plugin-herdr:test-sh | ok   status: a combination names its submissions
+   plugin-herdr:test-dash | ok   status: tasks redraw with the version unmoved
+                 cli:test | test wait_and_submit_tell_the_outcomes_apart ... ok
+   plugin-herdr:test-dash | ok   status: a task list it cannot read is left out
+     plugin-herdr:test-sh | ok   status: a landing of two names both
+                 cli:test | test watch_of_another_repository_leads ... ok
+     plugin-herdr:test-sh | ok   status: a document that names no subjects names numbers
+   plugin-herdr:test-dash | ok   status: rows are links
+                 cli:test |      Running tests/profiles/conformance.rs (target/debug/deps/conformance-6f73e4da0da527dd)
+                 cli:test | test watch_with_no_reader_writes_each_document ... ok
+                 cli:test | 
+                 cli:test | test result: ok. 204 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 50.42s
+                 cli:test | 
+                 cli:test |      Running tests/equip.rs (target/debug/deps/equip-ceba7be8e7ccb456)
+                 cli:test | 
+                 cli:test | running 0 tests
+                 cli:test | 
+                 cli:test | test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+                 cli:test | 
+                 cli:test | 
+                 cli:test | running 10 tests
+                 cli:test | test equip_at_a_revision_equips_whatever_its_branches_name ... ok
+                 cli:test | test a_failed_step_is_printed_with_its_words ... ok
+                 cli:test | test equip_reads_the_branchs_policy ... ok
+                 cli:test | test a_failed_step_exits_1 ... ok
+                 cli:test | test equip_reads_the_policy_at_the_revision_named ... ok
+                 cli:test | test equip_refuses_a_revision_with_no_policy ... ok
+                 cli:test | test equip_refuses_a_branch_its_policy_does_not_manage ... ok
+                 cli:test | test equip_refuses_a_branch_it_cannot_read ... ok
+                 cli:test | test equip_takes_no_part_of_the_bound ... ok
+                 cli:test | test every_step_passed_exits_0 ... ok
+                 cli:test | 
+                 cli:test | test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+                 cli:test | 
+                 cli:test |      Running tests/equip_tools.rs (target/debug/deps/equip_tools-d1a7b0369dc47640)
+                 cli:test |      Running tests/exec.rs (target/debug/deps/exec-ef189ea0c489435c)
+                 cli:test | 
+                 cli:test | running 0 tests
+                 cli:test | 
+                 cli:test | test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+                 cli:test | 
+                 cli:test |      Running tests/profiles/forge.rs (target/debug/deps/forge-6d62af8f1f654267)
+                 cli:test | 
+                 cli:test | running 0 tests
+                 cli:test | 
+                 cli:test | test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+                 cli:test | 
+     plugin-herdr:test-sh | ok   status: a subject with control characters stays on its line
+                 cli:test | 
+                 cli:test | running 33 tests
+                 cli:test | test a_comment_whose_first_try_cannot_connect_is_posted_once ... ok
+                 cli:test | test a_call_refused_its_token_is_made_on_a_fresh_one ... ok
+                 cli:test | test a_read_answered_503_until_the_bound_fails_unanswered ... ok
+                 cli:test | test a_429_waits_as_long_as_github_says ... ok
+                 cli:test | test a_read_github_could_not_answer_is_made_again ... ok
+                 cli:test | test a_redirect_is_githubs_answer_and_says_what_to_do ... ok
+                 cli:test | test a_refused_query_fails_in_githubs_words ... ok
+                 cli:test | test a_refused_token_says_why ... ok
+                 cli:test | test a_token_for_another_repository_is_refused ... ok
+                 cli:test | test a_dispatch_answered_502_is_made_once ... ok
+                 cli:test | test a_spent_allowance_is_waited_out_to_its_reset ... ok
+                 cli:test | test a_secondary_limit_naming_no_time_doubles ... ok
+                 cli:test | test a_token_is_bought_once_an_hour ... ok
+                 cli:test | test credentials_say_what_their_token_is_and_renew_buys_one ... ok
+                 cli:test | test a_write_that_sets_a_state_is_made_again ... ok
+                 cli:test | test a_write_that_makes_something_is_read_back_before_it_is_made_again ... ok
+                 cli:test | test every_process_on_the_host_honours_the_pause ... ok
+                 cli:test | test forge_check_all_set ... ok
+                 cli:test | test forge_check_names_an_extra_bypass ... ok
+                 cli:test | test live_pull_request_calls ... ok
+                 cli:test | test every_read_is_conditional ... ok
+                 cli:test | test no_installation_withholds_the_credentials_and_says_what_to_do ... ok
+                 cli:test | test no_token_is_kept_on_the_host ... ok
+                 cli:test | test the_apps_login_is_read_once ... ok
+                 cli:test | test graphqls_allowance_is_its_own ... ok
+                 cli:test | test one_query_reads_the_open_pull_requests_whole ... ok
+                 cli:test | test the_last_call_of_an_allowance_starts_the_pause ... ok
+                 cli:test | test the_list_says_whether_it_changed ... ok
+                 cli:test | test the_pause_outlives_the_process ... ok
+   plugin-herdr:test-dash | ok   status: links to paths that are not ASCII
+                 cli:test | test forge_check_names_each_failure ... ok
+                 cli:test | test the_apps_pull_request_calls ... ok
+                 cli:test | test the_pools_calls ... ok
+                 cli:test |      Running tests/host_process.rs (target/debug/deps/host_process-970a667f3dd813ee)
+                 cli:test | test the_query_reads_fifty_to_a_page ... ok
+                 cli:test | 
+                 cli:test | test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s
+                 cli:test | 
+                 cli:test | 
+                 cli:test | running 30 tests
+   plugin-herdr:test-dash | ok   status: a link focuses, opens, or is left alone
+     plugin-herdr:test-sh | ok   status: tasks redraw with the version unmoved
+   plugin-herdr:test-dash | ok   status: the log split
+     plugin-herdr:test-sh | ok   status: a task list it cannot read is left out
+                 cli:test | test a_newer_client_has_an_older_host_process_hand_over ... ok
+                 cli:test | test a_killed_host_process_loses_nothing ... ok
+   plugin-herdr:test-dash | ok   status: no control characters from a link or a document
+     plugin-herdr:test-sh | ok   status: rows are links
+                 cli:test | test a_refused_policy_in_one_repository_holds_no_others_round ... ok
+   plugin-herdr:test-dash | ok   status: a number does what a click does
+     plugin-herdr:test-sh | ok   status: links to paths that are not ASCII
+   plugin-herdr:test-dash | ok   status: two hosts
+     plugin-herdr:test-sh | ok   status: a link focuses, opens, or is left alone
+     plugin-herdr:test-sh | ok   status: the log split
+   plugin-herdr:test-dash | ok   status: redraws on change
+                 cli:test | test a_reach_while_it_ends_starts_another ... ok
+                 cli:test | test a_run_holds_nothing_of_the_command_that_started_the_host_process ... ok
+                 cli:test | test a_second_host_process_ends_at_once ... ok
+                 cli:test | test a_host_process_that_cannot_start_names_its_log ... ok
+     plugin-herdr:test-sh | ok   status: no control characters from a link or a document
+   plugin-herdr:test-dash | ok   status: close
+                 cli:test | test a_socket_a_killed_host_process_left_is_replaced ... ok
+     plugin-herdr:test-sh | ok   status: a number does what a click does
+   plugin-herdr:test-dash | ok   status: all repositories
+                 cli:test | test a_hand_over_longer_than_a_start_is_waited_out ... ok
+   plugin-herdr:test-dash | ok   status: the focused pane from herdr's context
+     plugin-herdr:test-sh | ok   status: two hosts
+                 cli:test | test a_served_repository_is_moved_by_the_host_process ... ok
+                 cli:test | test a_status_after_a_crash_starts_the_host_process ... ok
+                 cli:test | test a_status_with_nothing_in_play_starts_nothing ... ok
+   plugin-herdr:test-dash | ok   status: a plain directory
+                 cli:test | test a_step_is_the_host_processs_round ... ok
+                 cli:test | test a_repository_an_older_sluice_run_drives_is_left_to_it ... ok
+                 cli:test | test a_wait_follows_the_host_process_and_runs_no_round ... ok
+     plugin-herdr:test-sh | ok   status: redraws on change
+                 cli:test | sluice: warning: the host process closed the connection
+   plugin-herdr:test-dash | ok   status: a tall frame fits the terminal
+▮▮▮▮ plugin-herdr:test-sh (running for 180s)
+                 cli:test | test a_withdrawal_starts_the_host_process ... ok
+▮▮▮▮ plugin-herdr:test-dash (running for 180s)
+     plugin-herdr:test-sh | ok   status: close
+   plugin-herdr:test-dash | ok   status: a tall frame scrolls
+                 cli:test | test a_submit_with_no_host_process_running_is_landed_by_it ... ok
+                 cli:test | test an_older_client_uses_a_newer_host_process ... ok
+     plugin-herdr:test-sh | ok   status: all repositories
+                 cli:test | test a_wait_says_a_rounds_failure_once_and_goes_on ... ok
+   plugin-herdr:test-dash | ok   status: a branch with nothing queued is left out
+                 cli:test | test a_wait_starts_a_killed_host_process_again ... ok
+     plugin-herdr:test-sh | ok   status: the focused pane from herdr's context
+                 cli:test | test ten_reaches_at_once_start_one_host_process ... ok
+   plugin-herdr:test-dash | ok   status: an idle branch is shown a quarter of an hour after its last event
+                 cli:test | test ten_submits_at_once_start_one_host_process ... ok
+     plugin-herdr:test-sh | ok   status: a plain directory
+                 cli:test | test started_from_another_repository_lands_both ... ok
+▮▮▮▮ cli:test (running for 120s)
+   plugin-herdr:test-dash | ok   status: a pane outside git shows every repository
+     plugin-herdr:test-sh | ok   status: a tall frame fits the terminal
+                 cli:test | test the_host_process_ends_once_its_queues_are_empty ... ok
+                 cli:test | test the_host_process_ends_with_its_state_folder ... ok
+   plugin-herdr:test-dash | ok   status: without sluice
+                 cli:test | test the_overview_names_the_host_process ... ok
+                 cli:test | test an_agents_check_stopped_while_it_waits_is_counted_nowhere ... ok
+     plugin-herdr:test-sh | ok   status: a tall frame scrolls
+   plugin-herdr:test-dash | ok   status: a sluice without overview
+     plugin-herdr:test-sh | ok   status: a branch with nothing queued is left out
+                 cli:test | test s75_a_combination_starts_before_a_third_agents_check ... ok
+                 cli:test | test two_repositories_one_host_process ... ok
+   plugin-herdr:test-dash | ok   status: the dashboard
+     plugin-herdr:test-sh | ok   status: an idle branch is shown a quarter of an hour after its last event
+   plugin-herdr:test-dash | ok   status: segment
+     plugin-herdr:test-sh | ok   status: a pane outside git shows every repository
+     plugin-herdr:test-sh | ok   status: without sluice
+   plugin-herdr:test-dash | ok   status: the segment names what waits and the last event
+     plugin-herdr:test-sh | ok   status: a sluice without overview
+   plugin-herdr:test-dash | ok   status: another repository's document leaves the segment alone
+     plugin-herdr:test-sh | ok   status: the dashboard
+   plugin-herdr:test-dash | ok   status: agents' checks are load on the host
+   plugin-herdr:test-dash | ok   status: a finished check says what it is worth
+     plugin-herdr:test-sh | ok   status: segment
+                 cli:test |      Running tests/instance.rs (target/debug/deps/instance-965064b3c845798f)
+                 cli:test | test the_host_processs_look_at_an_idle_repository_starts_nothing ... ok
+                 cli:test | 
+                 cli:test | test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 44.18s
+                 cli:test | 
+                 cli:test |      Running tests/landed.rs (target/debug/deps/landed-8d953b17e8e763b8)
+                 cli:test | 
+                 cli:test | running 5 tests
+                 cli:test | test the_reserve_is_none_by_default ... ok
+                 cli:test | test a_reserve_that_leaves_no_run_is_refused ... ok
+                 cli:test | test guarding_reads_only_the_forge ... ok
+                 cli:test | test the_reserve_is_read_beside_the_bound ... ok
+                 cli:test | test discovery_is_read_from_the_forge ... ok
+                 cli:test | 
+                 cli:test | test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+                 cli:test | 
+                 cli:test |      Running tests/local_files.rs (target/debug/deps/local_files-fca1f724c277a4d5)
+                 cli:test | 
+                 cli:test | running 0 tests
+                 cli:test | 
+                 cli:test | test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+                 cli:test | 
+                 cli:test | 
+                 cli:test | running 17 tests
+                 cli:test | test a_second_read_at_one_version_walks_nothing ... ok
+                 cli:test | test a_finished_record_put_again_replaces_it_and_leaves_the_index ... ok
+                 cli:test | 
+                 cli:test | running 1 test
+                 cli:test | test a_finished_submission_moves_out_of_the_live_records_all_or_nothing ... ok
+                 cli:test | test a_stopped_writers_pending_write_is_read_whole_over_what_was_kept ... ok
+                 cli:test | test a_write_without_the_lock_is_an_error ... ok
+                 cli:test | test a_write_from_another_process_is_seen_at_the_next_read ... ok
+                 cli:test | test hold_the_lock_until_killed ... ok
+                 cli:test | test a_crash_mid_write_reads_whole_and_finishes_once ... ok
+                 cli:test | test ids_count_across_the_repository ... ok
+                 cli:test | test results_append_once_and_whole ... ok
+                 cli:test | test branch_names_round_trip ... ok
+                 cli:test | 
+                 cli:test | running 1 test
+                 cli:test | test the_lock_is_one_holder_and_dies_with_it ... ok
+                 cli:test | test a_waiting_lock_is_taken_when_the_holder_lets_go ... ok
+                 cli:test | test tasks_are_kept_beside_the_records_and_move_no_version ... ok
+                 cli:test | test two_writes_from_one_version ... ok
+                 cli:test | test the_records_are_the_fake_stores_records ... ok
+                 cli:test | test logs_are_kept_beside_the_records_and_only_the_last_ones ... ok
+                 cli:test | 
+                 cli:test | test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.30s
+                 cli:test | 
+                 cli:test |      Running tests/local_refs.rs (target/debug/deps/local_refs-9bed1bba3d80e4d5)
+                 cli:test | 
+                 cli:test | running 0 tests
+                 cli:test | 
+                 cli:test | test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+                 cli:test | 
+                 cli:test |      Running tests/profiles/moon.rs (target/debug/deps/moon-b8c3a0b3634f0a23)
+                 cli:test | 
+                 cli:test | running 0 tests
+                 cli:test | 
+                 cli:test | test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+                 cli:test | 
+                 cli:test |      Running tests/profiles/moon_telemetry.rs (target/debug/deps/moon_telemetry-9c209632cb040b46)
+                 cli:test | 
+                 cli:test | running 1 test
+                 cli:test |      Running tests/overview_watch.rs (target/debug/deps/overview_watch-e36959f8bc2cd250)
+                 cli:test | test moon_runs_with_otel_while_telemetry_is_on ... ok
+                 cli:test | 
+                 cli:test | test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+                 cli:test | 
+                 cli:test |      Running tests/peers.rs (target/debug/deps/peers-89e15393b05013db)
+                 cli:test | 
+                 cli:test | running 0 tests
+                 cli:test | 
+                 cli:test | test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+                 cli:test | 
+                 cli:test |      Running tests/profiles/places.rs (target/debug/deps/places-7fa731edfd5dfa2a)
+                 cli:test | 
+                 cli:test | running 0 tests
+                 cli:test | 
+                 cli:test | test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+                 cli:test | 
+▮▮▮▮ plugin-herdr:test-sh (running for 210s)
+                 cli:test |      Running tests/plugin_docs.rs (target/debug/deps/plugin_docs-95de5825eeb5f14d)
+                 cli:test | 
+                 cli:test | running 0 tests
+                 cli:test | 
+                 cli:test | test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+                 cli:test | 
+     plugin-herdr:test-sh | ok   status: the segment names what waits and the last event
+   plugin-herdr:test-dash | ok   status: the band says when checks hold the queue back
+▮▮▮▮ plugin-herdr:test-dash (running for 210s)
+                 cli:test | 
+                 cli:test | running 2 tests
+                 cli:test | test every_command_is_named_in_the_skills ... ok
+                 cli:test | test every_policy_key_is_named_in_the_setup_references ... ok
+                 cli:test | 
+                 cli:test | test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+                 cli:test | 
+                 cli:test |      Running tests/previews.rs (target/debug/deps/previews-24e2dade7110fcbf)
+                 cli:test | 
+                 cli:test | running 10 tests
+                 cli:test | test a_preview_returns_its_addresses_once_its_command_starts ... ok
+                 cli:test | test a_preview_is_released_only_when_asked ... ok
+                 cli:test | test a_preview_stopped_while_waiting_is_taken_up_again ... ok
+                 cli:test | test a_failed_preview_is_reported_and_released ... ok
+                 cli:test | test a_preview_waits_for_room_and_never_takes_the_reserve ... ok
+                 cli:test | test a_preview_waits_on_a_start_refused_at_the_bound ... ok
+                 cli:test | test an_unlanded_revision_is_refused ... ok
+                 cli:test | test asking_again_gives_the_same_preview ... ok
+                 cli:test | test the_arguments ... ok
+     plugin-herdr:test-sh | ok   status: another repository's document leaves the segment alone
+   plugin-herdr:test-dash | ok   status: branches keep the overview's order
+     plugin-herdr:test-sh | ok   status: agents' checks are load on the host
+                 cli:test | test a_preview_gets_the_hosts_cache_environment ... ok
+                 cli:test | 
+                 cli:test | test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.46s
+                 cli:test | 
+                 cli:test |      Running tests/previews_tools.rs (target/debug/deps/previews_tools-b3eb129f5bf9e115)
+                 cli:test | 
+                 cli:test | running 0 tests
+                 cli:test | 
+                 cli:test | test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+                 cli:test | 
+                 cli:test |      Running tests/protect.rs (target/debug/deps/protect-db2806d3e1e15613)
+                 cli:test |      Running tests/profiles/pull_requests.rs (target/debug/deps/pull_requests-b67291c90e34ae32)
+                 cli:test | 
+                 cli:test | running 0 tests
+                 cli:test | 
+                 cli:test | test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+                 cli:test | 
+                 cli:test |      Running tests/pushed_refs.rs (target/debug/deps/pushed_refs-4147a798df7dcf84)
+                 cli:test | 
+                 cli:test | running 0 tests
+                 cli:test | 
+                 cli:test | test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+                 cli:test | 
+                 cli:test |      Running tests/reader_tick.rs (target/debug/deps/reader_tick-476f2a2e190bc1f2)
+                 cli:test | 
+                 cli:test | running 0 tests
+                 cli:test | 
+                 cli:test | test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+                 cli:test | 
+                 cli:test | 
+                 cli:test | running 2 tests
+   plugin-herdr:test-dash | ok   status: the focused pane's named branch comes first
+                 cli:test | test a_counting_git_counts_what_status_starts ... ok
+                 cli:test |      Running tests/remote_branch.rs (target/debug/deps/remote_branch-3f6612bccfbc4562)
+     plugin-herdr:test-sh | ok   status: a finished check says what it is worth
+                 cli:test | test sluice_run_with_nothing_queued_starts_git_at_its_first_pass_alone ... ok
+                 cli:test | 
+                 cli:test | test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.34s
+                 cli:test | 
+                 cli:test |      Running tests/remote_refs.rs (target/debug/deps/remote_refs-a6893a79ff3840db)
+                 cli:test | 
+                 cli:test | running 0 tests
+                 cli:test | 
+                 cli:test | test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+                 cli:test | 
+   plugin-herdr:test-dash | ok   status: a named branch with no records
+                 cli:test |      Running tests/runs.rs (target/debug/deps/runs-114f2e0f3120daa8)
+                 cli:test | 
+                 cli:test | running 0 tests
+                 cli:test | 
+                 cli:test | test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+                 cli:test | 
+                 cli:test | 
+                 cli:test | running 10 tests
+                 cli:test | test a_command_that_cannot_start_fails_with_its_reason ... ok
+▮▮▮▮ cli:test (running for 150s)
+                 cli:test | test a_place_name_with_slashes_is_one_run ... ok
+                 cli:test | test a_run_has_its_own_environment_and_session ... ok
+                 cli:test | test a_run_ends_everything_it_started ... ok
+                 cli:test | test a_run_whose_supervisor_died_is_lost_and_ended ... ok
+                 cli:test | test removing_a_run_in_progress_ends_it ... ok
+                 cli:test | test a_sessions_runs_are_released_once_and_only_together ... ok
+                 cli:test | test removing_a_run_runs_its_release_once ... ok
+   plugin-herdr:test-dash | ok   status: a held checkout
+                 cli:test | test a_run_notes_when_its_output_grew ... ok
+                 cli:test | test a_run_over_its_limit_is_ended_and_timed_out ... ok
+                 cli:test | 
+                 cli:test | test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.28s
+                 cli:test | 
+                 cli:test |      Running tests/sessions.rs (target/debug/deps/sessions-74b4d9dfe78b0c4e)
+                 cli:test | 
+                 cli:test | running 7 tests
+                 cli:test | test a_session_run_is_written_read_and_ended ... ok
+                 cli:test | test a_session_runs_tasks_are_kept_on_its_record ... ok
+                 cli:test | test hold_a_run_directory_until_killed ... ok
+                 cli:test | test hold_the_sessions_lock_until_killed ... ok
+                 cli:test | 
+                 cli:test | running 1 test
+                 cli:test | 
+                 cli:test | running 1 test
+                 cli:test | 
+                 cli:test | running 1 test
+                 cli:test | test a_session_run_whose_supervisor_is_gone_is_dropped ... ok
+                 cli:test | test the_check_seam_counts_the_hosts_running_checks ... ok
+     plugin-herdr:test-sh | ok   status: the band says when checks hold the queue back
+   plugin-herdr:test-dash | ok   status: a held worktree
+                 cli:test | test a_session_run_is_begun_under_the_hosts_lock ... ok
+                 cli:test | 
+                 cli:test | test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s
+                 cli:test | 
+                 cli:test |      Running tests/stack.rs (target/debug/deps/stack-b21311834442df9e)
+                 cli:test | 
+                 cli:test | running 0 tests
+                 cli:test | 
+                 cli:test | test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+                 cli:test | 
+                 cli:test |      Running tests/telemetry.rs (target/debug/deps/telemetry-70932836e28d5c3d)
+                 cli:test | 
+                 cli:test | running 6 tests
+                 cli:test | test a_conflict_is_counted ... ok
+                 cli:test | test a_refused_landing_is_counted ... ok
+                 cli:test | test a_failure_reports_its_culprit ... ok
+                 cli:test | test a_landing_reports_its_round_verdict_and_landing ... ok
+                 cli:test | test a_replay_is_counted ... ok
+                 cli:test |      Running tests/telemetry_logs.rs (target/debug/deps/telemetry_logs-0840e03a283804ce)
+                 cli:test | test telemetry_is_off_unless_asked ... ok
+                 cli:test | 
+                 cli:test | test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s
+                 cli:test | 
+   plugin-herdr:test-dash | ok   status: another host's held checkout
+                 cli:test | 
+                 cli:test | running 9 tests
+                 cli:test | test a_failed_preview_s_output_is_sent_when_it_is_released ... ok
+   plugin-herdr:test-dash | ok   status: an idle branch with a held place
+                 cli:test | test a_round_is_one_trace_rooted_at_sluice_round ... ok
+                 cli:test | test a_round_s_spans_carry_what_they_are_of ... ok
+                 cli:test | test a_failure_s_output_is_sent_under_its_verdict_scrubbed ... ok
+     plugin-herdr:test-sh | ok   status: branches keep the overview's order
+                 cli:test | test a_run_s_checks_join_the_round ... ok
+                 cli:test | test telemetry_goes_to_the_endpoint_as_otlp_over_http ... ok
+                 cli:test | test a_collector_out_of_reach_fails_nothing ... ok
+                 cli:test |      Running tests/usage.rs (target/debug/deps/usage-26349b882e5f52c8)
+                 cli:test | test at_off_no_log_record_is_sent ... ok
+                 cli:test | test a_summary_says_where_the_output_is_kept_and_a_warning_is_sent_whole ... ok
+                 cli:test | 
+                 cli:test | test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.87s
+                 cli:test | 
+                 cli:test | 
+                 cli:test | running 10 tests
+                 cli:test | test an_unknown_command_exits_usage ... ok
+                 cli:test | test a_missing_argument_exits_usage ... ok
+                 cli:test | test an_unknown_flag_exits_usage_on_stderr ... ok
+                 cli:test | test a_subject_with_check_or_status_exits_usage ... ok
+                 cli:test | test a_command_still_takes_the_telemetry_flags ... ok
+                 cli:test | test branch_accept_help_has_an_example ... ok
+                 cli:test | test only_the_root_help_names_the_telemetry_flags ... ok
+                 cli:test | test submit_help_lists_the_exits_and_not_the_telemetry_flags ... ok
+                 cli:test | test help_and_version_exit_zero ... ok
+                 cli:test | test wait_help_lists_the_exits_and_a_bad_timeout_exits_usage ... ok
+                 cli:test | 
+                 cli:test | test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+                 cli:test | 
+                 cli:test |      Running tests/profiles/worktrunk.rs (target/debug/deps/worktrunk-644f98243e8c17ab)
+                 cli:test | 
+                 cli:test | running 0 tests
+                 cli:test | 
+                 cli:test | test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+                 cli:test | 
+[ WARN 11:18:15.573] moon_task_runner::output_archiver  Failed to package task outputs into archive: Failed to create ~/.local/share/flywheel/repositories/agentplot/sluice/sluice.git/sluice/.places/sluice+2Ftry+2Fbolt+2Fsluice-runs-one-host-process+2F11/.moon/cache/outputs/e83244c098bcf4c09bd1c582ee2002b686626ab5cf379eb7c661bcf9cf02a3eb.tar.gz.  task_target="cli:test" hash="e83244c098bcf4c09bd1c582ee2002b686626ab5cf379eb7c661bcf9cf02a3eb" archive_file="/Users/chuck/.local/share/flywheel/repositories/agentplot/sluice/sluice.git/sluice/.places/sluice+2Ftry+2Fbolt+2Fsluice-runs-one-host-process+2F11/.moon/cache/outputs/e83244c098bcf4c09bd1c582ee2002b686626ab5cf379eb7c661bcf9cf02a3eb.tar.gz"
+▮▮▮▮ cli:test (2m 36s 846ms, e83244c0)
+   plugin-herdr:test-dash | ok   status: a checkout still being tried
+     plugin-herdr:test-sh | ok   status: the focused pane's named branch comes first
+   plugin-herdr:test-dash | ok   status: a document from before held places
+     plugin-herdr:test-sh | ok   status: a named branch with no records
+   plugin-herdr:test-dash | ok   status: the segment counts held places
+     plugin-herdr:test-sh | ok   status: a held checkout
+   plugin-herdr:test-dash | ok   status: setup shows, never edits
+     plugin-herdr:test-sh | ok   status: a held worktree
+     plugin-herdr:test-sh | ok   status: another host's held checkout
+   plugin-herdr:test-dash | ok   status: one tab-bar line for every host
+     plugin-herdr:test-sh | ok   status: an idle branch with a held place
+     plugin-herdr:test-sh | ok   status: a checkout still being tried
+   plugin-herdr:test-dash | ok   status: the segment is the server's
+     plugin-herdr:test-sh | ok   status: a document from before held places
+   plugin-herdr:test-dash | ok   status: the segment is the same in every server
+     plugin-herdr:test-sh | ok   status: the segment counts held places
+     plugin-herdr:test-sh | ok   status: setup shows, never edits
+▮▮▮▮ plugin-herdr:test-sh (running for 240s)
+▮▮▮▮ plugin-herdr:test-dash (running for 240s)
+   plugin-herdr:test-dash | ok   status: fields it does not know change nothing
+   plugin-herdr:test-dash | ok   toasts: blamed
+   plugin-herdr:test-dash | ok   toasts: watcher restarted
+     plugin-herdr:test-sh | ok   status: one tab-bar line for every host
+   plugin-herdr:test-dash | ok   toasts: what is told is kept only while it is recent
+     plugin-herdr:test-sh | ok   status: the segment is the server's
+   plugin-herdr:test-dash | ok   toasts: an event on a long branch, or of many submissions
+   plugin-herdr:test-dash | ok   toasts: none when what was told cannot be kept
+     plugin-herdr:test-sh | ok   status: the segment is the same in every server
+   plugin-herdr:test-dash | ok   toasts: first sight of a repository
+   plugin-herdr:test-dash | ok   toasts: a conflict
+     plugin-herdr:test-sh | ok   status: fields it does not know change nothing
+   plugin-herdr:test-dash | ok   toasts: landed, looking elsewhere
+     plugin-herdr:test-sh | ok   toasts: blamed
+   plugin-herdr:test-dash | ok   toasts: landed, looking at it
+     plugin-herdr:test-sh | ok   toasts: watcher restarted
+   plugin-herdr:test-dash | ok   toasts: landed, no pane
+     plugin-herdr:test-sh | ok   toasts: what is told is kept only while it is recent
+   plugin-herdr:test-dash | ok   toasts: three servers
+     plugin-herdr:test-sh | ok   toasts: an event on a long branch, or of many submissions
+   plugin-herdr:test-dash | ok   toasts: a repository no pane is in
+     plugin-herdr:test-sh | ok   toasts: none when what was told cannot be kept
+     plugin-herdr:test-sh | ok   toasts: first sight of a repository
+   plugin-herdr:test-dash | ok   toasts: landed in two servers
+     plugin-herdr:test-sh | ok   toasts: a conflict
+   plugin-herdr:test-dash | ok   jump: jump
+     plugin-herdr:test-sh | ok   toasts: landed, looking elsewhere
+   plugin-herdr:test-dash | ok   jump: no pane
+     plugin-herdr:test-sh | ok   toasts: landed, looking at it
+   plugin-herdr:test-dash | ok   sidebar: testing
+     plugin-herdr:test-sh | ok   toasts: landed, no pane
+   plugin-herdr:test-dash | ok   sidebar: testing, with tasks
+▮▮▮▮ plugin-herdr:test-sh (running for 270s)
+   plugin-herdr:test-dash | ok   sidebar: checking
+▮▮▮▮ plugin-herdr:test-dash (running for 270s)
+     plugin-herdr:test-sh | ok   toasts: three servers
+   plugin-herdr:test-dash | ok   sidebar: checking a command
+     plugin-herdr:test-sh | ok   toasts: a repository no pane is in
+   plugin-herdr:test-dash | ok   sidebar: a submission comes before a check
+   plugin-herdr:test-dash | ok   sidebar: a blame comes before a check
+     plugin-herdr:test-sh | ok   toasts: landed in two servers
+   plugin-herdr:test-dash | ok   sidebar: blamed
+     plugin-herdr:test-sh | ok   jump: jump
+   plugin-herdr:test-dash | ok   sidebar: blamed, a command runner's task
+     plugin-herdr:test-sh | ok   jump: no pane
+   plugin-herdr:test-dash | ok   sidebar: a conflict
+     plugin-herdr:test-sh | ok   sidebar: testing
+     plugin-herdr:test-sh | ok   sidebar: testing, with tasks
+     plugin-herdr:test-sh | ok   sidebar: checking
+     plugin-herdr:test-sh | ok   sidebar: checking a command
+     plugin-herdr:test-sh | ok   sidebar: a submission comes before a check
+     plugin-herdr:test-sh | ok   sidebar: a blame comes before a check
+     plugin-herdr:test-sh | ok   sidebar: blamed
+     plugin-herdr:test-sh | ok   sidebar: blamed, a command runner's task
+     plugin-herdr:test-sh | ok   sidebar: a conflict
+   plugin-herdr:test-dash | ok   sidebar: landed, then gone
+   plugin-herdr:test-dash | ok   sidebar: nothing to say
+   plugin-herdr:test-dash | ok   sidebar: clean
+▮▮▮▮ plugin-herdr:test-sh (running for 300s)
+▮▮▮▮ plugin-herdr:test-dash (running for 300s)
+   plugin-herdr:test-dash | ok   sidebar: ahead again after a landing
+   plugin-herdr:test-dash | ok   sidebar: conflicts
+   plugin-herdr:test-dash | ok   sidebar: conflicts with what landed
+   plugin-herdr:test-dash | ok   sidebar: nothing changed
+     plugin-herdr:test-sh | ok   sidebar: landed, then gone
+     plugin-herdr:test-sh | ok   sidebar: nothing to say
+   plugin-herdr:test-dash | ok   sidebar: forecasts off
+   plugin-herdr:test-dash | ok   sidebar: a named branch
+     plugin-herdr:test-sh | ok   sidebar: clean
+   plugin-herdr:test-dash | ok   sidebar: a submission comes before a named branch
+     plugin-herdr:test-sh | ok   sidebar: ahead again after a landing
+   plugin-herdr:test-dash | ok   sidebar: a blame comes before a named branch
+     plugin-herdr:test-sh | ok   sidebar: conflicts
+   plugin-herdr:test-dash | ok   sidebar: a named branch with nothing queued
+   plugin-herdr:test-dash | ok   sidebar: a named branch with no records
+     plugin-herdr:test-sh | ok   sidebar: conflicts with what landed
+   plugin-herdr:test-dash | ok   sidebar: a named branch counts its checks
+   plugin-herdr:test-dash | ok   sidebar: a named branch with more than one under test
+     plugin-herdr:test-sh | ok   sidebar: nothing changed
+   plugin-herdr:test-dash | ok   sidebar: no forecast for a named pane
+     plugin-herdr:test-sh | ok   sidebar: forecasts off
+     plugin-herdr:test-sh | ok   sidebar: a named branch
+     plugin-herdr:test-sh | ok   sidebar: a submission comes before a named branch
+     plugin-herdr:test-sh | ok   sidebar: a blame comes before a named branch
+▮▮▮▮ plugin-herdr:test-sh (running for 330s)
+▮▮▮▮ plugin-herdr:test-dash (running for 330s)
+     plugin-herdr:test-sh | ok   sidebar: a named branch with nothing queued
+     plugin-herdr:test-sh | ok   sidebar: a named branch with no records
+     plugin-herdr:test-sh | ok   sidebar: a named branch counts its checks
+   plugin-herdr:test-dash | ok   sidebar: two servers forecast once
+     plugin-herdr:test-sh | ok   sidebar: a named branch with more than one under test
+   plugin-herdr:test-dash | ok   sidebar: named in one server, not in another
+     plugin-herdr:test-sh | ok   sidebar: no forecast for a named pane
+   plugin-herdr:test-dash | ok   sidebar: queued
+   plugin-herdr:test-dash | ok   sidebar: queued and held
+   plugin-herdr:test-dash | ok   sidebar: held alone
+   plugin-herdr:test-dash | ok   sidebar: a checkout two hosts list is counted once
+     plugin-herdr:test-sh | ok   sidebar: two servers forecast once
+     plugin-herdr:test-sh | ok   sidebar: named in one server, not in another
+     plugin-herdr:test-sh | ok   sidebar: queued
+     plugin-herdr:test-sh | ok   sidebar: queued and held
+     plugin-herdr:test-sh | ok   sidebar: held alone
+     plugin-herdr:test-sh | ok   sidebar: a checkout two hosts list is counted once
+   plugin-herdr:test-dash | ok   sidebar: a shown token is set again once a minute
+▮▮▮▮ plugin-herdr:test-sh (running for 360s)
+▮▮▮▮ plugin-herdr:test-dash (running for 360s)
+   plugin-herdr:test-dash | ok   sidebar: a commit is forecast within a tick
+   plugin-herdr:test-dash | ok   sidebar: two servers, one worktree
+     plugin-herdr:test-sh | ok   sidebar: a shown token is set again once a minute
+   plugin-herdr:test-dash | ok   sidebar: a server stops
+     plugin-herdr:test-sh | ok   sidebar: a commit is forecast within a tick
+     plugin-herdr:test-sh | ok   sidebar: two servers, one worktree
+   plugin-herdr:test-dash | ok   sidebar: named just after it opens
+▮▮▮▮ plugin-herdr:test-sh (running for 390s)
+▮▮▮▮ plugin-herdr:test-dash (running for 390s)
+     plugin-herdr:test-sh | ok   sidebar: a server stops
+   plugin-herdr:test-dash | ok   sidebar: named later
+   plugin-herdr:test-dash | ok   sidebar: tokens fade without the watcher
+   plugin-herdr:test-dash | 
+   plugin-herdr:test-dash | all 137 passed, 3 skipped
+[ WARN 11:21:09.260] moon_task_runner::output_archiver  Failed to package task outputs into archive: Failed to create ~/.local/share/flywheel/repositories/agentplot/sluice/sluice.git/sluice/.places/sluice+2Ftry+2Fbolt+2Fsluice-runs-one-host-process+2F11/.moon/cache/outputs/a86b14b2672a222ffbe658e1ab7ce83e0dd81931866e716840fe6426954858d2.tar.gz.  task_target="plugin-herdr:test-dash" hash="a86b14b2672a222ffbe658e1ab7ce83e0dd81931866e716840fe6426954858d2" archive_file="/Users/chuck/.local/share/flywheel/repositories/agentplot/sluice/sluice.git/sluice/.places/sluice+2Ftry+2Fbolt+2Fsluice-runs-one-host-process+2F11/.moon/cache/outputs/a86b14b2672a222ffbe658e1ab7ce83e0dd81931866e716840fe6426954858d2.tar.gz"
+▮▮▮▮ plugin-herdr:test-dash (6m 36s 991ms, a86b14b2)
+     plugin-herdr:test-sh | ok   sidebar: named just after it opens
+     plugin-herdr:test-sh | ok   sidebar: named later
+     plugin-herdr:test-sh | ok   sidebar: tokens fade without the watcher
+     plugin-herdr:test-sh | 
+     plugin-herdr:test-sh | all 137 passed, 3 skipped
+[ WARN 11:21:22.627] moon_task_runner::output_archiver  Failed to package task outputs into archive: Failed to create ~/.local/share/flywheel/repositories/agentplot/sluice/sluice.git/sluice/.places/sluice+2Ftry+2Fbolt+2Fsluice-runs-one-host-process+2F11/.moon/cache/outputs/7f6019994b589f6ba690361112710d84e3ef841c9848a7b25ee45d071214164f.tar.gz.  task_target="plugin-herdr:test-sh" hash="7f6019994b589f6ba690361112710d84e3ef841c9848a7b25ee45d071214164f" archive_file="/Users/chuck/.local/share/flywheel/repositories/agentplot/sluice/sluice.git/sluice/.places/sluice+2Ftry+2Fbolt+2Fsluice-runs-one-host-process+2F11/.moon/cache/outputs/7f6019994b589f6ba690361112710d84e3ef841c9848a7b25ee45d071214164f.tar.gz"
+▮▮▮▮ plugin-herdr:test-sh (6m 50s 545ms, 7f601999)
+
+Tasks: 28 completed
+ Time: 6m 50s 590ms
+
+Failed to shut down OTLP metrics exporter: Operation failed: [InternalFailure("Failed to shutdown")]

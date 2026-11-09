@@ -1,0 +1,21 @@
+--- stdout ---
+
+running 10 tests
+test tests::a_dropped_part_frees_its_room ... ok
+test tests::a_host_s_reads_are_refused_with_the_words_given ... ok
+test tests::a_branch_on_a_remote_has_a_copy_levelled_from_its_value ... ok
+test tests::a_read_of_the_records_fails_until_cleared ... ok
+test tests::a_part_is_refused_at_the_bound ... ok
+test tests::a_check_is_failed_by_the_task_it_depends_on ... ok
+test tests::a_session_place_keeps_its_last_result_until_released ... ok
+test tests::session_runs_are_counted_while_they_run ... ok
+test tests::the_driver_delivers_to_the_session_or_answers_undelivered ... ok
+test tests::the_host_count_holds_other_repositories_runs ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+--- stderr ---
+    Blocking waiting for file lock on build directory
+   Compiling sluice-fakes v0.0.0 (/Users/chuck/.local/share/flywheel/repositories/agentplot/sluice/sluice.git/sluice/.places/sluice+2Ftry+2Fbolt+2Fsluice-runs-one-host-process+2F11/crates/sluice-fakes)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 17.92s
+     Running unittests src/lib.rs (target/debug/deps/sluice_fakes-64f1691bb36a8bd7)

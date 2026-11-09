@@ -1,0 +1,67 @@
+--- stdout ---
+
+ src/content/docs/architecture/overview.md
+ 8:1    suggestion  Sentences over 35 words are hard to follow; split it.  Sluice.SentenceLength 
+ 11:8   suggestion  Sentences over 35 words are hard to follow; split it.  Sluice.SentenceLength 
+ 30:68  suggestion  Sentences over 35 words are hard to follow; split it.  Sluice.SentenceLength 
+ 38:10  suggestion  Sentences over 35 words are hard to follow; split it.  Sluice.SentenceLength 
+ 51:19  suggestion  Sentences over 35 words are hard to follow; split it.  Sluice.SentenceLength 
+
+
+ src/content/docs/guides/claude-code.md
+ 70:66   suggestion  Sentences over 35 words are hard to follow; split it.  Sluice.SentenceLength 
+ 255:55  suggestion  Sentences over 35 words are hard to follow; split it.  Sluice.SentenceLength 
+
+
+ src/content/docs/guides/walkthrough.md
+ 92:30  suggestion  Sentences over 35 words are hard to follow; split it.  Sluice.SentenceLength 
+ 99:28  suggestion  Sentences over 35 words are hard to follow; split it.  Sluice.SentenceLength 
+ 120:3  suggestion  Sentences over 35 words are hard to follow; split it.  Sluice.SentenceLength 
+ 140:1  suggestion  Sentences over 35 words are hard to follow; split it.  Sluice.SentenceLength 
+
+
+ src/content/docs/roadmap.md
+ 27:5  suggestion  Sentences over 35 words are hard to follow; split it.  Sluice.SentenceLength 
+
+
+ src/content/docs/guides/pull-requests.md
+ 380:9   suggestion  Sentences over 35 words are hard to follow; split it.       Sluice.SentenceLength 
+ 522:43  suggestion  'is decided by' is passive; name the actor as the subject.  Sluice.Passive        
+
+
+ src/content/docs/reference/state.md
+ 176:1   suggestion  Sentences over 35 words are hard to follow; split it.  Sluice.SentenceLength 
+ 215:22  suggestion  Sentences over 35 words are hard to follow; split it.  Sluice.SentenceLength 
+ 242:1   suggestion  Sentences over 35 words are hard to follow; split it.  Sluice.SentenceLength 
+ 245:9   suggestion  Sentences over 35 words are hard to follow; split it.  Sluice.SentenceLength 
+ 291:11  suggestion  Sentences over 35 words are hard to follow; split it.  Sluice.SentenceLength 
+ 525:55  suggestion  Sentences over 35 words are hard to follow; split it.  Sluice.SentenceLength 
+ 596:1   suggestion  Sentences over 35 words are hard to follow; split it.  Sluice.SentenceLength 
+ 654:1   suggestion  Sentences over 35 words are hard to follow; split it.  Sluice.SentenceLength 
+ 716:1   suggestion  Sentences over 35 words are hard to follow; split it.  Sluice.SentenceLength 
+
+
+ src/content/docs/reference/configuration.md
+ 133:1   suggestion  'There is' opens the sentence with no subject; name who does what.  Sluice.ThereIs        
+ 382:1   suggestion  Sentences over 35 words are hard to follow; split it.               Sluice.SentenceLength 
+ 521:51  suggestion  Sentences over 35 words are hard to follow; split it.               Sluice.SentenceLength 
+
+
+ src/content/docs/reference/commands.md
+ 14:1951  suggestion  Sentences over 35 words are hard to follow; split it.  Sluice.SentenceLength 
+ 174:36   suggestion  Sentences over 35 words are hard to follow; split it.  Sluice.SentenceLength 
+ 603:1    suggestion  Sentences over 35 words are hard to follow; split it.  Sluice.SentenceLength 
+ 644:30   suggestion  Sentences over 35 words are hard to follow; split it.  Sluice.SentenceLength 
+ 645:34   suggestion  Sentences over 35 words are hard to follow; split it.  Sluice.SentenceLength 
+ 700:10   suggestion  Sentences over 35 words are hard to follow; split it.  Sluice.SentenceLength 
+ 718:10   suggestion  Sentences over 35 words are hard to follow; split it.  Sluice.SentenceLength 
+ 731:1    suggestion  Sentences over 35 words are hard to follow; split it.  Sluice.SentenceLength 
+ 1167:28  suggestion  Sentences over 35 words are hard to follow; split it.  Sluice.SentenceLength 
+ 1223:1   suggestion  Sentences over 35 words are hard to follow; split it.  Sluice.SentenceLength 
+ 1259:1   suggestion  Sentences over 35 words are hard to follow; split it.  Sluice.SentenceLength 
+ 1437:95  suggestion  Sentences over 35 words are hard to follow; split it.  Sluice.SentenceLength 
+ 1472:60  suggestion  Sentences over 35 words are hard to follow; split it.  Sluice.SentenceLength 
+ 1476:42  suggestion  Sentences over 35 words are hard to follow; split it.  Sluice.SentenceLength 
+ 1500:29  suggestion  Sentences over 35 words are hard to follow; split it.  Sluice.SentenceLength 
+
+✔ 0 errors, 0 warnings and 41 suggestions in 19 files.

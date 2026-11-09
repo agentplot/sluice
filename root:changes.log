@@ -1,0 +1,9 @@
+--- stdout ---
+✓ change/a-checks-key-holds-its-executor
+✓ change/a-places-scratch-fits-a-socket
+✓ change/actions-pool
+✓ change/clickable-rows
+✓ change/finished-submissions
+✓ change/overview
+✓ change/session-runs
+Totals: 7 passed, 0 failed (7 items)

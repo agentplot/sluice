@@ -1,0 +1,4 @@
+--- stdout ---
+Validating marketplace manifest: /Users/chuck/.local/share/flywheel/repositories/agentplot/sluice/sluice.git/sluice/.places/sluice+2Ftry+2Fbolt+2Fsluice-runs-one-host-process+2F11/.claude-plugin/marketplace.json
+
+✔ Validation passed

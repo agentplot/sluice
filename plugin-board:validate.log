@@ -1,0 +1,18 @@
+--- stdout ---
+Validating plugin manifest: /Users/chuck/.local/share/flywheel/repositories/agentplot/sluice/sluice.git/sluice/.places/sluice+2Ftry+2Fbolt+2Fsluice-runs-one-host-process+2F11/plugins/sluice-board/.claude-plugin/plugin.json
+
+  ❯ types ./types/index.d.ts declares on $: nothing (no EngineInterface member)
+  ❯ types ./types/index.d.ts declares state: sluice-board.doc, sluice-board.mine, sluice-board.isHidden, sluice-board.now, sluice-board.remotes, sluice-board.opened, sluice-board.details, sluice-board.named, sluice-board.forecasting, sluice-board.error, sluice-board.unread, sluice-board.cannot, sluice-board.absent, sluice-board.refused
+
+Validating hooks: /Users/chuck/.local/share/flywheel/repositories/agentplot/sluice/sluice.git/sluice/.places/sluice+2Ftry+2Fbolt+2Fsluice-runs-one-host-process+2F11/plugins/sluice-board/hooks/hooks.json
+
+  ❯ ./register.tsx hooks: session.start, command.run{command=sluice}, tool.call{tool=Bash}, ui.render{component=AbovePrompt}, ui.render{component=Pane, requestId=sluice}
+  ❯ ./register.tsx answers its own command: command.run{command=sluice}
+  ❯ ./register.tsx gating hook with .catch: tool.call{tool=Bash}
+  ❯ ./register.tsx calls: $.clock.after (via feed), $.clock.every, $.clock.now, $.command.register, $.env.get (via follow), $.fs.read (via refusal), $.process.run (via blamedTests, collect, follow, forecastOnce, output, tailOf), $.process.spawn (via watch), $.prompt.submit (via collect, forecastOnce), $.state.get, $.state.set, $.ui.close, $.ui.copy, $.ui.notify (via raise), $.ui.open, $.ui.panes, $.ui.resolve, $.ui.status (via feed, refuse, see, take), $.ui.toast (via collect, forecastOnce, raise, refuse)
+  ❯ ./register.tsx env writes: nothing
+  ❯ ./register.tsx env reads: SLUICE_BRANCH, SLUICE_FORECAST
+  ❯ ./register.tsx state writes: sluice-board.absent, sluice-board.cannot, sluice-board.details, sluice-board.doc, sluice-board.error, sluice-board.forecasting, sluice-board.isHidden, sluice-board.mine, sluice-board.named, sluice-board.now, sluice-board.opened, sluice-board.refused, sluice-board.remotes, sluice-board.unread
+  ❯ ./register.tsx state reads: sluice-board.absent, sluice-board.cannot, sluice-board.details, sluice-board.doc, sluice-board.error, sluice-board.forecasting, sluice-board.isHidden, sluice-board.mine, sluice-board.named, sluice-board.now, sluice-board.opened, sluice-board.refused, sluice-board.remotes, sluice-board.unread
+
+✔ Validation passed

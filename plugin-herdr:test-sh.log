@@ -1,0 +1,144 @@
+--- stdout ---
+scripts run under /nix/store/5xfk6xkjqfn4cfn47ckm383g81lsfhca-bash-interactive-5.3p15/bin/sh -> bash
+ok   manifest: a broken one refused
+ok   stand-ins: herdr answers from its socket, jq and git are logged
+ok   watch: started twice
+ok   watch: two servers, one watcher
+ok   watch: watcher gone
+ok   watch: a lock left by a watcher that died
+ok   watch: a lock with no owner
+skip: watch: a watcher stops only its own sources: ps can't run here (tests/run.sh: line 228: /bin/ps: Operation not permitted)
+skip: watch: a killed watcher's sources are ended: ps can't run here (tests/run.sh: line 228: /bin/ps: Operation not permitted)
+skip: watch: a source is known without ps's start times: ps can't run here (tests/run.sh: line 228: /bin/ps: Operation not permitted)
+ok   watch: a watcher stopped in its source's first second ends it
+ok   watch: a pid kept alone and used again is left alone
+ok   watch: without ps, one source and it is ended
+ok   watch: without ps, an ended watcher's sources are left alone
+ok   watch: a pid used again by another process is left alone
+ok   watch: a reinstalled plugin replaces its watcher
+ok   watch: a plugin put back stops the host's watcher
+ok   watch: herdr gone
+ok   watch: herdr stops
+ok   watch: one of two servers stops
+ok   watch: another herdr server in its place
+ok   watch: another herdr server in its place as the tokens go out
+ok   watch: idle ticks run nothing
+ok   watch: a change wakes it
+ok   watch: a former version's watchers give way
+ok   watch: no configuration
+ok   watch: panes of two servers in one repository
+ok   watch: the last pane leaves
+ok   watch: three servers, two repositories, six processes
+ok   watch: a source of the user's
+ok   watch: configuration it cannot read
+ok   watch: two documents
+ok   watch: a large document costs what a small one does
+ok   watch: read by every server
+ok   watch: a document missing fields
+ok   watch: a document it cannot read
+ok   watch: what a held place failed is kept to its last line
+ok   watch: source exits
+ok   watch: the watcher only reads
+ok   status: testing
+ok   status: a combination names its submissions
+ok   status: a landing of two names both
+ok   status: a document that names no subjects names numbers
+ok   status: a subject with control characters stays on its line
+ok   status: tasks redraw with the version unmoved
+ok   status: a task list it cannot read is left out
+ok   status: rows are links
+ok   status: links to paths that are not ASCII
+ok   status: a link focuses, opens, or is left alone
+ok   status: the log split
+ok   status: no control characters from a link or a document
+ok   status: a number does what a click does
+ok   status: two hosts
+ok   status: redraws on change
+ok   status: close
+ok   status: all repositories
+ok   status: the focused pane from herdr's context
+ok   status: a plain directory
+ok   status: a tall frame fits the terminal
+ok   status: a tall frame scrolls
+ok   status: a branch with nothing queued is left out
+ok   status: an idle branch is shown a quarter of an hour after its last event
+ok   status: a pane outside git shows every repository
+ok   status: without sluice
+ok   status: a sluice without overview
+ok   status: the dashboard
+ok   status: segment
+ok   status: the segment names what waits and the last event
+ok   status: another repository's document leaves the segment alone
+ok   status: agents' checks are load on the host
+ok   status: a finished check says what it is worth
+ok   status: the band says when checks hold the queue back
+ok   status: branches keep the overview's order
+ok   status: the focused pane's named branch comes first
+ok   status: a named branch with no records
+ok   status: a held checkout
+ok   status: a held worktree
+ok   status: another host's held checkout
+ok   status: an idle branch with a held place
+ok   status: a checkout still being tried
+ok   status: a document from before held places
+ok   status: the segment counts held places
+ok   status: setup shows, never edits
+ok   status: one tab-bar line for every host
+ok   status: the segment is the server's
+ok   status: the segment is the same in every server
+ok   status: fields it does not know change nothing
+ok   toasts: blamed
+ok   toasts: watcher restarted
+ok   toasts: what is told is kept only while it is recent
+ok   toasts: an event on a long branch, or of many submissions
+ok   toasts: none when what was told cannot be kept
+ok   toasts: first sight of a repository
+ok   toasts: a conflict
+ok   toasts: landed, looking elsewhere
+ok   toasts: landed, looking at it
+ok   toasts: landed, no pane
+ok   toasts: three servers
+ok   toasts: a repository no pane is in
+ok   toasts: landed in two servers
+ok   jump: jump
+ok   jump: no pane
+ok   sidebar: testing
+ok   sidebar: testing, with tasks
+ok   sidebar: checking
+ok   sidebar: checking a command
+ok   sidebar: a submission comes before a check
+ok   sidebar: a blame comes before a check
+ok   sidebar: blamed
+ok   sidebar: blamed, a command runner's task
+ok   sidebar: a conflict
+ok   sidebar: landed, then gone
+ok   sidebar: nothing to say
+ok   sidebar: clean
+ok   sidebar: ahead again after a landing
+ok   sidebar: conflicts
+ok   sidebar: conflicts with what landed
+ok   sidebar: nothing changed
+ok   sidebar: forecasts off
+ok   sidebar: a named branch
+ok   sidebar: a submission comes before a named branch
+ok   sidebar: a blame comes before a named branch
+ok   sidebar: a named branch with nothing queued
+ok   sidebar: a named branch with no records
+ok   sidebar: a named branch counts its checks
+ok   sidebar: a named branch with more than one under test
+ok   sidebar: no forecast for a named pane
+ok   sidebar: two servers forecast once
+ok   sidebar: named in one server, not in another
+ok   sidebar: queued
+ok   sidebar: queued and held
+ok   sidebar: held alone
+ok   sidebar: a checkout two hosts list is counted once
+ok   sidebar: a shown token is set again once a minute
+ok   sidebar: a commit is forecast within a tick
+ok   sidebar: two servers, one worktree
+ok   sidebar: a server stops
+ok   sidebar: named just after it opens
+ok   sidebar: named later
+ok   sidebar: tokens fade without the watcher
+
+all 137 passed, 3 skipped

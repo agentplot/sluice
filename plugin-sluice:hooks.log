@@ -1,0 +1,30 @@
+--- stdout ---
+ok    denies: git push origin HEAD:main
+ok    denies: git push origin main
+ok    denies: git push -f origin unit/x:refs/heads/main
+ok    denies: git push origin unit/x:feature/y
+ok    denies: git push --all origin
+ok    denies: git -C /private/tmp/sluice-501/34557ab174/80031ad6fb/sluice-plugin-hooks.1MPWp8/repo merge unit/x
+ok    denies: cd /private/tmp/sluice-501/34557ab174/80031ad6fb/sluice-plugin-hooks.1MPWp8/repo && git merge --no-ff unit/x
+ok    denies: git update-ref refs/heads/main HEAD
+ok    denies: git status; git push origin HEAD:main
+ok    denies: gh pr merge 5 --merge
+ok    denies: gh pr merge 5
+ok    denies: sluice set-aside cli:tools --at 2026-10-17T13:05:32Z --reason x
+ok    denies: cd .. && sluice --json set-aside cli:tools --at t --reason x
+ok    allows: sluice status --all
+ok    allows: sluice exec main -- cargo test
+ok    allows: git push origin unit/x
+ok    allows: git push -u origin HEAD
+ok    allows: git push
+ok    allows: git merge main
+ok    allows: git merge --abort
+ok    allows: git update-ref refs/heads/unit/x HEAD
+ok    allows: gh pr merge 5
+ok    allows: echo "git push origin main"
+ok    allows: ls -la
+ok    allows: git push origin main
+ok    allows: git merge topic
+ok    the session note names the protected branches, has sluice inbox run first, has a submission watched from the background, under worktrunk submitted and waited on with wt submit, which removes the landed worktree, and says who submits an agent's work
+ok    no note where nothing is protected
+0 failed

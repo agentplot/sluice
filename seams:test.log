@@ -1,0 +1,21 @@
+--- stdout ---
+
+running 4 tests
+test tests::a_refused_read_is_found_under_added_context ... ok
+test tests::a_refused_read_says_what_it_said_before ... ok
+test tests::a_run_fails_on_a_fail_a_failed_dependency_or_a_missing_check ... ok
+test tests::a_submission_by_name_is_its_head_as_its_work ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+--- stderr ---
+    Blocking waiting for file lock on build directory
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling serde_core v1.0.229
+   Compiling syn v3.0.5
+   Compiling serde_derive v1.0.229
+   Compiling serde v1.0.229
+   Compiling sluice-seams v0.0.0 (/Users/chuck/.local/share/flywheel/repositories/agentplot/sluice/sluice.git/sluice/.places/sluice+2Ftry+2Fbolt+2Fsluice-runs-one-host-process+2F11/crates/sluice-seams)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 20.38s
+     Running unittests src/lib.rs (target/debug/deps/sluice_seams-fb58cadec115324d)

@@ -1,0 +1,24 @@
+--- stdout ---
+ok    the plan names main/, the git directory, the process and the history, and changes nothing
+ok    go refuses while another process holds the folder, and moves nothing
+ok    go refuses while another process has a file in the folder open
+ok    the plan says it cannot tell what holds the folder when lsof fails
+ok    go refuses when lsof fails
+ok    go refuses when main/ is already there
+ok    the plan names none of the named session's own: its shell, its helper, the helper's child
+ok    a process outside the session beside its helpers refuses go, which names only that process
+ok    go lays the folder out with only the named session and what it started in it
+ok    with no session named, the process that started the conversion holds nothing
+ok    go lays the clone out: bare git directory, main/ on its branch with its changes, nothing prunable
+ok    a worktree outside the folder still works
+ok    two sessions go to main/'s key, the caller's stays for /cd, memory goes to the git directory's key
+ok    a memory file already at the new key is left, with the one it would have replaced, and reported
+ok    a path too long for a derived key carries nothing and says to resume by id
+ok    kind names a plain clone its repository's only working copy
+ok    kind, asked from a clone with a worktree beside it, names the clone one of several
+ok    kind, asked from the worktree beside the clone, names the clone's folder
+ok    kind counts neither sluice's checkout under .git nor a deleted worktree
+ok    kind names a laid-out repository's git directory apart
+ok    kind, asked through a symbolic link, names the folder as it is on disk
+ok    kind refuses a folder that is no working copy, and changes nothing
+0 failed
