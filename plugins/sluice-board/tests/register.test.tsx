@@ -1531,6 +1531,8 @@ test("the host's sluice upgraded: the queue comes back, and what was decided mea
   expect(watch.isOpen()).toBe(true);
   await watch.print(landed13());
   expect(inbox.ranIn).toHaveLength(2);
+  // Decided while no watch was open, it is new: only what nothing handed over.
+  expect(inbox.ran).toEqual([INBOX, INBOX_NEW]);
   expect(seen.toasts).toContain("sluice: #13 landed on main");
   expect(seen.prompts).toEqual([LANDED13]);
   const band = await bandOf($);
@@ -1716,6 +1718,8 @@ test("a watch that ends is started again a second later, and what it prints is c
   expect(watch.started[1]! - watch.ended[0]!).toBe(1000);
   await watch.print(landed13());
   expect(inbox.ranIn).toHaveLength(2);
+  // Landed while no watch was open: only what nothing handed over.
+  expect(inbox.ran).toEqual([INBOX, INBOX_NEW]);
   expect(seen.toasts).toContain("sluice: #13 landed on main");
   expect(seen.prompts).toEqual([LANDED13]);
   expect(ran.filter((r) => r === READ)).toEqual([]);
@@ -1734,10 +1738,34 @@ test("a reload after a turn starts no turn for what sluice has handed over", asy
   expect(seen.prompts).toEqual([LANDED13]);
   // The first overview collects what is owed; the landing, what is new.
   expect(inbox.ran).toEqual([INBOX, INBOX_NEW]);
-  // Reloaded, the next watch prints the same; sluice now tells nothing of #13.
+  // The agent confirmed #13; reloaded, the next watch prints the same, a
+  // first overview, whose collect asks for everything still owed and is
+  // told nothing.
   await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
   await watch.print(landed13());
+  expect(inbox.ran).toEqual([INBOX, INBOX_NEW, INBOX]);
   expect(seen.prompts).toEqual([LANDED13]);
+  expect(seen.toasts).toEqual(["sluice: #13 landed on main"]);
+});
+
+test("a reload after a turn the agent did not confirm starts it again", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const seen = nothingSeen();
+  const watch = watchedHost(on, clock, seen);
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  // Nobody confirmed #13's blame, so the reload's collect prints it again.
+  inbox.answers = [printing(""), printing(BLAME13), printing(BLAME13)];
+  await watch.print(overview());
+  await watch.print(blamed());
+  expect(seen.prompts).toEqual([BLAME13]);
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await watch.print(blamed());
+  expect(inbox.ran).toEqual([INBOX, INBOX_NEW, INBOX]);
+  expect(seen.prompts).toEqual([BLAME13, BLAME13]);
+  // The blame is not news again: one toast, from before the reload.
+  expect(seen.toasts).toEqual(["sluice: #13 was blamed"]);
 });
 
 test("two outcomes while a collect runs give one more collect once it ends", async ($, on) => {
@@ -1949,6 +1977,30 @@ test("still not set up: /sluice reads once more, and the pane says so and what t
   await clock.settle();
   expect(watch.started).toEqual([NOW, NOW, NOW + 600_000]);
   expect(ran.filter((r) => r.startsWith("sluice"))).toEqual([]);
+});
+
+test("the first overview after the repository had no sluice collects everything owed, with no toast", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const seen = nothingSeen();
+  const watch = watchedHost(on, clock, seen);
+  panes(on);
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  inbox.answers = [printing(""), printing(LANDED13)];
+  await watch.print(queued13());
+  expect(inbox.ran).toEqual([INBOX]);
+  await watch.print(noSluice());
+  await watch.exit(0, "");
+  // Set up again: /sluice's watch prints #13 landed meanwhile, a first
+  // overview, which collects all that is owed and raises no toast for it.
+  await $.command.run(slash(true));
+  await clock.settle();
+  await watch.print(landed13());
+  expect(inbox.ran).toEqual([INBOX, INBOX]);
+  expect(inbox.ranIn).toEqual([ROOT, ROOT]);
+  expect(seen.prompts).toEqual([LANDED13]);
+  expect(seen.toasts).toEqual([]);
 });
 
 test("set up during the session: /sluice's watch shows the queue, and is followed", async ($, on) => {

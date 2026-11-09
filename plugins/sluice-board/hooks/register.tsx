@@ -390,8 +390,9 @@ function raise($: $, o: Outcome) {
 }
 
 // Whether the board's watch loop runs, once a load; how it follows sluice
-// once a watch has printed its first overview; and, while the loop waits to
-// start the next watch, what starts it at once.
+// once a watch has printed the first overview since the session's last
+// start; and, while the loop waits to start the next watch, what starts it
+// at once.
 let watching = false;
 let following: How | null = null;
 // The host's sluice is outside the releases the board runs with: it runs no
@@ -590,6 +591,11 @@ export const register: Register = (on, options) => {
   on("session.start", async ($, e, next) => {
     const started = await next(e);
     await $.command.register({ name: "sluice", description: "Show sluice's queue in a pane" });
+    // A later start is a load of the mod, a reload, an enable or a respawn:
+    // its next overview is a first overview, which collects everything still
+    // owed to the session (51, D14), whether or not this module's state was
+    // made afresh.
+    following = null;
     if (!watching) {
       watching = true;
       // It ends only when the engine refuses it, as once the mod is unloaded.
