@@ -254,6 +254,10 @@ impl OnGitHub {
         self.keys.signing(signer)
     }
 
+    /// `program` in `dir` on this host, its pauses skipped and its clock
+    /// moved on by each, so the host process it starts takes only the
+    /// passes the test's commands ask for, in the test's order (135;
+    /// design D13).
     fn command(&self, program: &str, dir: &Path) -> Command {
         let bin = Path::new(env!("CARGO_BIN_EXE_sluice")).parent().unwrap();
         let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
@@ -264,6 +268,7 @@ impl OnGitHub {
             .env("XDG_CONFIG_HOME", self.config.path())
             .env("XDG_STATE_HOME", self.state.path())
             .env("SLUICE_FORGE_API", self.gh.url())
+            .env("SLUICE_ROUND_SLEEP", "record")
             .env_remove("SLUICE_AGENT")
             .env_remove("GIT_DIR")
             .env_remove("GIT_WORK_TREE")
@@ -1314,11 +1319,14 @@ fn held_when_github_refuses_the_draft() {
     let n = g.pull_from("unit/refused").number;
     g.gh.refuse_drafts(true);
     let new = g.push_from(&w, &[("fix.txt", "a fix\n")]);
+    // Record 0103 D6: each step says what its intake met, what it asked
+    // and the words it was refused with.
     for _ in 0..3 {
         let out = g.round();
         assert!(
             out.contains(&format!(
-                "#{n} waits for the next submit, and GitHub would not mark it a draft"
+                "sluice: warning: taking in main's pull requests: pull/{n}: it waits for the \
+                 next submit, and GitHub would not mark it a draft"
             )) && out.contains("Resource not accessible by integration"),
             "{out}"
         );
@@ -4737,7 +4745,11 @@ fn hhmm(until: chrono::DateTime<chrono::Utc>) -> String {
 
 /// The forge-allowance spec's "A waiting submit meets the pause": stderr
 /// says once until when GitHub's allowance is spent, the submit calls
-/// GitHub again once it has passed, and goes on to its outcome.
+/// GitHub again once it has passed, and goes on to its outcome: GitHub's
+/// `main` is the landing of the request's head. The submit reads that
+/// outcome from the records, and the host process passes GitHub by while
+/// the pause stands for it (134, 135), so no call after the landing has
+/// the fake read the request merged.
 #[test]
 fn a_waiting_submit_waits_out_the_pause() {
     let g = OnGitHub::new("pr-spent-submit", "");
@@ -4756,21 +4768,39 @@ fn a_waiting_submit_waits_out_the_pause() {
     );
     assert_eq!(stderr.matches(&said).count(), 1, "{stderr}");
     assert!(!String::from_utf8_lossy(&out.stdout).contains("allowance"));
-    assert!(!g.pull_from("unit/paused").open, "landed");
+    let head = g.pull_from("unit/paused").head;
+    let main = g.main_on_github();
+    assert_eq!(
+        g.on_github(&["rev-parse", &format!("{main}^2")]),
+        head,
+        "landed"
+    );
 }
 
 /// The forge-allowance spec's "A wait whose timeout comes first": `sluice
-/// wait --timeout 5m` beside a pause twenty minutes long exits `5` with
-/// the submission as it stands, having made no call to GitHub.
+/// wait --timeout 30s` beside a pause twenty minutes long exits `5` with
+/// the submission as it stands, having made no call to GitHub. The wait
+/// follows the host process's passes, which pass GitHub by while the
+/// pause stands and go on with the queue (134, 135), so its submission's
+/// checks go on past the wait's limit, which is ten of its passes and
+/// within main's minute.
 #[test]
 fn a_wait_whose_timeout_comes_first_calls_nothing() {
     let g = OnGitHub::new("pr-spent-wait", "");
-    let (n, _) = g.by_hand("unit/slow", &[("slow", Some("x\n"))], false);
+    let pid = g.repo.dir().join(".git/hang.pid");
+    let hang = format!("{}\n", pid.display());
+    let (n, _) = g.by_hand("unit/hung", &[("hang", Some(&hang))], false);
     g.step();
     let id = g.of(n)[0]["id"].as_u64().expect("taken in").to_string();
     g.spent_for(20);
     let before = g.repo_calls();
-    let out = g.sluice(&["wait", &id, "--timeout", "5m"]);
+    let out = g.sluice(&["wait", &id, "--timeout", "30s"]);
+    if let Ok(process) = std::fs::read_to_string(&pid) {
+        let _ = Command::new("kill")
+            .arg(process.trim())
+            .stderr(Stdio::null())
+            .status();
+    }
     assert_eq!(out.status.code(), Some(sluice::WAITING), "{}", text(&out));
     assert_eq!(g.repo_calls(), before, "no call to GitHub: {}", text(&out));
 }
@@ -4915,8 +4945,12 @@ impl OnGitHub {
 
 /// forge-reads, "Nothing moved" and "A restart asks nothing new": twenty
 /// passes of `sluice run` over a minute ask for main's open pull requests
-/// once, and a step started again then asks nothing; the one waiting for a
-/// review is read again only at that asking, by the one query.
+/// once, and steps of the host process started again then ask nothing;
+/// the one waiting for a review is read again only at that asking, by the
+/// one query. The passes moved the clock of the host process that took
+/// them on by their minute (D13), so a step of that process would find
+/// the discovery due: the process that asks is the host process, and it
+/// is the one started again (135).
 #[test]
 fn nothing_moved_asks_once_a_minute() {
     let g = OnGitHub::new("pr-discovery", "reviews = 1");
@@ -4937,6 +4971,7 @@ fn nothing_moved_asks_once_a_minute() {
         text(&out)
     );
     let posts = g.posts();
+    g.restart_host();
     for _ in 0..3 {
         let out = g.sluice(&["step", "main"]);
         assert!(out.status.success(), "{}", text(&out));
@@ -5350,6 +5385,7 @@ impl OnGitHub {
 }
 
 impl Other<'_> {
+    /// As [`OnGitHub::command`], on the other host.
     fn command(&self, program: &str, dir: &Path) -> Command {
         let bin = Path::new(env!("CARGO_BIN_EXE_sluice")).parent().unwrap();
         let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
@@ -5360,6 +5396,7 @@ impl Other<'_> {
             .env("XDG_CONFIG_HOME", self.config.path())
             .env("XDG_STATE_HOME", self.state.path())
             .env("SLUICE_FORGE_API", self.g.gh.url())
+            .env("SLUICE_ROUND_SLEEP", "record")
             .env_remove("SLUICE_AGENT")
             .env_remove("GIT_DIR")
             .env_remove("GIT_WORK_TREE")
