@@ -595,6 +595,34 @@ thread_local! {
     static ROOM: RefCell<Option<sluice::host_process::room::Shared>> = const { RefCell::new(None) };
 }
 
+/// The host process the overview `c` runs reaches, where one answers,
+/// killed and waited for: one keeps the settings it read until it ends,
+/// so the next command starts one from its own environment that reads the
+/// host's configuration as it then stands (135; rule core.51; design D13).
+pub fn kill_host_process(c: &mut Command) {
+    let out = c.args(["overview", "--json"]).output().unwrap();
+    let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|_| {
+        panic!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )
+    });
+    let Some(pid) = doc["host_process"]["pid"].as_i64() else {
+        return;
+    };
+    let pid = nix::unistd::Pid::from_raw(pid as i32);
+    let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGKILL);
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while nix::sys::signal::kill(pid, None).is_ok() {
+        assert!(
+            std::time::Instant::now() < until,
+            "the host process lives on"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
 /// The fakes' host process on this thread ends at its next ask, killed:
 /// it lets the reader's place go, answers that ask with nothing, and the
 /// next ask finds one started again, which takes the place afresh (129).
