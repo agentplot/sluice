@@ -11,7 +11,7 @@ use std::time::Duration;
 use sluice_conformance::{policy, Harness, Rig, BRANCH};
 use sluice_core::records::{Event, LostRun, ResultKind, ResultLine, State};
 use sluice_core::{Peer, Sluice};
-use sluice_seams::{NotRun, Outcome};
+use sluice_seams::{Decided, NotRun, Outcome};
 
 /// Where the fakes say they looked for the run's record of a pass.
 const STORE: &str = "/the/store";
@@ -191,4 +191,44 @@ fn a_pass_nothing_proves_has_no_outcome_and_runs_again() {
         .iter()
         .flat_map(|c| &c.runs)
         .all(|r| r.lost.is_none()));
+}
+
+/// satisfies: 115, 114, 17, 20; record 0105; the pass-proof spec's
+/// "Three runs in a row"
+#[test]
+fn three_runs_whose_passes_nothing_proves_blame_with_why() {
+    let h = rig();
+    h.w().keeps_no_proof(Some(STORE));
+    h.work(
+        "unit/a",
+        "agent-a",
+        &[("a/lib", Some("a2")), ("b/lib", Some("b2"))],
+    );
+    let one = h.submit("unit/a");
+    settle(&h);
+    assert_eq!(h.sub(one).state, State::Failed);
+    assert_eq!(h.w().started().len(), 3, "no fourth run");
+    assert_eq!(lost(&h).len(), 2);
+    let failed: Vec<(String, Option<String>, bool)> = h
+        .sub(one)
+        .failed
+        .iter()
+        .map(|f| (f.task.clone(), f.not_run.clone(), f.hash.is_empty()))
+        .collect();
+    assert_eq!(
+        failed,
+        [
+            ("a:test".to_string(), Some(WHY.to_string()), true),
+            ("b:test".to_string(), Some(WHY.to_string()), true),
+        ]
+    );
+    match &h.delivered_to("agent-a")[0].decided {
+        Decided::Failed { failed, .. } => {
+            assert_eq!(failed, &vec!["a:test".to_string(), "b:test".to_string()])
+        }
+        other => panic!("delivered {other:?}"),
+    }
+    assert!(results_of(&h, "a:test").is_empty());
+    assert!(results_of(&h, "b:test").is_empty());
+    assert_eq!(missing(&h).len(), 1, "one cause, however many runs");
 }

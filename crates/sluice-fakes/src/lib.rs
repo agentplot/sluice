@@ -1178,7 +1178,9 @@ impl World {
     /// record 0105): with `Some(store)`, from now on each ran pass of a run
     /// is unkept, its record not in `store`, and no longer proven; fails,
     /// the tasks a check was failed by and replays are proven as before.
-    /// `None` keeps proof again.
+    /// A run that keeps no proof keeps no pass to replay either, as a
+    /// store a run could not write holds neither. `None` keeps proof
+    /// again.
     pub fn keeps_no_proof(&self, store: Option<&str>) {
         self.0.borrow_mut().no_proof = store.map(str::to_string);
     }
@@ -1523,8 +1525,10 @@ impl World {
             }
             None => Outcome::Pass,
         };
-        if outcome == Outcome::Pass {
-            // Like a content-keyed cache: only a pass is kept.
+        // Like a content-keyed cache: only a pass is kept, and nothing by
+        // a run that keeps no proof, whose store holds neither (record
+        // 0105).
+        if outcome == Outcome::Pass && inner.no_proof.is_none() {
             let at = inner.now.to_rfc3339();
             inner.cache.insert(key, at);
         }
