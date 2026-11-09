@@ -6067,10 +6067,20 @@ impl sluice::PullRequests for Pull7 {
 /// The branch, taking pull requests.
 fn pulls_setup() -> Fakes {
     let f = Fakes::new();
-    let policy = POLICY.replace(
-        "[branches.\"bolt/*\"]\n",
-        "[branches.\"bolt/*\"]\nremote = \"origin\"\n",
-    ) + "\n[branches.\"bolt/*\".pull_requests]\n";
+    // 137; record 0103 D2: a branch that takes pull requests keeps its
+    // records on its remote, so its policy names a signer, whose runs its
+    // gate trusts.
+    let policy = "[signers.a]\nssh = \".config/sluice.keys\"\n\n".to_string()
+        + &POLICY
+            .replace(
+                "[branches.\"bolt/*\"]\n",
+                "[branches.\"bolt/*\"]\nremote = \"origin\"\n",
+            )
+            .replace(
+                "trust = [\"open\", \"sandbox\", \"container\"]\n",
+                "trust = [\"a\"]\n",
+            )
+        + "\n[branches.\"bolt/*\".pull_requests]\n";
     f.world.init(
         BRANCH,
         &[(".config/sluice.toml", &policy), ("plugin/a", "a")],
