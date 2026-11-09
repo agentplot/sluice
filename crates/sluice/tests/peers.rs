@@ -137,7 +137,7 @@ impl Host {
                 text.lines()
                     .any(|l| l.ends_with(&format!("sluice host {pid} ends")))
             };
-            if started.iter().all(|pid| ended(pid)) {
+            if started.iter().all(ended) {
                 return;
             }
             assert!(
