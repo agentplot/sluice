@@ -35,8 +35,70 @@ const CHECK: &str = "if test -e hang && ! test -e \"$(cat hang)\"; then \
                      echo it broke; fi\ntest ! -e broken\n";
 
 /// The policy's table for `bolt/*`, branches on GitHub sluice lands on
-/// that take no pull requests.
-const BOLTS: &str = "\n[branches.\"bolt/*\"]\nremote = \"origin\"\ntimeout = \"1m\"\n";
+/// that take no pull requests, trusting the fixture's signers.
+const BOLTS: &str = "\n[branches.\"bolt/*\"]\nremote = \"origin\"\ntimeout = \"1m\"\n\
+                     trust = [\"a\", \"b\", \"c\"]\n";
+
+/// The signers a fixture's policy names, each by a key made for the
+/// fixture: `main`'s records are on its remote, and the host that keeps
+/// it takes its pull requests in (137, C.6; design D8). This host signs
+/// as `a`; another host signs as its own name where a test gives it its
+/// [`OnGitHub::signing`].
+const SIGNERS: [&str; 3] = ["a", "b", "c"];
+
+/// What a branch of a fixture's policy trusts: its signers.
+const TRUST: &str = "trust = [\"a\", \"b\", \"c\"]\n";
+
+/// The Ed25519 keys a fixture's signers sign with, made for it, and where
+/// each host's copy of its key is written.
+struct Keys {
+    keys: std::collections::BTreeMap<&'static str, ssh_key::PrivateKey>,
+    dir: Scratch,
+}
+
+impl Keys {
+    fn new(name: &str) -> Keys {
+        use ssh_key::{Algorithm, PrivateKey};
+        Keys {
+            keys: SIGNERS
+                .into_iter()
+                .map(|s| {
+                    let key = PrivateKey::random(&mut rand_core::OsRng, Algorithm::Ed25519);
+                    (s, key.unwrap())
+                })
+                .collect(),
+            dir: Scratch::new(&format!("{name}-keys")),
+        }
+    }
+
+    /// The policy's `[signers]` tables, one for each signer with its key.
+    fn tables(&self) -> String {
+        self.keys
+            .iter()
+            .map(|(s, k)| {
+                let key = k.public_key().to_openssh().unwrap();
+                format!("[signers.{s}]\nssh = \"{s} {key}\"\n\n")
+            })
+            .collect()
+    }
+
+    /// A host's `[signing]` table, signing as `signer` by its key, written
+    /// where only the test's user reads it.
+    fn signing(&self, signer: &str) -> String {
+        use std::os::unix::fs::PermissionsExt;
+        let path = self.dir.path().join(format!("{signer}.signing"));
+        if !path.exists() {
+            self.keys[signer]
+                .write_openssh_file(&path, ssh_key::LineEnding::LF)
+                .unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        format!(
+            "[signing]\nsigner = \"{signer}\"\nkey = {:?}\n",
+            path.display().to_string()
+        )
+    }
+}
 
 /// `main` on GitHub, taking pull requests with `conditions`, the lines of
 /// its `pull_requests` table.
@@ -46,6 +108,7 @@ struct OnGitHub {
     config: Scratch,
     state: Scratch,
     gh: github::GitHub,
+    keys: Keys,
     _files: Scratch,
 }
 
@@ -82,6 +145,8 @@ impl OnGitHub {
     }
 
     /// [`OnGitHub::checked`], with `extra` after its tables in the policy.
+    /// The policy names the fixture's signers, so `main`'s records are on
+    /// its remote and this host keeps it (design D8).
     fn checked_policy(
         name: &str,
         conditions: &str,
@@ -89,21 +154,37 @@ impl OnGitHub {
         lines: &str,
         extra: &str,
     ) -> OnGitHub {
-        OnGitHub::with(
+        OnGitHub::signed(
             name,
-            &format!(
-                "[tests]\nrunner = \"command\"\ncommand = \"sh check.sh\"\n\n\
-                 [branches.main]\nremote = \"origin\"\ntimeout = \"{timeout}\"\n{lines}\n\
-                 [branches.main.pull_requests]\n{conditions}\n{extra}"
-            ),
+            |keys| {
+                format!(
+                    "[tests]\nrunner = \"command\"\ncommand = \"sh check.sh\"\n\n{}\
+                     [branches.main]\nremote = \"origin\"\ntimeout = \"{timeout}\"\n{TRUST}{lines}\n\
+                     [branches.main.pull_requests]\n{conditions}\n{extra}",
+                    keys.tables()
+                )
+            },
             &[("check.sh", CHECK)],
         )
     }
 
     /// `main` on GitHub under `policy`, its tree holding `files` beside it.
     fn with(name: &str, policy: &str, files: &[(&str, &str)]) -> OnGitHub {
+        OnGitHub::signed(name, |_| policy.to_string(), files)
+    }
+
+    /// `main` on GitHub under the policy `policy` writes with the
+    /// fixture's keys, its tree holding `files` beside it. This host signs
+    /// as `a`, its `[signing]` before `[runs]`, so another host's config,
+    /// made from this one's from `[runs]` on, signs as none.
+    fn signed(
+        name: &str,
+        policy: impl FnOnce(&Keys) -> String,
+        files: &[(&str, &str)],
+    ) -> OnGitHub {
+        let keys = Keys::new(name);
         let repo = Repo::new(name);
-        repo.write(".config/sluice.toml", policy);
+        repo.write(".config/sluice.toml", &policy(&keys));
         for (path, content) in files {
             repo.write(path, content);
         }
@@ -128,7 +209,8 @@ impl OnGitHub {
         std::fs::write(
             dir.join("config.toml"),
             format!(
-                "[runs]\nmax = 2\n\n[forge]\napp_id = {}\nkey = {:?}\n",
+                "{}\n[runs]\nmax = 2\n\n[forge]\napp_id = {}\nkey = {:?}\n",
+                keys.signing("a"),
                 github::APP,
                 key.display().to_string()
             ),
@@ -142,8 +224,15 @@ impl OnGitHub {
             config,
             state: Scratch::new(&format!("{name}-state")),
             gh,
+            keys,
             _files: files,
         }
+    }
+
+    /// Another host's `[signing]`, signing as `signer` by the fixture's
+    /// key, for [`OnGitHub::other`]'s config.
+    fn signing(&self, signer: &str) -> String {
+        self.keys.signing(signer)
     }
 
     fn command(&self, program: &str, dir: &Path) -> Command {
@@ -203,14 +292,32 @@ impl OnGitHub {
         }
     }
 
-    /// This host's log of `main`, a document a line.
+    /// `main`'s log, a document a line: on its remote where its records
+    /// are, else in this host's files.
     fn log(&self) -> Vec<Value> {
-        let path = self.repo.dir().join(".git/sluice/main/log.jsonl");
-        std::fs::read_to_string(path)
-            .unwrap_or_default()
-            .lines()
+        let text = match self.on_the_remote("log.jsonl") {
+            Some(text) => text,
+            None => {
+                let path = self.repo.dir().join(".git/sluice/main/log.jsonl");
+                std::fs::read_to_string(path).unwrap_or_default()
+            }
+        };
+        text.lines()
             .map(|l| serde_json::from_str(l).unwrap())
             .collect()
+    }
+
+    /// The file `path` of `main`'s records on the remote, where they are.
+    fn on_the_remote(&self, path: &str) -> Option<String> {
+        let out = support::git_command()
+            .arg("--git-dir")
+            .arg(self.bare.path())
+            .args(["show", &format!("refs/sluice/state/main:{path}")])
+            .output()
+            .unwrap();
+        out.status
+            .success()
+            .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
     }
 
     /// `main`'s submissions.
@@ -1560,13 +1667,15 @@ impl OnGitHub {
 /// needing a review says it waits to be taken in on `b`, and for what.
 /// Once the second round has posted the first as under test and the
 /// forecast behind both, a round where neither moved posts nothing on
-/// either; the first's check takes five seconds, so nothing lands
-/// between them (D1; rule core.32).
+/// either; the first's check goes on until the test ends it, so nothing
+/// lands between them (D1; rule core.32).
 #[test]
 fn the_check_names_its_host_and_queue() {
     let g = OnGitHub::checked("pr-host-queue", "reviews = 1", "1m", "parallel = 1\n");
     g.named("b", "");
-    let (a, a_head) = g.by_hand("unit/ahead", &[("slow", Some("s\n"))], false);
+    let pid = g.repo.dir().join(".git/hang.pid");
+    let hang = format!("{}\n", pid.display());
+    let (a, a_head) = g.by_hand("unit/ahead", &[("hang", Some(&hang))], false);
     let (b, b_head) = g.by_hand("unit/behind", &[("b.txt", Some("b\n"))], false);
     let (_, c_head) = g.by_hand("unit/unreviewed", &[("c.txt", Some("c\n"))], false);
     for (n, head) in [(a, &a_head), (b, &b_head)] {
@@ -1609,6 +1718,9 @@ fn the_check_names_its_host_and_queue() {
     g.step();
     assert_eq!(g.posts_on(&b_head), on_b, "{:?}", g.posted(&b_head));
     assert_eq!(g.posts_on(&c_head), on_c, "{:?}", g.posted(&c_head));
+    if let Ok(process) = std::fs::read_to_string(&pid) {
+        let _ = Command::new("kill").arg(process.trim()).status();
+    }
 }
 
 /// pull-request-status, "The queue ahead moves": once the submission ahead
@@ -4565,8 +4677,10 @@ fn nothing_moved_asks_once_a_minute() {
 
 /// reader-tick, "A branch that takes pull requests between discoveries":
 /// none open and the host's interval a minute, six passes of `sluice run`
-/// within it start git exactly as often as one, and ask GitHub nothing
-/// after the first (129, 136).
+/// within it start git as often as one, but for the remote's one fetch at
+/// each pass after the first, which carries every ref the host reads of
+/// main's records on its remote, and ask GitHub nothing after the first
+/// (129, 136; rule core.31).
 #[test]
 fn passes_between_discoveries_start_no_git_and_ask_github_nothing() {
     let g = OnGitHub::new("pr-idle-ticks", "");
@@ -4589,13 +4703,20 @@ fn passes_between_discoveries_start_no_git_and_ask_github_nothing() {
             .collect();
         (git.starts()[starts..].to_vec(), asked)
     };
-    // The driver's first start pushes the host's intake mark, which its
-    // next start, within a third of the lease, renews never (137).
+    // The driver's first start carries main's records onto its remote and
+    // takes the lead there, which its next start, within the lease, finds
+    // its own (72, 73).
     run("1");
     let lists = g.lists();
     let (one, asked_one) = run("1");
     let (six, asked_six) = run("6");
-    assert_eq!(six.len(), one.len(), "one: {one:?}; six: {six:?}");
+    let ask = |start: &String| start.contains("+refs/sluice/state/*:");
+    assert_eq!(six.len(), one.len() + 5, "one: {one:?}; six: {six:?}");
+    assert_eq!(
+        six.iter().filter(|s| ask(s)).count(),
+        one.iter().filter(|s| ask(s)).count() + 5,
+        "the remote's one fetch at each pass: {six:?}"
+    );
     assert_eq!(g.lists(), lists + 2, "asked at each run's first pass alone");
     for call in &asked_six {
         assert!(
@@ -4861,18 +4982,28 @@ struct Other<'a> {
 }
 
 impl OnGitHub {
-    /// Lines put first in this host's config: its `[peers]` table, or its
-    /// `[signing]`, ahead of the `[forge]` table later lines are added to.
-    fn config_first(&self, lines: &str) {
+    /// This host is called `name` among its peers, with `lines` more in
+    /// its `[peers]` table, in place of any `[peers]` table its config
+    /// has.
+    fn named(&self, name: &str, lines: &str) {
         let path = self.config.path().join("sluice/config.toml");
         let text = std::fs::read_to_string(&path).unwrap();
-        std::fs::write(&path, format!("{lines}\n{text}")).unwrap();
-    }
-
-    /// This host is called `name` among its peers, with `lines` more in
-    /// its `[peers]` table.
-    fn named(&self, name: &str, lines: &str) {
-        self.config_first(&format!("[peers]\nname = \"{name}\"\n{lines}"));
+        let mut kept = String::new();
+        let mut peers = false;
+        for line in text.lines() {
+            if line.starts_with('[') {
+                peers = line.trim() == "[peers]";
+            }
+            if !peers {
+                kept.push_str(line);
+                kept.push('\n');
+            }
+        }
+        std::fs::write(
+            &path,
+            format!("[peers]\nname = \"{name}\"\n{lines}\n{kept}"),
+        )
+        .unwrap();
     }
 
     /// Another host, called `name` among its peers with `lines` more in its
@@ -5097,42 +5228,13 @@ fn records_on_each_host_one_host_asks() {
 /// no round of main.
 #[test]
 fn records_on_the_remote_only_the_lead_asks() {
-    use ssh_key::{Algorithm, LineEnding, PrivateKey};
-    let keys = [
-        PrivateKey::random(&mut rand_core::OsRng, Algorithm::Ed25519).unwrap(),
-        PrivateKey::random(&mut rand_core::OsRng, Algorithm::Ed25519).unwrap(),
-    ];
-    let line = |p: &str, k: &PrivateKey| format!("{p} {}", k.public_key().to_openssh().unwrap());
-    let g = OnGitHub::with(
-        "intake-signed",
-        &format!(
-            "[tests]\nrunner = \"command\"\ncommand = \"sh check.sh\"\n\n\
-             [signers.a]\nssh = \"{}\"\n\n[signers.b]\nssh = \"{}\"\n\n\
-             [branches.main]\nremote = \"origin\"\ntimeout = \"1m\"\ntrust = [\"a\", \"b\"]\n\n\
-             [branches.main.pull_requests]\n",
-            line("a", &keys[0]),
-            line("b", &keys[1])
-        ),
-        &[("check.sh", CHECK)],
-    );
-    let signing = |name: &str, key: &PrivateKey, dir: &Path| {
-        let path = dir.join(format!("{name}.signing"));
-        key.write_openssh_file(&path, LineEnding::LF).unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-        format!(
-            "[signing]\nsigner = \"{name}\"\nkey = {:?}\n",
-            path.display().to_string()
-        )
-    };
-    g.config_first(&signing("a", &keys[0], g.config.path()));
+    let g = OnGitHub::new("intake-signed", "");
     g.named("a", "");
     // Slow, so the submission is still under test when B waits on it.
     let (n, _) = g.by_hand("unit/signed", &[("slow", Some("s\n"))], false);
     g.step();
     let id = g.of(n)[0]["id"].as_u64().unwrap().to_string();
-    let keys_dir = Scratch::new("intake-signed-b-key");
-    let b = g.other("b", "", &signing("b", &keys[1], keys_dir.path()));
+    let b = g.other("b", "", &g.signing("b"));
     let lists = g.lists();
     let out = b.skipping(b.repo.dir(), &["wait", &id, "--timeout", "30s"]);
     assert_eq!(out.status.code(), Some(sluice::WAITING), "{}", text(&out));
