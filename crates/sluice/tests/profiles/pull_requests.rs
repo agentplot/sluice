@@ -5879,7 +5879,9 @@ fn landed_on_another_host() {
 /// request-intake-host, "Blamed on another host": B's round blames the
 /// pull request, sluice's check on its head concludes as a failure naming
 /// the blamed check, and A's wait exits as a failed submission does,
-/// naming what the check names.
+/// naming what the check names. B holds the request for its next submit
+/// in the pass that blamed it (record 0103 as amended 2026-11-09), so the
+/// check A reads, which GitHub keeps failed, says that.
 #[test]
 fn blamed_on_another_host() {
     let g = OnGitHub::new("intake-blamed", "");
@@ -5908,8 +5910,22 @@ fn blamed_on_another_host() {
     }
     let out = g.skipping(&w, &["wait", "main", "--timeout", "1m"]);
     assert_eq!(out.status.code(), Some(sluice::FAILED), "{}", text(&out));
-    let said = g.posted(&pull.head).unwrap().1;
-    assert!(said.starts_with("failed: "), "{said}");
+    let held = g.gh.forge.held().unwrap();
+    let sent: Vec<&str> = held
+        .posts
+        .iter()
+        .filter(|(rev, name, _)| *rev == pull.head && name == "sluice")
+        .map(|(_, _, p)| p.title.as_str())
+        .collect();
+    let blamed = sent.iter().position(|t| t.starts_with("failed: "));
+    assert!(blamed.is_some(), "{sent:?}");
+    let (status, said, _) = g.posted(&pull.head).unwrap();
+    assert_eq!(status, Status::Failure, "GitHub keeps it failed");
+    assert_eq!(said, "waiting: the next submit", "{sent:?}");
+    assert!(
+        sent.iter().rposition(|t| *t == said) > blamed,
+        "held after it was blamed: {sent:?}"
+    );
     assert!(text(&out).contains(&said), "{}", text(&out));
 }
 
