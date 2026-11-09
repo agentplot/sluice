@@ -472,18 +472,9 @@ fn a_round_is_one_trace_rooted_at_sluice_round() {
     telemetry.finish();
 }
 
-/// A run's checks get sluice's `OTEL_*`, its resource attributes extended
-/// with the round's trace and span, the place and the revision, each
-/// value encoded where the variable's syntax would read it, and the span
-/// that started the run as `TRACEPARENT`.
-#[test]
-fn a_run_s_checks_join_the_round() {
-    if !alone("a_run_s_checks_join_the_round") {
-        return;
-    }
-    std::env::set_var("OTEL_RESOURCE_ATTRIBUTES", "deployment.environment=test");
-    let endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").unwrap();
-    let (telemetry, spans, _) = start(Logs::Off);
+/// A command run's environment, the run started under a `sluice.start`
+/// span at a place named `p 1`, and the revision it ran at.
+fn a_run_s_environment() -> (String, String) {
     let repo = support::Repo::new("telemetry-run");
     let checks = Checks::new(
         &repo.dir().join(".git"),
@@ -540,17 +531,35 @@ fn a_run_s_checks_join_the_round() {
         std::thread::sleep(Duration::from_millis(50));
     };
     assert_eq!(report.tasks[0].outcome, Outcome::Pass);
+    let env = std::fs::read_to_string(tmp.join("env")).unwrap();
+    (env, revision)
+}
+
+/// The value `env`, as `env` prints it, gives `k`.
+fn var(env: &str, k: &str) -> Option<String> {
+    env.lines()
+        .find_map(|l| l.strip_prefix(&format!("{k}=")))
+        .map(str::to_string)
+}
+
+/// A run's checks get sluice's `OTEL_*`, its resource attributes extended
+/// with the round's trace and span, the place and the revision, each
+/// value encoded where the variable's syntax would read it, and the span
+/// that started the run as `TRACEPARENT`.
+#[test]
+fn a_run_s_checks_join_the_round() {
+    if !alone("a_run_s_checks_join_the_round") {
+        return;
+    }
+    std::env::set_var("OTEL_RESOURCE_ATTRIBUTES", "deployment.environment=test");
+    let endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").unwrap();
+    let (telemetry, spans, _) = start(Logs::Off);
+    let (env, revision) = a_run_s_environment();
     telemetry.flush();
 
     let ids = span(&spans, "sluice.start").span_context;
     let (trace, span) = (ids.trace_id().to_string(), ids.span_id().to_string());
-    let env = std::fs::read_to_string(tmp.join("env")).unwrap();
-    let var = |k: &str| {
-        env.lines()
-            .find_map(|l| l.strip_prefix(&format!("{k}=")))
-            .unwrap_or_else(|| panic!("no {k} in {env}"))
-            .to_string()
-    };
+    let var = |k: &str| var(&env, k).unwrap_or_else(|| panic!("no {k} in {env}"));
     assert_eq!(var("OTEL_EXPORTER_OTLP_ENDPOINT"), endpoint);
     assert_eq!(var("TRACEPARENT"), format!("00-{trace}-{span}-01"));
     assert_eq!(
@@ -559,6 +568,33 @@ fn a_run_s_checks_join_the_round() {
             "deployment.environment=test,sluice.trace_id={trace},sluice.span_id={span},\
              sluice.place=p%201,sluice.revision={revision}"
         )
+    );
+    telemetry.finish();
+}
+
+/// With traces off a run's checks join no trace: they get sluice's
+/// `OTEL_*`, the setting among them, and the place and the revision as
+/// resource attributes, with no `TRACEPARENT` and no trace or span id.
+#[test]
+fn with_traces_off_a_run_s_checks_join_no_trace() {
+    if !alone("with_traces_off_a_run_s_checks_join_no_trace") {
+        return;
+    }
+    std::env::set_var("OTEL_RESOURCE_ATTRIBUTES", "deployment.environment=test");
+    std::env::set_var("OTEL_TRACES_EXPORTER", "none");
+    let (telemetry, spans, _) = start(Logs::Off);
+    let (env, revision) = a_run_s_environment();
+    telemetry.flush();
+
+    let made = spans.get_finished_spans().unwrap();
+    assert!(made.is_empty(), "{made:?}");
+    assert_eq!(var(&env, "OTEL_TRACES_EXPORTER").as_deref(), Some("none"));
+    assert_eq!(var(&env, "TRACEPARENT"), None, "{env}");
+    assert_eq!(
+        var(&env, "OTEL_RESOURCE_ATTRIBUTES"),
+        Some(format!(
+            "deployment.environment=test,sluice.place=p%201,sluice.revision={revision}"
+        ))
     );
     telemetry.finish();
 }
@@ -632,6 +668,35 @@ fn with_traces_off_metrics_and_logs_still_go_to_the_endpoint() {
     std::env::set_var("OTEL_TRACES_EXPORTER", "none");
     let seen = sent(Logs::Summary);
     sent_to(&seen, &["/v1/metrics", "/v1/logs"], "/v1/traces");
+}
+
+/// With traces off no span is made, so a failure's record goes with no
+/// trace or span id.
+#[test]
+fn with_traces_off_a_failure_s_record_names_no_span() {
+    if !alone("with_traces_off_a_failure_s_record_names_no_span") {
+        return;
+    }
+    std::env::set_var("OTEL_TRACES_EXPORTER", "none");
+    let (telemetry, spans, logs) = start(Logs::Summary);
+    let f = setup();
+    assert_eq!(
+        submit(&f, "unit/a", &[("tests/t_a.py", Some("broken"))]),
+        FAILED
+    );
+    telemetry.flush();
+
+    let made = spans.get_finished_spans().unwrap();
+    assert!(made.is_empty(), "{made:?}");
+    let records = records(&logs);
+    let outputs: Vec<_> = records.iter().filter(|r| is_output(r)).collect();
+    assert_eq!(outputs.len(), 1, "{records:?}");
+    assert_eq!(
+        attr(outputs[0], "sluice.task").as_deref(),
+        Some("tests:t-a")
+    );
+    assert!(outputs[0].trace_context().is_none(), "{:?}", outputs[0]);
+    telemetry.finish();
 }
 
 /// A collector that cannot be reached loses what was held and fails
