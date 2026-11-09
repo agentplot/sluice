@@ -1319,6 +1319,113 @@ fn inbox_hands_a_landing_over_until_it_is_confirmed() {
     assert_eq!(handed(&s, n), ["inbox", "inbox"]);
 }
 
+/// `sluice confirm` with `args`, run in `dir`.
+fn confirm(s: &Scratch, dir: &Path, args: &[&str]) -> Output {
+    s.command(env!("CARGO_BIN_EXE_sluice"), dir)
+        .arg("confirm")
+        .args(args)
+        .output()
+        .unwrap()
+}
+
+/// 51, S77; outcome-confirm spec, "A landing confirmed", "Confirmed
+/// twice", "Another worktree's blame" and "A removed worktree's blame": a
+/// worktree confirms its landing by its key, and its inbox prints nothing
+/// of it then; confirmed again, it says when it was and writes nothing;
+/// another worktree's blame is refused, naming its reader, and stays owed
+/// until the operator confirms it for its removed worktree (record 0102).
+#[test]
+fn confirm_confirms_a_landing_by_its_key_and_says_when_again() {
+    let s = Scratch::new("wt-confirm");
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let n = id(&s.wt_submit(&a, &["--no-wait", "--json"]));
+    s.land(n);
+    let key = format!("{n}:landed");
+
+    let out = confirm(&s, &a, &[&key]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let said = text(&out);
+    for word in [key.as_str(), &format!("#{n}"), "bolt/x", "landed"] {
+        assert!(said.contains(word), "{word} not in {said}");
+    }
+    assert_eq!(text(&inbox(&s, &a, &[])), "");
+    let record = s.status(n);
+    assert_eq!(record["delivery"]["state"], "done", "{record}");
+    assert!(record["delivery"]["confirmed"].is_string(), "{record}");
+    let at = record["delivery"]["confirmed"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let lines = s.logged("confirmed");
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert_eq!(lines[0]["key"], key.as_str());
+    assert_eq!(lines[0]["by"], "confirm");
+
+    // Confirmed twice.
+    let before = std::fs::read(s.repo.dir().join(".git/sluice/bolt/x/version")).ok();
+    let out = confirm(&s, &a, &[&key, "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["confirmed"][0]["key"], key.as_str(), "{v}");
+    assert_eq!(v["confirmed"][0]["first"], false, "{v}");
+    assert_eq!(v["confirmed"][0]["at"], at.as_str(), "{v}");
+    let out = confirm(&s, &a, &[&key]);
+    assert_eq!(
+        text(&out).trim_end(),
+        format!("{key} was confirmed at {at}"),
+        "{}",
+        text(&out)
+    );
+    assert_eq!(
+        std::fs::read(s.repo.dir().join(".git/sluice/bolt/x/version")).ok(),
+        before,
+        "nothing written"
+    );
+    assert_eq!(s.logged("confirmed").len(), 1);
+
+    // Another worktree's blame.
+    let b = s.session("b", &[("broken", "x\n")]);
+    let m = id(&s.wt_submit(&b, &["--no-wait", "--json"]));
+    assert_eq!(s.decide(m)["state"], "failed");
+    let blame = format!("{m}:failed");
+    let out = confirm(&s, &a, &[&blame]);
+    assert_eq!(out.status.code(), Some(2), "{}", text(&out));
+    assert!(text(&out).contains("unit/b"), "{}", text(&out));
+    assert!(text(&out).contains("--as operator"), "{}", text(&out));
+    assert_eq!(s.status(m)["delivery"]["state"], "owed");
+    let out = confirm(&s, &a, &[&blame, "--json"]);
+    assert_eq!(out.status.code(), Some(2), "{}", text(&out));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["error"]["kind"], "refused", "{v}");
+    assert_eq!(
+        v["error"]["next"],
+        serde_json::json!([format!("sluice confirm {blame} --as operator")]),
+        "{v}"
+    );
+
+    // A removed worktree's blame, confirmed by the operator in the main
+    // checkout.
+    s.repo
+        .git(&["worktree", "remove", "--force", b.to_str().unwrap()]);
+    let out = confirm(&s, s.repo.dir(), &[&blame, "--as", "operator"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let record = s.status(m);
+    assert_eq!(record["delivery"]["state"], "done", "{record}");
+    let by: Vec<_> = s
+        .logged("confirmed")
+        .into_iter()
+        .filter(|l| l["id"] == m)
+        .map(|l| l["by"].clone())
+        .collect();
+    assert_eq!(by, ["operator"]);
+
+    // A key no branch holds.
+    let out = confirm(&s, &a, &["99:landed"]);
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out));
+    assert!(text(&out).contains("99:landed"), "{}", text(&out));
+    assert!(text(&out).contains("sluice inbox"), "{}", text(&out));
+}
+
 /// 51, 135: under `--json`, one document of the records collected, each
 /// marked delivered; collected again, none.
 #[test]
