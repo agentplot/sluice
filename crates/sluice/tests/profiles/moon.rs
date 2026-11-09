@@ -1377,3 +1377,93 @@ fn a_key_is_read_under_the_home_the_toolchain_gives_moon() {
     );
     assert_eq!(c.proven(&run, &report).unwrap(), ["alpha:test"]);
 }
+
+/// Record 0105 point 1 (C.2 moon and sandbox rows as amended at
+/// agentplot/blueprints 0c38f24; 108; rules core.9, core.35), the
+/// host-caches spec's "moon's home moved by the toolchain, on a host that
+/// shares moon's cache": `a_key_is_read_under_the_home_the_toolchain_gives_moon`
+/// under the sandbox, kept off the network. The host's cache, at a
+/// directory that is not moon's home, turns moon's sharing on; the
+/// toolchain moves moon's home under `/tmp`, reached through a link, where
+/// moon has not made `cache/shared`. The sandbox opens the store the run
+/// records, so moon keeps the task's manifest there and its key is proven.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_key_run_in_the_sandbox_is_proven_under_the_home_the_toolchain_gives_moon() {
+    let src = workspace("moon-sandbox-home-src");
+    let scratch = support::Scratch::new("moon-sandbox-home");
+    let bare = scratch.path().join("repo.git");
+    let worktree = scratch.path().join("main");
+    let cache = scratch.path().join("host-cache");
+    std::fs::create_dir_all(&cache).unwrap();
+    // moon's home by a path under `/tmp`, a link to `/private/tmp`, as the
+    // toolchain gives it; none of it made by the test.
+    let linked = support::Scratch(PathBuf::from(format!(
+        "/tmp/sluice-test-{}-moon-sandbox-home",
+        std::process::id()
+    )));
+    let _ = std::fs::remove_dir_all(linked.path());
+    std::fs::create_dir_all(linked.path()).unwrap();
+    assert_ne!(
+        std::fs::canonicalize(linked.path()).unwrap(),
+        linked.path(),
+        "the home is reached through a link"
+    );
+    let home = linked.path().join("moon-home");
+    src.git(&["clone", "-q", "--bare", ".", bare.to_str().unwrap()]);
+    src.git(&[
+        "--git-dir",
+        bare.to_str().unwrap(),
+        "worktree",
+        "add",
+        "-q",
+        worktree.to_str().unwrap(),
+        "main",
+    ]);
+    let mut req = request(&src, "p1", &["alpha:test"], None);
+    req.place.path = worktree.clone();
+    req.limits = Limits {
+        executor: Some("sandbox".into()),
+        network: Some(Network::Denied),
+        memory: None,
+        docker: false,
+    };
+    req.tests.insert(
+        "toolchain".into(),
+        Setting::List(vec![
+            "echo".into(),
+            format!("export MOON_HOME='{}'", home.display()),
+        ]),
+    );
+    let c = checks_in(
+        &bare,
+        vec![HostCache {
+            dir: cache.clone(),
+            socket: None,
+            env: [
+                ("MOON_CACHE_SHARED_WORKTREE_CACHE", "true"),
+                ("MOON_EXPERIMENT_CAS_OUTPUTS_CACHE", "true"),
+            ]
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .into(),
+        }],
+    );
+    let (run, report) = finish_run(&c, &req);
+    assert_eq!(
+        tasks(&report),
+        [("alpha:test".into(), Outcome::Pass, false)]
+    );
+    assert_eq!(report.executor.kind, "sandbox");
+
+    let key = &report.tasks[0].hash;
+    let manifest = |root: &Path| root.join("blobs").join(&key[..2]).join(&key[2..]);
+    assert!(
+        manifest(&home.join("cache/shared")).is_file(),
+        "the manifest under the toolchain's home"
+    );
+    assert!(
+        !manifest(&worktree.join(".moon/cache")).exists(),
+        "no manifest in the worktree"
+    );
+    assert_eq!(c.proven(&run, &report).unwrap(), ["alpha:test"]);
+}
