@@ -283,3 +283,18 @@ fn a_key_the_tree_does_not_bear_out_is_still_failed() {
     assert!(lost(&h).is_empty());
     assert!(missing(&h).is_empty());
 }
+
+/// satisfies: 78; record 0105; the pass-proof spec's "Its runs keep no
+/// manifest"
+#[test]
+fn a_branch_in_one_hosts_files_reads_no_proof() {
+    let h = Harness::bolt();
+    h.w().keeps_no_proof(Some(STORE));
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let one = h.submit("unit/a");
+    h.settle();
+    assert_eq!(h.sub(one).state, State::Landed);
+    assert!(missing(&h).is_empty());
+    assert!(!h.events().iter().any(|e| matches!(e, Event::Lost { .. })));
+    assert!(h.doc().proof_missing.is_empty());
+}
