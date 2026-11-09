@@ -7,10 +7,8 @@ conflict SHALL record no delivery for it, push no notice for it, and
 log no `pending`, `handed` or `confirmed` line for it; it SHALL log the
 decision as for any submission. `sluice inbox`, run anywhere, SHALL
 hand over nothing of it, and `sluice confirm` SHALL find no outcome
-owed under its key. A wait, a waiting submit or `sluice wait <n>` that
-reports it SHALL record nothing and SHALL NOT say it stays owed. A
-landed submission by name SHALL leave the live state as any finished
-submission does (130).
+owed under its key. A landed submission by name SHALL leave the live
+state as any finished submission does (130).
 
 #### Scenario: Blamed, and no inbox takes it
 
@@ -22,13 +20,6 @@ submission does (130).
   `handed` or `confirmed` line for it, each `sluice inbox --json`
   prints `outcomes` `[]`, and `sluice status 32 --json` gives no
   `delivery`
-
-#### Scenario: A wait in a bare clone reports it and marks nothing
-
-- **WHEN** submission 33, `bolt/x` by name, lands on `main`, and `sluice
-  wait 33` runs in the repository's git directory
-- **THEN** it reports 33 landed and exits 0, says nothing of 33 staying
-  owed, and `main`'s deliveries hold nothing under `33:landed`
 
 #### Scenario: Landed, it leaves the live records
 
@@ -64,3 +55,17 @@ worktree.
   has checked out `bolt/x`
 - **THEN** it prints `outcomes` `[]`, and the outcome stays owed to the
   request, shown in `main`'s status
+
+## ADDED Requirements
+
+### Requirement: A wait records nothing of a submission by name
+
+A wait, a waiting submit or `sluice wait <n>` that reports a submission
+by name SHALL record nothing and SHALL NOT say it stays owed.
+
+#### Scenario: A wait in a bare clone reports it and marks nothing
+
+- **WHEN** submission 33, `bolt/x` by name, lands on `main`, and `sluice
+  wait 33` runs in the repository's git directory
+- **THEN** it reports 33 landed and exits 0, says nothing of 33 staying
+  owed, and `main`'s deliveries hold nothing under `33:landed`

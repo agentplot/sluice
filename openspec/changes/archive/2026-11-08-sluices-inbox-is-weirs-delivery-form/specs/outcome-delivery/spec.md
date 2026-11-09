@@ -8,8 +8,7 @@ notice into that pane as a prompt to the agent there: one line opening
 `[sluice]`, naming the submission's number, its branch and its outcome,
 and for a landing the revision it landed as, for a failure the failed
 checks or that the time limit ended it, for a conflict the submissions
-it conflicts with, and ending with `sluice confirm <key>` for the
-outcome's key. No other session SHALL be sent the notice.
+it conflicts with. No other session SHALL be sent the notice.
 
 #### Scenario: A landing is pushed into the submitting pane
 
@@ -225,6 +224,18 @@ worktree it removes, since the reader's worktree goes with it.
 - **WHEN** `wt submit main` in worktree `unit-a` reports submission 13
   blamed, and keeps the worktree
 - **THEN** 13's `delivery` is `owed` with one hand-over by `wait`
+
+### Requirement: The notice names the key that confirms its outcome
+
+The notice the round pushes SHALL end with `sluice confirm <key>` for
+the outcome's key (51; record 0102).
+
+#### Scenario: A landing's notice names its key
+
+- **WHEN** submission 12, submitted from herdr pane `w1:p2` on this
+  host, lands on `main`
+- **THEN** the line pushed into pane `w1:p2` names `sluice confirm
+  12:landed` after its outcome
 
 ## REMOVED Requirements
 

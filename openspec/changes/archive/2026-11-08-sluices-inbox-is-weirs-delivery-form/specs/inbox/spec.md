@@ -140,13 +140,10 @@ be handed over again under the same key.
 ### Requirement: A place submitted with no session collects its outcome by inbox
 
 A submission made by `sluice submit <branch> --no-wait --json` with no
-multiplexer's variables in its environment SHALL record no session; the
-round that decides it SHALL push nothing, log one `pending` line, and
-try no more; `sluice inbox --json` run in the submitting worktree SHALL
-then hand the outcome over each time it runs until its reader confirms
-it, and `sluice inbox --confirm --json` SHALL hand it over and confirm
-it once. `sluice step <branch>` SHALL run one round of the branch's
-queue, its outbox included, as it does without this change.
+multiplexer's variables in its environment SHALL record no session;
+`sluice inbox --json` run in the submitting worktree SHALL then hand
+the outcome over each time it runs until its reader confirms it, and
+`sluice inbox --confirm --json` SHALL hand it over and confirm it once.
 
 #### Scenario: A caller that never waits collects a failure
 
@@ -258,6 +255,21 @@ pushed and no outcome an earlier collect handed over.
   earlier `sluice inbox`, and submission 14's blame, handed over by
   nothing, and `sluice inbox --new` runs there
 - **THEN** it prints 14's blame alone
+
+### Requirement: The round pushes nothing for a submission with no session
+
+The round that decides a submission that recorded no session SHALL push
+nothing, log one `pending` line, and try no more. `sluice step
+<branch>` SHALL run one round of the branch's queue, its outbox
+included.
+
+#### Scenario: A failure with no session is pushed nowhere
+
+- **WHEN** a caller runs `sluice submit main --no-wait --json` with no
+  herdr variables, then `sluice step main` until submission 21 is
+  blamed for `cli:test`
+- **THEN** `main`'s log holds one `pending` line for 21 and no further
+  attempt
 
 ## REMOVED Requirements
 

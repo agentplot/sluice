@@ -130,4 +130,34 @@ the archive applies.
 
 ## Archive
 
-Archived with this report.
+Archived with this report. `openspec archive` applied 27 added, 20
+modified and 5 removed requirements. `#check-fast` runs `root:specs`,
+`openspec validate --specs --strict`, and the specs as archived failed
+it on six warnings: three new capabilities with no Purpose, and three
+requirements longer than 500 characters. In this commit, as this
+repository's earlier archives did:
+
+- `outcome-deliveries`, `outcome-confirm` and `owed-outcomes` each get
+  a Purpose, drawn from the proposal's Capabilities.
+- inbox's "A place submitted with no session collects its outcome by
+  inbox" splits off "The round pushes nothing for a submission with no
+  session". The words "as it does without this change" are dropped,
+  since a main spec has no change to compare against.
+- outcome-delivery's "The round that decides an outcome pushes a notice
+  into the submitter's pane" splits off "The notice names the key that
+  confirms its outcome".
+- submit-by-name's "The outcome of a submission by name is delivered by
+  nothing" splits off "A wait records nothing of a submission by name",
+  and the scenario "A wait in a bare clone reports it and marks
+  nothing" moves under it.
+
+Each split keeps one behaviour per requirement and asks nothing new. The
+new requirements' scenarios are held by
+`a_caller_that_never_waits_collects_a_failure_and_a_landing_by_inbox`,
+the notice test at `worktrunk.rs:642` and the by-name wait tests. The
+archived deltas carry the same splits, so they read as the specs do.
+`openspec validate --specs --strict` passes 72 of 72.
+
+The other path was to send the change back to shorten its own deltas
+before archiving. It was not taken: the wording is cheap to change
+later, and the archive is where this repository has done it before.
