@@ -49,7 +49,10 @@ pub struct Verdict {
 /// (87, S18), and no pass. There, `proven` names the tasks whose keys the
 /// candidate's tree bears out, the only ones signed (C.6): one it leaves
 /// out was signed by no one, so it is failed under its key, no pass
-/// (15), never missing.
+/// (15), never missing. A pass the run kept no proof of never reaches
+/// it: the step moves it from the run's checks to those it left not run
+/// before anything is recorded, so it has no outcome here (114; record
+/// 0105; design D5 of the change `a-pass-nothing-proves-blames-no-one`).
 ///
 /// A task a required check depends on that ran and failed, which the
 /// runner skipped the check for, is read under its own key exactly as a

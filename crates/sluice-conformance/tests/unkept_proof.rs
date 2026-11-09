@@ -1,0 +1,194 @@
+//! A pass the run kept no proof of: on a branch whose records are on its
+//! remote, a check that passed in a run that kept nothing proving it ran
+//! has no outcome. Nothing is recorded under its key and nobody is blamed,
+//! it runs again within 115's bound, and the branch's log keeps its cause
+//! once per cause and host, with its end (114, 115, 16; record 0105; the
+//! change `a-pass-nothing-proves-blames-no-one`; rules core.9, core.28,
+//! core.35).
+
+use std::time::Duration;
+
+use sluice_conformance::{policy, Harness, Rig, BRANCH};
+use sluice_core::records::{Event, LostRun, ResultKind, ResultLine, State};
+use sluice_core::{Peer, Sluice};
+use sluice_seams::{NotRun, Outcome};
+
+/// Where the fakes say they looked for the run's record of a pass.
+const STORE: &str = "/the/store";
+
+/// What the fakes say of a pass whose record is not in [`STORE`].
+const WHY: &str = "it passed, but nothing the run kept proves it ran: \
+                   its record is not in /the/store";
+
+/// The bolt policy requiring `a:test` and `b:test`, on `origin`, its runs
+/// counted through the signer `box`, as
+/// `a_signed_branch_counts_the_dependency_through_its_signer` in
+/// `failed_dependency.rs` has it.
+fn signed() -> String {
+    policy(false, "fail", 4)
+        .replace(
+            "required = [\"#gate\"]",
+            "required = [\"a:test\", \"b:test\"]",
+        )
+        .replace(
+            "trust = [\"open\", \"sandbox\", \"container\"]\n",
+            "trust = [\"box\"]\nremote = \"origin\"\n",
+        )
+        + "\n[signers.box]\nssh = \"box ssh-ed25519 AAAA\"\n"
+}
+
+/// The three projects on a signed branch, this host signing as `box`.
+fn rig() -> Harness {
+    let h = Harness::new(&signed());
+    h.w().signs_as("box");
+    h
+}
+
+/// This host, `fake-host`, as the signer `box`.
+fn signer(h: &Harness) -> Sluice<'_> {
+    h.sluice().as_peer(Peer {
+        name: "fake-host".into(),
+        lease: Duration::from_secs(300),
+        alive: Duration::from_secs(120),
+        signer: Some("box".into()),
+        systems: None,
+        expire_after: sluice_core::EXPIRE_AFTER,
+    })
+}
+
+fn step(h: &Harness) {
+    signer(h).step(BRANCH).expect("a step runs");
+}
+
+/// Step as the signer until a step changes nothing.
+fn settle(h: &Harness) {
+    for _ in 0..64 {
+        let v = h.w().version(BRANCH);
+        let delivered = h.w().delivered().len();
+        let places = h.w().made_places().len();
+        step(h);
+        if v == h.w().version(BRANCH)
+            && delivered == h.w().delivered().len()
+            && places == h.w().made_places().len()
+        {
+            return;
+        }
+    }
+    panic!("{BRANCH} never settled");
+}
+
+/// The checks each lost run left not run, with why, in order.
+fn lost(h: &Harness) -> Vec<Vec<(String, String)>> {
+    h.events()
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::Lost { not_run, .. } if !not_run.is_empty() => {
+                Some(not_run.into_iter().map(|n| (n.task, n.reason)).collect())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Each `proof-missing` line's host and why, in order.
+fn missing(h: &Harness) -> Vec<(String, String)> {
+    h.events()
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::ProofMissing { host, why } => Some((host, why)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn results_of(h: &Harness, task: &str) -> Vec<ResultLine> {
+    h.results().into_iter().filter(|r| r.task == task).collect()
+}
+
+/// `tasks`, each could not run for [`WHY`].
+fn unkept(tasks: &[&str]) -> Vec<(String, String)> {
+    tasks
+        .iter()
+        .map(|t| (t.to_string(), WHY.to_string()))
+        .collect()
+}
+
+/// satisfies: 114, 16, 115; record 0105; the pass-proof spec's "Every
+/// pass of a run has no proof" and "The next run keeps its proof", and
+/// the run-outcome spec's "A pass with no proof"
+#[test]
+fn a_pass_nothing_proves_has_no_outcome_and_runs_again() {
+    let h = rig();
+    h.w().keeps_no_proof(Some(STORE));
+    h.work(
+        "unit/a",
+        "agent-a",
+        &[("a/lib", Some("a2")), ("b/lib", Some("b2"))],
+    );
+    let one = h.submit("unit/a");
+    for _ in 0..8 {
+        if !lost(&h).is_empty() {
+            break;
+        }
+        step(&h);
+    }
+    assert_eq!(lost(&h), [unkept(&["a:test", "b:test"])]);
+    assert!(results_of(&h, "a:test").is_empty(), "{:?}", h.results());
+    assert!(results_of(&h, "b:test").is_empty(), "{:?}", h.results());
+    assert_ne!(h.sub(one).state, State::Failed);
+    assert!(h.w().delivered().is_empty(), "nobody is blamed");
+    assert_eq!(missing(&h), [("fake-host".to_string(), WHY.to_string())]);
+    let doc = h.doc();
+    let runs: Vec<&LostRun> = doc
+        .candidates
+        .iter()
+        .flat_map(|c| &c.runs)
+        .filter_map(|r| r.lost.as_ref())
+        .collect();
+    assert_eq!(
+        runs,
+        [&LostRun {
+            host: "fake-host".into(),
+            system: None,
+            not_run: ["a:test", "b:test"]
+                .iter()
+                .map(|t| NotRun {
+                    task: t.to_string(),
+                    reason: WHY.into(),
+                })
+                .collect(),
+        }]
+    );
+
+    h.w().keeps_no_proof(None);
+    settle(&h);
+    assert_eq!(h.sub(one).state, State::Landed);
+    for task in ["a:test", "b:test"] {
+        let ran: Vec<ResultLine> = results_of(&h, task)
+            .into_iter()
+            .filter(|r| r.kind == ResultKind::Ran)
+            .collect();
+        assert_eq!(ran.len(), 1, "{ran:?}");
+        assert_eq!(ran[0].outcome, Outcome::Pass);
+        assert_eq!(ran[0].host.as_deref(), Some("fake-host"));
+        assert_eq!(ran[0].signer.as_deref(), Some("box"));
+    }
+    let kept: Vec<(String, String, u64)> = h
+        .events()
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::ProofKept {
+                host, why, runs, ..
+            } => Some((host, why, runs)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(kept, [("fake-host".to_string(), WHY.to_string(), 1)]);
+    let doc = h.doc();
+    assert!(doc.proof_missing.is_empty(), "{:?}", doc.proof_missing);
+    assert!(doc
+        .candidates
+        .iter()
+        .flat_map(|c| &c.runs)
+        .all(|r| r.lost.is_none()));
+}
