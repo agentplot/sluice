@@ -1567,6 +1567,198 @@ fn confirm_confirms_a_landing_by_its_key_and_says_when_again() {
     assert!(text(&out).contains("sluice inbox"), "{}", text(&out));
 }
 
+/// 51; outcome-confirm spec, "A confirmation's document" and "A key no
+/// branch holds is not found": under `--json`, a first confirmation gives
+/// its key, branch, reader, time and `first` true; a key no branch holds
+/// is the error document, `not_found`, naming `sluice inbox`, exit 1;
+/// several keys exit by the worst of them, a refusal's 2 over a key not
+/// found; and while a branch's records do not read, a key no branch read
+/// holds exits 3, the branch named in the reader's words, over a refusal,
+/// since whether the key is there is not known (rule core.11; record
+/// 0102, D7).
+#[test]
+fn confirm_json_gives_a_first_confirmation_and_the_worst_of_its_exits() {
+    let s = Scratch::new("wt-confirm-json");
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let n = id(&s.wt_submit(&a, &["--no-wait", "--json"]));
+    s.land(n);
+    let key = format!("{n}:landed");
+    let out = confirm(&s, &a, &[&key, "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let confirmed = v["confirmed"].as_array().unwrap();
+    assert_eq!(confirmed.len(), 1, "{v}");
+    assert_eq!(confirmed[0]["key"], key.as_str(), "{v}");
+    assert_eq!(confirmed[0]["branch"], "bolt/x", "{v}");
+    assert_eq!(confirmed[0]["reader"], "unit/a", "{v}");
+    assert!(confirmed[0]["at"].is_string(), "{v}");
+    assert_eq!(confirmed[0]["first"], true, "{v}");
+
+    // A key never recorded.
+    let out = confirm(&s, &a, &["99:landed", "--json"]);
+    assert_eq!(out.status.code(), Some(sluice::FAILED), "{}", text(&out));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["error"]["kind"], "not_found", "{v}");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("99:landed"),
+        "{v}"
+    );
+    assert_eq!(
+        v["error"]["next"],
+        serde_json::json!(["sluice inbox"]),
+        "{v}"
+    );
+
+    // Another worktree's blame beside a key not found, in either order.
+    let b = s.session("b", &[("broken", "x\n")]);
+    let m = id(&s.wt_submit(&b, &["--no-wait", "--json"]));
+    assert_eq!(s.decide(m)["state"], "failed");
+    let blame = format!("{m}:failed");
+    for keys in [["99:landed", blame.as_str()], [blame.as_str(), "99:landed"]] {
+        let out = confirm(&s, &a, &keys);
+        assert_eq!(out.status.code(), Some(sluice::CONFLICT), "{}", text(&out));
+        let out = confirm(&s, &a, &[keys[0], keys[1], "--json"]);
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(v["error"]["kind"], "refused", "{v}");
+    }
+
+    // A branch whose records do not read.
+    s.repo.git(&["branch", "bolt/y", "main"]);
+    let out = s.sluice(&["step", "bolt/y"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let records = s.repo.dir().join(".git/sluice/bolt/y");
+    assert!(records.join("version").exists(), "no records of bolt/y");
+    std::fs::write(
+        records.join("deliveries.jsonl"),
+        "{\"format\":\"weir-delivery/2\"}\n",
+    )
+    .unwrap();
+    let out = confirm(&s, &a, &["99:landed"]);
+    assert_eq!(out.status.code(), Some(sluice::INTERNAL), "{}", text(&out));
+    let said = String::from_utf8_lossy(&out.stderr);
+    for word in ["bolt/y", "deliveries.jsonl"] {
+        assert!(said.contains(word), "{word} not in {said}");
+    }
+    let out = confirm(&s, &a, &["99:landed", &blame, "--json"]);
+    assert_eq!(out.status.code(), Some(sluice::INTERNAL), "{}", text(&out));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["error"]["kind"], "internal", "{v}");
+    assert_eq!(s.status(m)["delivery"]["state"], "owed");
+}
+
+/// 51; owed-outcomes spec, "A landing pushed and not confirmed", "A
+/// landing confirmed and let go of" and "A queued submission": `sluice
+/// status <n> --json` gives a queued submission no `delivery`; landed and
+/// pushed into its pane, its `delivery` with its key, reader, `owed`,
+/// times, the hand-over by `notice`, `confirmed` null and its reader not
+/// known, and no `delivered`; confirmed, `done` with its time; let go of
+/// by the branch's next write, its key and `done` alone; and a withdrawn
+/// submission none (weir 107; record 0102, D3, D13; rule core.50).
+#[test]
+fn status_json_gives_a_decided_submissions_delivery_and_none_before() {
+    let s = Scratch::new("wt-status-delivery");
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let (n, _) = s.submit_from_pane(&a, "w1:p2");
+    let queued = s.status(n);
+    assert_eq!(queued["state"], "queued", "{queued}");
+    assert!(queued.get("delivery").is_none(), "{queued}");
+    assert_eq!(s.decide(n)["state"], "landed");
+    let key = format!("{n}:landed");
+    let record = s.status(n);
+    let d = &record["delivery"];
+    assert_eq!(d["key"], key.as_str(), "{record}");
+    assert_eq!(d["reader"], "unit/a", "{record}");
+    assert_eq!(d["state"], "owed", "{record}");
+    assert!(d["recorded_at"].is_string(), "{record}");
+    assert!(d["expires_at"].is_string(), "{record}");
+    let handed = d["handed"].as_array().unwrap();
+    assert_eq!(handed.len(), 1, "{record}");
+    assert_eq!(handed[0]["by"], "notice", "{record}");
+    assert!(handed[0]["at"].is_string(), "{record}");
+    assert_eq!(d["confirmed"], serde_json::Value::Null, "{record}");
+    assert_eq!(d["known"], false, "{record}");
+    assert!(record.get("delivered").is_none(), "{record}");
+    assert!(record.get("delivered_to").is_none(), "{record}");
+
+    let out = confirm(&s, &a, &[&key]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let done = s.status(n);
+    assert_eq!(done["delivery"]["state"], "done", "{done}");
+    assert!(done["delivery"]["confirmed"].is_string(), "{done}");
+    assert_eq!(done["delivery"]["known"], true, "{done}");
+
+    // The branch's next write, a submit's, lets the done delivery go, its
+    // submission among the finished records already.
+    let c = s.session("c", &[("c.txt", "c\n")]);
+    let w = id(&s.wt_submit(&c, &["--no-wait", "--json"]));
+    assert_eq!(
+        s.status(n)["delivery"],
+        serde_json::json!({ "key": key, "state": "done" })
+    );
+
+    // Withdrawn by its worktree's next submission while queued.
+    std::fs::write(c.join("more.txt"), "more\n").unwrap();
+    let dir = c.to_str().unwrap();
+    s.repo.git(&["-C", dir, "add", "-A"]);
+    s.repo.git(&["-C", dir, "commit", "-q", "-m", "more"]);
+    let again = id(&s.wt_submit(&c, &["--no-wait", "--json"]));
+    assert_ne!(again, w);
+    let withdrawn = s.status(w);
+    assert_eq!(withdrawn["state"], "withdrawn", "{withdrawn}");
+    assert!(withdrawn.get("delivery").is_none(), "{withdrawn}");
+}
+
+/// 51, 104; outcome-deliveries spec, "A day's span": on a host whose
+/// settings hold `[deliveries] expire_after = "24h"`, a landing's delivery
+/// expires a day after it is recorded (weir 104; record 0102, D9).
+#[test]
+fn a_hosts_span_of_a_day_owes_a_landing_for_a_day() {
+    let s = Scratch::new("wt-span-day");
+    std::fs::write(
+        s.config.join("sluice/config.toml"),
+        "[runs]\nmax = 2\n\n[deliveries]\nexpire_after = \"24h\"\n",
+    )
+    .unwrap();
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let n = id(&s.wt_submit(&a, &["--no-wait", "--json"]));
+    s.land(n);
+    let d = s.status(n)["delivery"].clone();
+    let at = |field: &str| {
+        chrono::DateTime::parse_from_rfc3339(d[field].as_str().unwrap_or_default())
+            .unwrap_or_else(|e| panic!("{field}: {e}: {d}"))
+    };
+    assert_eq!(
+        at("expires_at") - at("recorded_at"),
+        chrono::Duration::hours(24),
+        "{d}"
+    );
+}
+
+/// 51, rule core.11; outcome-deliveries spec, "A line that does not
+/// read": a line of `deliveries.jsonl` whose `format` is
+/// `weir-delivery/2` stops the branch's status, naming the file and
+/// `format` (record 0102, D3).
+#[test]
+fn a_deliveries_line_that_does_not_read_stops_the_branchs_status() {
+    let s = Scratch::new("wt-deliveries-unread");
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let n = id(&s.wt_submit(&a, &["--no-wait", "--json"]));
+    s.land(n);
+    let file = s.repo.dir().join(".git/sluice/bolt/x/deliveries.jsonl");
+    let held = std::fs::read_to_string(&file).unwrap();
+    assert!(held.contains("weir-delivery/1"), "{held}");
+    std::fs::write(&file, held.replace("weir-delivery/1", "weir-delivery/2")).unwrap();
+    let out = s.sluice(&["status", "bolt/x"]);
+    assert!(!out.status.success(), "{}", text(&out));
+    let said = text(&out);
+    for word in ["deliveries.jsonl", "`format`", "weir-delivery/2"] {
+        assert!(said.contains(word), "{word} not in {said}");
+    }
+}
+
 /// 51, 135; inbox spec, "Each outcome collected is handed over and stays
 /// owed": under `--json`, one document of the records handed over, each
 /// with its `delivery` as the run leaves it, and no `delivered`; collected
@@ -1601,6 +1793,98 @@ fn inbox_json_lists_each_record_until_it_is_confirmed() {
     assert_eq!(again.status.code(), Some(0), "{}", text(&again));
     let v: serde_json::Value = serde_json::from_slice(&again.stdout).unwrap();
     assert_eq!(v, serde_json::json!({ "outcomes": [] }));
+}
+
+/// 51, 104; inbox spec, "An expired outcome says so": on a host whose
+/// span is a second, a blame no carrier handed over expires still owed,
+/// and `sluice inbox` in its worktree hands it over all the same, its
+/// last line saying when it expired and naming its key (weir 104, 105;
+/// record 0102, D8).
+#[test]
+fn inbox_says_an_expired_outcome_is_still_owed() {
+    let s = Scratch::new("wt-inbox-expired");
+    std::fs::write(
+        s.config.join("sluice/config.toml"),
+        "[runs]\nmax = 2\n\n[deliveries]\nexpire_after = \"1s\"\n",
+    )
+    .unwrap();
+    let b = s.session("b", &[("broken", "x\n")]);
+    let n = id(&s.wt_submit(&b, &["--no-wait", "--json"]));
+    assert_eq!(s.decide(n)["state"], "failed");
+    std::thread::sleep(Duration::from_millis(1500));
+    let record = s.status(n);
+    assert_eq!(record["delivery"]["state"], "expired", "{record}");
+    let expires_at = record["delivery"]["expires_at"].as_str().unwrap();
+
+    let out = inbox(&s, &b, &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let said = String::from_utf8_lossy(&out.stdout).to_string();
+    let first = said.lines().next().unwrap_or_default();
+    assert!(first.contains(&format!("#{n} failed")), "{said}");
+    assert_eq!(
+        said.lines().last(),
+        Some(
+            format!(
+                "Expired at {expires_at}, still owed. Confirm it once you have acted on it: \
+                 sluice confirm {n}:failed"
+            )
+            .as_str()
+        ),
+        "{said}"
+    );
+    assert_eq!(handed(&s, n), ["inbox"]);
+    assert_eq!(s.status(n)["delivery"]["state"], "expired");
+}
+
+/// 51; inbox spec, "A notice already pushed" and "A new outcome with an
+/// older one owed": `sluice inbox --new` hands over only what no way has
+/// handed its reader: nothing of a landing the round pushed into the
+/// worktree's pane, recording nothing; and, once a plain collect has
+/// handed that landing over by `inbox`, the worktree's next blame alone
+/// (record 0102, D8, D14).
+#[test]
+fn inbox_new_hands_over_only_what_no_way_has_handed_over() {
+    let s = Scratch::new("wt-inbox-new");
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let (n, _) = s.submit_from_pane(&a, "w1:p2");
+    assert_eq!(s.decide(n)["state"], "landed");
+    assert_eq!(handed(&s, n), ["notice"]);
+
+    let out = inbox(&s, &a, &["--new"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert_eq!(text(&out), "");
+    assert_eq!(handed(&s, n), ["notice"]);
+    assert_eq!(s.logged("handed").len(), 1);
+
+    let out = inbox(&s, &a, &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert_eq!(handed(&s, n), ["notice", "inbox"]);
+
+    std::fs::write(a.join("broken"), "x\n").unwrap();
+    let dir = a.to_str().unwrap();
+    s.repo.git(&["-C", dir, "add", "-A"]);
+    s.repo.git(&["-C", dir, "commit", "-q", "-m", "broken"]);
+    let m = id(&s.wt_submit(&a, &["--no-wait", "--json"]));
+    assert_eq!(s.decide(m)["state"], "failed");
+    assert!(handed(&s, m).is_empty(), "{}", s.status(m));
+    let out = inbox(&s, &a, &["--new"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let said = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        said.lines()
+            .next()
+            .unwrap_or_default()
+            .contains(&format!("#{m} failed")),
+        "{said}"
+    );
+    assert!(!said.contains(&format!("#{n} landed")), "{said}");
+    assert_eq!(
+        said.lines().last(),
+        Some(format!("Confirm it once you have acted on it: sluice confirm {m}:failed").as_str()),
+        "{said}"
+    );
+    assert_eq!(handed(&s, m), ["inbox"]);
+    assert_eq!(handed(&s, n), ["notice", "inbox"]);
 }
 
 /// 51, 135; inbox spec, "A blame is delivered with its failed checks and
@@ -2093,6 +2377,11 @@ fn a_wait_with_no_files_checked_out_reads_as_a_worktree_on_its_branch() {
     assert_eq!(String::from_utf8_lossy(&out.stderr), "");
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(v, serde_json::json!({ "outcomes": [] }));
+    // Inbox spec, "The git directory collects nothing of a worktree's":
+    // the landing stays owed, with no hand-over.
+    assert_eq!(s.status(n)["delivery"]["state"], "owed", "{}", s.status(n));
+    assert!(handed(&s, n).is_empty(), "{}", s.status(n));
+    assert!(s.logged("handed").is_empty());
     let e = collected_one(&s, &a);
     assert_eq!(e["id"], n);
 }
@@ -2873,7 +3162,11 @@ mod status_gives_the_inbox_words {
         let _ = std::fs::remove_dir_all(&w);
         s.repo
             .git(&["worktree", "add", "-q", w.to_str().unwrap(), "bolt/w"]);
-        for dir in [s.repo.dir().join(".git"), s.repo.dir().to_path_buf(), w] {
+        for dir in [
+            s.repo.dir().join(".git"),
+            s.repo.dir().to_path_buf(),
+            w.clone(),
+        ] {
             let out = inbox(&s, &dir, &["--json"]);
             assert_eq!(out.status.code(), Some(0), "{}", text(&out));
             let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
@@ -2884,6 +3177,25 @@ mod status_gives_the_inbox_words {
                 dir.display()
             );
         }
+        // `sluice confirm` finds no outcome owed under its key, in the
+        // worktree on `bolt/w` and as the operator.
+        let key = format!("{n}:failed");
+        for (dir, args) in [
+            (w.clone(), vec![key.as_str()]),
+            (
+                s.repo.dir().to_path_buf(),
+                vec![key.as_str(), "--as", "operator"],
+            ),
+        ] {
+            let out = confirm(&s, &dir, &args);
+            assert_eq!(out.status.code(), Some(sluice::FAILED), "{}", text(&out));
+            assert!(
+                text(&out).contains(&format!("no outcome is owed under {key}")),
+                "{}",
+                text(&out)
+            );
+        }
+        assert!(s.logged("confirmed").iter().all(|l| l["id"] != n));
     }
 
     /// `bolt/w` by name, conflicting in `same.txt` with a session's landing:

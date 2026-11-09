@@ -4334,7 +4334,7 @@ fn a_submit_by_name_opens_the_request_from_the_branch() {
 /// request with no hand-over;
 /// `sluice inbox --json` in a worktree that has checked out `bolt/x`
 /// collects nothing of it, since no worktree pushed a branch sluice lands
-/// on.
+/// on, and `main`'s status shows it owed to the request.
 #[test]
 fn a_request_by_name_is_collected_by_no_worktree() {
     let g = OnGitHub::checked_policy("pr-by-name-inbox", "", "1m", "", BOLTS);
@@ -4385,6 +4385,26 @@ fn a_request_by_name_is_collected_by_no_worktree() {
     let id = Value::from(id);
     assert_eq!(g.delivery(&id)["reader"], format!("pull/{n}").as_str());
     assert_eq!(g.delivery(&id)["handed"], serde_json::json!([]));
+    // Submit-by-name spec, "No worktree on the branch collects its
+    // outcome": still owed to the request, it is shown in `main`'s status
+    // under the request, handed over by nothing (record 0102, D13).
+    let out = g.sluice(&["status", "main"]);
+    let said = text(&out);
+    let owed = said
+        .split_once("OWED\n")
+        .unwrap_or_else(|| panic!("no OWED section: {said}"))
+        .1;
+    let mut lines = owed.lines();
+    assert!(
+        lines
+            .next()
+            .unwrap_or_default()
+            .starts_with(&format!("  pull/{n}")),
+        "{said}"
+    );
+    let row = lines.next().unwrap_or_default();
+    assert!(row.contains(&format!("{id}:failed #{id}")), "{said}");
+    assert!(row.contains("handed over by nothing"), "{said}");
 }
 
 // ---------------------------------------------------------------------------
