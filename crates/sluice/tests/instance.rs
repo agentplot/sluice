@@ -546,6 +546,71 @@ mod bound {
         assert!(!said.contains("took up"), "{said}");
     }
 
+    /// The settings-take-up spec's "A kept run sends to the collector it
+    /// is changed to" (135; 151; record 0107; rules core.53, core.54;
+    /// design D1 to D7): `[telemetry]` changed to another collector while
+    /// the first combination's run goes is taken up by the run starting
+    /// itself afresh, which says so once; the first collector is sent what
+    /// the run held before it, traces and metrics, and the second the
+    /// traces of the run started afresh; each run starts once with every
+    /// core, and both land.
+    #[test]
+    fn a_run_takes_a_changed_telemetry_table_up_by_starting_afresh() {
+        use std::collections::BTreeSet;
+        let ok = |_: &support::http::Request| (200, Vec::new(), String::new());
+        let first = support::http::Fake::start(ok);
+        let second = support::http::Fake::start(ok);
+        let seen = Scratch::new("instance-afresh-seen");
+        let sending = |collector: &str| {
+            vec![
+                "[runs]".to_string(),
+                "max = 1".to_string(),
+                String::new(),
+                "[telemetry]".to_string(),
+                "send = true".to_string(),
+                format!("collector = \"{collector}\""),
+            ]
+        };
+        let changed = sending(second.url());
+        let (s, file) = two_queued("afresh", |file| {
+            let lines: Vec<&str> = changed.iter().map(String::as_str).collect();
+            check_writing(seen.path(), file, &lines, 30)
+        });
+        std::fs::write(&file, sending(first.url()).join("\n") + "\n").unwrap();
+
+        let out = s
+            .command(s.repo.dir())
+            .args(["run", "--rounds", "12"])
+            .output()
+            .unwrap();
+        let said = text(&out);
+        assert!(out.status.success(), "{said}");
+
+        // Read before any other command sends to the second collector.
+        let paths = |c: &support::http::Fake| -> BTreeSet<String> {
+            c.requests().into_iter().map(|r| r.path).collect()
+        };
+        let (to_first, to_second) = (paths(&first), paths(&second));
+        assert!(to_first.contains("/v1/traces"), "{to_first:?}\n{said}");
+        assert!(to_first.contains("/v1/metrics"), "{to_first:?}\n{said}");
+        assert!(to_second.contains("/v1/traces"), "{to_second:?}\n{said}");
+
+        let processors = std::thread::available_parallelism().map_or(1, |n| n.get());
+        assert_eq!(
+            starts(seen.path()),
+            [(1, processors), (1, processors)],
+            "{said}"
+        );
+        assert_eq!(states(&s, "bolt/a"), ["landed", "landed"], "{said}");
+        let took = format!(
+            "sluice: took up the host's settings in {}: [telemetry] changed, in this sluice run \
+             started afresh",
+            file.display()
+        );
+        assert_eq!(said.matches(&took).count(), 1, "{said}");
+        assert!(!said.contains("could not start afresh"), "{said}");
+    }
+
     /// 71: on a host that gives sluice all its cores, `[runs] cores = 2`
     /// under a bound of two gives each run one core, however many the host
     /// has; on a host that already limits sluice, `sluice run` refuses the

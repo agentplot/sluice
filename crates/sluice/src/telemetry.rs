@@ -456,10 +456,15 @@ impl Telemetry {
         })
     }
 
-    /// Send what is held so far, and go on.
+    /// Send what is held so far, every signal's, and go on: what a
+    /// `sluice run` holds is sent where it was sending before it starts
+    /// afresh (135; design D5 of `a-kept-run-hands-over-what-it-cannot-take-up`).
     pub fn flush(&self) {
         if let Some(t) = &self.traces {
             let _ = t.force_flush();
+        }
+        if let Some(m) = &self.metrics {
+            let _ = m.force_flush();
         }
         if let Some(l) = &self.logs {
             let _ = l.force_flush();

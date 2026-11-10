@@ -135,6 +135,14 @@ impl HostSettings {
         })
     }
 
+    /// As [`HostSettings::read`], the settings a `sluice run` started
+    /// afresh was handed in `text`, held as [`HostSettings::handed`] holds
+    /// them (design D4).
+    pub fn read_handed(text: &str) -> Result<HostSettings> {
+        let (given, all) = host_cores();
+        HostSettings::handed(text, config_path().as_deref(), given, all)
+    }
+
     /// The settings a `sluice run` started afresh was handed, read from
     /// the `text` the run bound, on a host of `all` cores that gives sluice
     /// `given` of them, held under no sign: its first look reads the file
