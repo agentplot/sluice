@@ -31,6 +31,9 @@ Repository permissions:
 
 ## 3. Keep its key on the host
 
+Where the host's own tool keeps the app's key and gives its token, skip
+this step: step 4 names that tool's command, and the host keeps no key.
+
 **Private keys › Generate a private key**, then:
 
 ```sh
@@ -52,6 +55,21 @@ user adds it there and keeps the key out of any store everyone may read:
 app_id = 123456
 key = "~/.config/sluice/app.pem"
 ```
+
+Where the host's own tool gives the app's token, `[forge]` names that
+command in place of `key`, its program and then each argument, run with no
+shell, and no key is kept on the host. The program and arguments below are
+placeholders for the tool's own:
+
+```toml
+[forge]
+app_id = 123456
+credential = ["<program>", "<argument>"]
+```
+
+sluice asks it as git asks a credential helper, `get` with the repository
+on its standard input, reading `password` and `password_expiry_utc`. A
+table names `key` or `credential`, never both.
 
 Nothing is written to `.git/config`; the token lives in sluice's memory and
 reaches only its own git.

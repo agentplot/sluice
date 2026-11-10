@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, TimeDelta, Utc};
 use serde_json::json;
-use sluice::identity::Identity;
+use sluice::identity::{CredentialCommand, Identity};
 use sluice::profiles::github::check::{check, Finding};
 use sluice::profiles::github::{App, Bearer, Repo};
 use sluice::retry::Policy;
@@ -52,13 +52,16 @@ impl Clock {
 }
 
 /// What the fake's GitHub holds for the app: its installation's
-/// permissions, the repositories a token it gives reaches, and each
-/// ruleset's bypass actors on `main`.
+/// permissions, the repositories a token it gives reaches, each ruleset's
+/// bypass actors on `main`, the id it gives the app `sluice-test`, and
+/// what it answers git's push to `o/r`.
 #[derive(Clone)]
 struct Forge {
     permissions: serde_json::Value,
     reaches: serde_json::Value,
     rulesets: Vec<(u64, serde_json::Value)>,
+    app: u64,
+    push: u16,
     clock: Clock,
 }
 
@@ -74,6 +77,8 @@ impl Forge {
                 11,
                 json!([{ "actor_id": APP, "actor_type": "Integration", "bypass_mode": "always" }]),
             )],
+            app: APP,
+            push: 200,
             clock: clock.clone(),
         }
     }
@@ -109,6 +114,44 @@ impl Forge {
         }
         if path == "/app" && r.method == "GET" {
             return json(200, json!({ "id": APP, "slug": "sluice-test" }));
+        }
+        if path == "/apps/sluice-test" && r.method == "GET" {
+            return json(200, json!({ "id": self.app, "slug": "sluice-test" }));
+        }
+        // git's first ask of a push: its answer to any token sent as git
+        // sends one.
+        if path == "/o/r.git/info/refs?service=git-receive-pack" && r.method == "GET" {
+            use base64::Engine;
+            let given = r
+                .header("Authorization")
+                .and_then(|a| a.strip_prefix("Basic "))
+                .and_then(|b| base64::engine::general_purpose::STANDARD.decode(b).ok())
+                .map(|b| String::from_utf8_lossy(&b).to_string())
+                .unwrap_or_default();
+            let status = if given.starts_with("x-access-token:") {
+                self.push
+            } else {
+                401
+            };
+            return (status, vec![], String::new());
+        }
+        // Who a token is, as GitHub answers its holder.
+        if path == "/graphql" && r.method == "POST" && r.body.contains("viewer") {
+            return json(
+                200,
+                json!({ "data": { "viewer": { "login": "sluice-test[bot]" } } }),
+            );
+        }
+        // What a token reaches, as GitHub answers its holder.
+        if path.starts_with("/installation/repositories") && r.method == "GET" {
+            let total = self.reaches.as_array().map_or(0, Vec::len);
+            return json(
+                200,
+                json!({
+                    "total_count": total, "repository_selection": "selected",
+                    "repositories": self.reaches
+                }),
+            );
         }
         if path == "/repos/o/r/rules/branches/main" {
             let rules: Vec<_> = self
@@ -149,6 +192,72 @@ fn app(fake: &Fake, clock: &Clock) -> App {
     .unwrap()
 }
 
+/// A credential command of the test's own (record 0108): a script, mode
+/// `0755`, written into the test's scratch directory, `here` naming that
+/// directory, where the script writes what it was asked; `body` runs with
+/// the operation as `$1`.
+fn credential_script(scratch: &support::Scratch, body: &str) -> CredentialCommand {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let path = scratch.path().join("token-helper");
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o755)
+        .open(&path)
+        .unwrap();
+    write!(f, "#!/bin/sh\nhere={}\n{body}", scratch.path().display()).unwrap();
+    f.sync_all().unwrap();
+    drop(f);
+    CredentialCommand::new(path, vec![])
+}
+
+/// A script's body that answers `get` with `token-<n>`, `n` counting its
+/// runs in `runs`, logging each operation in `log`, and an erase's
+/// password beside it; `end` is the shell that prints the token's end
+/// line, or nothing.
+fn counting(end: &str) -> String {
+    format!(
+        "input=$(cat)\n\
+         case \"$1\" in\n\
+         get)\n\
+           n=$(( $(cat \"$here/runs\" 2>/dev/null || echo 0) + 1 ))\n\
+           echo $n > \"$here/runs\"\n\
+           echo get >> \"$here/log\"\n\
+           echo username=x-access-token\n\
+           echo \"password=token-$n\"\n\
+           {end}\n\
+           ;;\n\
+         erase)\n\
+           echo \"erase $(echo \"$input\" | sed -n 's/^password=//p')\" >> \"$here/log\"\n\
+           ;;\n\
+         esac\n"
+    )
+}
+
+/// How many times a counting script gave a token.
+fn runs(scratch: &support::Scratch) -> usize {
+    std::fs::read_to_string(scratch.path().join("runs")).map_or(0, |n| n.trim().parse().unwrap())
+}
+
+/// A counting script's log: each operation, an erase with its password.
+fn script_log(scratch: &support::Scratch) -> Vec<String> {
+    std::fs::read_to_string(scratch.path().join("log"))
+        .unwrap_or_default()
+        .lines()
+        .map(String::from)
+        .collect()
+}
+
+/// The app whose tokens `command` gives, on the fake API, its clock `now`.
+fn commanded(
+    fake_url: &str,
+    command: CredentialCommand,
+    now: sluice::profiles::github::app::Now,
+) -> App {
+    App::commanded(APP, command, fake_url, now, policy())
+}
+
 fn minted(fake: &Fake) -> usize {
     fake.requests()
         .iter()
@@ -164,8 +273,8 @@ fn the_apps_login_is_read_once() {
     let clock = Clock::new();
     let fake = Forge::new(&clock).start();
     let app = app(&fake, &clock);
-    assert_eq!(app.login().unwrap(), "sluice-test[bot]");
-    assert_eq!(app.login().unwrap(), "sluice-test[bot]");
+    assert_eq!(app.login(&repo()).unwrap(), "sluice-test[bot]");
+    assert_eq!(app.login(&repo()).unwrap(), "sluice-test[bot]");
     let reads: Vec<_> = fake
         .requests()
         .into_iter()
@@ -178,6 +287,34 @@ fn the_apps_login_is_read_once() {
         "{auth}"
     );
     assert_eq!(minted(&fake), 0);
+}
+
+/// The forge-identity spec's "The bot under a command": under a credential
+/// command the app's bot is GraphQL's `viewer`, read once with the
+/// command's token, and the app's own record, which takes its key, is
+/// never asked (C.5 pull request, 120; record 0108).
+#[test]
+fn the_bot_under_a_command_is_the_viewers() {
+    use sluice::profiles::github::forge::Forge as _;
+    let clock = Clock::new();
+    let fake = Forge::new(&clock).start();
+    let scratch = support::Scratch::new("command-bot");
+    let command = credential_script(&scratch, &counting(""));
+    let app = commanded(fake.url(), command, ticking(&clock));
+    assert_eq!(app.login(&repo()).unwrap(), "sluice-test[bot]");
+    assert_eq!(app.login(&repo()).unwrap(), "sluice-test[bot]");
+    let asked: Vec<String> = fake
+        .requests()
+        .into_iter()
+        .filter(|r| r.path == "/graphql")
+        .map(|r| r.header("Authorization").unwrap_or_default().to_string())
+        .collect();
+    assert_eq!(asked, ["Bearer token-1"]);
+    assert!(
+        fake.requests().iter().all(|r| r.path != "/app"),
+        "{:?}",
+        fake.requests()
+    );
 }
 
 /// A token is bought once and kept until five minutes before its hour
@@ -203,6 +340,127 @@ fn a_token_is_bought_once_an_hour() {
         .unwrap()
         .to_string();
     assert!(bearer.starts_with("Bearer ey"), "{bearer}");
+}
+
+/// The forge-identity spec's "A token got once an hour": a command's token
+/// is held until five minutes before the end the command gave, and got
+/// again then; over two hours, at 0, 55 and 115 minutes, and nothing of
+/// the app's key is asked (record 0108).
+#[test]
+fn a_commands_token_is_got_once_before_each_end() {
+    let clock = Clock::new();
+    let fake = Forge::new(&clock).start();
+    let scratch = support::Scratch::new("command-hourly");
+    let start = clock.now();
+    std::fs::write(scratch.path().join("base"), start.timestamp().to_string()).unwrap();
+    let command = credential_script(
+        &scratch,
+        &counting("echo \"password_expiry_utc=$(( $(cat \"$here/base\") + n * 3600 ))\""),
+    );
+    let at = clock.clone();
+    let app = commanded(fake.url(), command, Box::new(move || at.now()));
+    let mut seen = Vec::new();
+    for minute in 0..=120 {
+        clock.set(start + TimeDelta::minutes(minute));
+        let t = app.token(&repo()).unwrap();
+        if seen.last() != Some(&t) {
+            seen.push(t);
+        }
+    }
+    assert_eq!(seen, ["token-1", "token-2", "token-3"]);
+    assert_eq!(runs(&scratch), 3);
+    let asked: Vec<String> = fake.requests().into_iter().map(|r| r.path).collect();
+    assert!(
+        asked.iter().all(|p| !p.ends_with("/access_tokens")
+            && p != "/app"
+            && p != "/repos/o/r/installation"),
+        "{asked:?}"
+    );
+}
+
+/// The forge-identity spec's "A token with no end": a token the command
+/// gives with no end is held until GitHub refuses it (record 0108).
+#[test]
+fn a_commands_token_with_no_end_is_held_until_refused() {
+    let clock = Clock::new();
+    let fake = Forge::new(&clock).start();
+    let scratch = support::Scratch::new("command-no-end");
+    let command = credential_script(&scratch, &counting(""));
+    let at = clock.clone();
+    let app = commanded(fake.url(), command, Box::new(move || at.now()));
+    let start = clock.now();
+    for minute in 0..=120 {
+        clock.set(start + TimeDelta::minutes(minute));
+        assert_eq!(app.token(&repo()).unwrap(), "token-1");
+    }
+    assert_eq!(runs(&scratch), 1);
+}
+
+/// The forge-identity spec's "A command's token described": the
+/// credentials a command's token gives say whose it is, for what, from
+/// which command, what GitHub says it reaches, its age and its end, read
+/// once with the token, and never the token (134 as amended 2026-11-09).
+#[test]
+fn a_commands_credentials_say_what_their_token_is() {
+    let clock = Clock::new();
+    let fake = Forge::new(&clock).start();
+    let scratch = support::Scratch::new("command-about");
+    let start = clock.now();
+    std::fs::write(scratch.path().join("base"), start.timestamp().to_string()).unwrap();
+    let command = credential_script(
+        &scratch,
+        &counting("echo \"password_expiry_utc=$(( $(cat \"$here/base\") + 3600 ))\""),
+    );
+    let program = command.program().display().to_string();
+    let app = commanded(fake.url(), command, ticking(&clock));
+    let c = app.credentials("https://github.com/o/r.git").unwrap();
+    assert_eq!(c.password, "token-1");
+    assert!(
+        c.about
+            .starts_with("app 4242's token for o/r from [forge] credential "),
+        "{}",
+        c.about
+    );
+    assert!(c.about.contains(&program), "{}", c.about);
+    assert!(c.about.contains("reaching o/r"), "{}", c.about);
+    let end = (start + TimeDelta::hours(1)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    assert!(c.about.ends_with(&format!("ending {end}")), "{}", c.about);
+    assert!(!c.about.contains("token-1"), "{}", c.about);
+    let reads: Vec<String> = fake
+        .requests()
+        .into_iter()
+        .filter(|r| r.path.starts_with("/installation/repositories"))
+        .map(|r| r.header("Authorization").unwrap_or_default().to_string())
+        .collect();
+    assert_eq!(reads, ["Bearer token-1"]);
+}
+
+/// The forge-identity spec's "A token for another repository": a token
+/// the command gives that GitHub says reaches another repository alone is
+/// refused, naming the command and both, and nothing is called with it.
+#[test]
+fn a_commands_token_for_another_repository_is_refused() {
+    let clock = Clock::new();
+    let mut forge = Forge::new(&clock);
+    forge.reaches = json!([{ "full_name": "o/other" }]);
+    let fake = forge.start();
+    let scratch = support::Scratch::new("command-other");
+    let command = credential_script(&scratch, &counting(""));
+    let program = command.program().display().to_string();
+    let app = commanded(fake.url(), command, ticking(&clock));
+    let err = format!("{:#}", app.token(&repo()).unwrap_err());
+    assert!(err.contains(&program), "{err}");
+    assert!(
+        err.contains("gave a token for o/r that GitHub says reaches o/other, not o/r"),
+        "{err}"
+    );
+    let asked: Vec<String> = fake
+        .requests()
+        .into_iter()
+        .filter(|r| r.header("Authorization") == Some("Bearer token-1"))
+        .map(|r| r.path)
+        .collect();
+    assert_eq!(asked, ["/installation/repositories?per_page=100"]);
 }
 
 /// A failure GitHub reports is an error that names it.
@@ -468,6 +726,66 @@ fn forge_check_names_each_failure() {
     );
 }
 
+/// The app on `fake` whose tokens a script the test writes gives, each
+/// `token-<n>`, reaching the fake's git there too.
+fn commanded_on(fake: &Fake, name: &str, clock: &Clock) -> (support::Scratch, App) {
+    let scratch = support::Scratch::new(name);
+    let command = credential_script(&scratch, &counting(""));
+    let app = commanded(fake.url(), command, ticking(clock)).serving_git(fake.url());
+    (scratch, app)
+}
+
+/// The forge-identity spec's "A command, all set": under a credential
+/// command the check finds a token comes, it is the app's and may push,
+/// and the ruleset lets only the app through, naming no key, installation
+/// or permission (record 0108).
+#[test]
+fn forge_check_with_a_command_all_set() {
+    let clock = Clock::new();
+    let fake = Forge::new(&clock).start();
+    let (_scratch, app) = commanded_on(&fake, "forge-check-command", &clock);
+    let found = check(&app, &repo(), "main", Some("operator"));
+    assert!(failures(&found).is_empty(), "{found:?}");
+    let said: Vec<&str> = found.iter().map(|f| f.what.as_str()).collect();
+    assert_eq!(said.len(), 4, "{said:?}");
+    assert!(
+        said[0].starts_with("[forge] credential ") && said[0].ends_with(" gives a token for o/r"),
+        "{said:?}"
+    );
+    assert_eq!(said[1], "the token is app 4242's");
+    assert_eq!(said[2], "the token may push to o/r");
+    assert!(said[3].contains("lets only app 4242 through"), "{said:?}");
+    for word in ["key", "installation", "permission"] {
+        assert!(said.iter().all(|s| !s.contains(word)), "{word}: {said:?}");
+    }
+}
+
+/// The forge-identity spec's "A command that gives another app's token,
+/// one that may not push": the check fails naming both apps, and says the
+/// token may not push and the app needs Contents read and write (record
+/// 0108).
+#[test]
+fn forge_check_with_a_command_names_each_failure() {
+    let clock = Clock::new();
+    let mut forge = Forge::new(&clock);
+    forge.app = 99;
+    forge.push = 403;
+    let fake = forge.start();
+    let (_scratch, app) = commanded_on(&fake, "forge-check-command-fails", &clock);
+    let found = check(&app, &repo(), "main", Some("operator"));
+    let f = failures(&found);
+    assert_eq!(f.len(), 2, "{found:?}");
+    assert!(
+        f[0].contains("is app 99's (sluice-test), not app 4242's"),
+        "{f:?}"
+    );
+    assert!(
+        f[1].contains("the token may not push to o/r")
+            && f[1].contains("give the app Contents read and write"),
+        "{f:?}"
+    );
+}
+
 /// A repository whose `main` lives on GitHub as configured, and on a bare
 /// repository on this host as git reaches it; the host's config and the
 /// fake API are the test's own.
@@ -517,6 +835,37 @@ impl OnGitHub {
             format!(
                 "[forge]\napp_id = {APP}\nkey = {:?}\n",
                 key.display().to_string()
+            ),
+        )
+        .unwrap();
+    }
+
+    /// The host's `[forge]` names the app and, in place of its key, a
+    /// credential command of the test's own: a script in the config
+    /// directory that gives `token-1` (record 0108).
+    fn give_forge_command(&self) {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let dir = self.config.path().join("sluice");
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("token-helper");
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o755)
+            .open(&script)
+            .unwrap();
+        f.write_all(
+            b"#!/bin/sh\ncat > /dev/null\n[ \"$1\" = get ] && echo password=token-1\nexit 0\n",
+        )
+        .unwrap();
+        f.sync_all().unwrap();
+        drop(f);
+        std::fs::write(
+            dir.join("config.toml"),
+            format!(
+                "[forge]\napp_id = {APP}\ncredential = [{:?}]\n",
+                script.display().to_string()
             ),
         )
         .unwrap();
@@ -637,6 +986,25 @@ fn forge_check_exits_by_what_it_finds() {
         said.contains("lets more than the app through: OrganizationAdmin 1"),
         "{said}"
     );
+}
+
+/// The forge-identity spec's "A command, all set", from the command line:
+/// `sluice forge check` on a host whose `[forge]` names a credential
+/// command runs it, says it gives a token and the ruleset lets only the
+/// app through, and says nothing of a key (record 0108).
+#[cfg(feature = "tools")]
+#[test]
+fn forge_check_runs_the_hosts_command() {
+    let s = OnGitHub::new("forge-check-command-host", Forge::new(&Clock::new()));
+    s.give_forge_command();
+    let (code, said) = s.sluice(&["forge", "check", "main"]);
+    assert_eq!(code, 0, "{said}");
+    assert!(said.contains("gives a token for o/r"), "{said}");
+    assert!(
+        said.contains(&format!("lets only app {APP} through")),
+        "{said}"
+    );
+    assert!(!said.contains("[forge] key"), "{said}");
 }
 
 /// The app's pull request calls against the fake API, answered from the
@@ -1062,6 +1430,104 @@ fn a_call_refused_its_token_is_made_on_a_fresh_one() {
     assert_eq!(minted(&fake), 2);
 }
 
+/// The fake API answering `/repos/o/r/pulls/7` with 401 to `refused` and
+/// with the pull request to any other token; every other call as `forge`
+/// answers it.
+fn refusing(forge: Forge, refused: &'static str) -> Fake {
+    let sold = Mutex::new(0);
+    Fake::start(move |r: &Request| {
+        if r.path != "/repos/o/r/pulls/7" {
+            return forge.answer(r, &sold);
+        }
+        if r.header("Authorization") == Some(refused) {
+            return json(401, json!({ "message": "Bad credentials" }));
+        }
+        json(
+            200,
+            json!({ "number": 7, "state": "open", "head": { "ref": "unit/a" }, "base": { "ref": "main" } }),
+        )
+    })
+}
+
+/// The `Authorization` each read of `/repos/o/r/pulls/7` carried.
+fn pull_reads(fake: &Fake) -> Vec<String> {
+    fake.requests()
+        .into_iter()
+        .filter(|r| r.path == "/repos/o/r/pulls/7")
+        .map(|r| r.header("Authorization").unwrap().to_string())
+        .collect()
+}
+
+/// The forge-identity spec's "Refused, erased and got afresh": a read
+/// GitHub refuses on the command's token is made again on one the command
+/// gives afresh, after it was told to erase the refused one, and sluice
+/// holds the fresh one after (134; rule core.29; record 0108).
+#[test]
+fn a_call_refused_a_commands_token_is_made_on_one_got_afresh() {
+    use sluice::profiles::github::forge::Forge as _;
+    let clock = Clock::new();
+    let fake = refusing(Forge::new(&clock), "Bearer token-1");
+    let scratch = support::Scratch::new("command-renew");
+    let command = credential_script(&scratch, &counting(""));
+    // A clock that moves on at each reading, so the fresh token is
+    // settled at once.
+    let app = commanded(fake.url(), command, ticking(&clock));
+    assert_eq!(app.pull(&repo(), 7).unwrap().unwrap().number, 7);
+    assert_eq!(pull_reads(&fake), ["Bearer token-1", "Bearer token-2"]);
+    assert_eq!(script_log(&scratch), ["get", "erase token-1", "get"]);
+    assert_eq!(app.token(&repo()).unwrap(), "token-2");
+}
+
+/// The forge-identity spec's "The command gives the refused token back":
+/// a command that gives again the token GitHub refused gives none afresh,
+/// and the read is not made again (record 0108).
+#[test]
+fn a_command_that_gives_the_refused_token_back_gives_none_afresh() {
+    use sluice::profiles::github::forge::Forge as _;
+    let clock = Clock::new();
+    let fake = refusing(Forge::new(&clock), "Bearer token-1");
+    let scratch = support::Scratch::new("command-same");
+    let command = credential_script(
+        &scratch,
+        "cat > /dev/null\n[ \"$1\" = get ] && echo password=token-1\nexit 0\n",
+    );
+    let app = commanded(fake.url(), command, ticking(&clock));
+    let err = format!("{:#}", app.pull(&repo(), 7).unwrap_err());
+    assert!(err.contains("401 Bad credentials"), "{err}");
+    assert!(err.contains("no token could be got afresh"), "{err}");
+    assert!(
+        err.contains("gave again the token GitHub refused for o/r"),
+        "{err}"
+    );
+    assert_eq!(pull_reads(&fake), ["Bearer token-1"]);
+}
+
+/// The forge-identity spec's "The command refuses", at the call: a command
+/// that gives no token fails the call that needed it, in the command's own
+/// words, and no call is made (record 0108).
+#[test]
+fn a_command_that_gives_no_token_fails_the_call() {
+    use sluice::profiles::github::forge::Forge as _;
+    let clock = Clock::new();
+    let fake = Forge::new(&clock).start();
+    let scratch = support::Scratch::new("command-refuses");
+    let command = credential_script(
+        &scratch,
+        "cat > /dev/null\necho run >> \"$here/log\"\n\
+         echo 'no drive on this host serves o/r' >&2\nexit 1\n",
+    );
+    let program = command.program().display().to_string();
+    let app = commanded(fake.url(), command, ticking(&clock));
+    let err = format!("{:#}", app.pull(&repo(), 7).unwrap_err());
+    assert!(
+        err.contains(&format!("[forge] credential {program}")),
+        "{err}"
+    );
+    assert!(err.contains("no drive on this host serves o/r"), "{err}");
+    assert_eq!(script_log(&scratch), ["run"]);
+    assert!(fake.requests().is_empty(), "{:?}", fake.requests());
+}
+
 /// The remote-retry spec's "A draft mark answered 502" and "A check run's
 /// update cut after it was sent": a write that sets a state is made again.
 #[test]
@@ -1393,6 +1859,44 @@ fn every_process_on_the_host_honours_the_pause() {
     assert!(sluice::retry::limited(&e).is_some(), "{e:#}");
     assert_eq!(gh.calls("GET", "/repos/o/r/pulls"), 1, "one call, refused");
     assert!(pauses.borrow().is_empty(), "a round waits no pause");
+}
+
+/// The forge-allowance spec's "A command's token honours the pause": a
+/// process whose token the host's credential command gives makes no call
+/// for a repository while a process on the app's key keeps the pause, and
+/// the pause is kept under the app and the repository's owner (134;
+/// record 0108).
+#[test]
+fn a_commands_token_honours_the_pause() {
+    use sluice::profiles::github::forge::Forge as _;
+    let (_dir, state, gh, _) = kept_github("allowance-command");
+    let reset = Utc::now() + TimeDelta::minutes(20);
+    gh.trouble("GET", "/repos/o/r/pulls", 1, primary_spent(reset));
+    let run = kept_app(&gh, state.path(), Rc::new(Policy::round().recording()));
+    let e = run.pulls(&repo(), "main").unwrap_err();
+    assert!(sluice::retry::limited(&e).is_some(), "{e:#}");
+    let scratch = support::Scratch::new("allowance-command-script");
+    let command = credential_script(
+        &scratch,
+        &format!("cat > /dev/null\necho password={}\n", github::TOKEN),
+    );
+    let submit = App::commanded(
+        APP,
+        command,
+        gh.url(),
+        Box::new(Utc::now),
+        Rc::new(Policy::round().recording()),
+    )
+    .keeping(sluice::profiles::github::kept::Kept::new(state.path()));
+    let e = submit.pulls(&repo(), "main").unwrap_err();
+    let limited = sluice::retry::limited(&e).expect("a spent allowance");
+    assert_eq!(limited.until.timestamp(), reset.timestamp());
+    assert_eq!(gh.calls("GET", "/repos/o/r/pulls"), 1, "one call, refused");
+    assert_eq!(gh.calls("GET", "/installation/repositories"), 0);
+    assert!(state
+        .path()
+        .join(format!("forge/pauses/{APP}-o-core.json"))
+        .is_file());
 }
 
 /// The forge-allowance spec's "The pause outlives the process": a process

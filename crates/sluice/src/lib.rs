@@ -3551,7 +3551,9 @@ fn could_not_read(
 /// Read `sub` again until it is decided, running a round between reads
 /// as a waiting driver does (1; rule core.4; ADR 0011), until the
 /// deadline or Ctrl-C. It reads before its first round, so a submission
-/// already decided runs nothing. Where `sluice run` lives on the host, it
+/// already decided runs nothing, and takes its first pass before it looks
+/// at its deadline, so a wait whose start used its time up still moves its
+/// queue once. Where `sluice run` lives on the host, it
 /// runs no round and takes no pull request in: it follows the driver's
 /// document, looking again at each tick, and runs rounds from the tick
 /// after the driver stops (135). Each call a round makes to a remote is
@@ -3631,11 +3633,17 @@ fn wait_on(
                 tell_hold(out, &branch, v.held.as_ref(), &mut said_hold)?;
             }
         }
-        if waiting.deadline.is_some_and(|d| waiting.clock.now() >= d) {
-            return Ok(undecided(WAITING, &reading));
-        }
-        if !first && !waiting.pause.pause() {
-            return Ok(undecided(STOPPED, &reading));
+        // Its first pass is taken whatever its deadline, as a wait that
+        // follows a pull request takes its first intake: a start that used
+        // its time up still moves the queue once, and out of time it says
+        // its submission as that pass left it (1).
+        if !first {
+            if waiting.deadline.is_some_and(|d| waiting.clock.now() >= d) {
+                return Ok(undecided(WAITING, &reading));
+            }
+            if !waiting.pause.pause() {
+                return Ok(undecided(STOPPED, &reading));
+            }
         }
         first = false;
         // 129: what the last read kept by revision and this one does not
