@@ -86,21 +86,26 @@ Examples:
 
 Telemetry, taken by every command:
       --otel                       Export traces, metrics and logs over
-                                   OTLP/HTTP, to where the OTEL_EXPORTER_OTLP_*
-                                   variables say; OTEL_SDK_DISABLED=true turns
-                                   them all off, and OTEL_TRACES_EXPORTER,
+                                   OTLP/HTTP, where the host's [telemetry] in
+                                   ~/.config/sluice/config.toml says; this flag
+                                   and SLUICE_OTEL choose for this command alone,
+                                   --otel=false or SLUICE_OTEL=0 turning the
+                                   host's send = true off. OTEL_SDK_DISABLED=true
+                                   turns them all off, and OTEL_TRACES_EXPORTER,
                                    OTEL_METRICS_EXPORTER or OTEL_LOGS_EXPORTER at
                                    none turns one alone off
-                                   [env: SLUICE_OTEL=1|true|yes|on]
+                                   [env: SLUICE_OTEL=1|true|yes|on|0|false|no|off]
       --otel-service-name <NAME>   The service the telemetry is reported as
-                                   [env: SLUICE_OTEL_SERVICE_NAME] [default: sluice]
+                                   [env: SLUICE_OTEL_SERVICE_NAME]
+                                   [default: the host's [telemetry], else sluice]
       --otel-logs <LOGS>           How much of a failed check's output is sent as
                                    logs: off, summary (where it is kept, never
                                    what it says) or tail (its end, scrubbed of
-                                   what reads as a secret)
-                                   [env: SLUICE_OTEL_LOGS] [default: summary]
+                                   what reads as a secret) [env: SLUICE_OTEL_LOGS]
+                                   [default: the host's [telemetry], else summary]
       --otel-logs-limit <BYTES>    The most of a failed check's output sent at
-                                   tail [env: SLUICE_OTEL_LOGS_LIMIT] [default: 8192]";
+                                   tail [env: SLUICE_OTEL_LOGS_LIMIT]
+                                   [default: the host's [telemetry], else 8192]";
 
 /// `sluice submit --help`'s examples and exits; the exits are those of
 /// the reference's "Exit codes".
@@ -209,49 +214,40 @@ pub struct Cli {
     pub worktree: String,
     // The telemetry flags are hidden, here and in every command, and
     // listed in ROOT_AFTER_HELP instead.
-    /// Export traces, metrics and logs over OTLP/HTTP, to where the
-    /// OTEL_EXPORTER_OTLP_* variables say. OTEL_SDK_DISABLED=true turns
-    /// them all off, and OTEL_TRACES_EXPORTER, OTEL_METRICS_EXPORTER or
-    /// OTEL_LOGS_EXPORTER at `none` turns that one alone off.
-    /// SLUICE_OTEL takes `1`, `true`, `yes` or `on`.
+    /// Export traces, metrics and logs over OTLP/HTTP, where the host's
+    /// `[telemetry]` in `~/.config/sluice/config.toml` says (151). This
+    /// flag, or SLUICE_OTEL, chooses for this command alone:
+    /// `--otel=false` or SLUICE_OTEL=0 turns the host's `send = true` off.
+    /// OTEL_SDK_DISABLED=true turns them all off, and OTEL_TRACES_EXPORTER,
+    /// OTEL_METRICS_EXPORTER or OTEL_LOGS_EXPORTER at `none` turns that one
+    /// alone off. SLUICE_OTEL takes `1`, `true`, `yes` or `on`, and `0`,
+    /// `false`, `no` or `off`.
     #[arg(
         long,
         global = true,
         hide = true,
         env = "SLUICE_OTEL",
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "true",
         value_parser = clap::builder::BoolishValueParser::new()
     )]
-    pub otel: bool,
-    /// The service the telemetry is reported as.
-    #[arg(
-        long,
-        global = true,
-        hide = true,
-        env = "SLUICE_OTEL_SERVICE_NAME",
-        default_value = "sluice"
-    )]
-    pub otel_service_name: String,
-    /// While --otel is on, how much of a failed check's output is sent as
-    /// logs: `off`, `summary` (where it is kept, never what it says) or
-    /// `tail` (its end, scrubbed of what reads as a secret).
-    #[arg(
-        long,
-        global = true,
-        hide = true,
-        env = "SLUICE_OTEL_LOGS",
-        value_enum,
-        default_value = "summary"
-    )]
-    pub otel_logs: telemetry::Logs,
-    /// The most of a failed check's output sent at `tail`, in bytes.
-    #[arg(
-        long,
-        global = true,
-        hide = true,
-        env = "SLUICE_OTEL_LOGS_LIMIT",
-        default_value_t = 8192
-    )]
-    pub otel_logs_limit: usize,
+    pub otel: Option<bool>,
+    /// The service the telemetry is reported as; where unset, the host's
+    /// `[telemetry] service`, else `sluice`.
+    #[arg(long, global = true, hide = true, env = "SLUICE_OTEL_SERVICE_NAME")]
+    pub otel_service_name: Option<String>,
+    /// While telemetry is on, how much of a failed check's output is sent
+    /// as logs: `off`, `summary` (where it is kept, never what it says) or
+    /// `tail` (its end, scrubbed of what reads as a secret); where unset,
+    /// the host's `[telemetry] logs`, else `summary`.
+    #[arg(long, global = true, hide = true, env = "SLUICE_OTEL_LOGS", value_enum)]
+    pub otel_logs: Option<telemetry::Logs>,
+    /// The most of a failed check's output sent at `tail`, in bytes, held
+    /// to 65536; where unset, the host's `[telemetry] logs_tail_bytes`,
+    /// else 8192.
+    #[arg(long, global = true, hide = true, env = "SLUICE_OTEL_LOGS_LIMIT")]
+    pub otel_logs_limit: Option<usize>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -1236,6 +1232,18 @@ fn requester(by: &str) -> Requester {
 }
 
 impl Cli {
+    /// 151: what this command was given of telemetry, by its flags or
+    /// its `SLUICE_OTEL*` variables, which choose for it alone over the
+    /// host's `[telemetry]` (record 0106; design D2).
+    pub fn choices(&self) -> telemetry::Choices {
+        telemetry::Choices {
+            otel: self.otel,
+            service: self.otel_service_name.clone(),
+            logs: self.otel_logs,
+            logs_limit: self.otel_logs_limit,
+        }
+    }
+
     /// Whether the command was asked for JSON, so that even a failure
     /// before or outside it is said as JSON.
     pub fn json(&self) -> bool {
@@ -6417,6 +6425,36 @@ fn worktree_json(p: &SessionPlace) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 151: `--otel` takes no value, on, or a boolean, `--otel=false` off
+    /// for the command, and never the word after it for its value; with
+    /// neither it nor `SLUICE_OTEL` it chooses nothing. A command's flags
+    /// follow its name, and `--otel` alone is the home view's (design D2).
+    #[test]
+    fn otel_takes_no_value_or_a_boolean() {
+        std::env::remove_var("SLUICE_OTEL");
+        for (line, otel) in [
+            (&["sluice", "status", "--otel", "main"][..], Some(true)),
+            (
+                &["sluice", "status", "--otel=false", "main"][..],
+                Some(false),
+            ),
+            (&["sluice", "status", "main"][..], None),
+        ] {
+            let cli = Cli::try_parse_from(line).unwrap();
+            assert_eq!(cli.choices().otel, otel, "{line:?}");
+            assert!(
+                matches!(&cli.command, Some(Command::Status { target: Some(t), .. }) if t == "main"),
+                "{line:?}: {:?}",
+                cli.command
+            );
+        }
+        let home = Cli::try_parse_from(["sluice", "--otel"]).unwrap();
+        assert_eq!(
+            (home.choices().otel, home.command.is_none()),
+            (Some(true), true)
+        );
+    }
 
     fn names() -> Names {
         let mut names = Names::default();

@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use clap::Parser;
 use sluice::instance::Instance;
 use sluice::profiles::checks::Checks;
-use sluice::telemetry::Logs;
+use sluice::telemetry::{Choices, Logs};
 use sluice::{run, Cli, Pause, CONFLICT, FAILED, LANDED};
 use sluice_core::OUTPUT;
 use sluice_fakes::{Crash, Fakes};
@@ -315,42 +315,47 @@ fn a_refused_landing_is_counted() {
     assert!(!has(&seen, "monotonic_counter.sluice.landed"), "{seen:?}");
 }
 
-/// Telemetry is on only when `--otel` or `SLUICE_OTEL` asks; it is
-/// reported as `sluice` unless named, sends a summary of a failure unless
-/// asked for more or none, and while it is off a run's checks get none of
-/// sluice's `OTEL_*`, no `TRACEPARENT` and no `sluice.*` attribute.
+/// A command chooses only what its flags or its `SLUICE_OTEL*` variables
+/// give it, each `None` where it was given neither, so the host's
+/// `[telemetry]` holds (151; record 0106; design D2); and while telemetry
+/// is off a run's checks get none of sluice's `OTEL_*`, no `TRACEPARENT`
+/// and no `sluice.*` attribute.
 #[test]
 fn telemetry_is_off_unless_asked() {
     let parse = |args: &[&str]| {
-        Cli::try_parse_from(["sluice", "step", BRANCH].iter().chain(args).copied()).unwrap()
+        Cli::try_parse_from(["sluice", "step", BRANCH].iter().chain(args).copied())
+            .unwrap()
+            .choices()
     };
-    for k in [
+    let variables = [
         "SLUICE_OTEL",
         "SLUICE_OTEL_SERVICE_NAME",
         "SLUICE_OTEL_LOGS",
         "SLUICE_OTEL_LOGS_LIMIT",
-    ] {
+    ];
+    for k in variables {
         std::env::remove_var(k);
     }
-    let cli = parse(&[]);
-    assert!(!cli.otel);
-    assert_eq!(cli.otel_service_name, "sluice");
-    assert_eq!(cli.otel_logs, Logs::Summary);
-    assert_eq!(cli.otel_logs_limit, 8192);
-    let cli = parse(&[
-        "--otel",
-        "--otel-service-name",
-        "ci-sluice",
-        "--otel-logs",
-        "tail",
-        "--otel-logs-limit",
-        "100",
-    ]);
-    assert!(cli.otel);
-    assert_eq!(cli.otel_service_name, "ci-sluice");
-    assert_eq!(cli.otel_logs, Logs::Tail);
-    assert_eq!(cli.otel_logs_limit, 100);
-    assert_eq!(parse(&["--otel-logs", "off"]).otel_logs, Logs::Off);
+    assert_eq!(parse(&[]), Choices::default());
+    assert_eq!(
+        parse(&[
+            "--otel",
+            "--otel-service-name",
+            "ci-sluice",
+            "--otel-logs",
+            "tail",
+            "--otel-logs-limit",
+            "100",
+        ]),
+        Choices {
+            otel: Some(true),
+            service: Some("ci-sluice".into()),
+            logs: Some(Logs::Tail),
+            logs_limit: Some(100),
+        }
+    );
+    assert_eq!(parse(&["--otel=false"]).otel, Some(false));
+    assert_eq!(parse(&["--otel-logs", "off"]).logs, Some(Logs::Off));
     for (value, on) in [
         ("1", true),
         ("true", true),
@@ -360,26 +365,22 @@ fn telemetry_is_off_unless_asked() {
         ("off", false),
     ] {
         std::env::set_var("SLUICE_OTEL", value);
-        assert_eq!(parse(&[]).otel, on, "SLUICE_OTEL={value}");
+        assert_eq!(parse(&[]).otel, Some(on), "SLUICE_OTEL={value}");
     }
+    std::env::remove_var("SLUICE_OTEL");
     std::env::set_var("SLUICE_OTEL_SERVICE_NAME", "ci-sluice");
     std::env::set_var("SLUICE_OTEL_LOGS", "tail");
     std::env::set_var("SLUICE_OTEL_LOGS_LIMIT", "100");
-    let cli = parse(&[]);
     assert_eq!(
-        (
-            cli.otel_service_name.as_str(),
-            cli.otel_logs,
-            cli.otel_logs_limit
-        ),
-        ("ci-sluice", Logs::Tail, 100)
+        parse(&[]),
+        Choices {
+            otel: None,
+            service: Some("ci-sluice".into()),
+            logs: Some(Logs::Tail),
+            logs_limit: Some(100),
+        }
     );
-    for k in [
-        "SLUICE_OTEL",
-        "SLUICE_OTEL_SERVICE_NAME",
-        "SLUICE_OTEL_LOGS",
-        "SLUICE_OTEL_LOGS_LIMIT",
-    ] {
+    for k in variables {
         std::env::remove_var(k);
     }
 
@@ -401,6 +402,7 @@ fn telemetry_is_off_unless_asked() {
             systems: None,
             caches: Vec::new(),
             expire_after: sluice_core::EXPIRE_AFTER,
+            telemetry: None,
         },
     )
     .with_running(repo.dir().join(".git/host-running"));

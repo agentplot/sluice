@@ -138,6 +138,16 @@ fn the_root_help_names_opentelemetrys_off_switches() {
     }
 }
 
+/// 151: the root help names the host's own settings, where telemetry is
+/// set up, and the file that holds them (record 0106; design D8).
+#[test]
+fn the_root_help_names_the_hosts_telemetry_table() {
+    let text = help(&["--help"]);
+    for words in ["[telemetry]", "~/.config/sluice/config.toml"] {
+        assert!(text.contains(words), "{words:?} in {text}");
+    }
+}
+
 #[test]
 fn a_command_still_takes_the_telemetry_flags() {
     // Outside any repository: read past the command line, it fails as

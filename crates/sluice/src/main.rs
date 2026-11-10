@@ -6,9 +6,10 @@ use std::time::{Duration, Instant};
 use clap::Parser;
 use sluice::exec::Host;
 use sluice::host_settings::{HostSettings, Look};
+use sluice::instance::Instance;
 use sluice::profiles::Bound;
 use sluice::retry::Policy;
-use sluice::telemetry::Telemetry;
+use sluice::telemetry::{Settings, Telemetry};
 use sluice::{drive, run, Cli, Command, Driven, Driving, Pause, Skipped, Sleep};
 use sluice_core::{Clock, Serves, Sluice, SystemClock};
 
@@ -95,46 +96,35 @@ fn main() {
         }
         std::process::exit(hook(cli, retry));
     }
-    // 135, record 0107: a `sluice run` holds the host's settings with the
-    // sign of their file, to take a change up between its passes.
-    let opened = repository_dir(&cli).and_then(|dir| match &cli.command {
+    // The host's own settings, read once: telemetry starts from them before
+    // the bound opens on them and before the interrupt handler is set, so
+    // no thread of sluice's runs while telemetry takes the caller's OTLP
+    // variables out (151; record 0106; design D2, D4). A `sluice run`
+    // holds them with the sign of their file, to take a change up between
+    // its passes (135; record 0107).
+    let read = match &cli.command {
         Some(Command::Run { .. }) => {
-            let settings = HostSettings::read()?;
-            let program = std::env::current_exe()?;
-            let bound = Bound::open_with(
-                &dir,
-                program.clone(),
-                settings.held().clone(),
-                retry.clone(),
-            )?;
-            Ok((
-                bound,
-                Some(Kept {
-                    dir,
-                    program,
-                    settings,
-                    retry: retry.clone(),
-                }),
-            ))
+            HostSettings::read().map(|settings| (settings.held().clone(), Some(settings)))
         }
-        _ => Ok((Bound::open(&dir, retry.clone())?, None)),
-    });
-    let (bound, kept) = match opened {
-        Ok(opened) => opened,
+        _ => Instance::read().map(|instance| (instance, None)),
+    };
+    let (instance, held) = match read {
+        Ok(read) => read,
         Err(e) => {
             eprintln!("sluice: {e:#}");
             tell_json(json, &e);
             std::process::exit(3);
         }
     };
-    if let Err(e) = sluice::stop_on_interrupt() {
-        eprintln!("sluice: {e:#}");
-        tell_json(json, &e);
-        std::process::exit(3);
-    }
+    let settings = Settings::choose(
+        cli.choices(),
+        instance.telemetry.as_ref(),
+        &sluice::profiles::checks::hostname(),
+        std::env::vars(),
+    );
     // ADR 0014: telemetry that cannot start is reported and left off.
-    let telemetry = if cli.otel {
-        match Telemetry::start(&cli.otel_service_name, cli.otel_logs, cli.otel_logs_limit) {
+    let telemetry = if settings.send {
+        match Telemetry::start(&settings) {
             Ok(t) => Some(t),
             Err(e) => {
                 eprintln!("sluice: warning: telemetry off: {e:#}");
@@ -144,6 +134,32 @@ fn main() {
     } else {
         None
     };
+    let opened = repository_dir(&cli).and_then(|dir| {
+        let program = std::env::current_exe()?;
+        let bound = Bound::open_with(&dir, program.clone(), instance, retry.clone())?;
+        let kept = held.map(|settings| Kept {
+            dir,
+            program,
+            settings,
+            retry: retry.clone(),
+        });
+        Ok((bound, kept))
+    });
+    let (bound, kept) = match opened {
+        Ok(opened) => opened,
+        Err(e) => {
+            eprintln!("sluice: {e:#}");
+            tell_json(json, &e);
+            finish(telemetry);
+            std::process::exit(3);
+        }
+    };
+    if let Err(e) = sluice::stop_on_interrupt() {
+        eprintln!("sluice: {e:#}");
+        tell_json(json, &e);
+        finish(telemetry);
+        std::process::exit(3);
+    }
     // The tick a reader names in its document is the pause it takes.
     let every = sluice::tick(cli.command.as_ref());
     let mut out = std::io::stdout();
@@ -175,10 +191,15 @@ fn main() {
             3
         }
     };
+    finish(telemetry);
+    std::process::exit(code);
+}
+
+/// Send what telemetry holds, where it started.
+fn finish(telemetry: Option<Telemetry>) {
     if let Some(t) = telemetry {
         t.finish();
     }
-    std::process::exit(code);
 }
 
 /// What a `sluice run` keeps to bind its repository afresh: the folder it
