@@ -23,7 +23,7 @@ core.28 and core.29.
 
 ## 1. Main as record 0110 leaves it
 
-- [ ] 1.1 Merge main into this branch once main holds fix `a-fetch-and-its-hook-share-no-lock` (record 0110). Use the subject `chore(merge): take main at <rev> into change/no-try-of-a-call-to-a-remote-outlasts-its-limit, a sluice under sluice's own fetch fetches nothing (record 0110; core.29)`. Where main does not hold it yet, stop short with `flume needs`, naming the fix this change waits on. True when `git merge-base --is-ancestor main HEAD` exits 0 and `git grep -q 'fn under_own_fetch' HEAD -- crates/sluice/src/profiles/pushed_refs.rs` exits 0.
+- [x] 1.1 Merge main into this branch once main holds fix `a-fetch-and-its-hook-share-no-lock` (record 0110). Use the subject `chore(merge): take main at <rev> into change/no-try-of-a-call-to-a-remote-outlasts-its-limit, a sluice under sluice's own fetch fetches nothing (record 0110; core.29)`. Where main does not hold it yet, stop short with `flume needs`, naming the fix this change waits on. True when `git merge-base --is-ancestor main HEAD` exits 0 and `git grep -q 'fn under_own_fetch' HEAD -- crates/sluice/src/profiles/pushed_refs.rs` exits 0.
 
 ## 2. The decision recorded
 
