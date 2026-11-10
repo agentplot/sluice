@@ -148,3 +148,11 @@ tool of ours on a page (core.26).
   No check of the gate reads `*.md` outside the site (core.21's details), so this task is done when the page says it.
 - [x] 6.5 In `README.md`, have "Telemetry" say that a host turns it on with `[telemetry] send = true` in `~/.config/sluice/config.toml`, and names its collector there. No check of the gate reads `README.md`, so this task is done when it says it.
 - [x] 6.6 In record 0014, `docs/adr/0014-telemetry-is-opt-in-otlp-and-decides-nothing.md`, add after its 2026-11-08 amendment a dated line saying that where telemetry goes is the host's own setting, `[telemetry]`, by record 0106 (151; rule core.53). No check of the gate reads `docs/adr/` (core.21's details), so this task is done when the record says it.
+
+## 7. The specs it makes pass strict validation
+
+- [x] 7.1 Split the requirements this change made longer than OpenSpec's 500 characters, which failed `root:specs` once the change was archived (#62 on `bolt/sluices-telemetry-is-a-host-setting`):
+  - in `telemetry`, "Telemetry is off unless asked", "A run's checks join the round", "How much of a failure is sent is the host's choice" and "OpenTelemetry's settings turn a signal off";
+  - in `host-settings-module`, "sluice reads the module's file as written", its list left to its scenario.
+
+  Move what each says beyond its own behaviour into requirements of its own, each with its scenarios: "Telemetry goes as OTLP to the collector chosen", "The table turns a signal off", "With a table, a run gets what sluice sends" and "With no table, a run gets the caller's telemetry". Keep in each MODIFIED block every scenario the specs hold for it. `root:changes` cannot see this, since OpenSpec measures a change's ADDED requirements alone, and `root:specs` reads the specs only once the change is archived. True when, in the devenv shell, a copy of `openspec/` in a temporary directory, with the change archived there by `openspec archive sluices-telemetry-is-a-host-setting --yes`, passes `openspec validate --specs --strict --no-interactive`.

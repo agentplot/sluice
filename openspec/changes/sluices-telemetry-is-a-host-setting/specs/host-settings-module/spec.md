@@ -61,16 +61,9 @@ file as written (35, 51, 71, 74, 78, 87, 136, 151; records 0098, 0102,
 
 The file the module renders with every key it declares set SHALL be
 read by sluice's own reader of the host's settings, which refuses a
-field it does not know, as the settings name it (35, 51, 71, 74, 78,
-87, 136, 151). That is:
-
-- the bound, the cores sluice may use, the reserve and the systems;
-- the forge's app, key and discovery;
-- the signer and its key;
-- the peers' lease, sign of life and name;
-- the span an outcome is owed before it expires;
-- each cache's directory, socket and variables;
-- the telemetry table's every key.
+field it does not know, as the settings name it: every key of `runs`,
+`forge`, `signing`, `peers`, `deliveries`, `caches` and `telemetry`
+(35, 51, 71, 74, 78, 87, 136, 151).
 
 #### Scenario: Reading the module's file
 

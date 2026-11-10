@@ -147,6 +147,101 @@ before.
     host's name;
   - the fourth reads the variable, and sluice adds no `host.name`.
 
+### Requirement: Telemetry goes as OTLP to the collector chosen
+
+While telemetry is on, sluice SHALL send it as OTLP over HTTP,
+protobuf, to the collector: the table's `collector`, else
+`OTEL_EXPORTER_OTLP_ENDPOINT`, else `http://localhost:4318`.
+
+#### Scenario: Telemetry reaches the collector as OTLP over HTTP
+
+- **WHEN** telemetry is on with no table, `OTEL_EXPORTER_OTLP_ENDPOINT`
+  names a collector, the service chosen is `sluice-under-test`, and a
+  submission's combination fails its gate
+- **THEN** the collector is sent a `POST` of `application/x-protobuf`
+  at `/v1/traces`, `/v1/metrics` and `/v1/logs`, and the traces name
+  the service, the release and `sluice.verdict`
+  (`telemetry_goes_to_the_endpoint_as_otlp_over_http` in
+  `crates/sluice/tests/telemetry_logs.rs`)
+
+### Requirement: The table turns a signal off
+
+The host's table SHALL turn traces off with `traces = false` and
+metrics with `metrics = false`, and logs SHALL be off while the logs'
+level chosen is `off`. The environment SHALL never turn on a signal the
+table turns off.
+
+#### Scenario: The table turns traces off whatever the environment says
+
+- **WHEN** the table holds `send = true`, its collector and
+  `traces = false`, `OTEL_TRACES_EXPORTER` is `otlp`, and a
+  submission's combination fails its gate
+- **THEN** nothing is sent to `/v1/traces`, and its metrics are sent to
+  `/v1/metrics` and its failure's record to `/v1/logs`
+  (`the_table_turns_traces_off_whatever_the_environment_says` in
+  `crates/sluice/tests/telemetry_logs.rs`)
+
+#### Scenario: The table and the environment together
+
+- **WHEN** the signals are chosen from a table and an environment
+- **THEN** each comes out as follows
+  (`the_table_turns_a_signal_off_and_the_environment_never_turns_it_on`
+  in `crates/sluice/src/telemetry.rs`):
+  - `traces = false` with `OTEL_TRACES_EXPORTER` at `otlp` leaves
+    traces off;
+  - `traces = true` with `OTEL_TRACES_EXPORTER` at `none` leaves them
+    off;
+  - `metrics` unset with nothing in the environment leaves metrics on;
+  - `logs = "off"` leaves logs off whatever the environment says.
+
+### Requirement: With a table, a run gets what sluice sends
+
+With a `[telemetry]` table, a run's `OTEL_*` SHALL be built from what
+sluice sends and from none of the caller's other `OTEL_*`:
+
+- the table's `collector` as `OTEL_EXPORTER_OTLP_ENDPOINT`, with
+  protocol `http/protobuf`, else the caller's `OTEL_EXPORTER_OTLP_*`;
+- `OTEL_<SIGNAL>_EXPORTER` at `none` for each signal sluice does not
+  send, traces, metrics or logs;
+- `OTEL_RESOURCE_ATTRIBUTES` holding `host.name` and the table's
+  `attributes`, before the run's own, and never `service.name`.
+
+#### Scenario: A run gets the table's collector and none of the caller's
+
+- **WHEN** telemetry is on with the table's `collector`,
+  `metrics = false` and `attributes` holding
+  `deployment.environment = "prod"`, the caller's environment holds
+  another `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`
+  and `OTEL_RESOURCE_ATTRIBUTES`, and a run is started under a span
+- **THEN** its environment holds `OTEL_EXPORTER_OTLP_ENDPOINT` the
+  table's collector, `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf`,
+  `OTEL_METRICS_EXPORTER=none`, a `TRACEPARENT` naming the span, and
+  `OTEL_RESOURCE_ATTRIBUTES` exactly `host.name`,
+  `deployment.environment=prod`, the trace and span ids,
+  `sluice.place` and `sluice.revision`; and no
+  `OTEL_EXPORTER_OTLP_HEADERS` and nothing of the caller's attributes
+  (`with_the_tables_collector_a_run_gets_it_and_none_of_the_callers` in
+  `crates/sluice/tests/telemetry_logs.rs`)
+
+### Requirement: With no table, a run gets the caller's telemetry
+
+Where the host has no `[telemetry]` table, a run SHALL get the caller's
+`OTEL_*` as sluice read them when it started, its
+`OTEL_RESOURCE_ATTRIBUTES` holding `host.name` where sluice named the
+host itself.
+
+#### Scenario: A run gets the caller's collector and attributes
+
+- **WHEN** telemetry is on with no table, the caller's
+  `OTEL_EXPORTER_OTLP_ENDPOINT` names a collector and its
+  `OTEL_RESOURCE_ATTRIBUTES` holds `deployment.environment=test`, and a
+  run is started under a span
+- **THEN** its environment holds the caller's
+  `OTEL_EXPORTER_OTLP_ENDPOINT`, and `OTEL_RESOURCE_ATTRIBUTES` begins
+  `deployment.environment=test,host.name=host-a`
+  (`a_run_s_checks_join_the_round` in
+  `crates/sluice/tests/telemetry_logs.rs`)
+
 ## MODIFIED Requirements
 
 ### Requirement: Telemetry is off unless asked
@@ -158,12 +253,8 @@ sluice SHALL send no telemetry unless one of these holds:
   `send = true`.
 
 `SLUICE_OTEL` takes `1`, `true`, `yes` or `on` to turn telemetry on,
-and `0`, `false`, `no` or `off` to turn it off. When on, it SHALL send
-OTLP over HTTP, protobuf, to the collector, as the service chosen, with
-`service.version` the release's. The collector is the table's
-`collector`, else `OTEL_EXPORTER_OTLP_ENDPOINT`, else
-`http://localhost:4318`. While telemetry is off, a run's checks SHALL
-get none of sluice's `OTEL_*` variables.
+and `0`, `false`, `no` or `off` to turn it off. While telemetry is off,
+a run's checks SHALL get none of sluice's `OTEL_*` variables.
 
 #### Scenario: A command's choices are read from its flags and variables
 
@@ -189,30 +280,12 @@ environment SHALL carry:
 
 - the collector sluice sends to and the signals it sends;
 - `OTEL_RESOURCE_ATTRIBUTES` extended with `sluice.place` and
-  `sluice.revision`;
+  `sluice.revision`, each value percent-encoded where the variable's
+  syntax would read it;
 - while it sends traces, `sluice.trace_id` and `sluice.span_id` there,
   and `TRACEPARENT` naming the span that started the run.
 
-Each value SHALL be percent-encoded where the variable's syntax would
-read it. Nothing of telemetry SHALL be added to a run's environment
-while telemetry is off.
-
-Where the host has a `[telemetry]` table, a run's `OTEL_*` SHALL be
-built from what sluice sends, and from none of the caller's other
-`OTEL_*`:
-
-- `OTEL_EXPORTER_OTLP_ENDPOINT` the table's `collector` and
-  `OTEL_EXPORTER_OTLP_PROTOCOL` `http/protobuf`, where the table names
-  a collector. Where it names none, the caller's
-  `OTEL_EXPORTER_OTLP_*`.
-- `OTEL_TRACES_EXPORTER`, `OTEL_METRICS_EXPORTER` or
-  `OTEL_LOGS_EXPORTER` at `none` for each signal sluice does not send.
-- `OTEL_RESOURCE_ATTRIBUTES` holding `host.name` and the table's
-  `attributes`, before the run's own, and never `service.name`.
-
-With no table, a run SHALL get sluice's own `OTEL_*` as before, its
-`OTEL_RESOURCE_ATTRIBUTES` holding `host.name` where sluice named it
-itself.
+Nothing of telemetry SHALL be added while telemetry is off.
 
 #### Scenario: A resource attribute's value is encoded
 
@@ -244,23 +317,6 @@ itself.
   (`with_traces_off_a_run_s_checks_join_no_trace` in
   `crates/sluice/tests/telemetry_logs.rs`)
 
-#### Scenario: A run gets the table's collector and none of the caller's
-
-- **WHEN** telemetry is on with the table's `collector`,
-  `metrics = false` and `attributes` holding
-  `deployment.environment = "prod"`, the caller's environment holds
-  another `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`
-  and `OTEL_RESOURCE_ATTRIBUTES`, and a run is started under a span
-- **THEN** its environment holds `OTEL_EXPORTER_OTLP_ENDPOINT` the
-  table's collector, `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf`,
-  `OTEL_METRICS_EXPORTER=none`, a `TRACEPARENT` naming the span, and
-  `OTEL_RESOURCE_ATTRIBUTES` exactly `host.name`,
-  `deployment.environment=prod`, the trace and span ids,
-  `sluice.place` and `sluice.revision`; and no
-  `OTEL_EXPORTER_OTLP_HEADERS` and nothing of the caller's attributes
-  (`with_the_tables_collector_a_run_gets_it_and_none_of_the_callers` in
-  `crates/sluice/tests/telemetry_logs.rs`)
-
 ### Requirement: How much of a failure is sent is the host's choice
 
 The logs' level SHALL be `off`, `summary` or `tail`, `summary` by
@@ -268,14 +324,8 @@ default. The command's `--otel-logs` or `SLUICE_OTEL_LOGS` chooses it,
 else the host's `[telemetry] logs`. At `summary` a failure's record
 body SHALL name the task and where its output is kept, never the
 output. At `tail` it SHALL be the output's end, beginning at a
-character's start, and at most this many bytes:
-
-- the command's `--otel-logs-limit` or `SLUICE_OTEL_LOGS_LIMIT`, held
-  to 65536;
-- else the table's `logs_tail_bytes`;
-- else 8192.
-
-A warning's body SHALL never be summarised.
+character's start, at most the tail's bytes chosen and never more than
+65536. A warning's body SHALL never be summarised.
 
 #### Scenario: A summary names where the output is kept
 
@@ -295,19 +345,13 @@ A warning's body SHALL never be summarised.
 
 ### Requirement: OpenTelemetry's settings turn a signal off
 
-While telemetry is on, sluice SHALL send a signal only while both of
-these leave it on:
-
-- the host's table: `traces` and `metrics` where it sets them, and for
-  logs a level other than `off`;
-- OpenTelemetry's SDK environment variables.
-
+While telemetry is on, sluice SHALL send a signal only while both the
+host's table and OpenTelemetry's SDK environment variables leave it on.
 `OTEL_SDK_DISABLED` `true` SHALL turn every signal off, and
 `OTEL_TRACES_EXPORTER`, `OTEL_METRICS_EXPORTER` or `OTEL_LOGS_EXPORTER`
 `none` SHALL turn that one alone off. Each value SHALL be read without
 its case or the space around it, and any other value SHALL leave its
-signal as the table has it: the environment SHALL never turn on a
-signal the table turns off.
+signal as the table has it.
 
 #### Scenario: Only traces are turned off
 
@@ -347,29 +391,6 @@ signal the table turns off.
   - at `otlp`, `console` or unset it leaves them on;
   - `OTEL_SDK_DISABLED` at `true` or ` TRUE ` turns every signal off;
   - at `1`, `false` or empty it turns none off.
-
-#### Scenario: The table turns traces off whatever the environment says
-
-- **WHEN** the table holds `send = true`, its collector and
-  `traces = false`, `OTEL_TRACES_EXPORTER` is `otlp`, and a
-  submission's combination fails its gate
-- **THEN** nothing is sent to `/v1/traces`, and its metrics are sent to
-  `/v1/metrics` and its failure's record to `/v1/logs`
-  (`the_table_turns_traces_off_whatever_the_environment_says` in
-  `crates/sluice/tests/telemetry_logs.rs`)
-
-#### Scenario: The table and the environment together
-
-- **WHEN** the signals are chosen from a table and an environment
-- **THEN** each comes out as follows
-  (`the_table_turns_a_signal_off_and_the_environment_never_turns_it_on`
-  in `crates/sluice/src/telemetry.rs`):
-  - `traces = false` with `OTEL_TRACES_EXPORTER` at `otlp` leaves
-    traces off;
-  - `traces = true` with `OTEL_TRACES_EXPORTER` at `none` leaves them
-    off;
-  - `metrics` unset with nothing in the environment leaves metrics on;
-  - `logs = "off"` leaves logs off whatever the environment says.
 
 ### Requirement: Telemetry with every signal off is off
 
