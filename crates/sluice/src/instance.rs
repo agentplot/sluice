@@ -506,6 +506,35 @@ impl Instance {
     pub fn jobs(&self) -> usize {
         (self.processors / self.bound).max(1)
     }
+
+    /// The tables whose settings differ between these and `other`, in the
+    /// configuration reference's order: `[runs]` for the bound, the
+    /// reserve, the cores sluice may use and the systems; `[forge]`;
+    /// `[signing]`; `[peers]`; `[deliveries]` for the span an outcome is
+    /// owed; `[[caches]]`. What a process that took `other` up says it
+    /// took up (135; record 0107; design D5).
+    pub fn changed_tables(&self, other: &Instance) -> Vec<&'static str> {
+        [
+            (
+                "[runs]",
+                (self.bound, self.reserved, self.processors, &self.systems)
+                    != (
+                        other.bound,
+                        other.reserved,
+                        other.processors,
+                        &other.systems,
+                    ),
+            ),
+            ("[forge]", self.forge != other.forge),
+            ("[signing]", self.signing != other.signing),
+            ("[peers]", self.peers != other.peers),
+            ("[deliveries]", self.expire_after != other.expire_after),
+            ("[[caches]]", self.caches != other.caches),
+        ]
+        .into_iter()
+        .filter_map(|(table, differs)| differs.then_some(table))
+        .collect()
+    }
 }
 
 /// 51: `[deliveries] expire_after`, a duration as sluice's settings write
@@ -767,7 +796,9 @@ pub fn state_dir() -> Result<PathBuf> {
     Ok(state.join("sluice"))
 }
 
-fn config_path() -> Option<PathBuf> {
+/// The host's settings file, `$XDG_CONFIG_HOME/sluice/config.toml` (default
+/// `~/.config`); none where the host has no home to name it in.
+pub(crate) fn config_path() -> Option<PathBuf> {
     let base = match std::env::var_os("XDG_CONFIG_HOME") {
         Some(d) if !d.is_empty() => PathBuf::from(d),
         _ => home()?.join(".config"),
@@ -1112,6 +1143,37 @@ dir = "/caches/moon"
             "RUSTC_WRAPPER is set by both the first and the second [[caches]]: \
              a variable has one value for every run"
         );
+    }
+
+    /// The settings-take-up spec's "Which tables changed": the tables a
+    /// change moves are named in the reference's order, and none for two
+    /// equal readings (135; record 0107; design D5).
+    #[test]
+    fn the_tables_a_change_moves_are_named() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("sluice-tables-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let key = dir.join("app.pem");
+        std::fs::write(&key, "key").unwrap();
+        std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let forge = |discovery: &str| {
+            format!(
+                "[forge]\napp_id = 42\nkey = {:?}\ndiscovery = {discovery:?}\n",
+                key.display().to_string()
+            )
+        };
+        let read = |text: &str| with(text, 16).unwrap();
+        let before = read(&format!("[runs]\nmax = 2\n\n{}", forge("60s")));
+        let after = read(&format!("[runs]\nmax = 3\n\n{}", forge("90s")));
+        let cached = read(&format!(
+            "[runs]\nmax = 2\n\n{}\n[[caches]]\ndir = \"/caches/a\"\n",
+            forge("60s")
+        ));
+        let again = read(&format!("[runs]\nmax = 2\n\n{}", forge("60s")));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(before.changed_tables(&after), ["[runs]", "[forge]"]);
+        assert_eq!(before.changed_tables(&cached), ["[[caches]]"]);
+        assert_eq!(before.changed_tables(&again), Vec::<&str>::new());
     }
 
     /// 35, 51, 71, 74, 78, 87, 136, 151; records 0098, 0102, 0106: the
