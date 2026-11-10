@@ -97,8 +97,12 @@ wait's five minutes would let one stalled try hold the lock that long.
   through `runs::end_group`, giving `GRACE` of two seconds, so git,
   asked, removes the lock files it holds. It waits `DRAINED`, 200 ms,
   for a pipe a process outside the group holds open.
-- `Ended { status, stopped, stdout, stderr }` says how the process
-  ended.
+- `Ended { status, stopped, stdout, stderr, stdout_cut, stderr_cut }`
+  says how the process ended, and whether what it kept of each pipe is
+  less than all the pipe gave: bytes past `kept` passed over, the pipe
+  failing past them, or the pipe not read to its end when the group was
+  ended. The credential command cuts its words so read at their last
+  whole line, as record 0108 as amended 2026-11-10 has them.
 - `span(d)` says a limit as `30s`, or as `300ms` under a second.
 
 `CredentialCommand::get` and `erase` move onto `finish`. Its own

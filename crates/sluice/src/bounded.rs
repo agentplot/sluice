@@ -29,6 +29,14 @@ pub struct Ended {
     pub stopped: bool,
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
+    /// Whether what was kept of each pipe is less than all it gave: bytes
+    /// past the first `kept` passed over, the pipe failing past them, or
+    /// the pipe not read to its end when its group was ended. A reader
+    /// that must never take part of a line as whole, a credential
+    /// command's words among them, cuts it at its last whole line (record
+    /// 0108 as amended 2026-11-10).
+    pub stdout_cut: bool,
+    pub stderr_cut: bool,
 }
 
 /// `command` run in a process group of its own, its standard output and
@@ -80,11 +88,15 @@ pub fn finish(child: &mut Child, limit: Duration, kept: u64) -> io::Result<Ended
         Some(s) => s,
         None => child.wait()?,
     };
+    let (stdout, stdout_cut) = out.taken();
+    let (stderr, stderr_cut) = err.taken();
     Ok(Ended {
         status,
         stopped: !done,
-        stdout: out.taken(),
-        stderr: err.taken(),
+        stdout,
+        stderr,
+        stdout_cut,
+        stderr_cut,
     })
 }
 
@@ -100,8 +112,17 @@ pub fn span(d: Duration) -> String {
 /// A pipe read to its end by a thread of its own, into a buffer the
 /// caller may take before the end comes.
 struct Drain {
-    read: Arc<Mutex<Vec<u8>>>,
+    read: Arc<Mutex<Kept>>,
     thread: Option<JoinHandle<()>>,
+}
+
+/// What a [`Drain`] has read of its pipe so far.
+#[derive(Default)]
+struct Kept {
+    bytes: Vec<u8>,
+    /// Whether it passed over anything past what it keeps, or the pipe
+    /// failed once its kept part was full.
+    passed_over: bool,
 }
 
 impl Drain {
@@ -109,15 +130,21 @@ impl Drain {
         self.thread.as_ref().is_none_or(JoinHandle::is_finished)
     }
 
-    /// What was read so far.
-    fn taken(self) -> Vec<u8> {
-        std::mem::take(&mut *self.read.lock().unwrap_or_else(|p| p.into_inner()))
+    /// What was kept so far, and whether it is less than all the pipe
+    /// gave: anything passed over, or the pipe not yet read to its end.
+    fn taken(self) -> (Vec<u8>, bool) {
+        let unfinished = !self.done();
+        let mut read = self.read.lock().unwrap_or_else(|p| p.into_inner());
+        (
+            std::mem::take(&mut read.bytes),
+            read.passed_over || unfinished,
+        )
     }
 }
 
 /// A thread reading `pipe` to its end, keeping its first `kept` bytes.
 fn drain(pipe: Option<impl Read + Send + 'static>, kept: u64) -> Drain {
-    let read = Arc::new(Mutex::new(Vec::new()));
+    let read = Arc::new(Mutex::new(Kept::default()));
     let thread = pipe.map(|pipe| {
         let read = read.clone();
         std::thread::spawn(move || {
@@ -130,13 +157,17 @@ fn drain(pipe: Option<impl Read + Send + 'static>, kept: u64) -> Drain {
                     Ok(n) => {
                         let keep = n.min(usize::try_from(left).unwrap_or(usize::MAX));
                         left -= keep as u64;
-                        if keep > 0 {
-                            let mut r = read.lock().unwrap_or_else(|p| p.into_inner());
-                            r.extend_from_slice(&chunk[..keep]);
-                        }
+                        let mut r = read.lock().unwrap_or_else(|p| p.into_inner());
+                        r.bytes.extend_from_slice(&chunk[..keep]);
+                        r.passed_over |= keep < n;
                     }
                     Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
-                    Err(_) => break,
+                    Err(_) => {
+                        if left == 0 {
+                            read.lock().unwrap_or_else(|p| p.into_inner()).passed_over = true;
+                        }
+                        break;
+                    }
                 }
             }
         })
@@ -182,6 +213,27 @@ mod tests {
         assert_eq!(ended.status.code(), Some(3));
         assert_eq!(ended.stdout, b"out\n");
         assert_eq!(ended.stderr, b"err\n");
+    }
+
+    /// Record 0108 as amended: what a pipe gives past its kept part is
+    /// passed over and the part said cut; a pipe that gives no more is
+    /// whole.
+    #[test]
+    fn what_passes_the_kept_part_is_said_cut() {
+        let mut child = Command::new("sh")
+            .args(["-c", "printf 'whole\\npart' >&2; printf 'out'"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let ended = finish(&mut child, Duration::from_secs(10), 8).unwrap();
+        assert!(!ended.stopped);
+        assert_eq!(ended.stderr, b"whole\npa");
+        assert!(ended.stderr_cut);
+        assert_eq!(ended.stdout, b"out");
+        assert!(!ended.stdout_cut);
     }
 
     #[test]
