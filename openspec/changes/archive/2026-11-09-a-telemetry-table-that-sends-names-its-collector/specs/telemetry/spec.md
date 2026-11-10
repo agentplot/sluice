@@ -24,14 +24,12 @@ or `false` SHALL need no `collector`.
 ### Requirement: The table's collector is sluice's alone
 
 Where the host's table names a `collector`, sluice SHALL send there and
-nowhere else. It SHALL use none of the caller's `OTEL_EXPORTER_OTLP_*`
-endpoints, headers, protocol, timeout or compression. A table names no
-`collector` only where it does not send by itself. Where the host has
-no table, or a command's own `--otel` turns telemetry on beside a table
-that names none, the environment's `OTEL_EXPORTER_OTLP_*` SHALL name
-the collector, its headers and its protocol as before. A log body SHALL
-still be scrubbed of the values of the caller's secret-named variables,
-the headers among them.
+nowhere else, with none of the caller's `OTEL_EXPORTER_OTLP_*`
+endpoints, headers, protocol, timeout or compression. With no table, or
+for a command's own `--otel` beside a table that names none, the
+environment's `OTEL_EXPORTER_OTLP_*` SHALL name the collector, its
+headers and its protocol. A log body SHALL still be scrubbed of the
+values of the caller's secret-named variables.
 
 #### Scenario: A session's collector and headers never take sluice's telemetry
 
