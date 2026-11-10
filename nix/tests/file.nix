@@ -149,8 +149,14 @@ in
       "bytes"
       "65536"
     ]
-    ++ describes "collector" [ "http://" ]
-    ++ describes "send" [ "false" ];
+    ++ describes "collector" [
+      "http://"
+      "send = true"
+    ]
+    ++ describes "send" [
+      "false"
+      "collector"
+    ];
 
   "A key given as a Nix path" = t.expect (
     !nixPath.success
