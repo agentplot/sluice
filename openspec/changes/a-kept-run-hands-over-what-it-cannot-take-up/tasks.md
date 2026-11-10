@@ -52,13 +52,13 @@ of ours on a page, in the skill or in output (core.26).
 
 ## 5. What a person reads
 
-- [ ] 5.1 Say on the site that a kept `sluice run` takes a change of `[telemetry]` up by starting itself afresh, in the same process, with nothing to restart:
+- [x] 5.1 Say on the site that a kept `sluice run` takes a change of `[telemetry]` up by starting itself afresh, in the same process, with nothing to restart:
   - In `site/src/content/docs/reference/configuration.md`, under "The host's config", say that a `sluice run` you keep running takes a change of `[telemetry]` up by starting itself afresh in the same process. Whatever runs it keeps following it, and runs already testing keep what they started with. Its stderr says the tables it took up. A change it could not start afresh for leaves it on the settings it holds, said once. Under `[telemetry]`, say the same in one sentence, linking that section.
   - In `site/src/content/docs/reference/commands.md`, add to the `sluice run` row that a change of `[telemetry]` starts it afresh in the same process.
   - In `site/src/content/docs/reference/telemetry.md`, where it says every command reads the table, say that a `sluice run` kept running takes a change of the table up at its next pass.
 
   True when `sluice exec bolt/a-kept-run-hands-over-what-it-cannot-take-up -- moon run site:prose` passes with no warning on the three pages.
-- [ ] 5.2 In `docs/telemetry.md`, where it says every command reads the table, say that a `sluice run` kept running takes a change of the table up at its next pass by starting itself afresh, so a host keeps no restart of sluice for it. No gate task reads `*.md` outside the site (core.21), so this one is checked by hand: true when `grep -n 'starting itself afresh' docs/telemetry.md` names the sentence.
+- [x] 5.2 In `docs/telemetry.md`, where it says every command reads the table, say that a `sluice run` kept running takes a change of the table up at its next pass by starting itself afresh, so a host keeps no restart of sluice for it. No gate task reads `*.md` outside the site (core.21), so this one is checked by hand: true when `grep -n 'starting itself afresh' docs/telemetry.md` names the sentence.
 - [ ] 5.3 In `plugins/sluice/skills/setting-up-sluice/SKILL.md`, under "The host's file", after "a `sluice run` kept running takes a change up before its next pass, so nothing restarts it", add that a change of `[telemetry]` starts it afresh in the same process. True when `sluice exec bolt/a-kept-run-hands-over-what-it-cannot-take-up -- moon run plugin-sluice:validate` passes.
 - [ ] 5.4 In `docs/adr/0107-a-sluice-process-that-keeps-running-takes-up-changed-host-settings-at-its-next-round.md`, add an amendment dated the day it is written, recording what the hand-over of `sluice run` chose within the decision, design D1 to D7, each with the path not taken:
   - `[telemetry]` the one table no binding takes up in place, compared whole;
