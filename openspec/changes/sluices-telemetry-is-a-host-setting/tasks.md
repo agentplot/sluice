@@ -41,15 +41,15 @@ tool of ours on a page (core.26).
 
 ## 2. The module declares the table
 
-- [ ] 2.1 In `nix/modules/options.nix`, declare `telemetry` as `unset (table { .. })` beside `forge` and `signing`, with every key D7 names, unset and typed.
+- [x] 2.1 In `nix/modules/options.nix`, declare `telemetry` as `unset (table { .. })` beside `forge` and `signing`, with every key D7 names, unset and typed.
   - Give each option a description saying what the key does, its unit or its values, and sluice's default where it is unset, in the configuration reference's words (principle 13).
   - Give the table's own description, naming clause 151.
   - In `nix/tests/settings.nix`, set `every`'s `telemetry` as the scenario "Every key the module declares" says.
   - Write the `[telemetry]` and `[telemetry.attributes]` it renders into `nix/tests/files/every.toml`.
 
   True when `sluice exec bolt/sluices-telemetry-is-a-host-setting -- moon run nix:test` passes.
-- [ ] 2.2 Add the case "The telemetry options say their units and values" to `nix/tests/file.nix`. It reads the descriptions from the evaluated module's `options` and finds what the scenario "The telemetry options' descriptions" says. True when `sluice exec bolt/sluices-telemetry-is-a-host-setting -- moon run nix:test` passes.
-- [ ] 2.3 Extend `the_modules_file_is_read_as_written` in `crates/sluice/src/instance.rs`, so the `Instance` it expects holds the telemetry table that `every.toml` holds, as the scenario "Reading the module's file" says. True when `cargo test -p sluice --lib instance::tests::the_modules_file_is_read_as_written` passes.
+- [x] 2.2 Add the case "The telemetry options say their units and values" to `nix/tests/file.nix`. It reads the descriptions from the evaluated module's `options` and finds what the scenario "The telemetry options' descriptions" says. True when `sluice exec bolt/sluices-telemetry-is-a-host-setting -- moon run nix:test` passes.
+- [x] 2.3 Extend `the_modules_file_is_read_as_written` in `crates/sluice/src/instance.rs`, so the `Instance` it expects holds the telemetry table that `every.toml` holds, as the scenario "Reading the module's file" says. True when `cargo test -p sluice --lib instance::tests::the_modules_file_is_read_as_written` passes.
 
 ## 3. The settings chosen
 
