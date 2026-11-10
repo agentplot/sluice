@@ -127,14 +127,14 @@ tool of ours on a page (core.26).
   - each other flag's default is the host's `[telemetry]`, else sluice's.
 
   Each flag's line still begins with the flag and a space, as `only_the_root_help_names_the_telemetry_flags` reads it. Add `the_root_help_names_the_hosts_telemetry_table` to `crates/sluice/tests/usage.rs`, finding `[telemetry]` and `~/.config/sluice/config.toml` in `help(&["--help"])`. True when `cargo test -p sluice --test usage the_root_help_names_the_hosts_telemetry_table` passes.
-- [ ] 6.2 In `site/src/content/docs/reference/configuration.md`, add what the table needs:
+- [x] 6.2 In `site/src/content/docs/reference/configuration.md`, add what the table needs:
   - a `[telemetry]` section after `[deliveries]`, with D1's keys in a key and meaning table, each with its unit, its values, its default and what is refused;
   - how a command's flags and `SLUICE_OTEL` choose for that command alone, and how OpenTelemetry's variables read beside the table;
   - the table's lines in the file's example, and its row in the tables' table, "it sends sluice's telemetry";
   - the `SLUICE_OTEL` row in "Environment" saying it chooses for one command over `[telemetry] send`.
 
   Its example attribute is `deployment.environment = "prod"`. True when `sluice exec bolt/sluices-telemetry-is-a-host-setting -- moon run site:prose` passes with no warning on the page.
-- [ ] 6.3 In `site/src/content/docs/reference/telemetry.md`, make the page say the table:
+- [x] 6.3 In `site/src/content/docs/reference/telemetry.md`, make the page say the table:
   - "Off unless asked", "Where" and "As" say the table first and the command's own choice over it;
   - "What a host needs" becomes a receiver on localhost and a `[telemetry]` table, with nothing set in a session's environment and no wrapper;
   - "The checks inside a run" says a run gets the collector and the signals sluice sends.
