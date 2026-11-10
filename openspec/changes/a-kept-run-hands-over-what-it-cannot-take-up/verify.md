@@ -44,7 +44,7 @@ a_run_keeps_its_settings_when_a_change_it_starts_afresh_for_does_not_bind`:
 
 ## Tasks
 
-All 15 tasks in `tasks.md` are ticked. `openspec validate
+All 14 tasks in `tasks.md` are ticked. `openspec validate
 a-kept-run-hands-over-what-it-cannot-take-up --strict`: valid.
 
 ## Requirements and scenarios
