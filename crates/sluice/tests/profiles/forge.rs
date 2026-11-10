@@ -1691,6 +1691,44 @@ fn every_process_on_the_host_honours_the_pause() {
     assert!(pauses.borrow().is_empty(), "a round waits no pause");
 }
 
+/// The forge-allowance spec's "A command's token honours the pause": a
+/// process whose token the host's credential command gives makes no call
+/// for a repository while a process on the app's key keeps the pause, and
+/// the pause is kept under the app and the repository's owner (134;
+/// record 0108).
+#[test]
+fn a_commands_token_honours_the_pause() {
+    use sluice::profiles::github::forge::Forge as _;
+    let (_dir, state, gh, _) = kept_github("allowance-command");
+    let reset = Utc::now() + TimeDelta::minutes(20);
+    gh.trouble("GET", "/repos/o/r/pulls", 1, primary_spent(reset));
+    let run = kept_app(&gh, state.path(), Rc::new(Policy::round().recording()));
+    let e = run.pulls(&repo(), "main").unwrap_err();
+    assert!(sluice::retry::limited(&e).is_some(), "{e:#}");
+    let scratch = support::Scratch::new("allowance-command-script");
+    let command = credential_script(
+        &scratch,
+        &format!("cat > /dev/null\necho password={}\n", github::TOKEN),
+    );
+    let submit = App::commanded(
+        APP,
+        command,
+        gh.url(),
+        Box::new(Utc::now),
+        Rc::new(Policy::round().recording()),
+    )
+    .keeping(sluice::profiles::github::kept::Kept::new(state.path()));
+    let e = submit.pulls(&repo(), "main").unwrap_err();
+    let limited = sluice::retry::limited(&e).expect("a spent allowance");
+    assert_eq!(limited.until.timestamp(), reset.timestamp());
+    assert_eq!(gh.calls("GET", "/repos/o/r/pulls"), 1, "one call, refused");
+    assert_eq!(gh.calls("GET", "/installation/repositories"), 0);
+    assert!(state
+        .path()
+        .join(format!("forge/pauses/{APP}-o-core.json"))
+        .is_file());
+}
+
 /// The forge-allowance spec's "The pause outlives the process": a process
 /// started again before the pause ends makes no call before it ends, and
 /// one waiting it out calls once it has.
