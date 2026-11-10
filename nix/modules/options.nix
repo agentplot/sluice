@@ -10,7 +10,11 @@
 # sluice's to refuse at its read, naming the setting. A key is named by
 # its path outside the store, since the file is in the store, which every
 # user reads: a key in the store, or one that is no path, fails
-# evaluation (78, 136).
+# evaluation (78, 136). `forge.credential`, a command that gives the
+# app's token in place of its key, is a list of its program and then each
+# argument, and an argument that holds a GitHub token's text fails
+# evaluation for the same reason; a program in the store is no secret
+# (record 0108, core.51).
 { packages }:
 {
   config,
@@ -77,6 +81,24 @@ let
         message = "${option} is in the Nix store, which every user reads: ${put}";
       }
     ];
+
+  # A token's text in the forge's credential command: GitHub's tokens
+  # begin with one of these.
+  prefixes = [
+    "ghs_"
+    "ghp_"
+    "gho_"
+    "ghu_"
+    "ghr_"
+    "github_pat_"
+  ];
+  credential = if cfg.settings.forge == null then null else cfg.settings.forge.credential;
+  noToken = lib.optionals (credential != null) [
+    {
+      assertion = !lib.any (word: lib.any (p: lib.hasPrefix p word) prefixes) credential;
+      message = "services.sluice.settings.forge.credential holds a GitHub token's text, and the file that names it is in the Nix store, which every user reads: name a command that prints the token";
+    }
+  ];
 in
 {
   options.services.sluice = {
@@ -106,9 +128,10 @@ in
             (table {
               app_id = unset types.int "The GitHub App sluice pushes as.";
               key = unset types.str "The path of the app's private key on this host, absolute or under `~/`, outside the Nix store. sluice refuses a key file anyone but its owner may read.";
+              credential = unset (types.listOf types.str) "In place of `key`, a command that gives the app's token: its program, then each argument, which sluice runs with no shell as git runs a credential helper. The program is a path, absolute or under `~/`, or a name the PATH finds. Never a token's text, since the file is in the Nix store, which every user reads (record 0108).";
               discovery = unset types.str "How often sluice asks GitHub for a branch's open pull requests while nothing on the host changes, a duration such as `\"60s\"` or `\"2m\"`. Where unset, `\"60s\"`; the least is `\"10s\"` (136).";
             })
-            "`[forge]`: the GitHub App sluice pushes as, for every branch whose `remote` is on GitHub. Where unset, sluice pushes with the host's own git credentials (136).";
+            "`[forge]`: the GitHub App sluice pushes as, for every branch whose `remote` is on GitHub, and its private key or a command that gives its token. Where unset, sluice pushes with the host's own git credentials (136; record 0108).";
         signing =
           unset
             (table {
@@ -155,6 +178,6 @@ in
 
   config = lib.mkMerge [
     { services.sluice.text = render (prune cfg.settings); }
-    (lib.mkIf cfg.enable { assertions = outside "forge" ++ outside "signing"; })
+    (lib.mkIf cfg.enable { assertions = outside "forge" ++ outside "signing" ++ noToken; })
   ];
 }

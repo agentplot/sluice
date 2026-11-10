@@ -45,4 +45,18 @@
       }
     ];
   };
+
+  # "A forge credential command": the app and the command that gives its
+  # token, in place of its key.
+  credential = {
+    forge = {
+      app_id = 123456;
+      credential = [
+        "/opt/forge/bin/token-helper"
+        "--app"
+        "sluice"
+      ];
+      discovery = "60s";
+    };
+  };
 }
