@@ -1,10 +1,11 @@
 # Verify: sluices-telemetry-is-a-host-setting
 
 Verified 2026-11-09 on `change/sluices-telemetry-is-a-host-setting` at
-`1d34d2d5`, cut from `bolt/sluices-telemetry-is-a-host-setting`
-(`ef64ee41`). The work holds: the whole checks pass, every requirement
-and scenario of both specs is met by the code and by a test that passed
-in the gate, and every task is ticked.
+`9c0069df`, cut from `bolt/sluices-telemetry-is-a-host-setting`
+(`ef64ee41`, the same on `origin`). The work holds: the whole checks
+pass, every requirement and scenario of both specs is met by the code
+and by a test that passed in the gate, every task is ticked, and the
+specs the change makes pass strict validation once it is archived.
 
 ## The whole checks
 
@@ -12,39 +13,62 @@ in the gate, and every task is ticked.
 `#check-fast` (`.config/sluice.toml`), run once with sluice 0.73.1:
 
 ```
-running the checks 1d34d2d affects against bolt/sluices-telemetry-is-a-host-setting (ef64ee4)
+running the checks 9c0069d affects against bolt/sluices-telemetry-is-a-host-setting (ef64ee4)
 ...
+Tasks: 9 completed
 passed: 9 tasks
-recorded 9 results under their keys for 1d34d2d
+recorded 9 results under their keys for 9c0069d
 ```
 
-Exit 0. The tasks were `root:format`, `root:lint`, `root:changes`,
-`root:adrs`, `nix:lint`, `nix:typecheck`, `nix:test`, `site:prose` and
-`cli:test`. `cli:test` passed every test binary, none failing or
-ignored.
+Exit 0. The tasks were `root:format`, `root:lint`, `root:changes`
+(10 changes valid), `root:adrs`, `nix:lint`, `nix:typecheck`,
+`nix:test`, `site:prose` (0 errors, 0 warnings) and `cli:test`.
+`cli:test` passed every test binary, none failing or ignored.
 
 Two kinds of warning in the run's output, neither from this change nor
 failing a check:
 
 - moon could not write its shared store under the host's moon home
-  (`Failed to create .../moon-home/cache/shared/blobs/temp/...`, nine
-  times) nor archive a task's outputs in the place's `.moon/cache`.
-  That is the sandbox not yet granting a run the store its check
-  profile reads, decision 1 of record 0105, which this tree does not
-  build yet. Results were recorded under their keys all the same.
+  (`Failed to create .../moon-home/cache/shared/blobs/temp/...`) nor
+  archive a task's outputs in the place's `.moon/cache`. That is the
+  sandbox not yet granting a run the store its check profile reads,
+  decision 1 of record 0105, which this tree does not build yet.
+  Results were recorded under their keys all the same.
 - `Failed to shut down OTLP metrics exporter` as the command ended:
   the installed sluice's own telemetry at exit, which no check reads.
 
-`openspec validate sluices-telemetry-is-a-host-setting --strict`: valid.
+## The specs once archived
+
+`root:specs` reads `openspec/specs/` alone, so the gate above cannot
+see what this change makes of them until it is archived. As task 7.1
+says, with the devenv's pinned OpenSpec, 1.14.3
+(`.devenv/profile/bin/openspec`), in a copy of `openspec/` in a
+temporary directory:
+
+- `openspec validate sluices-telemetry-is-a-host-setting --strict
+  --no-interactive`: valid.
+- `openspec archive sluices-telemetry-is-a-host-setting --yes`:
+  `host-settings-module` + 1 added, ~ 2 modified; `telemetry` + 9
+  added, ~ 5 modified; nothing removed or renamed.
+- `openspec validate --specs --strict --no-interactive`: 73 passed,
+  0 failed.
+
+Every scenario the specs hold for a MODIFIED requirement is kept in its
+block: `telemetry`'s "Telemetry is off unless asked", "A run's checks
+join the round", "How much of a failure is sent is the host's choice",
+"OpenTelemetry's settings turn a signal off" and "Telemetry with every
+signal off is off", and `host-settings-module`'s "The settings are the
+host's own file under its own names" and "sluice reads the module's
+file as written".
 
 ## Tasks
 
-All 26 tasks, 1.1 to 6.6, are ticked `[x]`. Each task's own "true
+All 27 tasks, 1.1 to 7.1, are ticked `[x]`. Each task's own "true
 when" test is among those below and passed in the gate. Where a task
 names `sluice exec ... -- moon run nix:test` or `site:prose`, the gate
 ran that task and it passed. 6.4, 6.5 and 6.6 are done when their pages
-say it. `docs/telemetry.md`, `README.md` and record 0014 each say the
-table as the task asks.
+say it: `docs/telemetry.md`, `README.md` and record 0014 each say the
+table as the task asks. 7.1 is true by the archive above.
 
 ## Specs
 
@@ -59,20 +83,22 @@ table as the task asks.
 | The table's collector is sluice's alone | A session's collector and headers never take sluice's telemetry | `telemetry_logs::the_tables_collector_takes_sluices_telemetry_and_none_of_the_callers` | ok |
 | | A table with no collector sends where the environment says | `telemetry_logs::with_no_collector_in_the_table_the_environment_names_it` | ok |
 | sluice names itself and its host | The resource with a table and without | `telemetry::tests::the_resource_is_the_tables_and_names_the_host` | ok |
+| Telemetry goes as OTLP to the collector chosen | Telemetry reaches the collector as OTLP over HTTP | `telemetry_logs::telemetry_goes_to_the_endpoint_as_otlp_over_http` | ok |
+| The table turns a signal off | The table turns traces off whatever the environment says | `telemetry_logs::the_table_turns_traces_off_whatever_the_environment_says` | ok |
+| | The table and the environment together | `telemetry::tests::the_table_turns_a_signal_off_and_the_environment_never_turns_it_on` | ok |
+| With a table, a run gets what sluice sends | A run gets the table's collector and none of the caller's | `telemetry_logs::with_the_tables_collector_a_run_gets_it_and_none_of_the_callers` | ok |
+| With no table, a run gets the caller's telemetry | A run gets the caller's collector and attributes | `telemetry_logs::a_run_s_checks_join_the_round` | ok |
 | Telemetry is off unless asked | A command's choices are read from its flags and variables | `telemetry_is_off_unless_asked` (`tests/telemetry.rs`) | ok |
 | | A run gets nothing while telemetry is off | `telemetry::tests::a_run_gets_nothing_while_telemetry_is_off` | ok |
 | A run's checks join the round | A resource attribute's value is encoded | `telemetry::tests::values_are_encoded_where_the_syntax_would_read_them` | ok |
 | | A run joins the round | `telemetry_logs::a_run_s_checks_join_the_round` | ok |
 | | A run joins no trace while traces are off | `telemetry_logs::with_traces_off_a_run_s_checks_join_no_trace` | ok |
-| | A run gets the table's collector and none of the caller's | `telemetry_logs::with_the_tables_collector_a_run_gets_it_and_none_of_the_callers` | ok |
 | How much of a failure is sent is the host's choice | A summary names where the output is kept | `telemetry::tests::a_summary_sends_where_the_output_is_kept_never_the_output` | ok |
 | | A tail ends on whole characters | `telemetry::tests::a_tail_keeps_the_end_from_a_character_s_start` | ok |
 | OpenTelemetry's settings turn a signal off | Only traces are turned off | `telemetry_logs::with_traces_off_metrics_and_logs_still_go_to_the_endpoint` | ok |
 | | Only metrics are turned off | `telemetry_logs::with_metrics_off_traces_and_logs_still_go_to_the_endpoint` | ok |
 | | Only logs are turned off | `telemetry_logs::with_logs_off_traces_and_metrics_still_go_to_the_endpoint` | ok |
 | | A setting is read as OpenTelemetry reads it | `telemetry::tests::the_standard_settings_are_read_as_opentelemetry_reads_them` | ok |
-| | The table turns traces off whatever the environment says | `telemetry_logs::the_table_turns_traces_off_whatever_the_environment_says` | ok |
-| | The table and the environment together | `telemetry::tests::the_table_turns_a_signal_off_and_the_environment_never_turns_it_on` | ok |
 | Telemetry with every signal off is off | The SDK turned off sends nothing | `telemetry_logs::with_the_sdk_disabled_nothing_is_sent` | ok |
 
 What the code does, read against each requirement:
@@ -96,9 +122,12 @@ What the code does, read against each requirement:
   leave them on. Logs are on only while `Signals::read` leaves them on
   and the level is not `off`. With none on, `begin` builds nothing and
   `on()` stays false.
-- **The collector** (D4). With a table `collector`, `Telemetry::start`
-  removes every `OTEL_EXPORTER_OTLP_*` from the process environment,
-  then gives each exporter `<collector>/v1/<signal>` and
+- **The collector** (D4). Every exporter is built `.with_http()`, so
+  telemetry goes as OTLP over HTTP to the collector chosen, the
+  exporter's own `http://localhost:4318` where nothing names one. With
+  a table `collector`, `Telemetry::start` removes every
+  `OTEL_EXPORTER_OTLP_*` from the process environment, then
+  `Settings::to` gives each exporter `<collector>/v1/<signal>` and
   `Protocol::HttpBinary`. `main.rs` reads `Instance::read()` once and
   starts telemetry before `Bound::open_with` and `stop_on_interrupt`.
   The scrub and the run's environment read the snapshot taken before
@@ -111,14 +140,14 @@ What the code does, read against each requirement:
   name is `profiles::checks::hostname()`, read in `main.rs`, so
   `telemetry.rs` names no profile.
 - **A run's environment** (D6). `run_env` builds from the settings
-  telemetry started under (`SENT`), never from `std::env::vars()`.
-  With a table, the run gets the collector and `http/protobuf`, or the
-  snapshot's `OTEL_EXPORTER_OTLP_*` where the table names none. It
-  gets `OTEL_<SIGNAL>_EXPORTER=none` for each signal not sent,
-  `OTEL_RESOURCE_ATTRIBUTES` of `host.name` and the table's attributes
-  before the round's and the run's, and no `service.name`. With no
-  table, it gets the snapshot's `OTEL_*` with `host.name` added where
-  sluice named it.
+  telemetry started under, through `variables`, never from
+  `std::env::vars()`. With a table, the run gets the collector and
+  `http/protobuf`, or the snapshot's `OTEL_EXPORTER_OTLP_*` where the
+  table names none; `OTEL_<SIGNAL>_EXPORTER=none` for each signal not
+  sent; `OTEL_RESOURCE_ATTRIBUTES` of `host.name` and the table's
+  attributes before the round's and the run's; and no `service.name`.
+  With no table, it gets the snapshot's `OTEL_*` with `host.name` added
+  where sluice named it.
 
 ### `host-settings-module`
 
