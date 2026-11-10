@@ -50,6 +50,15 @@
 //! [[caches]]                       # the task runner's shared cache
 //! dir = "~/.moon/cache/shared"
 //! env = { MOON_CACHE_SHARED_WORKTREE_CACHE = "true" }
+//!
+//! [telemetry]
+//! send = true
+//! collector = "http://localhost:4318"
+//! logs = "tail"
+//! logs_tail_bytes = 4096
+//!
+//! [telemetry.attributes]
+//! "deployment.environment" = "prod"
 //! ```
 //!
 //! `reserved` keeps that many runs of the bound for submissions, which
@@ -76,6 +85,13 @@
 //! sluice runs with no shell as git runs a credential helper (record
 //! 0108; [`crate::identity::CredentialCommand`]).
 //!
+//! `[telemetry]` says whether sluice sends its telemetry, where, as what,
+//! which signals and how much of a failure (151, C.7; record 0106; rule
+//! core.53): [`HostTelemetry`], each key unset where the file leaves it
+//! out, and no table at all where the file holds none. A command's own
+//! flag or variable chooses over it, for that command alone
+//! (`crate::telemetry::Settings::choose`).
+//!
 //! Branch protection's hook reads only `[forge]`, how sluice reaches a
 //! branch's remote, and passes over every other table and field, known
 //! or not, [`Instance::guarding`] (124; ADR 0059). Every other command
@@ -87,6 +103,10 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
+
+use sluice_seams::LOG_LIMIT;
+
+use crate::telemetry::Logs;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Instance {
@@ -114,6 +134,36 @@ pub struct Instance {
     /// 51: how long an outcome this host's rounds record is owed before it
     /// expires, `[deliveries] expire_after` (weir 104; design D9).
     pub expire_after: Duration,
+    /// 151: where sluice's telemetry goes, `[telemetry]`; `None` where the
+    /// file holds no table, which is not a table with nothing set (record
+    /// 0106; design D1).
+    pub telemetry: Option<HostTelemetry>,
+}
+
+/// The host's `[telemetry]` table (151, C.7; record 0106): each key as the
+/// file sets it, `None` where it leaves it out, so sluice's default, or a
+/// command's own choice, holds (`crate::telemetry::Settings::choose`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HostTelemetry {
+    /// Whether telemetry is sent; nothing is while unset or `false`.
+    pub send: Option<bool>,
+    /// The `http://` address sluice sends OTLP to, its final `/` taken off;
+    /// set wherever `send` is `true`, since a table that sends and names
+    /// none is refused.
+    pub collector: Option<String>,
+    /// The service sluice reports as; `sluice` where unset.
+    pub service: Option<String>,
+    /// Whether traces are sent; `true` where unset.
+    pub traces: Option<bool>,
+    /// Whether metrics are sent; `true` where unset.
+    pub metrics: Option<bool>,
+    /// How much of a failed check's output is sent; `summary` where unset.
+    pub logs: Option<Logs>,
+    /// At `tail`, the most of a failed check's output sent, in bytes, 1 to
+    /// 65536; 8192 where unset.
+    pub logs_tail_bytes: Option<usize>,
+    /// More resource attributes, each a string.
+    pub attributes: BTreeMap<String, String>,
 }
 
 /// One of the host's `[[caches]]`: a directory outside every checkout,
@@ -225,6 +275,47 @@ struct ConfigForm {
     /// place among them.
     #[serde(default)]
     caches: Vec<toml::Value>,
+    #[serde(default, deserialize_with = "telemetry_form")]
+    telemetry: Option<TelemetryForm>,
+}
+
+/// `[telemetry]` as the file writes it (design D1).
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct TelemetryForm {
+    send: Option<bool>,
+    collector: Option<String>,
+    service: Option<String>,
+    traces: Option<bool>,
+    metrics: Option<bool>,
+    logs: Option<String>,
+    logs_tail_bytes: Option<i64>,
+    #[serde(default)]
+    attributes: BTreeMap<String, String>,
+}
+
+/// `[telemetry]`, a field that does not read refused naming the table and
+/// the key: each key is read alone first, since the form, read whole,
+/// names an unknown key but not the key whose value is of the wrong type.
+fn telemetry_form<'de, D>(d: D) -> std::result::Result<Option<TelemetryForm>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error as _;
+    let table = toml::Table::deserialize(d)?;
+    for (key, value) in &table {
+        let alone = toml::Table::from_iter([(key.clone(), value.clone())]);
+        if let Err(e) = toml::Value::Table(alone).try_into::<TelemetryForm>() {
+            return Err(D::Error::custom(format!(
+                "[telemetry] {key}: {}",
+                e.message().trim()
+            )));
+        }
+    }
+    toml::Value::Table(table)
+        .try_into()
+        .map(Some)
+        .map_err(|e| D::Error::custom(format!("[telemetry]: {}", e.message().trim())))
 }
 
 #[derive(Deserialize)]
@@ -397,6 +488,7 @@ impl Instance {
         };
         let caches = caches(form.caches, home)?;
         let expire_after = expire_after(form.deliveries.expire_after)?;
+        let telemetry = form.telemetry.map(telemetry).transpose()?;
         Ok(Instance {
             bound,
             reserved,
@@ -407,6 +499,7 @@ impl Instance {
             systems,
             caches,
             expire_after,
+            telemetry,
         })
     }
 
@@ -443,6 +536,7 @@ impl Instance {
             systems: None,
             caches: Vec::new(),
             expire_after: sluice_core::EXPIRE_AFTER,
+            telemetry: None,
         })
     }
 
@@ -498,6 +592,83 @@ fn expire_after(text: Option<String>) -> Result<Duration> {
         );
     }
     Ok(span)
+}
+
+/// 151: the host's `[telemetry]`, each key as written, the collector's
+/// final `/` taken off; refused, naming `[telemetry]` and the key, where a
+/// key does not read as D1's table says, or where `send = true` names no
+/// `collector`, so the table never sends where the caller's
+/// `OTEL_EXPORTER_OTLP_*` say, a session's collector and its headers
+/// among them (record 0106 as amended; rule core.53; design D1).
+fn telemetry(form: TelemetryForm) -> Result<HostTelemetry> {
+    let collector = form.collector.as_deref().map(collector).transpose()?;
+    if form.send == Some(true) && collector.is_none() {
+        bail!(
+            "[telemetry] collector is unset while send = true: name the http:// address \
+             sluice sends to, such as \"http://localhost:4318\", since sluice never sends \
+             the table's telemetry where the caller's OTEL_EXPORTER_OTLP_* say"
+        );
+    }
+    if form.service.as_deref() == Some("") {
+        bail!("[telemetry] service is empty: name the service sluice reports as, or leave it out for sluice");
+    }
+    let logs = form
+        .logs
+        .map(|word| {
+            Logs::deserialize(toml::Value::String(word.clone()))
+                .map_err(|_| anyhow!("[telemetry] logs = {word:?} is none of off, summary or tail"))
+        })
+        .transpose()?;
+    let logs_tail_bytes = match form.logs_tail_bytes {
+        None => None,
+        Some(n) if (1..=LOG_LIMIT as i64).contains(&n) => Some(n as usize),
+        Some(n) => bail!(
+            "[telemetry] logs_tail_bytes = {n} is outside 1 to {LOG_LIMIT}: \
+             the most of a failed check's output sent, in bytes"
+        ),
+    };
+    for name in form.attributes.keys() {
+        match name.as_str() {
+            "" => bail!("[telemetry] attributes names an attribute with no name"),
+            "service.name" | "service.version" => bail!(
+                "[telemetry] attributes names {name}, which sluice sets itself: \
+                 the service is named by [telemetry] service"
+            ),
+            _ => {}
+        }
+    }
+    Ok(HostTelemetry {
+        send: form.send,
+        collector,
+        service: form.service,
+        traces: form.traces,
+        metrics: form.metrics,
+        logs,
+        logs_tail_bytes,
+        attributes: form.attributes,
+    })
+}
+
+/// `[telemetry] collector`: an `http://` address naming a host, its final
+/// `/` taken off (record 0014: sluice sends plain HTTP to a receiver on
+/// the host, which forwards over TLS).
+fn collector(text: &str) -> Result<String> {
+    let Some(rest) = text.strip_prefix("http://") else {
+        bail!(
+            "[telemetry] collector = {text:?} is no http:// address: sluice sends plain HTTP \
+             to a receiver on the host, which forwards over TLS"
+        );
+    };
+    let rest = rest.trim_end_matches('/');
+    let authority = rest.split('/').next().unwrap_or_default();
+    let host = match authority.strip_prefix('[') {
+        Some(v6) => v6.split(']').next().unwrap_or_default(),
+        None => authority.split(':').next().unwrap_or_default(),
+    };
+    if host.is_empty() {
+        bail!("[telemetry] collector = {text:?} names no host: give http://, a host, a port and at most a path");
+    }
+    Ok(format!("http://{rest}"))
 }
 
 /// The host's `[[caches]]`, `~` expanded in each `dir` and `socket`;
@@ -1252,10 +1423,11 @@ dir = "/caches/moon"
         );
     }
 
-    /// 35, 51, 71, 74, 78, 87, 136; records 0098, 0102: the file sluice's
-    /// flake module renders with every key it declares set, read by the
-    /// reader that refuses a field it does not know, as its settings name
-    /// it, the span an outcome is owed among them.
+    /// 35, 51, 71, 74, 78, 87, 136, 151; records 0098, 0102, 0106: the
+    /// file sluice's flake module renders with every key it declares set,
+    /// read by the reader that refuses a field it does not know, as its
+    /// settings name it, the span an outcome is owed and the telemetry
+    /// table among them.
     #[test]
     fn the_modules_file_is_read_as_written() {
         use std::os::unix::fs::PermissionsExt;
@@ -1318,7 +1490,184 @@ dir = "/caches/moon"
                     },
                 ],
                 expire_after: Duration::from_secs(72 * 3600),
+                telemetry: Some(HostTelemetry {
+                    send: Some(true),
+                    collector: Some("http://localhost:4318".into()),
+                    service: Some("sluice".into()),
+                    traces: Some(false),
+                    metrics: Some(true),
+                    logs: Some(Logs::Tail),
+                    logs_tail_bytes: Some(4096),
+                    attributes: variables(&[("deployment.environment", "prod")]),
+                }),
             }
         );
+    }
+
+    /// 151: `[telemetry]` read as written, the collector's final `/` taken
+    /// off, and settings with no table giving none (record 0106; design
+    /// D1).
+    #[test]
+    fn the_telemetry_table_is_read_as_written() {
+        let read = with(
+            r#"
+[telemetry]
+send = true
+collector = "http://localhost:4318/"
+service = "sluice-a"
+traces = false
+metrics = true
+logs = "tail"
+logs_tail_bytes = 4096
+
+[telemetry.attributes]
+"deployment.environment" = "prod"
+"#,
+            4,
+        )
+        .unwrap();
+        assert_eq!(
+            read.telemetry,
+            Some(HostTelemetry {
+                send: Some(true),
+                collector: Some("http://localhost:4318".into()),
+                service: Some("sluice-a".into()),
+                traces: Some(false),
+                metrics: Some(true),
+                logs: Some(Logs::Tail),
+                logs_tail_bytes: Some(4096),
+                attributes: BTreeMap::from([(
+                    "deployment.environment".to_string(),
+                    "prod".to_string()
+                )]),
+            })
+        );
+        assert_eq!(
+            with("[telemetry]\n", 4).unwrap().telemetry,
+            Some(HostTelemetry::default())
+        );
+        assert_eq!(with("[runs]\nmax = 1\n", 4).unwrap().telemetry, None);
+        assert_eq!(Instance::from_file(None, 4).unwrap().telemetry, None);
+    }
+
+    /// 151: a `[telemetry]` key that does not read is refused, naming the
+    /// table and the key (record 0106; design D1).
+    #[test]
+    fn a_telemetry_setting_that_does_not_read_is_refused() {
+        let err = |table: &str| {
+            format!(
+                "{:#}",
+                with(&format!("[telemetry]\n{table}\n"), 4).unwrap_err()
+            )
+        };
+        for (table, key, words) in [
+            (
+                "collector = \"https://otel.example:4318\"",
+                "[telemetry] collector",
+                &["plain HTTP to a receiver on the host", "TLS"][..],
+            ),
+            (
+                "collector = \"localhost:4318\"",
+                "[telemetry] collector",
+                &[],
+            ),
+            (
+                "collector = \"http://:4318\"",
+                "[telemetry] collector",
+                &["no host"],
+            ),
+            (
+                "collector = \"http:///v1\"",
+                "[telemetry] collector",
+                &["no host"],
+            ),
+            (
+                "logs = \"all\"",
+                "[telemetry] logs",
+                &["off", "summary", "tail"],
+            ),
+            (
+                "logs_tail_bytes = 0",
+                "[telemetry] logs_tail_bytes",
+                &["1", "65536"],
+            ),
+            (
+                "logs_tail_bytes = 65537",
+                "[telemetry] logs_tail_bytes",
+                &["1", "65536"],
+            ),
+            ("service = \"\"", "[telemetry] service", &[]),
+            (
+                "attributes = { \"service.name\" = \"x\" }",
+                "[telemetry] attributes",
+                &["service.name", "[telemetry] service"],
+            ),
+            (
+                "attributes = { \"service.version\" = \"1\" }",
+                "[telemetry] attributes",
+                &["service.version", "[telemetry] service"],
+            ),
+            (
+                "attributes = { \"\" = \"x\" }",
+                "[telemetry] attributes",
+                &["no name"],
+            ),
+            (
+                "headers = \"x-api=1\"",
+                "[telemetry] headers",
+                &["unknown field"],
+            ),
+            ("send = \"yes\"", "[telemetry] send", &["boolean"]),
+        ] {
+            let why = err(table);
+            assert!(why.contains(key), "{table}: {why}");
+            for w in words {
+                assert!(why.contains(w), "{table}: no {w} in {why}");
+            }
+        }
+        let edge = |table: &str| {
+            with(&format!("[telemetry]\n{table}\n"), 4)
+                .unwrap()
+                .telemetry
+                .unwrap()
+        };
+        assert_eq!(edge("logs_tail_bytes = 1").logs_tail_bytes, Some(1));
+        assert_eq!(edge("logs_tail_bytes = 65536").logs_tail_bytes, Some(65536));
+        assert_eq!(
+            edge("collector = \"http://[::1]:4318/otlp/\"")
+                .collector
+                .as_deref(),
+            Some("http://[::1]:4318/otlp")
+        );
+    }
+
+    /// 151: a `[telemetry]` whose `send` is `true` names its collector, or
+    /// is refused naming `[telemetry] collector`, so the table never sends
+    /// where the caller's `OTEL_EXPORTER_OTLP_*` say; a table that does
+    /// not send needs none (record 0106 as amended; rule core.53).
+    #[test]
+    fn a_telemetry_table_that_sends_names_its_collector() {
+        for table in [
+            "send = true",
+            "send = true\nservice = \"sluice-a\"\nlogs = \"tail\"",
+        ] {
+            let why = format!(
+                "{:#}",
+                with(&format!("[telemetry]\n{table}\n"), 4).unwrap_err()
+            );
+            for w in ["[telemetry] collector", "send = true", "http://"] {
+                assert!(why.contains(w), "{table}: no {w} in {why}");
+            }
+        }
+        for (table, send) in [
+            ("send = false", Some(false)),
+            ("service = \"sluice-a\"", None),
+        ] {
+            let read = with(&format!("[telemetry]\n{table}\n"), 4)
+                .unwrap()
+                .telemetry
+                .unwrap();
+            assert_eq!((read.send, read.collector), (send, None), "{table}");
+        }
     }
 }

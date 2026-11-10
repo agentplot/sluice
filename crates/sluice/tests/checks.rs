@@ -37,6 +37,7 @@ fn caching(repo: &Repo, caches: Vec<HostCache>) -> Checks {
             systems: None,
             caches,
             expire_after: sluice_core::EXPIRE_AFTER,
+            telemetry: None,
         },
     )
     .with_running(repo.dir().join(".git/host-running"))
@@ -420,6 +421,7 @@ fn a_second_repositorys_start_waits_for_the_hosts_bound() {
                 systems: None,
                 caches: Vec::new(),
                 expire_after: sluice_core::EXPIRE_AFTER,
+                telemetry: None,
             },
         )
         .with_running(host.path().to_path_buf())

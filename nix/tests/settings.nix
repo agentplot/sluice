@@ -44,6 +44,16 @@
         env.MOON_CACHE_SHARED_WORKTREE_CACHE = "true";
       }
     ];
+    telemetry = {
+      send = true;
+      collector = "http://localhost:4318";
+      service = "sluice";
+      traces = false;
+      metrics = true;
+      logs = "tail";
+      logs_tail_bytes = 4096;
+      attributes."deployment.environment" = "prod";
+    };
   };
 
   # "A forge credential command": the app and the command that gives its
