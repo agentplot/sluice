@@ -460,7 +460,7 @@ What the file holds:
 |---|---|---|
 | `[runs]` `max`, `cores`, `reserved` | runs at once, the cores they use, runs kept for submissions | always; each has a default |
 | `[runs] systems` | the systems the host runs | it runs only some of the policy's systems |
-| `[forge]` | the GitHub App sluice pushes as | it lands on a branch on GitHub ([github-app](references/profiles/github-app.md)) |
+| `[forge]` | the GitHub App sluice pushes as, by its key or by a command that gives its token | it lands on a branch on GitHub ([github-app](references/profiles/github-app.md)) |
 | `[signing]` | its signer and SSH key | it runs checks for a branch whose state is on its remote ([peers](references/profiles/peers.md)) |
 | `[peers]` | `lease`, `alive`, `name` | it shares a branch's remote with other hosts |
 | `[[caches]]` | the caches every run on the host shares | its builds share a cache ([checkout](references/profiles/checkout.md)) |
