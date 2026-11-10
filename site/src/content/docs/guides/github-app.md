@@ -48,6 +48,9 @@ lands on.
 
 ## 3. Keep its key on this machine
 
+A host whose own tool keeps the app's key and gives its token skips
+this step. Step 4 names that tool's command in place of the key.
+
 On the app's page, **Private keys › Generate a private key** downloads
 a `.pem` file. Move it next to sluice's host config, where only you may
 read it:
@@ -73,8 +76,20 @@ app_id = 123456                  # the App ID from step 1
 key = "~/.config/sluice/app.pem"
 ```
 
+A host whose own tool gives the app's token names that command as
+`credential`, in place of `key`, and keeps no key of the app's. Write
+the command as a list of its program and then each argument, as the
+[configuration reference](/sluice/reference/configuration/#forge)
+says:
+
+```toml
+[forge]
+app_id = 123456
+credential = ["/opt/forge/bin/token-helper", "--app", "sluice"]
+```
+
 From the next round, sluice makes a token from the key for the
-repository, keeps it in memory, and gives it only to its own `git fetch`
+repository, or asks the command for one, keeps it in memory, and gives it only to its own `git fetch`
 and `git push`. Nothing is written to `.git/config`, so the git your
 agents run never finds it. `sluice status` says who pushes:
 
@@ -95,8 +110,12 @@ before looking at any branch, and expects the branch where the first
 push did, so it never moves a branch that moved in between. When GitHub
 still refuses once that time is spent, sluice reports GitHub's own
 words, then what each refused token was, in the order it tried them:
-its app, repository, installation, scope and age. It never shows the
-token itself.
+its app, repository, installation, scope and age. For a token the
+command gave, it names the command and what GitHub says the token
+reaches in place of its installation and scope, then its age and its
+end. It never shows the token itself. A token the command gave is
+tried again on one the command gives afresh, after sluice asks the
+command to erase the refused one.
 
 ## 5. Make the app the ruleset's only bypass
 
@@ -164,6 +183,7 @@ While it lasts:
 
 The key is a file your user may read, and an agent runs as your user.
 The ruleset keeps agents off `main` because their git never uses the
-key, not because they can't read it. Running agents as another user, or
-keeping the key in a secrets manager, would close that gap; sluice
-doesn't do either yet.
+key, not because they can't read it. A command that gives the token
+keeps the key out of your user's files, but an agent may run that
+command as it may read a key. Running agents as another user would
+close that gap; sluice doesn't do that yet.

@@ -7,12 +7,21 @@
 //! GitHub shows a ruleset's bypass list only to a caller with write access
 //! to the ruleset, which the app is not given, so the rulesets are read
 //! with the operator's own token.
+//!
+//! Under a credential command, which mints nothing, the check reads what
+//! GitHub shows a token's holder: that the command gives a token for the
+//! repository, that the token is the app's `[forge] app_id` names, and
+//! that it may push, from the receive-pack advertisement git's push asks
+//! for first; then the rulesets. GitHub shows a token's other grants to no
+//! holder of the token alone, so they are left to where the app's key is
+//! kept (record 0108).
 
 use std::collections::BTreeSet;
 
 use serde_json::Value;
 
 use super::app::{App, Bearer, Repo};
+use crate::identity::CredentialCommand;
 
 /// One thing checked, and whether it holds.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,6 +41,9 @@ fn failed(what: String) -> Finding {
 /// Check `app` on `repo` for `branch`; `operator` is the operator's own
 /// token, which reads the rulesets' bypass lists.
 pub fn check(app: &App, repo: &Repo, branch: &str, operator: Option<&str>) -> Vec<Finding> {
+    if let Some(command) = app.command() {
+        return commanded(app, command, repo, branch, operator);
+    }
     let mut found = Vec::new();
     match app.token(repo) {
         Ok(_) => found.push(ok(format!("app {} makes a token for {repo}", app.id()))),
@@ -67,6 +79,56 @@ pub fn check(app: &App, repo: &Repo, branch: &str, operator: Option<&str>) -> Ve
         }
         Err(e) => found.push(failed(format!("{e:#}"))),
     }
+    found.extend(rules(app, repo, branch, operator));
+    found
+}
+
+/// [`check`] under a credential command: a token comes, it is the app's,
+/// it may push; then the rulesets (record 0108).
+fn commanded(
+    app: &App,
+    command: &CredentialCommand,
+    repo: &Repo,
+    branch: &str,
+    operator: Option<&str>,
+) -> Vec<Finding> {
+    let named = format!("[forge] credential {command}");
+    let mut found = Vec::new();
+    match app.token(repo) {
+        Ok(_) => found.push(ok(format!("{named} gives a token for {repo}"))),
+        Err(e) => {
+            let words = format!("{e:#}");
+            found.push(failed(if words.starts_with(&named) {
+                words
+            } else {
+                format!("{named} gives no token for {repo}: {words}")
+            }));
+            return found;
+        }
+    }
+    let id = app.id();
+    found.push(match app.app_of_token(repo) {
+        Ok((of, _)) if of == id => ok(format!("the token is app {id}'s")),
+        Ok((of, slug)) => failed(format!(
+            "the token {named} gives is app {of}'s ({slug}), not app {id}'s: name in [forge] \
+             app_id the app whose token it gives"
+        )),
+        Err(e) => failed(format!("reading whose token {named} gives: {e:#}")),
+    });
+    found.push(match app.may_push(repo) {
+        Ok(200..=299) => ok(format!("the token may push to {repo}")),
+        Ok(status @ (401 | 403 | 404)) => failed(format!(
+            "the token may not push to {repo}: GitHub answered git's push {status}: give the \
+             app Contents read and write"
+        )),
+        Ok(status) => failed(format!(
+            "GitHub answered git's push to {repo} {status}, which says nothing of whether the \
+             token may push"
+        )),
+        Err(e) => failed(format!(
+            "reading whether the token may push to {repo}: {e:#}"
+        )),
+    });
     found.extend(rules(app, repo, branch, operator));
     found
 }

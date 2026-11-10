@@ -3855,7 +3855,7 @@ impl Pulls {
                     // sluice opened, never one a person opened; none leaves
                     // the title as it is.
                     let title = match subject {
-                        Some(s) if s != p.title && p.author == forge.login()? => Some(s),
+                        Some(s) if s != p.title && p.author == forge.login(&t.repo)? => Some(s),
                         _ => None,
                     };
                     if p.body != body || title.is_some() {

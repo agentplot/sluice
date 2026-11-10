@@ -6,10 +6,13 @@
 //!   last-modified time with its body, `<h>` the first 32 hex digits of
 //!   the address's SHA-256. It is used only on GitHub's 304 for it, so it
 //!   decides nothing GitHub did not just confirm (rule core.11).
-//! - `pauses/<app>-<installation>-<resource>.json`: until when GitHub said
-//!   an allowance is spent, in its words, and how many such answers came
-//!   in a row; `resource` is GitHub's own name for the allowance, `core`
-//!   for REST and `graphql`.
+//! - `pauses/<app>-<owner>-<resource>.json`: until when GitHub said an
+//!   allowance is spent, in its words, and how many such answers came in a
+//!   row; `owner` is the account the repository is on, which names the
+//!   app's one installation there, whichever way its token came, minted
+//!   from the app's key or given by the host's credential command, which
+//!   tells no installation's id (record 0108); `resource` is GitHub's own
+//!   name for the allowance, `core` for REST and `graphql`.
 //! - `requests/<owner>/<repo>/<base>.json`: each branch's readings, when
 //!   its open pull requests were last asked for, at which revision of the
 //!   branch and version of its records, and what was last read and posted
@@ -84,12 +87,13 @@ pub struct Pause {
     pub streak: u32,
 }
 
-/// Which allowance a pause is of: the app's installation and GitHub's
-/// name for the allowance.
+/// Which allowance a pause is of: the app's installation, named by the
+/// account it is on, since an app has one installation on an account, and
+/// GitHub's name for the allowance (134; record 0108).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Allowance {
     pub app: u64,
-    pub installation: u64,
+    pub owner: String,
     pub resource: String,
 }
 
@@ -203,7 +207,7 @@ impl Kept {
     fn pause_path(&self, a: &Allowance) -> PathBuf {
         self.dir
             .join("pauses")
-            .join(format!("{}-{}-{}.json", a.app, a.installation, a.resource))
+            .join(format!("{}-{}-{}.json", a.app, a.owner, a.resource))
     }
 
     /// The answer kept for `url`; `None` when none is, or it is torn, or
@@ -575,7 +579,7 @@ mod tests {
         assert_eq!(kept.answer(url), None);
         let a = Allowance {
             app: 1,
-            installation: 2,
+            owner: "o".into(),
             resource: "core".into(),
         };
         std::fs::create_dir_all(kept.pause_path(&a).parent().unwrap()).unwrap();
@@ -779,7 +783,7 @@ mod tests {
         let kept = Kept::new(&dir);
         let a = Allowance {
             app: 4242,
-            installation: 7,
+            owner: "o".into(),
             resource: "core".into(),
         };
         let now = Utc::now();
@@ -808,6 +812,39 @@ mod tests {
             ..sooner
         };
         assert_eq!(kept.put_pause(&a, even_later.clone()).unwrap(), even_later);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The forge-allowance spec's "A command's token honours the pause": a
+    /// pause is kept under the app, the repository's owner and the
+    /// allowance, whichever way the token came (134; record 0108).
+    #[test]
+    fn a_pause_is_kept_under_the_owner() {
+        let dir = scratch("owner");
+        let kept = Kept::new(&dir);
+        let a = Allowance {
+            app: 4242,
+            owner: "o".into(),
+            resource: "core".into(),
+        };
+        let pause = Pause {
+            until: Utc::now() + TimeDelta::minutes(20),
+            words: "API rate limit exceeded".into(),
+            streak: 0,
+        };
+        kept.put_pause(&a, pause.clone()).unwrap();
+        assert!(dir.join("forge/pauses/4242-o-core.json").is_file());
+        assert_eq!(kept.pause(&a), Some(pause));
+        let other = Allowance {
+            owner: "p".into(),
+            ..a.clone()
+        };
+        assert_eq!(kept.pause(&other), None);
+        let graphql = Allowance {
+            resource: "graphql".into(),
+            ..a
+        };
+        assert_eq!(kept.pause(&graphql), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
