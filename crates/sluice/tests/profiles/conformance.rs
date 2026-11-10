@@ -206,7 +206,11 @@ impl Tests for RecordedChecks {
         self.inner.running()
     }
 
-    fn proven(&self, run: &RunHandle, report: &sluice_seams::RunReport) -> Result<Vec<String>> {
+    fn proven(
+        &self,
+        run: &RunHandle,
+        report: &sluice_seams::RunReport,
+    ) -> Result<sluice_seams::Proof> {
         self.inner.proven(run, report)
     }
 
@@ -479,6 +483,7 @@ impl Real {
                 systems: None,
                 caches: vec![moon_cache],
                 expire_after: sluice_core::EXPIRE_AFTER,
+                telemetry: None,
             },
             std::rc::Rc::new(sluice::retry::Policy::command().recording()),
         )

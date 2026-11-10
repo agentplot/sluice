@@ -16,6 +16,7 @@ pub mod overview;
 pub mod owed;
 pub mod policy;
 pub mod preview;
+pub mod proof;
 pub mod records;
 pub mod refused;
 pub mod refused_writes;

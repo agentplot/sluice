@@ -10,6 +10,7 @@ pub mod equip;
 pub mod exec;
 pub mod home;
 pub mod host_count;
+pub mod host_settings;
 pub mod identity;
 pub mod instance;
 pub mod overview;
@@ -36,7 +37,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use overview::Follows;
 use reader::{Driver, Drives, Reader};
-use sluice_core::overview::{in_queue, BranchView, Held};
+use sluice_core::overview::{in_queue, BranchView, CandidateView, Held};
 use sluice_core::records::{Beside, BranchHold, CopyBehind, Event, FailedTask, State, Submission};
 use sluice_core::{
     Accepted, AmendRefusal, Clock, Collect, CopyDiffers, Forecast, Forecasted, GroupRequest,
@@ -85,21 +86,26 @@ Examples:
 
 Telemetry, taken by every command:
       --otel                       Export traces, metrics and logs over
-                                   OTLP/HTTP, to where the OTEL_EXPORTER_OTLP_*
-                                   variables say; OTEL_SDK_DISABLED=true turns
-                                   them all off, and OTEL_TRACES_EXPORTER,
+                                   OTLP/HTTP, where the host's [telemetry] in
+                                   ~/.config/sluice/config.toml says; this flag
+                                   and SLUICE_OTEL choose for this command alone,
+                                   --otel=false or SLUICE_OTEL=0 turning the
+                                   host's send = true off. OTEL_SDK_DISABLED=true
+                                   turns them all off, and OTEL_TRACES_EXPORTER,
                                    OTEL_METRICS_EXPORTER or OTEL_LOGS_EXPORTER at
                                    none turns one alone off
-                                   [env: SLUICE_OTEL=1|true|yes|on]
+                                   [env: SLUICE_OTEL=1|true|yes|on|0|false|no|off]
       --otel-service-name <NAME>   The service the telemetry is reported as
-                                   [env: SLUICE_OTEL_SERVICE_NAME] [default: sluice]
+                                   [env: SLUICE_OTEL_SERVICE_NAME]
+                                   [default: the host's [telemetry], else sluice]
       --otel-logs <LOGS>           How much of a failed check's output is sent as
                                    logs: off, summary (where it is kept, never
                                    what it says) or tail (its end, scrubbed of
-                                   what reads as a secret)
-                                   [env: SLUICE_OTEL_LOGS] [default: summary]
+                                   what reads as a secret) [env: SLUICE_OTEL_LOGS]
+                                   [default: the host's [telemetry], else summary]
       --otel-logs-limit <BYTES>    The most of a failed check's output sent at
-                                   tail [env: SLUICE_OTEL_LOGS_LIMIT] [default: 8192]";
+                                   tail [env: SLUICE_OTEL_LOGS_LIMIT]
+                                   [default: the host's [telemetry], else 8192]";
 
 /// `sluice submit --help`'s examples and exits; the exits are those of
 /// the reference's "Exit codes".
@@ -208,49 +214,40 @@ pub struct Cli {
     pub worktree: String,
     // The telemetry flags are hidden, here and in every command, and
     // listed in ROOT_AFTER_HELP instead.
-    /// Export traces, metrics and logs over OTLP/HTTP, to where the
-    /// OTEL_EXPORTER_OTLP_* variables say. OTEL_SDK_DISABLED=true turns
-    /// them all off, and OTEL_TRACES_EXPORTER, OTEL_METRICS_EXPORTER or
-    /// OTEL_LOGS_EXPORTER at `none` turns that one alone off.
-    /// SLUICE_OTEL takes `1`, `true`, `yes` or `on`.
+    /// Export traces, metrics and logs over OTLP/HTTP, where the host's
+    /// `[telemetry]` in `~/.config/sluice/config.toml` says (151). This
+    /// flag, or SLUICE_OTEL, chooses for this command alone:
+    /// `--otel=false` or SLUICE_OTEL=0 turns the host's `send = true` off.
+    /// OTEL_SDK_DISABLED=true turns them all off, and OTEL_TRACES_EXPORTER,
+    /// OTEL_METRICS_EXPORTER or OTEL_LOGS_EXPORTER at `none` turns that one
+    /// alone off. SLUICE_OTEL takes `1`, `true`, `yes` or `on`, and `0`,
+    /// `false`, `no` or `off`.
     #[arg(
         long,
         global = true,
         hide = true,
         env = "SLUICE_OTEL",
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "true",
         value_parser = clap::builder::BoolishValueParser::new()
     )]
-    pub otel: bool,
-    /// The service the telemetry is reported as.
-    #[arg(
-        long,
-        global = true,
-        hide = true,
-        env = "SLUICE_OTEL_SERVICE_NAME",
-        default_value = "sluice"
-    )]
-    pub otel_service_name: String,
-    /// While --otel is on, how much of a failed check's output is sent as
-    /// logs: `off`, `summary` (where it is kept, never what it says) or
-    /// `tail` (its end, scrubbed of what reads as a secret).
-    #[arg(
-        long,
-        global = true,
-        hide = true,
-        env = "SLUICE_OTEL_LOGS",
-        value_enum,
-        default_value = "summary"
-    )]
-    pub otel_logs: telemetry::Logs,
-    /// The most of a failed check's output sent at `tail`, in bytes.
-    #[arg(
-        long,
-        global = true,
-        hide = true,
-        env = "SLUICE_OTEL_LOGS_LIMIT",
-        default_value_t = 8192
-    )]
-    pub otel_logs_limit: usize,
+    pub otel: Option<bool>,
+    /// The service the telemetry is reported as; where unset, the host's
+    /// `[telemetry] service`, else `sluice`.
+    #[arg(long, global = true, hide = true, env = "SLUICE_OTEL_SERVICE_NAME")]
+    pub otel_service_name: Option<String>,
+    /// While telemetry is on, how much of a failed check's output is sent
+    /// as logs: `off`, `summary` (where it is kept, never what it says) or
+    /// `tail` (its end, scrubbed of what reads as a secret); where unset,
+    /// the host's `[telemetry] logs`, else `summary`.
+    #[arg(long, global = true, hide = true, env = "SLUICE_OTEL_LOGS", value_enum)]
+    pub otel_logs: Option<telemetry::Logs>,
+    /// The most of a failed check's output sent at `tail`, in bytes, held
+    /// to 65536; where unset, the host's `[telemetry] logs_tail_bytes`,
+    /// else 8192.
+    #[arg(long, global = true, hide = true, env = "SLUICE_OTEL_LOGS_LIMIT")]
+    pub otel_logs_limit: Option<usize>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -1235,6 +1232,18 @@ fn requester(by: &str) -> Requester {
 }
 
 impl Cli {
+    /// 151: what this command was given of telemetry, by its flags or
+    /// its `SLUICE_OTEL*` variables, which choose for it alone over the
+    /// host's `[telemetry]` (record 0106; design D2).
+    pub fn choices(&self) -> telemetry::Choices {
+        telemetry::Choices {
+            otel: self.otel,
+            service: self.otel_service_name.clone(),
+            logs: self.otel_logs,
+            logs_limit: self.otel_logs_limit,
+        }
+    }
+
     /// Whether the command was asked for JSON, so that even a failure
     /// before or outside it is said as JSON.
     pub fn json(&self) -> bool {
@@ -1270,6 +1279,228 @@ impl Cli {
             Some(_) => false,
         }
     }
+}
+
+/// What `sluice run` carries from one pass to the next, whatever binding
+/// each pass runs under (135; design D3): the passes counted toward its
+/// `--rounds`, the repository's driver's lock and its reader (129),
+/// what its document last asked, whether it said that another run drives
+/// the repository, the holds and the refusals it said, the policies it
+/// read by revision (129; rule core.31), and whether the host's systems
+/// were checked (87).
+pub struct Driving {
+    rounds: Option<usize>,
+    /// The tick the reader's document names (64).
+    tick: Duration,
+    n: usize,
+    checked: bool,
+    /// Where the host's readers keep their files, and the repository as
+    /// they name it.
+    place: Option<(std::path::PathBuf, String)>,
+    driver: Option<Driver>,
+    reader: Option<Reader>,
+    /// 129: what its document last asked of whether the repository has
+    /// sluice.
+    asked: Option<overview::Asked>,
+    said_beside: bool,
+    /// 121: each branch's hold as last said, so it is said once.
+    said: BTreeMap<String, Option<(Rev, Rev)>>,
+    /// 26, 121: the words each branch passed by was last said with.
+    passed: BTreeMap<String, String>,
+    /// 129: each policy read, by revision, kept across passes and
+    /// bindings, since a policy at a revision is that revision's bytes.
+    policies: sluice_core::Policies,
+}
+
+impl Driving {
+    /// A `sluice run` that has driven no pass yet, ending after `rounds`
+    /// passes where it names a bound.
+    pub fn new(rounds: Option<usize>) -> Driving {
+        Driving {
+            rounds,
+            tick: tick(Some(&Command::Run { rounds })),
+            n: 0,
+            checked: false,
+            place: None,
+            driver: None,
+            reader: None,
+            asked: None,
+            said_beside: false,
+            said: BTreeMap::new(),
+            passed: BTreeMap::new(),
+            policies: sluice_core::Policies::default(),
+        }
+    }
+}
+
+/// What a pass of `sluice run` ended with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Driven {
+    /// It paused, and the next pass is due.
+    Next,
+    /// The run ends with this exit: its `--rounds` reached, or its pause
+    /// stopped.
+    Ended(i32),
+}
+
+/// One pass of `sluice run` over the repository the seams bind, and the
+/// pause after it (135; design D3): the host's systems checked before the
+/// first pass `driving` runs (87), then the repository's driver's lock
+/// taken or kept, every branch's round run and the reader's document
+/// written (129). Its caller may bind the repository afresh between two
+/// calls, and the next pass runs wholly under the new binding (rule
+/// core.54).
+pub fn drive(
+    driving: &mut Driving,
+    seams: Seams<'_>,
+    host: &dyn exec::Host,
+    pulls: &dyn PullRequests,
+    clock: &dyn Clock,
+    pause: &dyn Pause,
+    out: &mut dyn Write,
+) -> Result<Driven> {
+    let s = Sluice::new(seams, clock)
+        .as_peer(host.peer())
+        .serving(Serves::Every)
+        .keeping(&driving.policies);
+    if !driving.checked {
+        s.check_host_systems()?;
+        driving.checked = true;
+    }
+    // 135: the repository's one driver on the host, and so its reader
+    // (129): a run that finds another live drives nothing, and looks again
+    // at each pass.
+    let (readers, repository) = match &driving.place {
+        Some(place) => place.clone(),
+        None => {
+            let place = (host.readers()?, host.repository()?);
+            driving.place = Some(place.clone());
+            place
+        }
+    };
+    // 26: the branches this pass passed by, with their words; a
+    // bounded run whose last pass passed one by ends as a step
+    // of that branch would.
+    let mut failed: BTreeMap<String, String> = BTreeMap::new();
+    if driving.driver.is_none() {
+        driving.driver = Driver::take(&readers, &repository)?;
+    }
+    if driving.driver.is_some() {
+        // Its part in reading: it drives, so the place is its,
+        // whatever lease a newer watch holds, and it takes none. A
+        // lock it could not try leaves it following, as a watch.
+        match &mut driving.reader {
+            Some(r) => {
+                let _ = r.step(false, Drives::Itself);
+            }
+            None => {
+                driving.reader = Some(Reader::take_given(
+                    &readers,
+                    &repository,
+                    host.version(),
+                    Drives::Itself,
+                )?)
+            }
+        }
+        // 129: what the last pass read by revision and this one
+        // does not use is forgotten.
+        s.next_pass();
+        host.next_pass();
+        // A read whose start it could not mark leaves a forecast
+        // reading past this reader, which decides nothing (64).
+        if let Some(Reader::Lead(lead)) = &driving.reader {
+            let _ = lead.begin();
+        }
+        // 129: each remote that keeps branches' records asked
+        // once, first; a refusal is its branches' alone, read as
+        // last fetched.
+        if let Err(e) = seams.state.refresh() {
+            telemetry::warn(&format!("sluice: warning: {e:#}"));
+        }
+        // 97, previews-1 101: every pass, whether or not a branch
+        // has a queue.
+        exec::tell_abandoned(out, false, &s.release_abandoned()?)?;
+        preview::tell_dropped(out, false, &s.release_unusable_previews()?)?;
+        let mut branches = seams.state.branches()?;
+        match pulls.branches(seams) {
+            Ok(b) => branches.extend(b),
+            Err(e) => telemetry::warn(&format!("sluice: warning: {e:#}")),
+        }
+        branches.sort();
+        branches.dedup();
+        for branch in branches {
+            intake(pulls, seams, clock, &branch, Taker::Driver, false, out);
+            // 26, rule core.14: a branch whose records' read or
+            // round fails is that branch's alone; the pass goes
+            // on to every other branch. 129: one with nothing in
+            // play costs the pass its records' read alone.
+            let ran = s.in_play(&branch).and_then(|in_play| match in_play {
+                false => Ok(None),
+                true => s.round(&branch).map(Some),
+            });
+            let round = match ran {
+                Ok(round) => {
+                    driving.passed.remove(&branch);
+                    round
+                }
+                // Ctrl-C reaching the git a branch's read runs is no
+                // refusal of that branch's.
+                Err(_) if INTERRUPTED.load(Ordering::SeqCst) => None,
+                Err(e) => {
+                    let words = format!("{e:#}");
+                    tell_passed(out, &branch, &words, &mut driving.passed)?;
+                    failed.insert(branch.clone(), words);
+                    None
+                }
+            };
+            if let Some(round) = round {
+                exec::tell_abandoned(out, false, &round.released)?;
+                preview::tell_dropped(out, false, &round.previews)?;
+                exec::tell_releases(out, false, &round.releases)?;
+                if matches!(round.step, Step::Stepped | Step::Held) {
+                    let said = driving.said.entry(branch.clone()).or_default();
+                    tell_hold(out, &branch, round.held.as_ref(), said)?;
+                }
+            }
+        }
+        // 129: the reader's document every watch and wait on the
+        // host follows, each pass, queue or none, read as the
+        // pass's own ask left the records and naming its tick
+        // (64); a read it could not make is its document, in the
+        // words it was refused with (133), and the pass goes on.
+        // Ctrl-C reaching the git a read runs is no failure of the
+        // queues'.
+        if let Some(Reader::Lead(lead)) = &mut driving.reader {
+            let doc =
+                overview::read_held(&s, host, clock, Follows::Kept(pulls), &mut driving.asked)
+                    .unwrap_or_else(|e| told::document(Kind::Internal, &format!("{e:#}"), &[]));
+            let doc = overview::ticked(doc, driving.tick);
+            if !INTERRUPTED.load(Ordering::SeqCst) {
+                // The last document stands for a write that failed
+                // until one succeeds.
+                let _ = lead.write(&doc);
+            }
+        }
+    } else if !driving.said_beside {
+        telemetry::warn(
+            "sluice: another sluice run drives this repository on this host; \
+             this one runs nothing while it does",
+        );
+        driving.said_beside = true;
+    }
+    driving.n += 1;
+    if driving.rounds.is_some_and(|r| driving.n >= r) {
+        // 26: one line per branch, as `main` writes a failed step's, said
+        // whether or not stdout said it this pass.
+        for (branch, words) in &failed {
+            telemetry::error(&format!("sluice: {branch}: {words}"));
+        }
+        return Ok(Driven::Ended(if failed.is_empty() { 0 } else { INTERNAL }));
+    }
+    if !pause.pause() {
+        return Ok(Driven::Ended(STOPPED));
+    }
+    Ok(Driven::Next)
 }
 
 /// Run one command; returns its exit code.
@@ -1585,147 +1816,12 @@ pub fn run(
             Ok(0)
         }
         Command::Run { rounds } => {
-            let s = s.serving(Serves::Every);
-            s.check_host_systems()?;
-            // 135: the repository's one driver on the host, and so its
-            // reader (129): a run that finds another live drives nothing,
-            // and looks again at each pass.
-            let (readers, repository) = (host.readers()?, host.repository()?);
-            let mut driver: Option<Driver> = None;
-            let mut reader: Option<Reader> = None;
-            // 129: what its document last asked of whether the repository
-            // has sluice.
-            let mut asked = None;
-            let mut said_beside = false;
-            let mut n = 0;
-            // 121: each branch's hold as last said, so it is said once.
-            let mut said: BTreeMap<String, Option<(Rev, Rev)>> = BTreeMap::new();
-            // 26, 121: the words each branch passed by was last said with.
-            let mut passed: BTreeMap<String, String> = BTreeMap::new();
+            let mut driving = Driving::new(rounds);
             loop {
-                // 26: the branches this pass passed by, with their words; a
-                // bounded run whose last pass passed one by ends as a step
-                // of that branch would.
-                let mut failed: BTreeMap<String, String> = BTreeMap::new();
-                if driver.is_none() {
-                    driver = Driver::take(&readers, &repository)?;
-                }
-                if driver.is_some() {
-                    // Its part in reading: it drives, so the place is its,
-                    // whatever lease a newer watch holds, and it takes none. A
-                    // lock it could not try leaves it following, as a watch.
-                    match &mut reader {
-                        Some(r) => {
-                            let _ = r.step(false, Drives::Itself);
-                        }
-                        None => {
-                            reader = Some(Reader::take_given(
-                                &readers,
-                                &repository,
-                                host.version(),
-                                Drives::Itself,
-                            )?)
-                        }
-                    }
-                    // 129: what the last pass read by revision and this one
-                    // does not use is forgotten.
-                    s.next_pass();
-                    host.next_pass();
-                    // A read whose start it could not mark leaves a forecast
-                    // reading past this reader, which decides nothing (64).
-                    if let Some(Reader::Lead(lead)) = &reader {
-                        let _ = lead.begin();
-                    }
-                    // 129: each remote that keeps branches' records asked
-                    // once, first; a refusal is its branches' alone, read as
-                    // last fetched.
-                    if let Err(e) = seams.state.refresh() {
-                        telemetry::warn(&format!("sluice: warning: {e:#}"));
-                    }
-                    // 97, previews-1 101: every pass, whether or not a branch
-                    // has a queue.
-                    exec::tell_abandoned(out, false, &s.release_abandoned()?)?;
-                    preview::tell_dropped(out, false, &s.release_unusable_previews()?)?;
-                    let mut branches = seams.state.branches()?;
-                    match pulls.branches(seams) {
-                        Ok(b) => branches.extend(b),
-                        Err(e) => telemetry::warn(&format!("sluice: warning: {e:#}")),
-                    }
-                    branches.sort();
-                    branches.dedup();
-                    for branch in branches {
-                        intake(pulls, seams, clock, &branch, Taker::Driver, false, out);
-                        // 26, rule core.14: a branch whose records' read or
-                        // round fails is that branch's alone; the pass goes
-                        // on to every other branch. 129: one with nothing in
-                        // play costs the pass its records' read alone.
-                        let ran = s.in_play(&branch).and_then(|in_play| match in_play {
-                            false => Ok(None),
-                            true => s.round(&branch).map(Some),
-                        });
-                        let round = match ran {
-                            Ok(round) => {
-                                passed.remove(&branch);
-                                round
-                            }
-                            // Ctrl-C reaching the git a branch's read runs is no
-                            // refusal of that branch's.
-                            Err(_) if INTERRUPTED.load(Ordering::SeqCst) => None,
-                            Err(e) => {
-                                let words = format!("{e:#}");
-                                tell_passed(out, &branch, &words, &mut passed)?;
-                                failed.insert(branch.clone(), words);
-                                None
-                            }
-                        };
-                        if let Some(round) = round {
-                            exec::tell_abandoned(out, false, &round.released)?;
-                            preview::tell_dropped(out, false, &round.previews)?;
-                            exec::tell_releases(out, false, &round.releases)?;
-                            if matches!(round.step, Step::Stepped | Step::Held) {
-                                let said = said.entry(branch.clone()).or_default();
-                                tell_hold(out, &branch, round.held.as_ref(), said)?;
-                            }
-                        }
-                    }
-                    // 129: the reader's document every watch and wait on the
-                    // host follows, each pass, queue or none, read as the
-                    // pass's own ask left the records and naming its tick
-                    // (64); a read it could not make is its document, in the
-                    // words it was refused with (133), and the pass goes on.
-                    // Ctrl-C reaching the git a read runs is no failure of the
-                    // queues'.
-                    if let Some(Reader::Lead(lead)) = &mut reader {
-                        let doc =
-                            overview::read_held(&s, host, clock, Follows::Kept(pulls), &mut asked)
-                                .unwrap_or_else(|e| {
-                                    told::document(Kind::Internal, &format!("{e:#}"), &[])
-                                });
-                        let doc = overview::ticked(doc, tick);
-                        if !INTERRUPTED.load(Ordering::SeqCst) {
-                            // The last document stands for a write that failed
-                            // until one succeeds.
-                            let _ = lead.write(&doc);
-                        }
-                    }
-                } else if !said_beside {
-                    telemetry::warn(
-                        "sluice: another sluice run drives this repository on this host; \
-                         this one runs nothing while it does",
-                    );
-                    said_beside = true;
-                }
-                n += 1;
-                if rounds.is_some_and(|r| n >= r) {
-                    // 26: one line per branch, as `main` writes a failed
-                    // step's, said whether or not stdout said it this pass.
-                    for (branch, words) in &failed {
-                        telemetry::error(&format!("sluice: {branch}: {words}"));
-                    }
-                    return Ok(if failed.is_empty() { 0 } else { INTERNAL });
-                }
-                if !pause.pause() {
-                    return Ok(STOPPED);
+                if let Driven::Ended(code) =
+                    drive(&mut driving, seams, host, pulls, clock, pause, out)?
+                {
+                    return Ok(code);
                 }
             }
         }
@@ -3001,7 +3097,7 @@ fn await_submission(
     said: Option<State>,
     out: &mut dyn Write,
 ) -> Result<i32> {
-    let (sub, by, code, waits) = match wait_on(s, waiting, sub, said, out)? {
+    let (sub, by, code, tested) = match wait_on(s, waiting, sub, said, out)? {
         Waited::Decided(sub, by, after) => {
             let branch = sub.branch.clone();
             let names = BTreeMap::new();
@@ -3054,15 +3150,16 @@ fn await_submission(
                 out,
             );
         }
-        Waited::Undecided(sub, by, code, waits) => (sub, by, code, waits),
+        Waited::Undecided(sub, by, code, tested) => (sub, by, code, tested),
     };
     if waiting.json {
         let doc = with_copy(serde_json::to_value(&sub)?, waiting.copy)?;
         let mut doc = with_carried(doc, by.as_ref());
-        // 84, record 0074: what its combination waits for, as the view
-        // the wait followed has it (rule core.25).
-        if !waits.is_empty() {
-            doc["waiting"] = serde_json::json!(waits);
+        // 84, record 0074; 114, record 0105: what its combination waits
+        // for and why its last run had no outcome, as the view the wait
+        // followed has it (rule core.25).
+        if let Some(c) = &tested {
+            under_test(&mut doc, c);
         }
         writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
     } else {
@@ -3088,17 +3185,32 @@ fn decided_document(sub: &Submission, decided: Option<&Decided>) -> Result<serde
     Ok(doc)
 }
 
-/// 84, record 0074: `doc`, `sub`'s record, with what its combination under
-/// test waits for, the hosts that turned its run down each with why, where
-/// any did. It decides nothing, so a read that fails adds nothing.
+/// 84, record 0074; 114, record 0105: `doc`, `sub`'s record, with what its
+/// combination under test waits for and why its last run had no outcome,
+/// as [`under_test`] gives them. It decides nothing, so a read that fails
+/// adds nothing.
 fn with_waiting(s: &Sluice<'_>, sub: &Submission, mut doc: serde_json::Value) -> serde_json::Value {
     let view = s.branch_view_of(&sub.branch).ok();
     if let Some(c) = view.as_ref().and_then(|v| progress::own(v, sub.id)) {
-        if !c.waiting.is_empty() {
-            doc["waiting"] = serde_json::json!(c.waiting);
-        }
+        under_test(&mut doc, c);
     }
     doc
+}
+
+/// What `doc`, a submission's document, gives of `c`, its combination
+/// under test: under `waiting`, the hosts that turned its run down each
+/// with why, where any did (84, record 0074); under `lost`, each run whose
+/// last run had no outcome, its host, its system where the policy names
+/// one and each check it left not run with why, whatever the cause, until
+/// that run's next result (114; record 0105, design D7 of the change
+/// `a-pass-nothing-proves-blames-no-one`).
+fn under_test(doc: &mut serde_json::Value, c: &CandidateView) {
+    if !c.waiting.is_empty() {
+        doc["waiting"] = serde_json::json!(c.waiting);
+    }
+    if !c.lost.is_empty() {
+        doc["lost"] = serde_json::json!(c.lost);
+    }
 }
 
 /// 51: report `sub`, decided, as [`report`] does, its document giving its
@@ -3161,9 +3273,10 @@ enum Waited {
     /// that then failed, what failed after the landing (122).
     Decided(Submission, Option<CarriedBy>, Option<anyhow::Error>),
     /// As it stands when the wait's time ran out ([`WAITING`]) or it was
-    /// stopped ([`STOPPED`]), with what its combination, or that of what
-    /// it follows, waits for as last read (84, record 0074).
-    Undecided(Submission, Option<CarriedBy>, i32, BTreeMap<String, String>),
+    /// stopped ([`STOPPED`]), with its combination under test, or that of
+    /// what it follows, as last read: what it waits for (84, record 0074)
+    /// and why its last run had no outcome (114, record 0105).
+    Undecided(Submission, Option<CarriedBy>, i32, Option<CandidateView>),
     /// As last read, when a round failed as the forge could not answer
     /// for the retry policy's time.
     Unread(Submission, anyhow::Error),
@@ -3491,8 +3604,8 @@ fn wait_on(
         // As it stands, with what it follows as it stands.
         let undecided = |code: i32, reading: &Reading| {
             let by = following.clone().map(CarriedBy::Entry);
-            let waits = reading.waits(following.as_ref().unwrap_or(&own).id);
-            Waited::Undecided(own.clone(), by, code, waits)
+            let combination = reading.combination(following.as_ref().unwrap_or(&own).id);
+            Waited::Undecided(own.clone(), by, code, combination)
         };
         let id = sub.id;
         if !waiting.json {
@@ -3618,15 +3731,14 @@ struct Reading {
 }
 
 impl Reading {
-    /// 84, record 0074: what submission `id`'s combination under test
-    /// waits for, as last read: each host that turned its run down, with
-    /// why.
-    fn waits(&self, id: u64) -> BTreeMap<String, String> {
+    /// Submission `id`'s combination under test, as last read: what it
+    /// waits for (84, record 0074) and why its last run had no outcome
+    /// (114, record 0105).
+    fn combination(&self, id: u64) -> Option<CandidateView> {
         self.view
             .as_ref()
             .and_then(|v| progress::own(v, id))
-            .map(|c| c.waiting.clone())
-            .unwrap_or_default()
+            .cloned()
     }
 
     fn take(host: &dyn exec::Host) -> Result<Reading> {
@@ -6313,6 +6425,36 @@ fn worktree_json(p: &SessionPlace) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 151: `--otel` takes no value, on, or a boolean, `--otel=false` off
+    /// for the command, and never the word after it for its value; with
+    /// neither it nor `SLUICE_OTEL` it chooses nothing. A command's flags
+    /// follow its name, and `--otel` alone is the home view's (design D2).
+    #[test]
+    fn otel_takes_no_value_or_a_boolean() {
+        std::env::remove_var("SLUICE_OTEL");
+        for (line, otel) in [
+            (&["sluice", "status", "--otel", "main"][..], Some(true)),
+            (
+                &["sluice", "status", "--otel=false", "main"][..],
+                Some(false),
+            ),
+            (&["sluice", "status", "main"][..], None),
+        ] {
+            let cli = Cli::try_parse_from(line).unwrap();
+            assert_eq!(cli.choices().otel, otel, "{line:?}");
+            assert!(
+                matches!(&cli.command, Some(Command::Status { target: Some(t), .. }) if t == "main"),
+                "{line:?}: {:?}",
+                cli.command
+            );
+        }
+        let home = Cli::try_parse_from(["sluice", "--otel"]).unwrap();
+        assert_eq!(
+            (home.choices().otel, home.command.is_none()),
+            (Some(true), true)
+        );
+    }
 
     fn names() -> Names {
         let mut names = Names::default();

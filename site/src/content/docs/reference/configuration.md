@@ -111,6 +111,16 @@ nobody. After three runs in a row in which its tests could not run, its
 newest submission is blamed, and each test is named with why. A command
 given to `sluice exec` after `--` is not held to `not_run`.
 
+On a branch whose state is on its remote, a test that passed counts only
+where moon's manifest of it is in the store moon keeps it in. The same
+holds for the manifest of each task it depends on. A test that passed in
+a run that kept no such manifest has no result and blames nobody. Its
+combination is tested again, and the run counts as one whose tests could
+not run. While a combination is tested again for any of these reasons,
+`sluice status` and `sluice wait` say which host's run had no outcome
+and why. The branch's log names the host and the store once, as the
+[state page](/sluice/reference/state/#the-log) shows.
+
 On a host whose system Nix manages, NixOS or nix-darwin, sluice notes
 the system `/run/current-system` links to as a run begins. A test that
 did not pass in a run during which the host's system was switched has no
@@ -499,13 +509,23 @@ a tool submits only once the work is approved.
 
 How many runs a host tests at once, who sluice pushes as, what it signs
 its results as and which caches every run shares are the host's own
-settings, never a repository's. They live in one file on the host,
+settings, never a repository's. So is where its telemetry goes. They live in one file on the host,
 `$XDG_CONFIG_HOME/sluice/config.toml`, which is
 `~/.config/sluice/config.toml` where `XDG_CONFIG_HOME` is unset, and
-every repository on the host reads the same file. sluice reads it when a
-command starts and never writes it: a change counts from the next
-command, and a `sluice run` you keep running takes it once you start it
-again. Without the file, every setting has its default.
+every repository on the host reads the same file. sluice never writes
+it. A command reads it as it starts, so a change counts from the next
+command. Without the file, every setting has its default.
+
+A `sluice run` you keep running looks at the file between its passes.
+It takes a change up before its next pass, and says on stderr which
+tables it took up. A run already testing keeps what it started with:
+its cores, its caches and what its executor lets it touch. A new bound
+holds the runs that start after it. A file that is gone, doesn't read,
+or names a key that doesn't read leaves the `sluice run` on the
+settings it holds. It says so once, with the file and the reason, and
+reads the file again once it changes again. To go back to the
+defaults, write an empty file. A key changed in place, at the path the
+file names, counts once the file next changes or sluice next starts.
 
 ```toml
 [runs]
@@ -531,6 +551,13 @@ expire_after = "168h"  # default: 168h; how long an outcome is owed before it sh
 
 [[caches]]                       # a cache every run on the host shares
 dir = "~/.cache/sccache"
+
+[telemetry]
+send = true                          # default: false; whether sluice sends its telemetry
+collector = "http://localhost:4318"  # a receiver on the host; needed where send = true
+
+[telemetry.attributes]
+"deployment.environment" = "prod"
 ```
 
 | table | what it sets | a host needs it when |
@@ -542,6 +569,7 @@ dir = "~/.cache/sccache"
 | [`[peers]`](#peers) | How long a quiet host keeps a branch, how often this host shows it is alive, and its name among the hosts. | It shares a branch's remote with other hosts. |
 | [`[deliveries]`](#deliveries) | How long an outcome is owed to its worktree before it shows as expired. | Its agents confirm their outcomes sooner or later than in a week. |
 | [`[[caches]]`](#caches) | The caches every run on the host shares. | Its builds share a cache, a compile server's or the task runner's. |
+| [`[telemetry]`](#telemetry) | Whether sluice sends its telemetry, where, as what, which signals and how much of a failure. | It sends sluice's telemetry. |
 
 ### Who writes it
 
@@ -564,7 +592,9 @@ another tool manages the host's configuration, the file is that tool's.
 It is read-only, or a link into the tool's own store, or the tool writes
 it again each time it applies the configuration. Change it where the
 host's configuration is managed, and apply it from there: an edit on the
-host is refused, or lost at the next apply. A `->` in the listing marks
+host is refused, or lost at the next apply. Nothing need restart sluice
+when the managed file changes: a `sluice run` kept running takes the
+change up before its next pass. A `->` in the listing marks
 a link, and a mode with no `w` marks a read-only file:
 
 ```sh
@@ -746,6 +776,77 @@ outcome.
 |---|---|
 | `expire_after` | A duration such as `"168h"`, `"72h"` or `"90m"`, at least a second. The default is `"168h"`, a week. A value that is no such duration is refused, naming `[deliveries] expire_after`. |
 
+### `[telemetry]`
+
+Whether sluice sends its telemetry, where, as what, which signals and
+how much of a failure. sluice sends OTLP over HTTP, protobuf, to a
+collector, as the [telemetry reference](/sluice/reference/telemetry/)
+describes. A host with no `[telemetry]` sends nothing unless a command
+asks.
+
+```toml
+[telemetry]
+send = true
+collector = "http://localhost:4318"
+logs = "tail"
+logs_tail_bytes = 4096
+
+[telemetry.attributes]
+"deployment.environment" = "prod"
+```
+
+| key | meaning |
+|---|---|
+| `send` | Whether sluice sends its telemetry, `true` or `false`. The default is `false`: sluice sends nothing. `true` needs a `collector`. |
+| `collector` | The collector sluice sends to, an `http://` address: a host, a port and at most a path, such as `"http://localhost:4318"`. sluice sends to its `/v1/traces`, `/v1/metrics` and `/v1/logs`. Name a receiver on the host, which forwards over TLS: sluice sends plain HTTP, and refuses an `https://` address. A table with `send = true` names one. Unset, the table sends nothing, and a command's own `--otel` sends where `OTEL_EXPORTER_OTLP_ENDPOINT` says, else to `http://localhost:4318`. |
+| `service` | The service sluice reports as, its `service.name`. The default is `"sluice"`. |
+| `traces` | Whether sluice sends traces, `true` or `false`. The default is `true`. |
+| `metrics` | Whether sluice sends metrics, `true` or `false`. The default is `true`. |
+| `logs` | How much of a failed check's output sluice sends as logs. `"off"` sends no logs at all. `"summary"` sends which task failed and where its output is kept, never the output. `"tail"` sends the output's end, scrubbed of what reads as a secret. The default is `"summary"`. |
+| `logs_tail_bytes` | At `logs = "tail"`, the most of a failed check's output sluice sends, in bytes, from 1 to 65536. The default is 8192. |
+| `attributes` | More resource attributes on everything sluice sends, each a string, such as `"deployment.environment" = "prod"`. The default is none. |
+
+Everything sluice sends carries `service.name`, `service.version`, the
+release, and `host.name`, the host's own name. An `attributes` entry
+`host.name` names the host in its place.
+
+sluice refuses to start on a `[telemetry]` it cannot read, naming the
+table and the key: a key it does not know, a `collector` that is no
+`http://` address or names no host, `send = true` with no `collector`,
+or an empty `service`. It refuses a
+`logs` other than `off`, `summary` or `tail`, and a `logs_tail_bytes`
+below 1 or above 65536. It refuses an attribute with no name, and one
+named `service.name` or `service.version`, which `service` and the
+release name. A sluice too old to know `[telemetry]` refuses the file, as it
+refuses any table it does not know.
+
+A command's own choice holds for that command alone, over the table.
+`--otel` or `SLUICE_OTEL=1` sends where `send` is unset or `false`, and
+`--otel=false` or `SLUICE_OTEL=0` sends nothing where `send = true`.
+`--otel-service-name`, `--otel-logs` and `--otel-logs-limit` choose
+`service`, `logs` and `logs_tail_bytes` the same way, as do
+`SLUICE_OTEL_SERVICE_NAME`, `SLUICE_OTEL_LOGS` and
+`SLUICE_OTEL_LOGS_LIMIT`. sluice holds a limit above 65536 to 65536.
+
+OpenTelemetry's variables only turn telemetry or a signal off, or name
+the collector where the table names none:
+
+- `OTEL_SDK_DISABLED=true` turns telemetry off, and
+  `OTEL_TRACES_EXPORTER`, `OTEL_METRICS_EXPORTER` or
+  `OTEL_LOGS_EXPORTER` at `none` turns that signal off. None of them
+  turns on a signal the table turns off.
+- Where the table names a `collector`, sluice reads none of the caller's
+  `OTEL_EXPORTER_OTLP_*`: a session's endpoint, headers and protocol
+  never take sluice's telemetry. A table names none only where it does
+  not send, and there, for a command's own `--otel`, they name the
+  collector, its headers and its protocol.
+- Where the host has a `[telemetry]`, sluice reads neither
+  `OTEL_RESOURCE_ATTRIBUTES` nor `OTEL_SERVICE_NAME`.
+
+A host with no `[telemetry]` reads the environment as a command is given
+it, `OTEL_EXPORTER_OTLP_*`, `OTEL_RESOURCE_ATTRIBUTES` and
+`OTEL_SERVICE_NAME` among it.
+
 ### `[[caches]]`
 
 The caches the host keeps for every build on it: a compile server's
@@ -824,5 +925,5 @@ cache.
 | `SLUICE_REVISION` | sluice, for a preview | The full revision the preview holds. |
 | `SLUICE_JOBS` | sluice, for a run | The cores the run may use: the cores sluice may use, `[runs] cores` where set and else what the host gives it, divided by `[runs] max`, the bound every repository on the host shares, and never less than one. |
 | each `[[caches]]` `env` | the host's config, for every run | The variables a cache's clients read, exactly as the host's [`[[caches]]`](#caches) declares them: for a submission's run, an agent's `sluice exec` and a preview's command, under any executor. Nothing else of sluice's own environment reaches a run. |
-| `SLUICE_OTEL` | the host | `1` turns telemetry on; see [telemetry](/sluice/reference/telemetry/). |
+| `SLUICE_OTEL` | the caller, for one command | `1`, `true`, `yes` or `on` turns telemetry on for the command, and `0`, `false`, `no` or `off` turns it off, over the host's [`[telemetry] send`](#telemetry); see [telemetry](/sluice/reference/telemetry/). |
 | `SLUICE_FORGE_API` | tests | Where the `[forge]` app's API calls go instead of `https://api.github.com`: a fake one. |
