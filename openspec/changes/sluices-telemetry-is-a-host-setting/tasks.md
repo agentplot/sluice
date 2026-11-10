@@ -110,14 +110,14 @@ tool of ours on a page (core.26).
 
 ## 5. A run gets what sluice sends
 
-- [ ] 5.1 Have `run_env` build a run's `OTEL_*` from the settings telemetry started with, never from `std::env::vars()`, as D6 says:
+- [x] 5.1 Have `run_env` build a run's `OTEL_*` from the settings telemetry started with, never from `std::env::vars()`, as D6 says:
   - `begin` keeps the settings where `on()` is kept;
   - a pure function of the settings, the current span's ids and the run's attributes builds the map, and `run_env` calls it;
   - while telemetry is off, `run_env` gives nothing.
 
   Add `with_the_tables_collector_a_run_gets_it_and_none_of_the_callers` to `telemetry_logs.rs`, built as `a_run_s_checks_join_the_round` is, as the scenario "A run gets the table's collector and none of the caller's" says. True when `cargo test -p sluice --test telemetry_logs -- --exact with_the_tables_collector_a_run_gets_it_and_none_of_the_callers` passes.
-- [ ] 5.2 Have `a_run_s_checks_join_the_round` expect `OTEL_RESOURCE_ATTRIBUTES` exactly `deployment.environment=test,host.name=host-a,sluice.trace_id=<trace>,sluice.span_id=<span>,sluice.place=p%201,sluice.revision=<revision>`, as the scenario "A run joins the round" says. True when `cargo test -p sluice --test telemetry_logs -- --exact a_run_s_checks_join_the_round` passes.
-- [ ] 5.3 Have `with_traces_off_a_run_s_checks_join_no_trace` expect `OTEL_RESOURCE_ATTRIBUTES` exactly `deployment.environment=test,host.name=host-a,sluice.place=p%201,sluice.revision=<revision>`. True when `cargo test -p sluice --test telemetry_logs -- --exact with_traces_off_a_run_s_checks_join_no_trace` passes.
+- [x] 5.2 Have `a_run_s_checks_join_the_round` expect `OTEL_RESOURCE_ATTRIBUTES` exactly `deployment.environment=test,host.name=host-a,sluice.trace_id=<trace>,sluice.span_id=<span>,sluice.place=p%201,sluice.revision=<revision>`, as the scenario "A run joins the round" says. True when `cargo test -p sluice --test telemetry_logs -- --exact a_run_s_checks_join_the_round` passes.
+- [x] 5.3 Have `with_traces_off_a_run_s_checks_join_no_trace` expect `OTEL_RESOURCE_ATTRIBUTES` exactly `deployment.environment=test,host.name=host-a,sluice.place=p%201,sluice.revision=<revision>`. True when `cargo test -p sluice --test telemetry_logs -- --exact with_traces_off_a_run_s_checks_join_no_trace` passes.
 
 ## 6. What a person reads says the table
 

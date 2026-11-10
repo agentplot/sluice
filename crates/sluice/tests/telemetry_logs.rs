@@ -561,8 +561,9 @@ fn var(env: &str, k: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// A run's checks get sluice's `OTEL_*`, its resource attributes extended
-/// with the round's trace and span, the place and the revision, each
+/// With no `[telemetry]`, a run's checks get sluice's `OTEL_*`, its
+/// resource attributes extended with the host's name, which sluice names
+/// itself, the round's trace and span, the place and the revision, each
 /// value encoded where the variable's syntax would read it, and the span
 /// that started the run as `TRACEPARENT`.
 #[test]
@@ -584,16 +585,78 @@ fn a_run_s_checks_join_the_round() {
     assert_eq!(
         var("OTEL_RESOURCE_ATTRIBUTES"),
         format!(
-            "deployment.environment=test,sluice.trace_id={trace},sluice.span_id={span},\
-             sluice.place=p%201,sluice.revision={revision}"
+            "deployment.environment=test,host.name=host-a,sluice.trace_id={trace},\
+             sluice.span_id={span},sluice.place=p%201,sluice.revision={revision}"
         )
     );
     telemetry.finish();
 }
 
+/// 151: where the host's table names a collector, a run's checks get it,
+/// protobuf, each signal sluice does not send as `none`, and its resource
+/// attributes as sluice names them, `host.name` and the table's, before
+/// the round's and the run's own; and none of the caller's OTLP settings
+/// or attributes (record 0106; rule core.53; design D6).
+#[test]
+fn with_the_tables_collector_a_run_gets_it_and_none_of_the_callers() {
+    if !alone("with_the_tables_collector_a_run_gets_it_and_none_of_the_callers") {
+        return;
+    }
+    std::env::set_var("OTEL_EXPORTER_OTLP_HEADERS", "x-session=s3cr3t-session");
+    std::env::set_var("OTEL_RESOURCE_ATTRIBUTES", "deployment.environment=session");
+    let collector = nobody();
+    let table = sending(
+        &collector,
+        HostTelemetry {
+            metrics: Some(false),
+            attributes: [("deployment.environment".into(), "prod".into())].into(),
+            ..HostTelemetry::default()
+        },
+    );
+    let settings = Chosen::choose(Choices::default(), Some(&table), "host-a", std::env::vars());
+    let spans = InMemorySpanExporter::default();
+    let telemetry = Telemetry::start_with(
+        &settings,
+        spans.clone(),
+        Some(InMemoryLogExporter::default()),
+    )
+    .unwrap();
+    let (env, revision) = a_run_s_environment();
+    telemetry.flush();
+
+    let ids = span(&spans, "sluice.start").span_context;
+    let (trace, span) = (ids.trace_id().to_string(), ids.span_id().to_string());
+    let var = |k: &str| var(&env, k).unwrap_or_else(|| panic!("no {k} in {env}"));
+    assert_eq!(var("OTEL_EXPORTER_OTLP_ENDPOINT"), collector);
+    assert_ne!(
+        std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").as_deref(),
+        Ok(collector.as_str())
+    );
+    assert_eq!(var("OTEL_EXPORTER_OTLP_PROTOCOL"), "http/protobuf");
+    assert_eq!(var("OTEL_METRICS_EXPORTER"), "none");
+    assert_eq!(var("TRACEPARENT"), format!("00-{trace}-{span}-01"));
+    assert_eq!(
+        var("OTEL_RESOURCE_ATTRIBUTES"),
+        format!(
+            "host.name=host-a,deployment.environment=prod,sluice.trace_id={trace},\
+             sluice.span_id={span},sluice.place=p%201,sluice.revision={revision}"
+        )
+    );
+    for line in env.lines() {
+        assert!(!line.starts_with("OTEL_EXPORTER_OTLP_HEADERS="), "{line}");
+        assert!(!line.contains("session"), "{line}");
+        assert!(
+            !line.starts_with("OTEL_TRACES_EXPORTER=") && !line.starts_with("OTEL_LOGS_EXPORTER="),
+            "{line}"
+        );
+    }
+    telemetry.finish();
+}
+
 /// With traces off a run's checks join no trace: they get sluice's
-/// `OTEL_*`, the setting among them, and the place and the revision as
-/// resource attributes, with no `TRACEPARENT` and no trace or span id.
+/// `OTEL_*`, the setting among them, and the host's name, the place and
+/// the revision as resource attributes, with no `TRACEPARENT` and no
+/// trace or span id.
 #[test]
 fn with_traces_off_a_run_s_checks_join_no_trace() {
     if !alone("with_traces_off_a_run_s_checks_join_no_trace") {
@@ -612,7 +675,8 @@ fn with_traces_off_a_run_s_checks_join_no_trace() {
     assert_eq!(
         var(&env, "OTEL_RESOURCE_ATTRIBUTES"),
         Some(format!(
-            "deployment.environment=test,sluice.place=p%201,sluice.revision={revision}"
+            "deployment.environment=test,host.name=host-a,sluice.place=p%201,\
+             sluice.revision={revision}"
         ))
     );
     telemetry.finish();

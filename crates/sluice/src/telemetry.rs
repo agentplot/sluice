@@ -1,31 +1,36 @@
-//! OpenTelemetry for sluice (ADR 0014): off unless `--otel` or
-//! `SLUICE_OTEL` turns it on, then the core's `tracing` spans and metric
-//! events exported over OTLP/HTTP to wherever the standard
-//! `OTEL_EXPORTER_OTLP_*` variables say. Telemetry decides nothing: an
-//! exporter that fails is silent, and nothing reads it back.
+//! OpenTelemetry for sluice (ADR 0014): off unless the host's own
+//! settings, `[telemetry]`, or a command's own `--otel` or `SLUICE_OTEL`
+//! turn it on, then the core's `tracing` spans and metric events exported
+//! over OTLP/HTTP to the table's collector, else wherever the standard
+//! `OTEL_EXPORTER_OTLP_*` variables say (151; record 0106; rule core.53).
+//! A command's own choice is for that command alone, over the table
+//! ([`Settings::choose`]). Telemetry decides nothing: an exporter that
+//! fails is silent, and nothing reads it back.
 //!
 //! OpenTelemetry's own settings turn it, or one signal, off again, as its
 //! SDK environment variables specification reads them: `OTEL_SDK_DISABLED`
 //! at `true` every signal, and `OTEL_TRACES_EXPORTER`,
 //! `OTEL_METRICS_EXPORTER` or `OTEL_LOGS_EXPORTER` at `none` that one
-//! alone. A signal turned off is never built.
+//! alone; they never turn on a signal the table turns off. A signal
+//! turned off is never built.
 //!
-//! A run's checks get sluice's `OTEL_*` and, in `OTEL_RESOURCE_ATTRIBUTES`,
-//! the trace and span of the round that started them, so what they export
-//! is found beside the round; and the W3C `TRACEPARENT`, for a tool that
+//! A run's checks get what sluice sends: its collector and the signals it
+//! sends, its resource attributes and, in `OTEL_RESOURCE_ATTRIBUTES`, the
+//! trace and span of the round that started them, so what they export is
+//! found beside the round; and the W3C `TRACEPARENT`, for a tool that
 //! reads it to nest its spans under the start.
 //!
 //! Logs (ADR 0022): a failed check's output, which the core emits once
 //! where it keeps it, and sluice's own warnings and errors, sent as OTLP
-//! log records under the span they were emitted in. `SLUICE_OTEL_LOGS`
-//! says how much of the output goes: none, a summary naming where it is
-//! kept, or its end scrubbed of what reads as a secret. The kept copy on
-//! disk is the record (20, 26; rule core.11); a record lost on the way is
-//! never sent again.
+//! log records under the span they were emitted in. The host's `[telemetry]
+//! logs`, or a command's `SLUICE_OTEL_LOGS`, says how much of the output
+//! goes: none, a summary naming where it is kept, or its end scrubbed of
+//! what reads as a secret. The kept copy on disk is the record (20, 26;
+//! rule core.11); a record lost on the way is never sent again.
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -49,6 +54,10 @@ use tracing_subscriber::Layer;
 use crate::instance::HostTelemetry;
 
 static ON: AtomicBool = AtomicBool::new(false);
+
+/// The settings telemetry started under, which a run's environment is
+/// built from (design D6).
+static SENT: OnceLock<Settings> = OnceLock::new();
 
 /// How much of a failed check's output is sent (ADR 0022): the flag and
 /// the host's `[telemetry] logs` read one set of words (design D1).
@@ -438,6 +447,7 @@ impl Telemetry {
             .with(metrics.clone().map(MetricsLayer::new))
             .with(bridge);
         tracing::subscriber::set_global_default(subscriber)?;
+        let _ = SENT.set(settings.clone());
         ON.store(true, Ordering::SeqCst);
         Ok(Telemetry {
             traces,
@@ -562,26 +572,78 @@ pub fn on() -> bool {
 }
 
 /// What a run's environment takes of telemetry: nothing when it is off;
-/// otherwise sluice's own `OTEL_*`, with `attributes` and the current
-/// span's trace and span ids added to `OTEL_RESOURCE_ATTRIBUTES`, and the
-/// current span as `TRACEPARENT`.
+/// otherwise what sluice sends, built from the settings it started under,
+/// never from this process's environment as it is now (design D6).
 pub fn run_env(attributes: &[(&str, &str)]) -> BTreeMap<String, String> {
-    if !on() {
+    let Some(settings) = SENT.get().filter(|_| on()) else {
         return BTreeMap::new();
-    }
-    let mut env: BTreeMap<String, String> = std::env::vars()
-        .filter(|(k, _)| k.starts_with("OTEL_"))
-        .collect();
+    };
     let cx = tracing::Span::current().context();
     let span = cx.span();
-    let ids = span.span_context();
-    let (trace, span) = (ids.trace_id().to_string(), ids.span_id().to_string());
-    let mut pairs: Vec<String> = env
-        .remove("OTEL_RESOURCE_ATTRIBUTES")
+    variables(settings, span.span_context(), attributes)
+}
+
+/// A run's telemetry under `settings`, started under the span `ids`, with
+/// the run's own `attributes` (design D6). With a table: the collector
+/// sluice sends to, the table's or else the caller's
+/// `OTEL_EXPORTER_OTLP_*`; `OTEL_<SIGNAL>_EXPORTER=none` for each signal
+/// sluice does not send; and `OTEL_RESOURCE_ATTRIBUTES` holding sluice's
+/// `host.name` and the table's `attributes`, never `service.name`, so a
+/// tool reports as itself; no other `OTEL_*`. With none: the caller's
+/// `OTEL_*` as they were when chosen, `host.name` added where sluice
+/// named the host itself. Either way, while traces go, the trace and span
+/// ids and `TRACEPARENT`, and then the run's own attributes, each value
+/// encoded.
+fn variables(
+    settings: &Settings,
+    ids: &opentelemetry::trace::SpanContext,
+    attributes: &[(&str, &str)],
+) -> BTreeMap<String, String> {
+    let caller = |prefix: &'static str| {
+        settings
+            .env
+            .iter()
+            .filter(move |(k, _)| k.starts_with(prefix))
+            .cloned()
+    };
+    let named = settings
+        .named()
         .into_iter()
-        .filter(|s| !s.is_empty())
-        .collect();
+        .map(|(k, v)| format!("{k}={}", encode(&v)));
+    let (mut env, mut pairs): (BTreeMap<String, String>, Vec<String>) = match &settings.table {
+        None => {
+            let mut env: BTreeMap<String, String> = caller("OTEL_").collect();
+            let pairs = env
+                .remove("OTEL_RESOURCE_ATTRIBUTES")
+                .into_iter()
+                .filter(|s| !s.is_empty())
+                .chain(named)
+                .collect();
+            (env, pairs)
+        }
+        Some(_) => {
+            let mut env: BTreeMap<String, String> = match &settings.collector {
+                Some(collector) => BTreeMap::from([
+                    ("OTEL_EXPORTER_OTLP_ENDPOINT".into(), collector.clone()),
+                    ("OTEL_EXPORTER_OTLP_PROTOCOL".into(), "http/protobuf".into()),
+                ]),
+                None => caller("OTEL_EXPORTER_OTLP_").collect(),
+            };
+            let on = settings.signals;
+            for (sent, variable) in [
+                (on.traces, "OTEL_TRACES_EXPORTER"),
+                (on.metrics, "OTEL_METRICS_EXPORTER"),
+                (on.logs, "OTEL_LOGS_EXPORTER"),
+            ] {
+                if !sent {
+                    env.insert(variable.into(), "none".into());
+                }
+            }
+            (env, named.collect())
+        }
+    };
     if ids.is_valid() {
+        let (trace, span) = (ids.trace_id().to_string(), ids.span_id().to_string());
         pairs.push(format!("sluice.trace_id={trace}"));
         pairs.push(format!("sluice.span_id={span}"));
         env.insert(
