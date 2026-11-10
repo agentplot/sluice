@@ -28,9 +28,9 @@
 //! starts, and takes it out of its environment, so no child inherits it.
 
 use std::collections::BTreeMap;
-use std::ffi::OsString;
+use std::ffi::{CString, OsStr, OsString};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-use std::os::unix::process::CommandExt;
+use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::process::Command;
 
@@ -130,9 +130,10 @@ impl HandOver {
 
     /// Replace this process's image with the run started afresh, handing
     /// it `driver`, the duplicate of the driver's lock, by its number
-    /// (design D2, D5). It returns only where the start failed: `driver`
-    /// is closed, so the driver the run keeps is the only hold on the
-    /// lock, and the error names `program`.
+    /// (design D2, D5). It returns only where the start failed, with the
+    /// process as it was (rule core.54): `driver` is closed, so the driver
+    /// the run keeps is the only hold on the lock, and the error names
+    /// `program`.
     pub fn start(
         mut self,
         program: &Path,
@@ -142,11 +143,50 @@ impl HandOver {
     ) -> anyhow::Error {
         self.driver = driver.as_ref().map(AsRawFd::as_raw_fd);
         let failed = match self.command(program, args, env) {
-            Ok(mut cmd) => anyhow::Error::from(cmd.exec()),
+            Ok(cmd) => replace(&cmd),
             Err(e) => e,
         };
         drop(driver);
         failed.context(format!("starting {} afresh", program.display()))
+    }
+}
+
+/// Replace this process's image with `cmd`'s by `execve`, `cmd` being one
+/// [`HandOver::command`] built, its environment cleared and set whole
+/// (design D2, D3). It returns only where the start failed, and leaves
+/// the process as it was. std's `CommandExt::exec` does not: while it
+/// tries the start it sets the process's own environment to the
+/// command's, so a thread reading a variable meanwhile reads the
+/// command's, or memory freed once the start failed, and it sets
+/// `SIGPIPE` back to its default, which a run whose start failed would
+/// keep.
+fn replace(cmd: &Command) -> anyhow::Error {
+    let c = |s: &OsStr| {
+        CString::new(s.as_bytes()).map_err(|_| anyhow!("{} holds a NUL", s.to_string_lossy()))
+    };
+    let parts = || -> Result<(CString, Vec<CString>, Vec<CString>)> {
+        let program = c(cmd.get_program())?;
+        let mut argv = vec![program.clone()];
+        for arg in cmd.get_args() {
+            argv.push(c(arg)?);
+        }
+        let mut envp = Vec::new();
+        for (name, value) in cmd.get_envs() {
+            if let Some(value) = value {
+                let mut pair = name.to_owned();
+                pair.push("=");
+                pair.push(value);
+                envp.push(c(&pair)?);
+            }
+        }
+        Ok((program, argv, envp))
+    };
+    match parts() {
+        Ok((program, argv, envp)) => match nix::unistd::execve(&program, &argv, &envp) {
+            Ok(never) => match never {},
+            Err(errno) => std::io::Error::from(errno).into(),
+        },
+        Err(e) => e,
     }
 }
 
@@ -216,6 +256,59 @@ mod tests {
         );
         let read: HandOver = serde_json::from_str(doc.to_str().unwrap()).unwrap();
         assert_eq!(read, handed);
+    }
+
+    /// A start that fails leaves the process as it was: no thread reads
+    /// the environment handed over while the start is tried, which reads
+    /// no variable of the process's own meanwhile, `TMPDIR` among them,
+    /// and `SIGPIPE` keeps its disposition (core.54; design D5).
+    #[test]
+    fn a_hand_over_that_cannot_start_leaves_the_process_as_it_was() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use std::sync::Arc;
+        let sigpipe = || {
+            let mut old = std::mem::MaybeUninit::<nix::libc::sigaction>::zeroed();
+            // SAFETY: a null action only reads SIGPIPE's disposition into
+            // `old`, which the call fills.
+            unsafe {
+                assert_eq!(
+                    nix::libc::sigaction(nix::libc::SIGPIPE, std::ptr::null(), old.as_mut_ptr()),
+                    0
+                );
+                old.assume_init().sa_sigaction
+            }
+        };
+        let before = sigpipe();
+        let stop = Arc::new(AtomicBool::new(false));
+        let seen = Arc::new(AtomicUsize::new(0));
+        let reader = {
+            let (stop, seen) = (Arc::clone(&stop), Arc::clone(&seen));
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    if std::env::var_os(VAR).is_some() {
+                        seen.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            })
+        };
+        let program = std::env::temp_dir()
+            .join(format!("sluice-hand-over-none-{}", std::process::id()))
+            .join("sluice");
+        for _ in 0..50 {
+            let e = every().start(&program, &[], &[], None);
+            assert!(
+                format!("{e:#}").contains("No such file or directory"),
+                "{e:#}"
+            );
+        }
+        stop.store(true, Ordering::Relaxed);
+        reader.join().unwrap();
+        assert_eq!(
+            seen.load(Ordering::Relaxed),
+            0,
+            "a thread read the environment handed over"
+        );
+        assert_eq!(sigpipe(), before, "SIGPIPE keeps its disposition");
     }
 
     /// The settings-take-up spec's "An executable that cannot start": the
