@@ -37,6 +37,18 @@ failing a check:
 
 `openspec validate sluices-telemetry-is-a-host-setting --strict`: valid.
 
+After the archive, `openspec validate --specs --strict` warns on five
+requirements whose text the change made longer than OpenSpec's 500
+characters: in `telemetry`, "Telemetry is off unless asked" (640), "A
+run's checks join the round" (1255), "How much of a failure is sent is
+the host's choice" (555) and "OpenTelemetry's settings turn a signal
+off" (600); in `host-settings-module`, "sluice reads the module's file
+as written" (535). Under `--strict` those warnings fail the two specs,
+which passed at `ef64ee41`. The gate validates `--changes` alone
+(`root:changes`), so no check fails, and nothing a requirement says is
+wrong. A later change that touches these requirements can split them,
+moving their lists into scenarios.
+
 ## Tasks
 
 All 26 tasks, 1.1 to 6.6, are ticked `[x]`. Each task's own "true
