@@ -408,8 +408,9 @@ impl Instance {
 
     /// As [`Instance::from_host`], from the settings' `text`, read from
     /// `path`, with `~/` expanded in `home`: so a test gives both, and sets
-    /// no `HOME` beside the tests on other threads.
-    fn from_text(
+    /// no `HOME` beside the tests on other threads, and a take-up binds the
+    /// text it read (design D4, D5).
+    pub(crate) fn from_text(
         text: &str,
         path: Option<&Path>,
         given: usize,
@@ -555,8 +556,10 @@ impl Instance {
     /// configuration reference's order: `[runs]` for the bound, the
     /// reserve, the cores sluice may use and the systems; `[forge]`;
     /// `[signing]`; `[peers]`; `[deliveries]` for the span an outcome is
-    /// owed; `[[caches]]`. What a process that took `other` up says it
-    /// took up (135; record 0107; design D5).
+    /// owed; `[telemetry]`, compared whole; `[[caches]]`. What a process
+    /// that took `other` up says it took up, and, where one of [`AFRESH`]
+    /// is among them, takes up only by starting afresh (135; record 0107;
+    /// design D1, D5).
     pub fn changed_tables(&self, other: &Instance) -> Vec<&'static str> {
         [
             (
@@ -573,6 +576,7 @@ impl Instance {
             ("[signing]", self.signing != other.signing),
             ("[peers]", self.peers != other.peers),
             ("[deliveries]", self.expire_after != other.expire_after),
+            ("[telemetry]", self.telemetry != other.telemetry),
             ("[[caches]]", self.caches != other.caches),
         ]
         .into_iter()
@@ -580,6 +584,14 @@ impl Instance {
         .collect()
     }
 }
+
+/// The tables no binding takes up in place, as [`Instance::changed_tables`]
+/// names them: `[telemetry]`, whose subscriber and providers are set once
+/// in a process, which also took the caller's OTLP variables out of its
+/// own environment where the table named a collector. A process takes a
+/// change of one of these up by starting afresh (135; record 0107;
+/// design D1).
+pub const AFRESH: [&str; 1] = ["[telemetry]"];
 
 /// 51: `[deliveries] expire_after`, a duration as sluice's settings write
 /// one, a week where unset; refused, naming the setting, where it does not
@@ -734,7 +746,7 @@ fn caches(forms: Vec<toml::Value>, home: Option<&Path>) -> Result<Vec<HostCache>
 }
 
 /// The settings file's text; none where there is no file.
-fn settings_text(path: Option<&Path>) -> Result<String> {
+pub(crate) fn settings_text(path: Option<&Path>) -> Result<String> {
     match path.map(std::fs::read_to_string) {
         Some(Ok(t)) => Ok(t),
         Some(Err(e)) if e.kind() != std::io::ErrorKind::NotFound => {
@@ -879,7 +891,8 @@ pub fn host_cores() -> (usize, usize) {
     (given, all)
 }
 
-fn home() -> Option<PathBuf> {
+/// The home `~/` is expanded in, where the host has one.
+pub(crate) fn home() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .filter(|h| !h.is_empty())
         .map(PathBuf::from)
@@ -1398,6 +1411,46 @@ dir = "/caches/moon"
         assert_eq!(before.changed_tables(&after), ["[runs]", "[forge]"]);
         assert_eq!(before.changed_tables(&cached), ["[[caches]]"]);
         assert_eq!(before.changed_tables(&again), Vec::<&str>::new());
+    }
+
+    /// The settings-take-up spec's "A changed telemetry table is named" and
+    /// "Which tables start the run afresh": `[telemetry]` is named between
+    /// `[deliveries]` and `[[caches]]`, and it alone of the tables starts a
+    /// run afresh (135; record 0107; design D1).
+    #[test]
+    fn a_changed_telemetry_table_is_named_and_taken_up_afresh() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("sluice-afresh-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let key = dir.join("app.pem");
+        std::fs::write(&key, "key").unwrap();
+        std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let forge = format!(
+            "[forge]\napp_id = 42\nkey = {:?}\n",
+            key.display().to_string()
+        );
+        let read = |text: &str| with(text, 16).unwrap();
+        let telemetry = |collector: &str, logs: &str| {
+            format!("[telemetry]\nsend = true\ncollector = {collector:?}\nlogs = {logs:?}\n")
+        };
+        let before = read(&format!(
+            "{forge}\n{}",
+            telemetry("http://localhost:4318", "summary")
+        ));
+        let moved = read(&format!(
+            "{forge}\n{}\n[[caches]]\ndir = \"/caches/a\"\n",
+            telemetry("http://localhost:4319", "summary")
+        ));
+        let logs = read(&format!(
+            "{forge}\n{}",
+            telemetry("http://localhost:4318", "tail")
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(before.changed_tables(&moved), ["[telemetry]", "[[caches]]"]);
+        assert_eq!(before.changed_tables(&logs), ["[telemetry]"]);
+        assert!(AFRESH.contains(&"[telemetry]"));
+        assert!(!AFRESH.contains(&"[runs]"));
+        assert!(!AFRESH.contains(&"[forge]"));
     }
 
     /// The host-settings-module spec's "Reading the module's credential

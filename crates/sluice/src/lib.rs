@@ -9,6 +9,7 @@ pub mod bounded;
 pub mod branch;
 pub mod equip;
 pub mod exec;
+pub mod hand_over;
 pub mod home;
 pub mod host_count;
 pub mod host_settings;
@@ -31,6 +32,7 @@ pub mod words;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
+use std::os::fd::OwnedFd;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -1299,6 +1301,10 @@ pub struct Driving {
     /// they name it.
     place: Option<(std::path::PathBuf, String)>,
     driver: Option<Driver>,
+    /// 135: the driver's lock handed over by the `sluice run` this one
+    /// started afresh from, adopted at the first pass before the lock
+    /// would be taken (design D4, D6).
+    handed: Option<OwnedFd>,
     reader: Option<Reader>,
     /// 129: what its document last asked of whether the repository has
     /// sluice.
@@ -1324,6 +1330,7 @@ impl Driving {
             checked: false,
             place: None,
             driver: None,
+            handed: None,
             reader: None,
             asked: None,
             said_beside: false,
@@ -1332,6 +1339,50 @@ impl Driving {
             policies: sluice_core::Policies::default(),
         }
     }
+
+    /// What this run hands to itself started afresh (135; record 0107;
+    /// design D4, D6): the passes counted, a duplicate of the driver's
+    /// lock left open across the start, and what it said. The driver is
+    /// kept, so a hand-over that cannot start still drives.
+    pub fn hand_over(&self) -> Result<Carried> {
+        Ok(Carried {
+            passes: self.n,
+            driver: self.driver.as_ref().map(Driver::hand_over).transpose()?,
+            said: self.said.clone(),
+            passed: self.passed.clone(),
+            said_beside: self.said_beside,
+        })
+    }
+
+    /// A `sluice run` started afresh from one that handed it `carried`,
+    /// ending once `rounds` passes, those already driven among them, where
+    /// it names a bound. Its first pass adopts the driver's lock carried
+    /// before it would take the lock, and it says again nothing the run
+    /// said (135; record 0107; design D4, D6).
+    pub fn handed(rounds: Option<usize>, carried: Carried) -> Driving {
+        Driving {
+            n: carried.passes,
+            handed: carried.driver,
+            said: carried.said,
+            passed: carried.passed,
+            said_beside: carried.said_beside,
+            ..Driving::new(rounds)
+        }
+    }
+}
+
+/// What a `sluice run` hands to itself started afresh, as [`Driving`]
+/// keeps it (135; record 0107; design D4, D6): the passes counted toward
+/// its `--rounds`, the driver's lock as a descriptor open across the
+/// start, where it held it, and the holds, the refusals and whether it
+/// said another run drives the repository, so none is said again.
+#[derive(Debug, Default)]
+pub struct Carried {
+    pub passes: usize,
+    pub driver: Option<OwnedFd>,
+    pub said: BTreeMap<String, Option<(Rev, Rev)>>,
+    pub passed: BTreeMap<String, String>,
+    pub said_beside: bool,
 }
 
 /// What a pass of `sluice run` ended with.
@@ -1383,6 +1434,11 @@ pub fn drive(
     // bounded run whose last pass passed one by ends as a step
     // of that branch would.
     let mut failed: BTreeMap<String, String> = BTreeMap::new();
+    // 135: a run started afresh holds the lock it was handed, with no
+    // moment let go, where it is this repository's (design D4, D6).
+    if let Some(fd) = driving.handed.take() {
+        driving.driver = Driver::adopt(fd, &readers, &repository)?;
+    }
     if driving.driver.is_none() {
         driving.driver = Driver::take(&readers, &repository)?;
     }
@@ -3308,11 +3364,11 @@ fn decided(
     out: &mut dyn Write,
 ) -> Result<Next> {
     Ok(match carried(s, waiting, read, out)? {
-        Carried::Entry(e) => Next::Follow(e),
-        Carried::Request(n) => Next::End(Waited::Request(own.clone(), n)),
+        WorkGoes::Entry(e) => Next::Follow(e),
+        WorkGoes::Request(n) => Next::End(Waited::Request(own.clone(), n)),
         // Landed by what carried its work: named, where `read` is its own,
         // and its own's end where `read` is what it followed.
-        Carried::Landed(o, e) => {
+        WorkGoes::Landed(o, e) => {
             let by = CarriedBy::Entry(e);
             let end = match o.id == own.id {
                 true => o,
@@ -3320,14 +3376,14 @@ fn decided(
             };
             Next::End(Waited::Decided(end, Some(by), None))
         }
-        Carried::Outcome(o, _) if o.id == own.id => Next::End(Waited::Decided(o, None, None)),
+        WorkGoes::Outcome(o, _) if o.id == own.id => Next::End(Waited::Decided(o, None, None)),
         // What carried its work ended as its request closed: the request.
-        Carried::Outcome(_, Some(n)) => {
+        WorkGoes::Outcome(_, Some(n)) => {
             let by = CarriedBy::Request(n, RequestEnd::Closed);
             let end = own_end(s, own.clone(), Some(&by))?;
             Next::End(Waited::Decided(end, Some(by), None))
         }
-        Carried::Outcome(o, None) => {
+        WorkGoes::Outcome(o, None) => {
             let by = CarriedBy::Entry(o);
             let end = own_end(s, own.clone(), Some(&by))?;
             Next::End(Waited::Decided(end, Some(by), None))
@@ -3336,7 +3392,7 @@ fn decided(
 }
 
 /// What a wait does with a submission it read decided.
-enum Carried {
+enum WorkGoes {
     /// Its outcome, to report, with the number of its pull request where
     /// that was read closed, which ended its work (record 0100 D2).
     Outcome(Submission, Option<u64>),
@@ -3368,9 +3424,9 @@ fn carried(
     waiting: &Waiting<'_>,
     sub: Submission,
     out: &mut dyn Write,
-) -> Result<Carried> {
+) -> Result<WorkGoes> {
     if sub.state != State::Withdrawn {
-        return Ok(Carried::Outcome(sub, None));
+        return Ok(WorkGoes::Outcome(sub, None));
     }
     let branch = s.seams().branch;
     // What cannot be read leaves the outcome as the records hold it, and
@@ -3402,8 +3458,8 @@ fn carried(
                 ..sub
             };
             return Ok(match by {
-                Some(e) => Carried::Landed(landed, e),
-                None => Carried::Outcome(landed, None),
+                Some(e) => WorkGoes::Landed(landed, e),
+                None => WorkGoes::Outcome(landed, None),
             });
         }
         Ok(None) => {}
@@ -3428,19 +3484,19 @@ fn carried(
         .rfind(|e| e.id > sub.id && e.from.worktree == sub.from.worktree && carries(&e.head));
     if let Some(e) = later {
         follows(format!("#{}", e.id), out)?;
-        return Ok(Carried::Entry(e));
+        return Ok(WorkGoes::Entry(e));
     }
     let (Some(pulls), Some(n)) = (
         waiting.pulls,
         waiting.pulls.and_then(|p| p.request_of(&sub.from.worktree)),
     ) else {
-        return Ok(Carried::Outcome(sub, None));
+        return Ok(WorkGoes::Outcome(sub, None));
     };
     let followed = match pulls.follow(s.seams(), waiting.clock, &sub.branch, n) {
         Ok(f) => f,
         Err(e) => {
             unread(&format!("pull request #{n}"), e);
-            return Ok(Carried::Outcome(sub, None));
+            return Ok(WorkGoes::Outcome(sub, None));
         }
     };
     let closed = matches!(followed, Followed::Closed).then_some(n);
@@ -3468,13 +3524,13 @@ fn carried(
     Ok(match goes_on {
         Some(Some(e)) => {
             follows(format!("#{}", e.id), out)?;
-            Carried::Entry(e)
+            WorkGoes::Entry(e)
         }
         Some(None) => {
             follows(format!("its pull request #{n}"), out)?;
-            Carried::Request(n)
+            WorkGoes::Request(n)
         }
-        None => Carried::Outcome(sub, closed),
+        None => WorkGoes::Outcome(sub, closed),
     })
 }
 

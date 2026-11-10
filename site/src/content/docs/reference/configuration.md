@@ -527,6 +527,14 @@ reads the file again once it changes again. To go back to the
 defaults, write an empty file. A key changed in place, at the path the
 file names, counts once the file next changes or sluice next starts.
 
+A `sluice run` can't swap its telemetry in place, so it takes a change
+of `[telemetry]` up by starting itself afresh, in the same process,
+with nothing to restart. Whatever runs it, a terminal, a pane or a
+service manager, keeps following it, and runs already testing keep
+what they started with. Its stderr says the tables it took up, as for
+any change. A change it couldn't start afresh for leaves it on the
+settings it holds, and it says so once, with the file and the reason.
+
 ```toml
 [runs]
 max = 2        # default: a quarter of the cores; every repository shares it
@@ -830,7 +838,9 @@ Whether sluice sends its telemetry, where, as what, which signals and
 how much of a failure. sluice sends OTLP over HTTP, protobuf, to a
 collector, as the [telemetry reference](/sluice/reference/telemetry/)
 describes. A host with no `[telemetry]` sends nothing unless a command
-asks.
+asks. A `sluice run` you keep running takes a change of the table up
+by starting itself afresh, in the same process, as
+[the host's config](#the-hosts-config-configsluiceconfigtoml) says.
 
 ```toml
 [telemetry]

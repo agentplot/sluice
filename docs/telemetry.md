@@ -124,9 +124,11 @@ and for where it goes, the host's own `[telemetry]`,
 
    Nothing goes in a session's environment, and nothing wraps sluice:
    every command on the host reads the table, an agent's `sluice submit`
-   or `wt submit` and a `sluice run` or `sluice step` alike. sluice names
-   the host itself, `host.name`, so hosts sending to one backend can be
-   told apart. Write the table once the host's sluice reads it: an older
+   or `wt submit` and a `sluice run` or `sluice step` alike. A `sluice
+   run` kept running takes a change of the table up at its next pass by
+   starting itself afresh, so a host keeps no restart of sluice for it.
+   sluice names the host itself, `host.name`, so hosts sending to one
+   backend can be told apart. Write the table once the host's sluice reads it: an older
    sluice refuses the file, as it refuses any table it does not know.
    Drop a wrapper that sets `SLUICE_OTEL*` or unsets the caller's OTLP
    variables in the same change.

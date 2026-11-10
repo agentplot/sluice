@@ -546,6 +546,148 @@ mod bound {
         assert!(!said.contains("took up"), "{said}");
     }
 
+    /// The settings-take-up spec's "A kept run sends to the collector it
+    /// is changed to" (135; 151; record 0107; rules core.53, core.54;
+    /// design D1 to D7): `[telemetry]` changed to another collector while
+    /// the first combination's run goes is taken up by the run starting
+    /// itself afresh, which says so once; the first collector is sent what
+    /// the run held before it, traces and metrics, and the second the
+    /// traces of the run started afresh; each run starts once with every
+    /// core, and both land.
+    #[test]
+    fn a_run_takes_a_changed_telemetry_table_up_by_starting_afresh() {
+        use std::collections::BTreeSet;
+        let ok = |_: &support::http::Request| (200, Vec::new(), String::new());
+        let first = support::http::Fake::start(ok);
+        let second = support::http::Fake::start(ok);
+        let seen = Scratch::new("instance-afresh-seen");
+        let sending = |collector: &str| {
+            vec![
+                "[runs]".to_string(),
+                "max = 1".to_string(),
+                String::new(),
+                "[telemetry]".to_string(),
+                "send = true".to_string(),
+                format!("collector = \"{collector}\""),
+            ]
+        };
+        let changed = sending(second.url());
+        let (s, file) = two_queued("afresh", |file| {
+            let lines: Vec<&str> = changed.iter().map(String::as_str).collect();
+            check_writing(seen.path(), file, &lines, 30)
+        });
+        std::fs::write(&file, sending(first.url()).join("\n") + "\n").unwrap();
+
+        // The caller's OpenTelemetry variables turn a signal off whatever
+        // the table says (core.53), and `sluice exec` hands its command
+        // those of the host's sluice: the run is given none.
+        let mut run = s.command(s.repo.dir());
+        for (name, _) in std::env::vars_os() {
+            if name.to_string_lossy().starts_with("OTEL_") {
+                run.env_remove(name);
+            }
+        }
+        let out = run.args(["run", "--rounds", "12"]).output().unwrap();
+        let said = text(&out);
+        assert!(out.status.success(), "{said}");
+
+        // Read before any other command sends to the second collector.
+        let paths = |c: &support::http::Fake| -> BTreeSet<String> {
+            c.requests().into_iter().map(|r| r.path).collect()
+        };
+        let (to_first, to_second) = (paths(&first), paths(&second));
+        assert!(to_first.contains("/v1/traces"), "{to_first:?}\n{said}");
+        assert!(to_first.contains("/v1/metrics"), "{to_first:?}\n{said}");
+        assert!(to_second.contains("/v1/traces"), "{to_second:?}\n{said}");
+
+        let processors = std::thread::available_parallelism().map_or(1, |n| n.get());
+        assert_eq!(
+            starts(seen.path()),
+            [(1, processors), (1, processors)],
+            "{said}"
+        );
+        assert_eq!(states(&s, "bolt/a"), ["landed", "landed"], "{said}");
+        let took = format!(
+            "sluice: took up the host's settings in {}: [telemetry] changed, in this sluice run \
+             started afresh",
+            file.display()
+        );
+        assert_eq!(said.matches(&took).count(), 1, "{said}");
+        assert!(!said.contains("could not start afresh"), "{said}");
+    }
+
+    /// The settings-take-up spec's "Settings it would start afresh for that
+    /// do not bind" (135; record 0107; rule core.54; design D5): a change
+    /// of `[runs]`, `[forge]` and `[telemetry]` whose key holds no private
+    /// key leaves the run on all it holds, the bound of one among it, so
+    /// the second combination's run starts only once the first has ended,
+    /// with the cores the first had; both land, and the run says once the
+    /// file, the tables, that its settings do not bind and the key, with
+    /// nothing taken up and nothing started afresh.
+    #[test]
+    fn a_run_keeps_its_settings_when_a_change_it_starts_afresh_for_does_not_bind() {
+        use std::os::unix::fs::PermissionsExt;
+        let seen = Scratch::new("instance-unbound-afresh-seen");
+        let keys = Scratch::new("instance-unbound-afresh-key");
+        let key = keys.path().join("app.pem");
+        std::fs::write(&key, "no private key\n").unwrap();
+        std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let key_line = format!("key = {:?}", key.display().to_string());
+        let (s, file) = two_queued("unbound-afresh", |file| {
+            check_writing(
+                seen.path(),
+                file,
+                &[
+                    "[runs]",
+                    "max = 2",
+                    "",
+                    "[forge]",
+                    "app_id = 1",
+                    &key_line,
+                    "",
+                    "[telemetry]",
+                    "send = true",
+                    "collector = \"http://127.0.0.1:9\"",
+                ],
+                30,
+            )
+        });
+
+        let out = s
+            .command(s.repo.dir())
+            .args(["run", "--rounds", "12"])
+            .output()
+            .unwrap();
+        let said = text(&out);
+        assert!(out.status.success(), "{said}");
+
+        let processors = std::thread::available_parallelism().map_or(1, |n| n.get());
+        assert_eq!(
+            starts(seen.path()),
+            [(1, processors), (1, processors)],
+            "{said}"
+        );
+        // A command reads the file as it starts, and refuses a key that
+        // does not read: the status is read under the settings the run held.
+        std::fs::write(&file, "[runs]\nmax = 1\n").unwrap();
+        assert_eq!(states(&s, "bolt/a"), ["landed", "landed"], "{said}");
+        let refused: Vec<&str> = said
+            .lines()
+            .filter(|l| l.contains("which this sluice run takes up only by starting afresh"))
+            .collect();
+        assert_eq!(refused.len(), 1, "{said}");
+        let words = format!(
+            "sluice: warning: {} changed [runs], [forge], [telemetry], which this sluice run \
+             takes up only by starting afresh, and its settings do not bind, so it keeps the \
+             settings it holds until the file changes: ",
+            file.display()
+        );
+        assert!(refused[0].starts_with(&words), "{said}");
+        assert!(refused[0].contains(&key.display().to_string()), "{said}");
+        assert!(!said.contains("is refused"), "{said}");
+        assert!(!said.contains("took up"), "{said}");
+    }
+
     /// 71: on a host that gives sluice all its cores, `[runs] cores = 2`
     /// under a bound of two gives each run one core, however many the host
     /// has; on a host that already limits sluice, `sluice run` refuses the
