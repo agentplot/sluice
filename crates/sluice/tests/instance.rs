@@ -616,6 +616,78 @@ mod bound {
         assert!(!said.contains("could not start afresh"), "{said}");
     }
 
+    /// The settings-take-up spec's "Settings it would start afresh for that
+    /// do not bind" (135; record 0107; rule core.54; design D5): a change
+    /// of `[runs]`, `[forge]` and `[telemetry]` whose key holds no private
+    /// key leaves the run on all it holds, the bound of one among it, so
+    /// the second combination's run starts only once the first has ended,
+    /// with the cores the first had; both land, and the run says once the
+    /// file, the tables, that its settings do not bind and the key, with
+    /// nothing taken up and nothing started afresh.
+    #[test]
+    fn a_run_keeps_its_settings_when_a_change_it_starts_afresh_for_does_not_bind() {
+        use std::os::unix::fs::PermissionsExt;
+        let seen = Scratch::new("instance-unbound-afresh-seen");
+        let keys = Scratch::new("instance-unbound-afresh-key");
+        let key = keys.path().join("app.pem");
+        std::fs::write(&key, "no private key\n").unwrap();
+        std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let key_line = format!("key = {:?}", key.display().to_string());
+        let (s, file) = two_queued("unbound-afresh", |file| {
+            check_writing(
+                seen.path(),
+                file,
+                &[
+                    "[runs]",
+                    "max = 2",
+                    "",
+                    "[forge]",
+                    "app_id = 1",
+                    &key_line,
+                    "",
+                    "[telemetry]",
+                    "send = true",
+                    "collector = \"http://127.0.0.1:9\"",
+                ],
+                30,
+            )
+        });
+
+        let out = s
+            .command(s.repo.dir())
+            .args(["run", "--rounds", "12"])
+            .output()
+            .unwrap();
+        let said = text(&out);
+        assert!(out.status.success(), "{said}");
+
+        let processors = std::thread::available_parallelism().map_or(1, |n| n.get());
+        assert_eq!(
+            starts(seen.path()),
+            [(1, processors), (1, processors)],
+            "{said}"
+        );
+        // A command reads the file as it starts, and refuses a key that
+        // does not read: the status is read under the settings the run held.
+        std::fs::write(&file, "[runs]\nmax = 1\n").unwrap();
+        assert_eq!(states(&s, "bolt/a"), ["landed", "landed"], "{said}");
+        let refused: Vec<&str> = said
+            .lines()
+            .filter(|l| l.contains("which this sluice run takes up only by starting afresh"))
+            .collect();
+        assert_eq!(refused.len(), 1, "{said}");
+        let words = format!(
+            "sluice: warning: {} changed [runs], [forge], [telemetry], which this sluice run \
+             takes up only by starting afresh, and its settings do not bind, so it keeps the \
+             settings it holds until the file changes: ",
+            file.display()
+        );
+        assert!(refused[0].starts_with(&words), "{said}");
+        assert!(refused[0].contains(&key.display().to_string()), "{said}");
+        assert!(!said.contains("is refused"), "{said}");
+        assert!(!said.contains("took up"), "{said}");
+    }
+
     /// 71: on a host that gives sluice all its cores, `[runs] cores = 2`
     /// under a bound of two gives each run one core, however many the host
     /// has; on a host that already limits sluice, `sluice run` refuses the

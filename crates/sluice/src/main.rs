@@ -334,11 +334,23 @@ fn keep_running(
                  holds until the file changes: {why}"
             ))
         };
+        // A change it takes up only by starting afresh that it could not
+        // start afresh for, because its settings do not bind or the start
+        // failed, said once with the tables (rule core.54; design D5).
+        let not_afresh = |tables: &[&str], cause: &str, why: &str| {
+            sluice::telemetry::warn(&format!(
+                "sluice: warning: {file} changed {}, which this sluice run takes up only by \
+                 starting afresh, and {cause}, so it keeps the settings it holds until the file \
+                 changes: {why}",
+                tables.join(", ")
+            ))
+        };
         match kept.settings.look() {
             Look::Same => {}
             Look::Refused(why) => refused(&why),
             Look::Changed(instance, text) => {
                 let tables = kept.settings.held().changed_tables(&instance);
+                let afresh = tables.iter().any(|t| AFRESH.contains(t));
                 let rebound = Bound::open_with(
                     &kept.dir,
                     kept.program.clone(),
@@ -353,19 +365,14 @@ fn keep_running(
                     Ok(b)
                 });
                 match rebound {
-                    Ok(b) if tables.iter().any(|t| AFRESH.contains(t)) => {
+                    Ok(b) if afresh => {
                         drop(b);
                         if let Some(t) = telemetry {
                             t.flush();
                         }
                         let _ = out.flush();
                         let why = start_afresh(&kept.started, &driving, &tables, text);
-                        sluice::telemetry::warn(&format!(
-                            "sluice: warning: {file} changed {}, which this sluice run takes up \
-                             only by starting afresh, and it could not start afresh, so it keeps \
-                             the settings it holds until the file changes: {why:#}",
-                            tables.join(", ")
-                        ));
+                        not_afresh(&tables, "it could not start afresh", &format!("{why:#}"));
                     }
                     Ok(b) => {
                         let tables = tables.join(", ");
@@ -374,6 +381,9 @@ fn keep_running(
                         eprintln!(
                             "sluice: took up the host's settings in {file}: {tables} changed"
                         );
+                    }
+                    Err(e) if afresh => {
+                        not_afresh(&tables, "its settings do not bind", &format!("{e:#}"))
                     }
                     Err(e) => refused(&format!("{e:#}")),
                 }
