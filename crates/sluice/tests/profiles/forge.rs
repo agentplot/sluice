@@ -110,6 +110,17 @@ impl Forge {
         if path == "/app" && r.method == "GET" {
             return json(200, json!({ "id": APP, "slug": "sluice-test" }));
         }
+        // What a token reaches, as GitHub answers its holder.
+        if path.starts_with("/installation/repositories") && r.method == "GET" {
+            let total = self.reaches.as_array().map_or(0, Vec::len);
+            return json(
+                200,
+                json!({
+                    "total_count": total, "repository_selection": "selected",
+                    "repositories": self.reaches
+                }),
+            );
+        }
         if path == "/repos/o/r/rules/branches/main" {
             let rules: Vec<_> = self
                 .rulesets
@@ -314,6 +325,73 @@ fn a_commands_token_with_no_end_is_held_until_refused() {
         assert_eq!(app.token(&repo()).unwrap(), "token-1");
     }
     assert_eq!(runs(&scratch), 1);
+}
+
+/// The forge-identity spec's "A command's token described": the
+/// credentials a command's token gives say whose it is, for what, from
+/// which command, what GitHub says it reaches, its age and its end, read
+/// once with the token, and never the token (134 as amended 2026-11-09).
+#[test]
+fn a_commands_credentials_say_what_their_token_is() {
+    let clock = Clock::new();
+    let fake = Forge::new(&clock).start();
+    let scratch = support::Scratch::new("command-about");
+    let start = clock.now();
+    std::fs::write(scratch.path().join("base"), start.timestamp().to_string()).unwrap();
+    let command = credential_script(
+        &scratch,
+        &counting("echo \"password_expiry_utc=$(( $(cat \"$here/base\") + 3600 ))\""),
+    );
+    let program = command.program().display().to_string();
+    let app = commanded(fake.url(), command, ticking(&clock));
+    let c = app.credentials("https://github.com/o/r.git").unwrap();
+    assert_eq!(c.password, "token-1");
+    assert!(
+        c.about
+            .starts_with("app 4242's token for o/r from [forge] credential "),
+        "{}",
+        c.about
+    );
+    assert!(c.about.contains(&program), "{}", c.about);
+    assert!(c.about.contains("reaching o/r"), "{}", c.about);
+    let end = (start + TimeDelta::hours(1)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    assert!(c.about.ends_with(&format!("ending {end}")), "{}", c.about);
+    assert!(!c.about.contains("token-1"), "{}", c.about);
+    let reads: Vec<String> = fake
+        .requests()
+        .into_iter()
+        .filter(|r| r.path.starts_with("/installation/repositories"))
+        .map(|r| r.header("Authorization").unwrap_or_default().to_string())
+        .collect();
+    assert_eq!(reads, ["Bearer token-1"]);
+}
+
+/// The forge-identity spec's "A token for another repository": a token
+/// the command gives that GitHub says reaches another repository alone is
+/// refused, naming the command and both, and nothing is called with it.
+#[test]
+fn a_commands_token_for_another_repository_is_refused() {
+    let clock = Clock::new();
+    let mut forge = Forge::new(&clock);
+    forge.reaches = json!([{ "full_name": "o/other" }]);
+    let fake = forge.start();
+    let scratch = support::Scratch::new("command-other");
+    let command = credential_script(&scratch, &counting(""));
+    let program = command.program().display().to_string();
+    let app = commanded(fake.url(), command, ticking(&clock));
+    let err = format!("{:#}", app.token(&repo()).unwrap_err());
+    assert!(err.contains(&program), "{err}");
+    assert!(
+        err.contains("gave a token for o/r that GitHub says reaches o/other, not o/r"),
+        "{err}"
+    );
+    let asked: Vec<String> = fake
+        .requests()
+        .into_iter()
+        .filter(|r| r.header("Authorization") == Some("Bearer token-1"))
+        .map(|r| r.path)
+        .collect();
+    assert_eq!(asked, ["/installation/repositories?per_page=100"]);
 }
 
 /// A failure GitHub reports is an error that names it.
