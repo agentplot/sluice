@@ -113,14 +113,21 @@ that comes with a change of the host's file.
 
 ### D2. Start afresh in the same process
 
-The run hands over by replacing its own program image
-(`std::os::unix::process::CommandExt::exec`). The process keeps its id,
-its parent, its terminal, its standard output and error, its folder and
-its session, so a terminal, a pane, launchd or systemd go on following
-the same process. Everything the old image held in memory is gone,
-telemetry's subscriber and providers among it.
+The run hands over by replacing its own program image (`execve`, with
+the environment given whole). The process keeps its id, its parent, its
+terminal, its standard output and error, its folder and its session, so
+a terminal, a pane, launchd or systemd go on following the same
+process. Everything the old image held in memory is gone, telemetry's
+subscriber and providers among it. A start that fails leaves the
+process as it was: no variable of its environment and no signal's
+disposition changes.
 
-*Not taken.* Starting a new process and ending this one. A service
+*Not taken.* std's `CommandExt::exec`. While it tries the start it sets
+the process's own environment to the command's, so another thread
+reading a variable meanwhile reads the command's, or memory freed once
+the start failed, and it sets `SIGPIPE` back to its default, which a
+run whose start failed would keep. Starting a new process and ending
+this one. A service
 manager would see its process end. launchd's `KeepAlive` would start a
 second `sluice run`, and systemd's default stop would end the new one
 with the unit's other processes. A terminal would get its prompt back
@@ -213,7 +220,11 @@ one of `AFRESH`:
 1. The run binds the new settings (`Bound::open_with`) and checks the
    new binding's host systems, as an in-place take-up does (record
    0107, D5), and drops the new binding. Where either fails, it keeps
-   what it holds and says so as a refusal, and nothing is handed over.
+   what it holds, nothing is handed over, and it says on stderr once,
+   through `telemetry::warn`: `sluice: warning: <path> changed <tables>,
+   which this sluice run takes up only by starting afresh, and its
+   settings do not bind, so it keeps the settings it holds until the
+   file changes: <why>`.
 2. It flushes its telemetry, `Telemetry::flush`, which flushes metrics
    as well as traces and logs. What the old image held is sent to the
    collector it sent to. The providers stay up.

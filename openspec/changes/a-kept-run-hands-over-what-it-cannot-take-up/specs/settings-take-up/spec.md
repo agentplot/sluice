@@ -158,6 +158,31 @@ again, and SHALL never end for it (rule core.54).
   (`a_hand_over_that_cannot_start_says_why` in
   `crates/sluice/src/hand_over.rs`)
 
+#### Scenario: A start that fails leaves the process as it was
+
+- **WHEN** a hand-over's start fails while another thread of the
+  process reads its environment
+- **THEN** that thread never reads the environment handed over, and
+  `SIGPIPE` keeps its disposition
+  (`a_hand_over_that_cannot_start_leaves_the_process_as_it_was` in
+  `crates/sluice/src/hand_over.rs`)
+
+#### Scenario: Settings it would start afresh for that do not bind
+
+- **WHEN** the host's settings say `[runs] max = 1`, `sluice run` is
+  running with two submissions queued on `bolt/a`, and the file is
+  changed in `[runs]`, `[forge]` and `[telemetry]`, with a `[forge]` key
+  that holds no private key, while the first combination's run is going
+- **THEN** the second combination's run starts only once the first has
+  ended, with the cores the first had, and both submissions land
+- **AND** stderr says exactly once `sluice: warning: <path> changed
+  [runs], [forge], [telemetry], which this sluice run takes up only by
+  starting afresh, and its settings do not bind, so it keeps the
+  settings it holds until the file changes: <why>`, naming the key, and
+  nothing is taken up
+  (`a_run_keeps_its_settings_when_a_change_it_starts_afresh_for_does_not_bind`
+  in `crates/sluice/tests/instance.rs`)
+
 ### Requirement: Runs started before a hand-over are reaped
 
 The run started afresh SHALL reap every run supervisor the run started
