@@ -840,6 +840,37 @@ impl OnGitHub {
         .unwrap();
     }
 
+    /// The host's `[forge]` names the app and, in place of its key, a
+    /// credential command of the test's own: a script in the config
+    /// directory that gives `token-1` (record 0108).
+    fn give_forge_command(&self) {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let dir = self.config.path().join("sluice");
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("token-helper");
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o755)
+            .open(&script)
+            .unwrap();
+        f.write_all(
+            b"#!/bin/sh\ncat > /dev/null\n[ \"$1\" = get ] && echo password=token-1\nexit 0\n",
+        )
+        .unwrap();
+        f.sync_all().unwrap();
+        drop(f);
+        std::fs::write(
+            dir.join("config.toml"),
+            format!(
+                "[forge]\napp_id = {APP}\ncredential = [{:?}]\n",
+                script.display().to_string()
+            ),
+        )
+        .unwrap();
+    }
+
     /// `sluice <args>`: its exit and what it said. The operator's token is
     /// the fake's, so nothing asks gh for the user's.
     fn sluice(&self, args: &[&str]) -> (i32, String) {
@@ -955,6 +986,25 @@ fn forge_check_exits_by_what_it_finds() {
         said.contains("lets more than the app through: OrganizationAdmin 1"),
         "{said}"
     );
+}
+
+/// The forge-identity spec's "A command, all set", from the command line:
+/// `sluice forge check` on a host whose `[forge]` names a credential
+/// command runs it, says it gives a token and the ruleset lets only the
+/// app through, and says nothing of a key (record 0108).
+#[cfg(feature = "tools")]
+#[test]
+fn forge_check_runs_the_hosts_command() {
+    let s = OnGitHub::new("forge-check-command-host", Forge::new(&Clock::new()));
+    s.give_forge_command();
+    let (code, said) = s.sluice(&["forge", "check", "main"]);
+    assert_eq!(code, 0, "{said}");
+    assert!(said.contains("gives a token for o/r"), "{said}");
+    assert!(
+        said.contains(&format!("lets only app {APP} through")),
+        "{said}"
+    );
+    assert!(!said.contains("[forge] key"), "{said}");
 }
 
 /// The app's pull request calls against the fake API, answered from the
