@@ -75,10 +75,12 @@ command, whatever the table says.
 
 #### Scenario: --otel takes no value or a boolean
 
-- **WHEN** the command line is `sluice --otel status`,
-  `sluice --otel=false status` or `sluice status`
+- **WHEN** the command line is `sluice status --otel main`,
+  `sluice status --otel=false main` or `sluice status main`, or
+  `sluice --otel` alone
 - **THEN** the telemetry choice is on, off or not given, in that order,
-  and the command is `status` each time
+  and the command is `status` of `main` each time; and `sluice --otel`
+  is the home view with telemetry on
   (`otel_takes_no_value_or_a_boolean` in `crates/sluice/src/lib.rs`)
 
 ### Requirement: The table's collector is sluice's alone

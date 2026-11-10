@@ -145,13 +145,21 @@ boolish parser, so:
 - `--otel` alone is on.
 - `--otel=false` and `SLUICE_OTEL=0` are off for that command, whatever
   the table says.
-- `--otel` before a command name never takes the command as its value.
+- `--otel` never takes the word after it as its value:
+  `sluice status --otel main` is `main`'s status. A command's flags
+  follow its name, since the root refuses an argument before a command
+  (`args_conflicts_with_subcommands`); `sluice --otel` alone is the home
+  view with telemetry on.
 
 A tail the command gives over 65536 is held to 65536, as today.
 
 `main.rs` reads the host's settings once, with `Instance::read`. It
 chooses the settings from the CLI and that instance's `telemetry`, and
 opens the bound with `Bound::open_with` on the same instance.
+
+Not taken: the root's arguments allowed before a command, so that
+`sluice --otel status` reads. The home view's `--json` and `--worktree`
+would then pass before a command and be dropped with nothing said.
 
 Not taken: the table over the command's own flags. An operator could
 then not turn telemetry off, or on, for one command (151: "A command's

@@ -46,6 +46,8 @@ use tracing_subscriber::filter::filter_fn;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::Layer;
 
+use crate::instance::HostTelemetry;
+
 static ON: AtomicBool = AtomicBool::new(false);
 
 /// How much of a failed check's output is sent (ADR 0022): the flag and
@@ -102,6 +104,174 @@ impl Signals {
             };
         }
         on
+    }
+}
+
+/// The service sluice reports as where neither the command nor the host's
+/// table names one.
+pub const SERVICE: &str = "sluice";
+
+/// The most of a failed check's output sent at `tail`, in bytes, where
+/// neither the command nor the host's table says.
+pub const TAIL: usize = 8192;
+
+/// What a command was given of telemetry: its own flag, else its
+/// `SLUICE_OTEL*` variable, each `None` where it was given neither, so
+/// the host's `[telemetry]` holds (151; design D2).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Choices {
+    /// `--otel`, `SLUICE_OTEL`.
+    pub otel: Option<bool>,
+    /// `--otel-service-name`, `SLUICE_OTEL_SERVICE_NAME`.
+    pub service: Option<String>,
+    /// `--otel-logs`, `SLUICE_OTEL_LOGS`.
+    pub logs: Option<Logs>,
+    /// `--otel-logs-limit`, `SLUICE_OTEL_LOGS_LIMIT`, in bytes.
+    pub logs_limit: Option<usize>,
+}
+
+/// The telemetry a command sends, chosen once as it starts (151; record
+/// 0106; rule core.53): each setting the command's own choice, else the
+/// host's `[telemetry]`, else sluice's default; the signals both the
+/// table and OpenTelemetry's variables leave on; and the environment as
+/// it was when chosen, which everything sluice reads of it is read from
+/// (design D2 to D6).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Settings {
+    /// Whether telemetry is asked for.
+    pub send: bool,
+    /// The service sluice reports as.
+    pub service: String,
+    /// How much of a failed check's output is sent.
+    pub logs: Logs,
+    /// At `tail`, the most of a failed check's output sent, in bytes.
+    pub limit: usize,
+    /// The table's collector, an `http://` address, where it names one.
+    collector: Option<String>,
+    /// The table's `attributes`; `None` where the host has no table.
+    table: Option<BTreeMap<String, String>>,
+    /// The host's own name.
+    host: String,
+    /// The signals the table and OpenTelemetry's variables leave on.
+    signals: Signals,
+    /// The environment as it was when chosen (design D4).
+    env: Vec<(String, String)>,
+}
+
+/// The resource sluice sends as (design D5): the attributes it names
+/// itself, and whether OpenTelemetry's `OTEL_RESOURCE_ATTRIBUTES` and
+/// `OTEL_SERVICE_NAME` are read beside them, as they are only where the
+/// host has no `[telemetry]`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Named {
+    pub pairs: Vec<(String, String)>,
+    pub reads_environment: bool,
+}
+
+impl Settings {
+    /// The settings `choices` and the host's `table` give on the host
+    /// named `host`, with `env`, as name and value pairs, the environment
+    /// they keep and read: each setting the command's choice, else the
+    /// table's, else sluice's default, a command's tail held to 65536
+    /// bytes (design D2). A signal is on only while the table and
+    /// OpenTelemetry's variables both leave it on, and logs only at a
+    /// level other than `off` (design D3).
+    pub fn choose(
+        choices: Choices,
+        table: Option<&HostTelemetry>,
+        host: &str,
+        env: impl IntoIterator<Item = (String, String)>,
+    ) -> Settings {
+        let env: Vec<(String, String)> = env.into_iter().collect();
+        let send = choices
+            .otel
+            .or_else(|| table.and_then(|t| t.send))
+            .unwrap_or(false);
+        let service = choices
+            .service
+            .or_else(|| table.and_then(|t| t.service.clone()))
+            .unwrap_or_else(|| SERVICE.to_string());
+        let logs = choices
+            .logs
+            .or_else(|| table.and_then(|t| t.logs))
+            .unwrap_or(Logs::Summary);
+        let limit = choices
+            .logs_limit
+            .map(|n| n.min(LOG_LIMIT))
+            .or_else(|| table.and_then(|t| t.logs_tail_bytes))
+            .unwrap_or(TAIL);
+        let left = Signals::read(env.iter().cloned());
+        let signals = Signals {
+            traces: left.traces && table.and_then(|t| t.traces).unwrap_or(true),
+            metrics: left.metrics && table.and_then(|t| t.metrics).unwrap_or(true),
+            logs: left.logs && logs != Logs::Off,
+        };
+        Settings {
+            send,
+            service,
+            logs,
+            limit,
+            collector: table.and_then(|t| t.collector.clone()),
+            table: table.map(|t| t.attributes.clone()),
+            host: host.to_string(),
+            signals,
+            env,
+        }
+    }
+
+    /// The resource sluice sends as (design D5). With a table:
+    /// `service.name`, `service.version`, `host.name` unless the table's
+    /// `attributes` names one, and those, the environment's read not at
+    /// all. With none: `service.name`, `service.version` and `host.name`
+    /// unless `OTEL_RESOURCE_ATTRIBUTES` names one, the environment's
+    /// read beside them as OpenTelemetry reads them.
+    pub fn resource(&self) -> Named {
+        let mut pairs = vec![
+            ("service.name".to_string(), self.service.clone()),
+            ("service.version".to_string(), crate::VERSION.to_string()),
+        ];
+        pairs.extend(self.named());
+        Named {
+            pairs,
+            reads_environment: self.table.is_none(),
+        }
+    }
+
+    /// The attributes sluice names its host and the table's with:
+    /// `host.name`, the host's own name, unless the table's `attributes`,
+    /// or with no table `OTEL_RESOURCE_ATTRIBUTES`, names one; then the
+    /// table's `attributes` (design D5).
+    fn named(&self) -> Vec<(String, String)> {
+        let names_host = match &self.table {
+            Some(attributes) => attributes.contains_key("host.name"),
+            None => self.var("OTEL_RESOURCE_ATTRIBUTES").is_some_and(|v| {
+                v.split(',')
+                    .any(|pair| pair.split('=').next().map(str::trim) == Some("host.name"))
+            }),
+        };
+        let mut pairs = Vec::new();
+        if !names_host {
+            pairs.push(("host.name".to_string(), self.host.clone()));
+        }
+        if let Some(attributes) = &self.table {
+            pairs.extend(attributes.iter().map(|(k, v)| (k.clone(), v.clone())));
+        }
+        pairs
+    }
+
+    /// The table's collector, where it names one: sluice's alone (design
+    /// D4).
+    pub fn collector(&self) -> Option<&str> {
+        self.collector.as_deref()
+    }
+
+    /// The value the environment, as chosen, gives `name`.
+    fn var(&self, name: &str) -> Option<&str> {
+        self.env
+            .iter()
+            .rev()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.as_str())
     }
 }
 
@@ -532,6 +702,206 @@ mod tests {
         assert_eq!(
             signals(&[("OTEL_LOGS_EXPORTER", "none")]),
             Signals { logs: false, ..all }
+        );
+    }
+
+    fn pairs(env: &[(&str, &str)]) -> Vec<(String, String)> {
+        env.iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    fn choose(choices: Choices, table: Option<&HostTelemetry>, env: &[(&str, &str)]) -> Settings {
+        Settings::choose(choices, table, "host-a", pairs(env))
+    }
+
+    /// 151: each setting the command's choice, else the table's, else
+    /// sluice's default; `SLUICE_OTEL=0` turns a table's `send = true` off
+    /// for the command, and `--otel` turns telemetry on where the table
+    /// does not (record 0106; design D2).
+    #[test]
+    fn the_settings_are_chosen_by_the_command_then_the_table() {
+        let none = Choices::default();
+        let otel = |on| Choices {
+            otel: Some(on),
+            ..Choices::default()
+        };
+        let sends = HostTelemetry {
+            send: Some(true),
+            ..HostTelemetry::default()
+        };
+        let quiet = HostTelemetry {
+            send: Some(false),
+            ..HostTelemetry::default()
+        };
+        assert!(!choose(none.clone(), None, &[]).send);
+        assert!(!choose(none.clone(), Some(&HostTelemetry::default()), &[]).send);
+        assert!(choose(none.clone(), Some(&sends), &[]).send);
+        assert!(!choose(otel(false), Some(&sends), &[]).send);
+        assert!(choose(otel(true), None, &[]).send);
+        assert!(choose(otel(true), Some(&quiet), &[]).send);
+
+        let defaults = choose(none.clone(), None, &[]);
+        assert_eq!(
+            (defaults.service.as_str(), defaults.logs, defaults.limit),
+            ("sluice", Logs::Summary, 8192)
+        );
+        let table = HostTelemetry {
+            service: Some("sluice-a".into()),
+            logs: Some(Logs::Tail),
+            logs_tail_bytes: Some(4096),
+            ..HostTelemetry::default()
+        };
+        let tables = choose(none.clone(), Some(&table), &[]);
+        assert_eq!(
+            (tables.service.as_str(), tables.logs, tables.limit),
+            ("sluice-a", Logs::Tail, 4096)
+        );
+        let commands = Choices {
+            otel: None,
+            service: Some("ci-sluice".into()),
+            logs: Some(Logs::Off),
+            logs_limit: Some(100),
+        };
+        for table in [None, Some(&table)] {
+            let chosen = choose(commands.clone(), table, &[]);
+            assert_eq!(
+                (chosen.service.as_str(), chosen.logs, chosen.limit),
+                ("ci-sluice", Logs::Off, 100)
+            );
+        }
+        let over = Choices {
+            logs_limit: Some(1 << 30),
+            ..Choices::default()
+        };
+        assert_eq!(choose(over, Some(&table), &[]).limit, LOG_LIMIT);
+    }
+
+    /// 151: a signal goes only while the table and OpenTelemetry's
+    /// variables both leave it on; the environment never turns on what
+    /// the table turns off (record 0106; design D3).
+    #[test]
+    fn the_table_turns_a_signal_off_and_the_environment_never_turns_it_on() {
+        let table = |traces, metrics, logs| HostTelemetry {
+            send: Some(true),
+            traces,
+            metrics,
+            logs,
+            ..HostTelemetry::default()
+        };
+        let signals = |t: HostTelemetry, env: &[(&str, &str)]| {
+            choose(Choices::default(), Some(&t), env).signals
+        };
+        let off = signals(
+            table(Some(false), None, None),
+            &[("OTEL_TRACES_EXPORTER", "otlp")],
+        );
+        assert!(!off.traces && off.metrics && off.logs, "{off:?}");
+        let off = signals(
+            table(Some(true), None, None),
+            &[("OTEL_TRACES_EXPORTER", "none")],
+        );
+        assert!(!off.traces && off.metrics && off.logs, "{off:?}");
+        let on = signals(table(None, None, None), &[]);
+        assert!(on.traces && on.metrics && on.logs, "{on:?}");
+        let off = signals(table(None, Some(false), None), &[]);
+        assert!(off.traces && !off.metrics, "{off:?}");
+        for env in [
+            &[][..],
+            &[("OTEL_LOGS_EXPORTER", "otlp")][..],
+            &[("OTEL_LOGS_EXPORTER", "none")][..],
+        ] {
+            let off = signals(table(None, None, Some(Logs::Off)), env);
+            assert!(off.traces && off.metrics && !off.logs, "{env:?}: {off:?}");
+        }
+        // A command's level of `off` turns logs off too, and `none` turns
+        // them off at any level.
+        let commands = Choices {
+            logs: Some(Logs::Off),
+            ..Choices::default()
+        };
+        assert!(!choose(commands, None, &[]).signals.logs);
+        let off = choose(Choices::default(), None, &[("OTEL_LOGS_EXPORTER", "none")]);
+        assert!(!off.signals.logs);
+        let all = choose(Choices::default(), None, &[("OTEL_SDK_DISABLED", "true")]);
+        assert_eq!(
+            all.signals,
+            Signals {
+                traces: false,
+                metrics: false,
+                logs: false
+            }
+        );
+    }
+
+    /// 151: with a table the resource is sluice's own, `host.name` the
+    /// host's unless the table's `attributes` names one, and no variable
+    /// is read; with none, `OTEL_RESOURCE_ATTRIBUTES` is read beside it,
+    /// and sluice names the host unless that does (record 0106; design
+    /// D5).
+    #[test]
+    fn the_resource_is_the_tables_and_names_the_host() {
+        let named = |table: Option<&HostTelemetry>, env: &[(&str, &str)]| {
+            choose(Choices::default(), table, env).resource()
+        };
+        let own = |rest: &[(&str, &str)]| {
+            let mut all = pairs(&[
+                ("service.name", "sluice-a"),
+                ("service.version", crate::VERSION),
+            ]);
+            all.extend(pairs(rest));
+            all
+        };
+        let table = |attributes: &[(&str, &str)]| HostTelemetry {
+            service: Some("sluice-a".into()),
+            attributes: pairs(attributes).into_iter().collect(),
+            ..HostTelemetry::default()
+        };
+        let session = [("OTEL_RESOURCE_ATTRIBUTES", "deployment.environment=session")];
+
+        let prod = table(&[("deployment.environment", "prod")]);
+        assert_eq!(
+            named(Some(&prod), &session),
+            Named {
+                pairs: own(&[("host.name", "host-a"), ("deployment.environment", "prod")]),
+                reads_environment: false,
+            }
+        );
+        let boxed = table(&[("host.name", "box")]);
+        assert_eq!(
+            named(Some(&boxed), &[]),
+            Named {
+                pairs: own(&[("host.name", "box")]),
+                reads_environment: false,
+            }
+        );
+        let service = |all: Vec<(String, String)>| {
+            all.into_iter()
+                .map(|(k, v)| match k.as_str() {
+                    "service.name" => (k, "sluice".to_string()),
+                    _ => (k, v),
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            named(None, &session),
+            Named {
+                pairs: service(own(&[("host.name", "host-a")])),
+                reads_environment: true,
+            }
+        );
+        assert_eq!(
+            named(
+                None,
+                &[(
+                    "OTEL_RESOURCE_ATTRIBUTES",
+                    "deployment.environment=session, host.name=box"
+                )]
+            ),
+            Named {
+                pairs: service(own(&[])),
+                reads_environment: true,
+            }
         );
     }
 

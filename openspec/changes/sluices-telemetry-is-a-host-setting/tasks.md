@@ -53,33 +53,33 @@ tool of ours on a page (core.26).
 
 ## 3. The settings chosen
 
-- [ ] 3.1 In `crates/sluice/src/telemetry.rs`, add `Choices` and `Settings`, and `Settings::choose(choices, table, host, env)`, as D2 says. It is a pure function of:
+- [x] 3.1 In `crates/sluice/src/telemetry.rs`, add `Choices` and `Settings`, and `Settings::choose(choices, table, host, env)`, as D2 says. It is a pure function of:
   - what the command gave;
   - the host's `Option<&HostTelemetry>`;
   - the host's name;
   - the environment as name and value pairs, which it keeps as its snapshot (D4).
 
   Each setting takes the command's choice, else the table's, else sluice's default, and a command's tail over 65536 is held to it. Nothing calls `choose` yet. Add the unit test `the_settings_are_chosen_by_the_command_then_the_table`, with the cases of the scenario "Each setting from the command, else the table, else its default". True when `cargo test -p sluice --lib telemetry::tests::the_settings_are_chosen_by_the_command_then_the_table` passes.
-- [ ] 3.2 Have `Settings` hold the signals D3 gives: the table's `traces` and `metrics`, `true` where unset, each also left on by `Signals::read` of the snapshot; and logs on while `Signals::read` leaves them on and the chosen level is not `off`. Add the unit test `the_table_turns_a_signal_off_and_the_environment_never_turns_it_on`, with the cases of the scenario "The table and the environment together". True when `cargo test -p sluice --lib telemetry::tests::the_table_turns_a_signal_off_and_the_environment_never_turns_it_on` passes.
-- [ ] 3.3 Have `Settings` give the resource D5 says, as the attribute pairs sluice sets and whether the environment's are read, which a unit test can read:
+- [x] 3.2 Have `Settings` hold the signals D3 gives: the table's `traces` and `metrics`, `true` where unset, each also left on by `Signals::read` of the snapshot; and logs on while `Signals::read` leaves them on and the chosen level is not `off`. Add the unit test `the_table_turns_a_signal_off_and_the_environment_never_turns_it_on`, with the cases of the scenario "The table and the environment together". True when `cargo test -p sluice --lib telemetry::tests::the_table_turns_a_signal_off_and_the_environment_never_turns_it_on` passes.
+- [x] 3.3 Have `Settings` give the resource D5 says, as the attribute pairs sluice sets and whether the environment's are read, which a unit test can read:
   - with a table: `service.name`, `service.version`, `host.name` unless `attributes` names one, and `attributes`, the environment's read not at all;
   - with none: `service.name`, `service.version`, and `host.name` unless the snapshot's `OTEL_RESOURCE_ATTRIBUTES` names one, the environment's read by `Resource::builder()` as today.
 
   Add the unit test `the_resource_is_the_tables_and_names_the_host`, with the cases of the scenario "The resource with a table and without". True when `cargo test -p sluice --lib telemetry::tests::the_resource_is_the_tables_and_names_the_host` passes.
-- [ ] 3.4 In `crates/sluice/src/lib.rs`, make the telemetry fields `Option`s with no clap default, as D2 says:
+- [x] 3.4 In `crates/sluice/src/lib.rs`, make the telemetry fields `Option`s with no clap default, as D2 says:
   - `otel: Option<bool>`, with `num_args = 0..=1`, `require_equals = true`, `default_missing_value = "true"` and the boolish parser;
   - `otel_service_name: Option<String>`, `otel_logs: Option<Logs>` and `otel_logs_limit: Option<usize>`;
   - `Cli::choices()`, giving `Choices`.
 
   Add the unit test `otel_takes_no_value_or_a_boolean` to `lib.rs`'s tests, with the cases of the scenario "--otel takes no value or a boolean". True when `cargo test -p sluice --lib tests::otel_takes_no_value_or_a_boolean` passes.
-- [ ] 3.5 In `crates/sluice/src/main.rs`, read the host's settings once, as D2 and D4 say:
+- [x] 3.5 In `crates/sluice/src/main.rs`, read the host's settings once, as D2 and D4 say:
   - `Instance::read()`, refused as `Bound::open` was, exiting 3;
   - `Settings::choose(cli.choices(), instance.telemetry.as_ref(), &profiles::checks::hostname(), std::env::vars())`;
   - telemetry started where the settings send, before the bound opens and before `stop_on_interrupt`, through today's `Telemetry::start` with the chosen service, level and tail;
   - the bound opened with `Bound::open_with` on that instance.
 
   True when `cargo test -p sluice --test usage a_command_still_takes_the_telemetry_flags` passes.
-- [ ] 3.6 In `crates/sluice/tests/telemetry.rs`, have `telemetry_is_off_unless_asked` read `cli.choices()`, as the scenario "A command's choices are read from its flags and variables" says:
+- [x] 3.6 In `crates/sluice/tests/telemetry.rs`, have `telemetry_is_off_unless_asked` read `cli.choices()`, as the scenario "A command's choices are read from its flags and variables" says:
   - with nothing given, every choice is `None`;
   - each flag gives `Some` of its value;
   - each `SLUICE_OTEL*` variable gives `Some` of its value, `SLUICE_OTEL` at `0` and `off` giving `Some(false)`.

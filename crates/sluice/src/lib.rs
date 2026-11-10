@@ -218,39 +218,23 @@ pub struct Cli {
         global = true,
         hide = true,
         env = "SLUICE_OTEL",
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "true",
         value_parser = clap::builder::BoolishValueParser::new()
     )]
-    pub otel: bool,
+    pub otel: Option<bool>,
     /// The service the telemetry is reported as.
-    #[arg(
-        long,
-        global = true,
-        hide = true,
-        env = "SLUICE_OTEL_SERVICE_NAME",
-        default_value = "sluice"
-    )]
-    pub otel_service_name: String,
+    #[arg(long, global = true, hide = true, env = "SLUICE_OTEL_SERVICE_NAME")]
+    pub otel_service_name: Option<String>,
     /// While --otel is on, how much of a failed check's output is sent as
     /// logs: `off`, `summary` (where it is kept, never what it says) or
     /// `tail` (its end, scrubbed of what reads as a secret).
-    #[arg(
-        long,
-        global = true,
-        hide = true,
-        env = "SLUICE_OTEL_LOGS",
-        value_enum,
-        default_value = "summary"
-    )]
-    pub otel_logs: telemetry::Logs,
+    #[arg(long, global = true, hide = true, env = "SLUICE_OTEL_LOGS", value_enum)]
+    pub otel_logs: Option<telemetry::Logs>,
     /// The most of a failed check's output sent at `tail`, in bytes.
-    #[arg(
-        long,
-        global = true,
-        hide = true,
-        env = "SLUICE_OTEL_LOGS_LIMIT",
-        default_value_t = 8192
-    )]
-    pub otel_logs_limit: usize,
+    #[arg(long, global = true, hide = true, env = "SLUICE_OTEL_LOGS_LIMIT")]
+    pub otel_logs_limit: Option<usize>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -1235,6 +1219,18 @@ fn requester(by: &str) -> Requester {
 }
 
 impl Cli {
+    /// 151: what this command was given of telemetry, by its flags or
+    /// its `SLUICE_OTEL*` variables, which choose for it alone over the
+    /// host's `[telemetry]` (record 0106; design D2).
+    pub fn choices(&self) -> telemetry::Choices {
+        telemetry::Choices {
+            otel: self.otel,
+            service: self.otel_service_name.clone(),
+            logs: self.otel_logs,
+            logs_limit: self.otel_logs_limit,
+        }
+    }
+
     /// Whether the command was asked for JSON, so that even a failure
     /// before or outside it is said as JSON.
     pub fn json(&self) -> bool {
@@ -6329,6 +6325,36 @@ fn worktree_json(p: &SessionPlace) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 151: `--otel` takes no value, on, or a boolean, `--otel=false` off
+    /// for the command, and never the word after it for its value; with
+    /// neither it nor `SLUICE_OTEL` it chooses nothing. A command's flags
+    /// follow its name, and `--otel` alone is the home view's (design D2).
+    #[test]
+    fn otel_takes_no_value_or_a_boolean() {
+        std::env::remove_var("SLUICE_OTEL");
+        for (line, otel) in [
+            (&["sluice", "status", "--otel", "main"][..], Some(true)),
+            (
+                &["sluice", "status", "--otel=false", "main"][..],
+                Some(false),
+            ),
+            (&["sluice", "status", "main"][..], None),
+        ] {
+            let cli = Cli::try_parse_from(line).unwrap();
+            assert_eq!(cli.choices().otel, otel, "{line:?}");
+            assert!(
+                matches!(&cli.command, Some(Command::Status { target: Some(t), .. }) if t == "main"),
+                "{line:?}: {:?}",
+                cli.command
+            );
+        }
+        let home = Cli::try_parse_from(["sluice", "--otel"]).unwrap();
+        assert_eq!(
+            (home.choices().otel, home.command.is_none()),
+            (Some(true), true)
+        );
+    }
 
     fn names() -> Names {
         let mut names = Names::default();
