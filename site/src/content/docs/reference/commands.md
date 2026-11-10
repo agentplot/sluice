@@ -977,6 +977,23 @@ ok      the app may write acme/widgets's workflows
 failed  ruleset "main" on main lets more than the app through: RepositoryRole 5
 ```
 
+Where `[forge]` names a `credential` command in place of a key, the
+check runs the command and reads what GitHub shows the token's holder.
+The command gives a token for the repository. The token is the app's
+that `app_id` names, by the bot GitHub says holds it. The token may
+push, by GitHub's answer to the first thing git asks for a push. Then
+it checks the rulesets as with a key. GitHub shows a token's other
+grants, workflows, checks and pull requests, to nobody holding only the
+token. The check leaves them to wherever the app's key is kept.
+
+```console
+$ sluice forge check main
+ok      [forge] credential /opt/forge/bin/token-helper --app sluice gives a token for acme/widgets
+ok      the token is app 123456's
+ok      the token may push to acme/widgets
+ok      ruleset "main" on main lets only app 123456 through
+```
+
 [Protecting main on GitHub](/sluice/guides/github-app/) sets
 it up.
 
