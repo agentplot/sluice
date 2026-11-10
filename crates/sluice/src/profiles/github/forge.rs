@@ -191,8 +191,9 @@ pub fn check_name(task: &str, system: Option<&str>) -> String {
 
 pub trait Forge {
     /// Who GitHub names as the author of a pull request sluice opens: a
-    /// request whose author it is, sluice opened.
-    fn login(&self) -> Result<String>;
+    /// request whose author it is, sluice opened. Read with `repo`'s token
+    /// where nothing else tells it (record 0108).
+    fn login(&self, repo: &Repo) -> Result<String>;
 
     /// The open pull requests into `base`.
     fn pulls(&self, repo: &Repo, base: &str) -> Result<Vec<Pull>>;

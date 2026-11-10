@@ -88,7 +88,7 @@ fn guarding_reads_only_the_forge() {
         i.forge,
         Some(sluice::instance::Forge {
             app_id: 42,
-            key: key.clone(),
+            source: sluice::instance::Source::Key(key.clone()),
             discovery: sluice::instance::DISCOVERY,
         })
     );

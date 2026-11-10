@@ -4,6 +4,15 @@
 //! and bought again five minutes before it ends, or at once for a call
 //! GitHub refused it on. Nothing is written anywhere.
 //!
+//! Where the host names a credential command in place of the app's key,
+//! the token for a repository is the command's, asked as git asks a
+//! credential helper ([`CredentialCommand`]), held as a bought one is
+//! until five minutes before the end the command gave, or until GitHub
+//! refuses it where the command gave none; a refused one is erased and got
+//! afresh from the command, and GitHub is asked once with each token got
+//! which repositories it reaches, for what it is (134 as amended
+//! 2026-11-09; record 0108).
+//!
 //! Every call to the API runs under the retry policy (134; rule core.29),
 //! classed by what it does ([`Call`]): one GitHub never judged, a
 //! connection not made, is tried again; a call GitHub refused the
@@ -42,7 +51,8 @@ use serde_json::Value;
 use sluice_seams::Unanswered;
 
 use super::kept::{self, Allowance, Kept, Pause};
-use crate::instance::Forge;
+use crate::identity::{Asked, CredentialCommand};
+use crate::instance::{Forge, Source};
 use crate::retry::{Failed, Judged, Kind, Limited, Policy};
 
 /// GitHub's API.
@@ -50,6 +60,9 @@ pub const API: &str = "https://api.github.com";
 
 /// Where the API calls go instead of [`API`]: a fake one, in tests.
 pub const API_VAR: &str = "SLUICE_FORGE_API";
+
+/// Where git reaches GitHub's repositories.
+pub const GIT: &str = "https://github.com";
 
 /// How long a JWT is good for, the most GitHub takes.
 const JWT_LIFE: i64 = 600;
@@ -121,18 +134,33 @@ pub struct Installation {
 #[derive(Clone)]
 struct Token {
     secret: String,
-    ends: DateTime<Utc>,
+    /// Its end; none where a credential command gave none, when it is held
+    /// until GitHub refuses it.
+    ends: Option<DateTime<Utc>>,
+    /// When sluice got it, bought or given.
     bought: DateTime<Utc>,
-    installation: u64,
-    /// What GitHub said the token reaches, in its words.
-    scope: String,
+    /// The installation it was bought from; none for a command's token,
+    /// which tells none.
+    installation: Option<u64>,
+    /// What it is, but for its age and end, built when it is got: whose,
+    /// for what, from where and what GitHub says it reaches; never the
+    /// secret.
+    about: String,
+}
+
+/// How the app comes by a token for a repository: minted with its key, or
+/// given by the host's credential command (record 0108).
+enum Mint {
+    Key(EncodingKey),
+    Command(CredentialCommand),
 }
 
 /// An installation token, and what it is for a report of its refusal.
 pub struct Issued {
     pub secret: String,
     /// The app, the repository, the installation it was bought from, its
-    /// scope and its age; never the secret.
+    /// scope and its age; for a command's, the command, what GitHub says
+    /// it reaches, its age and its end; never the secret.
     pub about: String,
 }
 
@@ -177,17 +205,24 @@ pub enum Bearer<'a> {
     Repo(&'a Repo),
     /// A token given, the operator's own.
     Token(&'a str),
+    /// A token the host's credential command gave for a repository, asked
+    /// with before it is held: counted against the repository's
+    /// allowance, and a refusal of it no reason to get another (record
+    /// 0108).
+    Given(&'a Repo, &'a str),
 }
 
 pub struct App {
     id: u64,
-    key: EncodingKey,
+    mint: Mint,
     api: String,
+    /// Where git reaches the repositories: [`GIT`], or a test's fake.
+    git: String,
     now: Now,
     http: ureq::Agent,
     tokens: RefCell<BTreeMap<Repo, Token>>,
-    /// The app's slug, once read.
-    slug: RefCell<Option<String>>,
+    /// The app's bot, once read.
+    login: RefCell<Option<String>>,
     policy: Rc<Policy>,
     /// The host's answers and pauses; none, nothing is kept.
     kept: Option<Kept>,
@@ -221,30 +256,83 @@ impl App {
     /// API at `api`, each call under `policy`.
     pub fn new(id: u64, pem: &[u8], api: &str, now: Now, policy: Rc<Policy>) -> Result<App> {
         let key = EncodingKey::from_rsa_pem(pem).context("the app's key is no RSA private key")?;
-        let http = http_config().into();
-        Ok(App {
+        Ok(App::made(id, Mint::Key(key), api, now, policy))
+    }
+
+    /// The app `id`, its tokens given by `command` (record 0108), calling
+    /// the API at `api`, each call under `policy`. Nothing is asked of the
+    /// command before a token is needed.
+    pub fn commanded(
+        id: u64,
+        command: CredentialCommand,
+        api: &str,
+        now: Now,
+        policy: Rc<Policy>,
+    ) -> App {
+        App::made(id, Mint::Command(command), api, now, policy)
+    }
+
+    fn made(id: u64, mint: Mint, api: &str, now: Now, policy: Rc<Policy>) -> App {
+        App {
             id,
-            key,
+            mint,
             api: api.trim_end_matches('/').into(),
+            git: GIT.into(),
             now,
-            http,
+            http: http_config().into(),
             tokens: RefCell::default(),
-            slug: RefCell::default(),
+            login: RefCell::default(),
             policy,
             kept: None,
             told: Cell::new(None),
-        })
+        }
+    }
+
+    /// The command that gives the app's tokens, where the host names one in
+    /// place of its key.
+    pub fn command(&self) -> Option<&CredentialCommand> {
+        match &self.mint {
+            Mint::Command(c) => Some(c),
+            Mint::Key(_) => None,
+        }
     }
 
     /// The host's `[forge]` app, each call under the command's `policy`,
-    /// keeping its answers and pauses in the host's state.
+    /// keeping its answers and pauses in the host's state: its tokens
+    /// minted with its key, or given by its credential command, which is
+    /// run only once a token is needed (record 0108).
     pub fn open(forge: &Forge, policy: Rc<Policy>) -> Result<App> {
-        let pem = std::fs::read(&forge.key)
-            .with_context(|| format!("reading the app's key {}", forge.key.display()))?;
-        let api = std::env::var(API_VAR).unwrap_or_else(|_| API.into());
-        let app = App::new(forge.app_id, &pem, &api, Box::new(Utc::now), policy)
-            .with_context(|| format!("[forge] key {}", forge.key.display()))?;
+        let faked = std::env::var(API_VAR).ok();
+        let api = faked.clone().unwrap_or_else(|| API.into());
+        let app = match &forge.source {
+            Source::Key(key) => {
+                let pem = std::fs::read(key)
+                    .with_context(|| format!("reading the app's key {}", key.display()))?;
+                App::new(forge.app_id, &pem, &api, Box::new(Utc::now), policy)
+                    .with_context(|| format!("[forge] key {}", key.display()))?
+            }
+            Source::Credential(c) => App::commanded(
+                forge.app_id,
+                CredentialCommand::new(&c.program, c.args.clone()),
+                &api,
+                Box::new(Utc::now),
+                policy,
+            ),
+        };
+        // Only a test's fake is named there, and it answers git's address
+        // too.
+        let app = match faked {
+            Some(base) => app.serving_git(&base),
+            None => app,
+        };
         Ok(app.keeping(Kept::new(&crate::instance::state_dir()?)))
+    }
+
+    /// `self`, reaching the repositories' git at `base` instead of
+    /// [`GIT`]: a test's fake.
+    pub fn serving_git(mut self, base: &str) -> App {
+        self.git = base.trim_end_matches('/').into();
+        self
     }
 
     /// `self`, keeping its answers and pauses in `kept`.
@@ -269,8 +357,12 @@ impl App {
         self.id
     }
 
-    /// A JWT that authenticates as the app for ten minutes.
+    /// A JWT that authenticates as the app for ten minutes; none under a
+    /// credential command, which signs nothing.
     pub fn jwt(&self) -> Result<String> {
+        let Mint::Key(key) = &self.mint else {
+            bail!("[forge] names a credential command, not a key");
+        };
         let now = (self.now)().timestamp();
         let claims = Claims {
             iat: now - JWT_SKEW,
@@ -280,25 +372,107 @@ impl App {
         Ok(jsonwebtoken::encode(
             &Header::new(Algorithm::RS256),
             &claims,
-            &self.key,
+            key,
         )?)
     }
 
-    /// The app's slug, which GitHub names its bot user after: read with
-    /// its JWT once in this process, and kept.
+    /// The app's slug, which GitHub names its bot user after, read with
+    /// its JWT.
     pub fn slug(&self) -> Result<String> {
-        if let Some(slug) = self.slug.borrow().as_ref() {
-            return Ok(slug.clone());
-        }
         let v = self
             .get("/app", Bearer::App)
             .with_context(|| format!("reading app {}", self.id))?;
-        let slug = v["slug"]
+        Ok(v["slug"]
             .as_str()
             .ok_or_else(|| anyhow!("GitHub gave app {} no slug", self.id))?
-            .to_string();
-        *self.slug.borrow_mut() = Some(slug.clone());
-        Ok(slug)
+            .to_string())
+    }
+
+    /// The app's bot, which GitHub names as the author of every pull
+    /// request the app opens: under a key, named after its slug, read
+    /// with its JWT; under a credential command, GraphQL's `viewer` read
+    /// with `repo`'s token, since GitHub answers the app's own record to
+    /// its key alone (C.5 pull request, 120; record 0108). Read once in
+    /// this process, and kept.
+    pub fn bot(&self, repo: &Repo) -> Result<String> {
+        if let Some(login) = self.login.borrow().as_ref() {
+            return Ok(login.clone());
+        }
+        let login = match self.mint {
+            Mint::Key(_) => format!("{}[bot]", self.slug()?),
+            Mint::Command(_) => self.viewer(repo)?,
+        };
+        *self.login.borrow_mut() = Some(login.clone());
+        Ok(login)
+    }
+
+    /// The app whose token `repo`'s is, by GitHub's word: its id and its
+    /// slug, the viewer's login with its `[bot]` taken off, the app's
+    /// record read by that slug with the token. What tells a command's
+    /// token of another app, which would pass a ruleset's check against
+    /// `[forge] app_id` and fail every push (record 0108).
+    pub fn app_of_token(&self, repo: &Repo) -> Result<(u64, String)> {
+        let login = self.viewer(repo)?;
+        let Some(slug) = login.strip_suffix("[bot]") else {
+            bail!("GitHub names the token {login}, who is no app's bot");
+        };
+        let v = self
+            .get(&format!("/apps/{slug}"), Bearer::Repo(repo))
+            .with_context(|| format!("reading app {slug}"))?;
+        let id = v["id"]
+            .as_u64()
+            .ok_or_else(|| anyhow!("GitHub gave app {slug} no id"))?;
+        Ok((id, slug.to_string()))
+    }
+
+    /// GitHub's status for git's first ask of a push to `repo` with its
+    /// token, the receive-pack advertisement: 200 where the token may
+    /// push, and 401, 403 or 404 where it may not. Read under the retry
+    /// policy as a read (record 0108).
+    pub fn may_push(&self, repo: &Repo) -> Result<u16> {
+        use base64::Engine;
+        let token = self.token(repo)?;
+        let path = format!(
+            "/{}/{}.git/info/refs?service=git-receive-pack",
+            repo.owner, repo.name
+        );
+        let url = format!("{}{path}", self.git);
+        let basic = base64::engine::general_purpose::STANDARD
+            .encode(format!("{}:{token}", super::TOKEN_USER));
+        let auth = format!("Basic {basic}");
+        self.policy
+            .run(Kind::Read, |_| {
+                let resp = self
+                    .http
+                    .get(&url)
+                    .header("Authorization", &auth)
+                    .header("Git-Protocol", "version=2")
+                    .call()
+                    .map_err(|e| {
+                        Failed::new(sent(&e), anyhow!(e).context(format!("GET {path}")))
+                    })?;
+                match resp.status().as_u16() {
+                    s @ 500..=599 => Err(Failed::new(
+                        Judged::Never,
+                        Unanswered(format!("GET {path}: {s}")).into(),
+                    )),
+                    s => Ok(s),
+                }
+            })
+            .map_err(|s| s.into_error())
+    }
+
+    /// Who GitHub says `repo`'s token is, GraphQL's `viewer`: the bot of
+    /// the app whose token it is.
+    fn viewer(&self, repo: &Repo) -> Result<String> {
+        let query = serde_json::json!({ "query": "query { viewer { login } }" }).to_string();
+        let v = self
+            .post_api(Call::Read, "/graphql", Bearer::Repo(repo), &query)
+            .with_context(|| format!("asking GitHub whose {repo}'s token is"))?;
+        Ok(v["data"]["viewer"]["login"]
+            .as_str()
+            .ok_or_else(|| anyhow!("GitHub named no viewer for {repo}'s token: {}", v["errors"]))?
+            .to_string())
     }
 
     /// The app's installation on `repo`. GitHub finds none on a repository
@@ -340,19 +514,22 @@ impl App {
         Ok(Installation { id, permissions })
     }
 
-    /// An installation token for `repo`, bought when this process has
-    /// none that lasts five minutes more.
+    /// An installation token for `repo`, bought, or got from the host's
+    /// credential command, when this process has none that lasts five
+    /// minutes more.
     pub fn token(&self, repo: &Repo) -> Result<String> {
         Ok(self.held(repo)?.secret)
     }
 
     /// A token for `repo` as [`App::token`] gives it, or, `fresh`, one
     /// bought now whatever this process holds, which replaces it: for a
-    /// call GitHub refused the last one on. A fresh token is handed over
-    /// once it is [`SETTLE`] old.
+    /// call GitHub refused the last one on. Under a credential command the
+    /// refused token is erased and one got afresh, and a command that
+    /// gives the refused token again gives none afresh (record 0108). A
+    /// fresh token is handed over once it is [`SETTLE`] old.
     pub fn issue(&self, repo: &Repo, fresh: bool) -> Result<Issued> {
         let t = if fresh {
-            let t = self.buy(repo)?;
+            let t = self.renewed(repo)?;
             if let Ok(wait) = (SETTLE - ((self.now)() - t.bought)).to_std() {
                 std::thread::sleep(wait);
             }
@@ -361,29 +538,175 @@ impl App {
             self.held(repo)?
         };
         let age = ((self.now)() - t.bought).num_seconds().max(0);
-        Ok(Issued {
-            about: format!(
-                "app {}'s token for {repo} from installation {}, scoped to {}, bought {age}s ago",
-                self.id, t.installation, t.scope
+        let about = match (t.installation, t.ends) {
+            (Some(_), _) => format!("{}, bought {age}s ago", t.about),
+            (None, Some(ends)) => format!(
+                "{}, got {age}s ago, ending {}",
+                t.about,
+                ends.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
             ),
+            (None, None) => format!("{}, got {age}s ago, given with no end", t.about),
+        };
+        Ok(Issued {
+            about,
             secret: t.secret,
         })
     }
 
     /// The token this process holds for `repo` while it lasts five
-    /// minutes more, or one bought now.
+    /// minutes more, or one given with no end, or one got now.
     fn held(&self, repo: &Repo) -> Result<Token> {
         let now = (self.now)();
         if let Some(t) = self.tokens.borrow().get(repo) {
-            if t.ends - now > REFRESH {
-                return Ok(t.clone());
+            match t.ends {
+                Some(ends) if ends - now > REFRESH => return Ok(t.clone()),
+                // Held until GitHub refuses it, as git holds a credential
+                // with no expiry (record 0108).
+                None => return Ok(t.clone()),
+                Some(_) => {}
             }
         }
-        self.buy(repo)
+        self.get_token(repo)
     }
 
-    /// A token bought now from `repo`'s installation for `repo` alone,
-    /// kept for the next call on `repo`.
+    /// A token got now for `repo` alone, bought with the app's key or
+    /// given by the host's command, kept for the next call on `repo`.
+    fn get_token(&self, repo: &Repo) -> Result<Token> {
+        let t = match &self.mint {
+            Mint::Key(_) => self.buy(repo)?,
+            Mint::Command(command) => {
+                let given = command.get(&asked(repo))?;
+                self.described(command, repo, given.password, given.ends)?
+            }
+        };
+        self.tokens.borrow_mut().insert(repo.clone(), t.clone());
+        Ok(t)
+    }
+
+    /// A token got afresh for `repo` in place of the one held, which
+    /// GitHub refused: under a command, the refused one erased first, and
+    /// the same one given again no fresh token (134; rule core.29; record
+    /// 0108).
+    fn renewed(&self, repo: &Repo) -> Result<Token> {
+        let Mint::Command(command) = &self.mint else {
+            return self.get_token(repo);
+        };
+        let asked = asked(repo);
+        let refused = self.tokens.borrow_mut().remove(repo);
+        if let Some(r) = &refused {
+            command.erase(&asked, super::TOKEN_USER, &r.secret);
+        }
+        let given = command.get(&asked)?;
+        if refused.is_some_and(|r| r.secret == given.password) {
+            bail!("[forge] credential {command} gave again the token GitHub refused for {repo}");
+        }
+        let t = self.described(command, repo, given.password, given.ends)?;
+        self.tokens.borrow_mut().insert(repo.clone(), t.clone());
+        Ok(t)
+    }
+
+    /// The token `command` gave for `repo`, what it is read once from
+    /// GitHub with it ([`App::reach`]); refused where GitHub says it does
+    /// not reach `repo`.
+    fn described(
+        &self,
+        command: &CredentialCommand,
+        repo: &Repo,
+        secret: String,
+        ends: Option<DateTime<Utc>>,
+    ) -> Result<Token> {
+        let bought = (self.now)();
+        let reach = self.reach(command, repo, &secret)?;
+        Ok(Token {
+            about: format!(
+                "app {}'s token for {repo} from [forge] credential {command}, {reach}",
+                self.id
+            ),
+            secret,
+            ends,
+            bought,
+            installation: None,
+        })
+    }
+
+    /// What GitHub says a token `command` gave for `repo` reaches, asked
+    /// once with it, in words that follow the command in what the token
+    /// is: `reaching` the repositories GitHub lists, or every one of the
+    /// account; refused where GitHub's whole list leaves `repo` out, as a
+    /// bought token is. The read is counted against `repo`'s allowance,
+    /// not made while its pause stands, and GitHub's refusal of it is
+    /// told in its words, the token handed over all the same, since the
+    /// call it was got for meets that refusal itself (134 as amended
+    /// 2026-11-09; record 0108).
+    fn reach(&self, command: &CredentialCommand, repo: &Repo, secret: &str) -> Result<String> {
+        let path = "/installation/repositories?per_page=100";
+        let bearer = Bearer::Given(repo, secret);
+        let paused = self
+            .allowance(bearer, path)
+            .and_then(|a| self.kept.as_ref()?.pause(&a))
+            .filter(|p| p.until > self.policy.wall());
+        if let Some(p) = paused {
+            return Ok(format!(
+                "not asked what it reaches: GitHub's allowance is spent until {}",
+                crate::retry::clock(p.until)
+            ));
+        }
+        let (status, v, text, _) = match self.answer("GET", Call::Read, path, bearer, None) {
+            Ok(a) => a,
+            Err(e) => {
+                return Ok(match crate::retry::limited(&e) {
+                    Some(l) => format!(
+                        "not asked what it reaches: GitHub's allowance is spent until {}",
+                        crate::retry::clock(l.until)
+                    ),
+                    None => format!("GitHub did not say what it reaches: {e:#}"),
+                })
+            }
+        };
+        if !(200..300).contains(&status) {
+            let why = v["message"].as_str().unwrap_or(text.trim());
+            return Ok(format!(
+                "GitHub refused to say what it reaches: {status} {why}"
+            ));
+        }
+        let names: Vec<&str> = v["repositories"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|r| r["full_name"].as_str())
+            .collect();
+        let full = repo.to_string();
+        let total = v["total_count"].as_u64().unwrap_or(names.len() as u64);
+        let listed = names.iter().any(|n| n.eq_ignore_ascii_case(&full));
+        let all = v["repository_selection"].as_str() == Some("all");
+        let whole = total <= names.len() as u64;
+        let named = || {
+            if names.is_empty() {
+                "no repository".to_string()
+            } else {
+                names.join(", ")
+            }
+        };
+        if !listed && whole && !all {
+            bail!(
+                "[forge] credential {command} gave a token for {repo} that GitHub says reaches {}, \
+                 not {repo}",
+                named()
+            );
+        }
+        Ok(if all {
+            format!("reaching every repository of {}", repo.owner)
+        } else if listed {
+            format!("reaching {}", named())
+        } else {
+            format!(
+                "reaching {total} repositories, of which GitHub listed {}",
+                names.len()
+            )
+        })
+    }
+
+    /// A token bought now from `repo`'s installation for `repo` alone.
     fn buy(&self, repo: &Repo) -> Result<Token> {
         let installation = self.installation(repo)?;
         let body = serde_json::json!({ "repositories": [repo.name] }).to_string();
@@ -407,15 +730,18 @@ impl App {
             .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
             .ok_or_else(|| anyhow!("GitHub gave a token for {repo} with no end"))?
             .with_timezone(&Utc);
-        let t = Token {
+        Ok(Token {
+            about: format!(
+                "app {}'s token for {repo} from installation {}, scoped to {}",
+                self.id,
+                installation.id,
+                scope(repo, &v)?
+            ),
             secret,
-            ends,
+            ends: Some(ends),
             bought,
-            installation: installation.id,
-            scope: scope(repo, &v)?,
-        };
-        self.tokens.borrow_mut().insert(repo.clone(), t.clone());
-        Ok(t)
+            installation: Some(installation.id),
+        })
     }
 
     /// `GET` an API path as `bearer`.
@@ -494,20 +820,8 @@ impl App {
         let mut said = String::new();
         self.policy
             .run(call.kind(), |t| {
-                let auth = match bearer {
-                    Bearer::App => self.jwt(),
-                    Bearer::Repo(repo) if t.renew() => self
-                        .issue(repo, true)
-                        .map(|i| i.secret)
-                        .map_err(|e| anyhow!("{said}; and no token could be bought afresh: {e:#}")),
-                    Bearer::Repo(repo) => self.token(repo),
-                    Bearer::Token(token) => Ok(token.to_string()),
-                };
-                let auth = auth.map_err(|e| match call {
-                    // Nothing was sent: no answer to it went unread.
-                    Call::Make => Failed::new(Judged::Answered, anyhow!("{e:#}")),
-                    _ => Failed::new(Judged::Answered, e),
-                })?;
+                // A pause is known before any token is got, so no token is
+                // got for a call it stops (record 0108).
                 let allowance = self.allowance(bearer, path);
                 let paused = allowance
                     .as_ref()
@@ -515,6 +829,25 @@ impl App {
                 if let Some(p) = paused.as_ref().filter(|p| p.until > self.policy.wall()) {
                     return Err(self.limited(p.until, &p.words));
                 }
+                let auth = match bearer {
+                    Bearer::App => self.jwt(),
+                    Bearer::Repo(repo) if t.renew() => {
+                        self.issue(repo, true).map(|i| i.secret).map_err(|e| {
+                            let how = match self.mint {
+                                Mint::Key(_) => "bought",
+                                Mint::Command(_) => "got",
+                            };
+                            anyhow!("{said}; and no token could be {how} afresh: {e:#}")
+                        })
+                    }
+                    Bearer::Repo(repo) => self.token(repo),
+                    Bearer::Token(token) | Bearer::Given(_, token) => Ok(token.to_string()),
+                };
+                let auth = auth.map_err(|e| match call {
+                    // Nothing was sent: no answer to it went unread.
+                    Call::Make => Failed::new(Judged::Answered, anyhow!("{e:#}")),
+                    _ => Failed::new(Judged::Answered, e),
+                })?;
                 let url = format!("{}{path}", self.api);
                 let kept = match (&self.kept, method) {
                     (Some(k), "GET") => k.answer(&url),
@@ -552,16 +885,16 @@ impl App {
     }
 
     /// The allowance a call as `bearer` to `path` is counted against:
-    /// the installation's, `graphql` or `core`; `None` for the app's own
-    /// calls and the operator's token, or before a token was bought.
+    /// the installation's, named by the repository's owner, `graphql` or
+    /// `core`, known before any token is held; `None` for the app's own
+    /// calls and the operator's token (134; record 0108).
     fn allowance(&self, bearer: Bearer, path: &str) -> Option<Allowance> {
-        let Bearer::Repo(repo) = bearer else {
+        let (Bearer::Repo(repo) | Bearer::Given(repo, _)) = bearer else {
             return None;
         };
-        let installation = self.tokens.borrow().get(repo)?.installation;
         Some(Allowance {
             app: self.id,
-            installation,
+            owner: repo.owner.clone(),
             resource: resource(path).into(),
         })
     }
@@ -807,6 +1140,16 @@ fn sent(e: &ureq::Error) -> Judged {
             Judged::Never
         }
         _ => Judged::Unknown,
+    }
+}
+
+/// What a credential command is asked for a token for `repo`, in git's
+/// words (record 0108).
+fn asked(repo: &Repo) -> Asked {
+    Asked {
+        protocol: "https".into(),
+        host: "github.com".into(),
+        path: repo.to_string(),
     }
 }
 
