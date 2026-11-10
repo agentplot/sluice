@@ -4,9 +4,43 @@ Verified on 2026-11-09, on `change/sluice-takes-its-forge-token-from-a-command`
 at `dddb7d92`, cut from `bolt/sluice-takes-its-forge-token-from-a-command`
 (`b51d6ad`), with sluice 0.73.1.
 
-**Outcome: the whole checks pass, every task is done, and every requirement
-and scenario of the three delta specs is met. The change is ready to
-archive.**
+**Outcome: not archived.** The whole checks pass, every task is done, and
+the code meets every scenario of the three delta specs. But the specs the
+archive would write fail `root:specs`, a `#check-fast` task of the bolt's
+gate. Seven requirements this change modifies are over OpenSpec's 500
+characters, which `--strict` fails ("What falls short" below). The change
+goes back to have them split, one behaviour each, before it is archived.
+
+## What falls short
+
+`openspec archive sluice-takes-its-forge-token-from-a-command --yes`,
+applied and then undone in the working tree, gives specs that fail
+`openspec validate --specs --strict`, the command `root:specs` runs: 71
+passed, 3 failed. At `dddb7d92`, before the archive, 74 passed. `openspec
+validate --changes --strict` (`root:changes`) passes the delta itself,
+since it doesn't measure a requirement's length. Each failure is "Requirement
+text is very long (>500 characters)". Each requirement below is one this
+change's delta MODIFIES, made longer by it:
+
+| Spec | Requirement | Characters |
+|---|---|---|
+| forge-allowance | Every process on the host honours the pause | 698 |
+| forge-identity | The host names sluice's app | 723 |
+| forge-identity | sluice's git calls carry the app's token | 694 |
+| forge-identity | forge check verifies the setup | 713 |
+| forge-identity | A refusal that stands names each refused token | 602 |
+| host-settings-module | The settings are the host's own file under its own names | 622 |
+| host-settings-module | sluice reads the module's file as written | 510 |
+
+The fix is in the delta specs, under
+`openspec/changes/sluice-takes-its-forge-token-from-a-command/specs/`. Split
+each of these into requirements of one behaviour each, under 500
+characters, with each scenario under the requirement it tests. For
+example, the command's own refusals of `[forge] credential` could leave
+"The host names sluice's app", and `forge check`'s findings under a
+command could leave "forge check verifies the setup". The code and its
+tests need no change for it. Then `openspec archive` gives specs that pass
+`root:specs`.
 
 ## The whole checks
 
