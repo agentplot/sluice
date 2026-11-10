@@ -111,7 +111,10 @@ pub fn helper(operation: &str, input: &mut dyn BufRead, out: &mut dyn Write) -> 
 pub const COMMAND_LIMIT: Duration = Duration::from_secs(30);
 
 /// The most of a command's standard output, and of its standard error,
-/// that is read; what it writes past it is passed over.
+/// that is read; what it writes past it is passed over. Standard error cut
+/// there is given to its last whole line, so a token cut at the limit,
+/// too short for its shape, leaves none of itself (record 0108 as amended
+/// 2026-11-10).
 const OUTPUT_LIMIT: u64 = 64 * 1024;
 
 /// What a credential command is asked for, in git's words: the protocol,
@@ -198,9 +201,15 @@ impl CredentialCommand {
         let out = drain(child.stdout.take());
         let err = drain(child.stderr.take());
         let status = self.wait(&mut child, group, &[&out, &err])?;
-        let out = out.join().unwrap_or_default();
+        let out = out.join().unwrap_or_default().bytes;
         let err = err.join().unwrap_or_default();
-        let words = crate::scrub::Scrub::shapes().scrub(String::from_utf8_lossy(&err).trim());
+        let text = String::from_utf8_lossy(&err.bytes);
+        let text = if err.cut {
+            text.rfind('\n').map_or("", |end| &text[..end])
+        } else {
+            &text
+        };
+        let words = crate::scrub::Scrub::shapes().scrub(text.trim());
         let failed = |what: String| {
             let mut e = format!("[forge] credential {self} {what}");
             if !words.is_empty() {
@@ -321,7 +330,7 @@ impl CredentialCommand {
         &self,
         child: &mut Child,
         group: i32,
-        readers: &[&JoinHandle<Vec<u8>>],
+        readers: &[&JoinHandle<Kept>],
     ) -> Result<Option<std::process::ExitStatus>> {
         use nix::sys::signal::{killpg, Signal};
         use nix::unistd::Pid;
@@ -350,14 +359,25 @@ impl CredentialCommand {
     }
 }
 
+/// What [`drain`] kept of a pipe, and whether it passed over anything
+/// past [`OUTPUT_LIMIT`].
+#[derive(Default)]
+struct Kept {
+    bytes: Vec<u8>,
+    cut: bool,
+}
+
 /// A thread reading `pipe` to its end, keeping the first [`OUTPUT_LIMIT`]
-/// bytes of it.
-fn drain(pipe: Option<impl Read + Send + 'static>) -> JoinHandle<Vec<u8>> {
+/// bytes of it and saying whether it passed over anything past them: a
+/// full kept part followed by anything but a clean end is read as cut, so
+/// a pipe that failed past the limit is never taken whole.
+fn drain(pipe: Option<impl Read + Send + 'static>) -> JoinHandle<Kept> {
     std::thread::spawn(move || {
-        let mut kept = Vec::new();
+        let mut kept = Kept::default();
         if let Some(mut pipe) = pipe {
-            let _ = (&mut pipe).take(OUTPUT_LIMIT).read_to_end(&mut kept);
-            let _ = std::io::copy(&mut pipe, &mut std::io::sink());
+            let _ = (&mut pipe).take(OUTPUT_LIMIT).read_to_end(&mut kept.bytes);
+            let rest = std::io::copy(&mut pipe, &mut std::io::sink());
+            kept.cut = kept.bytes.len() as u64 == OUTPUT_LIMIT && !matches!(rest, Ok(0));
         }
         kept
     })
@@ -545,6 +565,31 @@ echo username=x-access-token
         for dir in [refuses, no_password] {
             let _ = std::fs::remove_dir_all(dir);
         }
+    }
+
+    /// The forge-identity spec's "A token across the limit" (record 0108 as
+    /// amended 2026-11-10).
+    #[test]
+    fn a_credential_commands_words_cut_at_their_limit_end_at_a_whole_line() {
+        let dir = scratch("words-cut");
+        let program = script(
+            &dir,
+            "cat > /dev/null\nhead -c 65520 /dev/zero | tr '\\0' x >&2\n\
+             printf '\\nghs_0123456789abcdefghijABCDEFGHIJ012345\\n' >&2\nexit 1\n",
+        );
+        let e = format!(
+            "{:#}",
+            CredentialCommand::new(&program, vec![])
+                .get(&asked())
+                .err()
+                .unwrap()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        let tail = crate::scrub::end(&e, 200);
+        assert!(e.contains("exited 1"), "{tail}");
+        assert!(e.contains(&"x".repeat(65520)), "{tail}");
+        assert!(!e.contains("ghs_"), "{tail}");
+        assert!(!e.contains("0123456789a"), "{tail}");
     }
 
     /// `erase` tells the command the refused token as git tells a helper,
