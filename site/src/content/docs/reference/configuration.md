@@ -626,6 +626,12 @@ wrote it, and sluice refuses it if sluice does not know it either. Name
 each key file by its path on the host, from `/` or under `~/`.
 Evaluation fails on a key under the Nix store, on a key's text, and on
 a Nix path such as `./app.pem`, which would copy the key into the store.
+`forge.credential` takes the command that gives the app's token, in
+place of `forge.key`, as a list of strings: its program, then each
+argument, such as
+`[ "/opt/forge/bin/token-helper" "--app" "sluice" ]`. A string in its
+place fails evaluation, and so does an argument that holds a GitHub
+token's text, since the file is in the store.
 The module links `~/.config/sluice/config.toml` to the file it writes,
 for nix-darwin's primary user, or on NixOS for `services.sluice.user`.
 A file already there that is no link moves once, to
