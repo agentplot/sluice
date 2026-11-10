@@ -1,7 +1,7 @@
 //! A fake HTTP server on a port the system picks, answering each request
 //! with what the test's handler says and keeping every request it saw.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -61,6 +61,73 @@ impl Fake {
 
     pub fn requests(&self) -> Vec<Request> {
         self.seen.lock().unwrap().clone()
+    }
+}
+
+/// A remote that takes every connection, reads its request and never
+/// answers it, as a server stalled mid-call does: each connection is held
+/// open from its side, so a test can tell whether the client let it go.
+pub struct Silent {
+    url: String,
+    seen: Arc<Mutex<Vec<Request>>>,
+    held: Arc<Mutex<Vec<TcpStream>>>,
+}
+
+impl Silent {
+    pub fn start() -> Silent {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("a port");
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let (seen, held) = (
+            Arc::new(Mutex::new(Vec::new())),
+            Arc::new(Mutex::new(Vec::new())),
+        );
+        let (s, h) = (seen.clone(), held.clone());
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { continue };
+                let (s, h) = (s.clone(), h.clone());
+                std::thread::spawn(move || {
+                    if let Some(req) = read(&mut BufReader::new(&stream)) {
+                        s.lock().unwrap().push(req);
+                    }
+                    h.lock().unwrap().push(stream);
+                });
+            }
+        });
+        Silent { url, seen, held }
+    }
+
+    /// `http://127.0.0.1:<port>`
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    pub fn requests(&self) -> Vec<Request> {
+        self.seen.lock().unwrap().clone()
+    }
+
+    /// Whether the client has closed every connection it opened, within
+    /// a moment for the system to tell.
+    pub fn all_let_go(&self) -> bool {
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            let open = self.held.lock().unwrap().iter().any(|stream| {
+                stream.set_nonblocking(true).unwrap();
+                let mut b = [0u8; 512];
+                loop {
+                    match (&*stream).read(&mut b) {
+                        Ok(0) => break false,
+                        Ok(_) => continue,
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break true,
+                        Err(_) => break false,
+                    }
+                }
+            });
+            if !open || std::time::Instant::now() >= until {
+                return !open;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
     }
 }
 
