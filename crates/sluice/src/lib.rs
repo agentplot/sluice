@@ -85,21 +85,26 @@ Examples:
 
 Telemetry, taken by every command:
       --otel                       Export traces, metrics and logs over
-                                   OTLP/HTTP, to where the OTEL_EXPORTER_OTLP_*
-                                   variables say; OTEL_SDK_DISABLED=true turns
-                                   them all off, and OTEL_TRACES_EXPORTER,
+                                   OTLP/HTTP, where the host's [telemetry] in
+                                   ~/.config/sluice/config.toml says; this flag
+                                   and SLUICE_OTEL choose for this command alone,
+                                   --otel=false or SLUICE_OTEL=0 turning the
+                                   host's send = true off. OTEL_SDK_DISABLED=true
+                                   turns them all off, and OTEL_TRACES_EXPORTER,
                                    OTEL_METRICS_EXPORTER or OTEL_LOGS_EXPORTER at
                                    none turns one alone off
-                                   [env: SLUICE_OTEL=1|true|yes|on]
+                                   [env: SLUICE_OTEL=1|true|yes|on|0|false|no|off]
       --otel-service-name <NAME>   The service the telemetry is reported as
-                                   [env: SLUICE_OTEL_SERVICE_NAME] [default: sluice]
+                                   [env: SLUICE_OTEL_SERVICE_NAME]
+                                   [default: the host's [telemetry], else sluice]
       --otel-logs <LOGS>           How much of a failed check's output is sent as
                                    logs: off, summary (where it is kept, never
                                    what it says) or tail (its end, scrubbed of
-                                   what reads as a secret)
-                                   [env: SLUICE_OTEL_LOGS] [default: summary]
+                                   what reads as a secret) [env: SLUICE_OTEL_LOGS]
+                                   [default: the host's [telemetry], else summary]
       --otel-logs-limit <BYTES>    The most of a failed check's output sent at
-                                   tail [env: SLUICE_OTEL_LOGS_LIMIT] [default: 8192]";
+                                   tail [env: SLUICE_OTEL_LOGS_LIMIT]
+                                   [default: the host's [telemetry], else 8192]";
 
 /// `sluice submit --help`'s examples and exits; the exits are those of
 /// the reference's "Exit codes".
@@ -208,11 +213,14 @@ pub struct Cli {
     pub worktree: String,
     // The telemetry flags are hidden, here and in every command, and
     // listed in ROOT_AFTER_HELP instead.
-    /// Export traces, metrics and logs over OTLP/HTTP, to where the
-    /// OTEL_EXPORTER_OTLP_* variables say. OTEL_SDK_DISABLED=true turns
-    /// them all off, and OTEL_TRACES_EXPORTER, OTEL_METRICS_EXPORTER or
-    /// OTEL_LOGS_EXPORTER at `none` turns that one alone off.
-    /// SLUICE_OTEL takes `1`, `true`, `yes` or `on`.
+    /// Export traces, metrics and logs over OTLP/HTTP, where the host's
+    /// `[telemetry]` in `~/.config/sluice/config.toml` says (151). This
+    /// flag, or SLUICE_OTEL, chooses for this command alone:
+    /// `--otel=false` or SLUICE_OTEL=0 turns the host's `send = true` off.
+    /// OTEL_SDK_DISABLED=true turns them all off, and OTEL_TRACES_EXPORTER,
+    /// OTEL_METRICS_EXPORTER or OTEL_LOGS_EXPORTER at `none` turns that one
+    /// alone off. SLUICE_OTEL takes `1`, `true`, `yes` or `on`, and `0`,
+    /// `false`, `no` or `off`.
     #[arg(
         long,
         global = true,
@@ -224,15 +232,19 @@ pub struct Cli {
         value_parser = clap::builder::BoolishValueParser::new()
     )]
     pub otel: Option<bool>,
-    /// The service the telemetry is reported as.
+    /// The service the telemetry is reported as; where unset, the host's
+    /// `[telemetry] service`, else `sluice`.
     #[arg(long, global = true, hide = true, env = "SLUICE_OTEL_SERVICE_NAME")]
     pub otel_service_name: Option<String>,
-    /// While --otel is on, how much of a failed check's output is sent as
-    /// logs: `off`, `summary` (where it is kept, never what it says) or
-    /// `tail` (its end, scrubbed of what reads as a secret).
+    /// While telemetry is on, how much of a failed check's output is sent
+    /// as logs: `off`, `summary` (where it is kept, never what it says) or
+    /// `tail` (its end, scrubbed of what reads as a secret); where unset,
+    /// the host's `[telemetry] logs`, else `summary`.
     #[arg(long, global = true, hide = true, env = "SLUICE_OTEL_LOGS", value_enum)]
     pub otel_logs: Option<telemetry::Logs>,
-    /// The most of a failed check's output sent at `tail`, in bytes.
+    /// The most of a failed check's output sent at `tail`, in bytes, held
+    /// to 65536; where unset, the host's `[telemetry] logs_tail_bytes`,
+    /// else 8192.
     #[arg(long, global = true, hide = true, env = "SLUICE_OTEL_LOGS_LIMIT")]
     pub otel_logs_limit: Option<usize>,
 }

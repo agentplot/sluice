@@ -121,7 +121,7 @@ tool of ours on a page (core.26).
 
 ## 6. What a person reads says the table
 
-- [ ] 6.1 In `crates/sluice/src/lib.rs`, have `ROOT_AFTER_HELP` and the telemetry fields' doc comments say what D8 says, keeping the help's column and width:
+- [x] 6.1 In `crates/sluice/src/lib.rs`, have `ROOT_AFTER_HELP` and the telemetry fields' doc comments say what D8 says, keeping the help's column and width:
   - `--otel` exports where the host's `[telemetry]` says, in `~/.config/sluice/config.toml`;
   - the command's flag and `SLUICE_OTEL` choose for that command alone, `SLUICE_OTEL=0` among them;
   - each other flag's default is the host's `[telemetry]`, else sluice's.
