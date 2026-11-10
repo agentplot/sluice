@@ -578,11 +578,16 @@ mod bound {
         });
         std::fs::write(&file, sending(first.url()).join("\n") + "\n").unwrap();
 
-        let out = s
-            .command(s.repo.dir())
-            .args(["run", "--rounds", "12"])
-            .output()
-            .unwrap();
+        // The caller's OpenTelemetry variables turn a signal off whatever
+        // the table says (core.53), and `sluice exec` hands its command
+        // those of the host's sluice: the run is given none.
+        let mut run = s.command(s.repo.dir());
+        for (name, _) in std::env::vars_os() {
+            if name.to_string_lossy().starts_with("OTEL_") {
+                run.env_remove(name);
+            }
+        }
+        let out = run.args(["run", "--rounds", "12"]).output().unwrap();
         let said = text(&out);
         assert!(out.status.success(), "{said}");
 
