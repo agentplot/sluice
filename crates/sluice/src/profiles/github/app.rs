@@ -494,6 +494,15 @@ impl App {
         let mut said = String::new();
         self.policy
             .run(call.kind(), |t| {
+                // A pause is known before any token is got, so no token is
+                // got for a call it stops (record 0108).
+                let allowance = self.allowance(bearer, path);
+                let paused = allowance
+                    .as_ref()
+                    .and_then(|a| self.kept.as_ref()?.pause(a));
+                if let Some(p) = paused.as_ref().filter(|p| p.until > self.policy.wall()) {
+                    return Err(self.limited(p.until, &p.words));
+                }
                 let auth = match bearer {
                     Bearer::App => self.jwt(),
                     Bearer::Repo(repo) if t.renew() => self
@@ -508,13 +517,6 @@ impl App {
                     Call::Make => Failed::new(Judged::Answered, anyhow!("{e:#}")),
                     _ => Failed::new(Judged::Answered, e),
                 })?;
-                let allowance = self.allowance(bearer, path);
-                let paused = allowance
-                    .as_ref()
-                    .and_then(|a| self.kept.as_ref()?.pause(a));
-                if let Some(p) = paused.as_ref().filter(|p| p.until > self.policy.wall()) {
-                    return Err(self.limited(p.until, &p.words));
-                }
                 let url = format!("{}{path}", self.api);
                 let kept = match (&self.kept, method) {
                     (Some(k), "GET") => k.answer(&url),
@@ -552,16 +554,16 @@ impl App {
     }
 
     /// The allowance a call as `bearer` to `path` is counted against:
-    /// the installation's, `graphql` or `core`; `None` for the app's own
-    /// calls and the operator's token, or before a token was bought.
+    /// the installation's, named by the repository's owner, `graphql` or
+    /// `core`, known before any token is held; `None` for the app's own
+    /// calls and the operator's token (134; record 0108).
     fn allowance(&self, bearer: Bearer, path: &str) -> Option<Allowance> {
         let Bearer::Repo(repo) = bearer else {
             return None;
         };
-        let installation = self.tokens.borrow().get(repo)?.installation;
         Some(Allowance {
             app: self.id,
-            installation,
+            owner: repo.owner.clone(),
             resource: resource(path).into(),
         })
     }
