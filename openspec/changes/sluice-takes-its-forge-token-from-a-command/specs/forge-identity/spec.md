@@ -5,15 +5,9 @@
 ### Requirement: The host names sluice's app
 The host's config SHALL accept a `[forge]` table with `app_id` and one
 of two ways to the app's token: `key`, the path of the app's private key
-on the host, or `credential`, a command that gives the token, written as
-a list of its program and then each argument and run with no shell
-(record 0108). A table that names both, or neither, SHALL be refused,
-naming both. A `credential` that is a string, an empty list, or a list
-whose program is a relative path SHALL be refused, naming the setting.
-A key file readable by anyone but its owner SHALL be refused with a
-message naming the file and the mode it needs. Branch protection's
-reading of the host's settings SHALL take `credential` as it takes `key`
-(124; record 0059).
+on the host, or `credential`, a command that gives the token (record
+0108). A key file readable by anyone but its owner SHALL be refused with
+a message naming the file and the mode it needs.
 
 #### Scenario: A key others can read
 - **WHEN** `key` names a file with mode `0644`
@@ -23,29 +17,13 @@ reading of the host's settings SHALL take `credential` as it takes `key`
 - **WHEN** the host's config has no `[forge]` table and a branch has a `remote`
 - **THEN** sluice fetches and pushes with the host's own git credentials, and `sluice status` says the branch has no identity of its own
 
-#### Scenario: A command in place of a key
-- **WHEN** `[forge]` names `app_id = 42` and `credential = ["/opt/forge/bin/token-helper", "--app", "sluice"]`
-- **THEN** sluice reads the table, with the command's program and arguments as written and no key, and branch protection's reading gives the same command
-
-#### Scenario: Both a key and a command
-- **WHEN** `[forge]` names both `key` and `credential`
-- **THEN** sluice refuses the table, naming `key` and `credential` and saying to name one
-
-#### Scenario: A command written as a shell line
-- **WHEN** `[forge]` names `credential = "token-helper --app sluice"`
-- **THEN** sluice refuses the table, saying the command is a list of its program and arguments, run with no shell
-
 ### Requirement: sluice's git calls carry the app's token
 With a `[forge]` table, sluice's fetches and pushes of a branch whose
 remote is on GitHub SHALL authenticate with a token for that repository
 alone: an installation token minted from the app's key, or the token
-the host's credential command gives. sluice SHALL ask the command for
-it as git asks a credential helper: it runs the command with `get`
-appended to its arguments and writes `protocol=https`, `host=github.com`
-and `path=<owner>/<name>` on its standard input. It then reads
-`password` and `password_expiry_utc` from the command's standard output.
-The token SHALL be held in memory only, never written to a file, a git
-config, a log or the environment of any process but that git call.
+the host's credential command gives (record 0108). The token SHALL be
+held in memory only, never written to a file, a git config, a log or the
+environment of any process but that git call.
 
 #### Scenario: A landing pushed as the app
 - **WHEN** a submission lands on a branch with a `remote` on GitHub and the host has a `[forge]` table
@@ -55,20 +33,13 @@ config, a log or the environment of any process but that git call.
 - **WHEN** a round has fetched and pushed with the app's token
 - **THEN** no file, git config or environment variable on the host holds the token
 
-#### Scenario: The command asked as a credential helper
-- **WHEN** the host's `[forge]` names a credential command and sluice needs credentials for `https://github.com/o/r.git`
-- **THEN** the command was run once with `get` as its last argument, its standard input held `protocol=https`, `host=github.com` and `path=o/r`, and the credentials carry the `password` it printed
-
 ### Requirement: A refusal that stands names each refused token
 A call the remote refused on sluice's token on every try until the
 retry policy's time is spent SHALL fail with the remote's own words,
 whole, followed by what each refused token was, in the order tried, and
-never the token itself. A minted token is named by its app, its
+never the token itself. A minted token SHALL be named by its app, its
 repository, the installation it was bought from, the repositories and
-permissions GitHub gave it, and its age. A token a credential command
-gave is named by its app, its repository, the command, what GitHub said
-it reaches when sluice got it, its age, and the end the command gave or
-that it gave none (134 as amended 2026-11-09).
+permissions GitHub gave it, and its age.
 
 #### Scenario: Refused twice
 - **WHEN** GitHub answers a push with `Repository not found.` on the token held and on a fresh one, and the policy's time is spent before another try
@@ -78,22 +49,13 @@ that it gave none (134 as amended 2026-11-09).
 - **WHEN** a push is refused on its token and GitHub refuses to issue another
 - **THEN** one push was made, and the failure carries the remote's words, what the refused token was, and why none could be bought afresh
 
-#### Scenario: A command's token described
-- **WHEN** the host's credential command gives a token for `o/r` that ends in an hour, and GitHub answers that it reaches `o/r`
-- **THEN** the credentials say they are app 4242's token for `o/r` from the command, naming its program and arguments, reaching `o/r`, with its age and its end, and never hold the token's text in what they say of it
-
 ### Requirement: forge check verifies the setup
 `sluice forge check [<branch>]` SHALL report, for the branch's remote,
 whether every ruleset on the branch lets only the app through, and
 SHALL exit non-zero when any check fails, naming which. With a key, it
 SHALL also report whether the key reads, a token mints, and the app is
 installed on the repository with permission to write contents,
-workflows, checks and pull requests. With a credential command, it
-SHALL also report whether the command gives a token for the repository,
-whether that token is the app's that `app_id` names, and whether the
-token may push to the repository (record 0108). Whether it may push is
-read from GitHub's answer to the receive-pack advertisement that git's
-push asks for first.
+workflows, checks and pull requests.
 
 #### Scenario: A ruleset that lets the operator through
 - **WHEN** the ruleset on `main` lists the operator's account as a bypass beside the app
@@ -107,6 +69,63 @@ push asks for first.
 - **WHEN** the app is installed with Contents and Workflows write but only Checks read
 - **THEN** `sluice forge check main` exits non-zero and names the Checks permission
 
+## ADDED Requirements
+
+### Requirement: A forge credential is a command written as a list
+`[forge] credential` SHALL be written as a list of the command's
+program and then each argument, and run with no shell. A `credential`
+that is a string, an empty list, or a list whose program is a relative
+path SHALL be refused, naming the setting. Branch protection's reading
+of the host's settings SHALL take `credential` as it takes `key` (124;
+records 0059, 0108).
+
+#### Scenario: A command in place of a key
+- **WHEN** `[forge]` names `app_id = 42` and `credential = ["/opt/forge/bin/token-helper", "--app", "sluice"]`
+- **THEN** sluice reads the table, with the command's program and arguments as written and no key, and branch protection's reading gives the same command
+
+#### Scenario: A command written as a shell line
+- **WHEN** `[forge]` names `credential = "token-helper --app sluice"`
+- **THEN** sluice refuses the table, saying the command is a list of its program and arguments, run with no shell
+
+### Requirement: A forge table names a key or a command, never both
+A `[forge]` table that names both `key` and `credential`, or neither,
+SHALL be refused, naming both (record 0108).
+
+#### Scenario: Both a key and a command
+- **WHEN** `[forge]` names both `key` and `credential`
+- **THEN** sluice refuses the table, naming `key` and `credential` and saying to name one
+
+### Requirement: The credential command is asked as git asks a helper
+sluice SHALL ask the host's credential command for a repository's token
+as git asks a credential helper: it runs the command with `get` appended
+to its arguments and writes `protocol=https`, `host=github.com` and
+`path=<owner>/<name>` on its standard input. It then reads `password`
+and `password_expiry_utc` from the command's standard output (record
+0108).
+
+#### Scenario: The command asked as a credential helper
+- **WHEN** the host's `[forge]` names a credential command and sluice needs credentials for `https://github.com/o/r.git`
+- **THEN** the command was run once with `get` as its last argument, its standard input held `protocol=https`, `host=github.com` and `path=o/r`, and the credentials carry the `password` it printed
+
+### Requirement: A command's token is named by its command
+Where a refusal that stands, or the credentials, say what a token a
+credential command gave is, they SHALL name its app, its repository, the
+command, what GitHub said it reaches when sluice got it, its age, and
+the end the command gave or that it gave none, and never the token's
+text (134 as amended 2026-11-09; record 0108).
+
+#### Scenario: A command's token described
+- **WHEN** the host's credential command gives a token for `o/r` that ends in an hour, and GitHub answers that it reaches `o/r`
+- **THEN** the credentials say they are app 4242's token for `o/r` from the command, naming its program and arguments, reaching `o/r`, with its age and its end, and never hold the token's text in what they say of it
+
+### Requirement: forge check verifies a credential command
+With a credential command, `sluice forge check [<branch>]` SHALL also
+report whether the command gives a token for the repository, whether
+that token is the app's that `app_id` names, and whether the token may
+push to the repository. Whether it may push SHALL be read from GitHub's
+answer to the receive-pack advertisement that git's push asks for first
+(record 0108).
+
 #### Scenario: A command, all set
 - **WHEN** the host's credential command gives a token for the repository, GitHub names that token's bot as app 4242's, the receive-pack advertisement answers 200, and the ruleset's only bypass is app 4242
 - **THEN** the check says the command gives a token, the token is app 4242's and may push, and the ruleset lets only app 4242 through, and fails nothing
@@ -114,8 +133,6 @@ push asks for first.
 #### Scenario: A command that gives another app's token, one that may not push
 - **WHEN** the host's `[forge]` names `app_id = 4242`, its command gives a token GitHub names as app 99's, and the receive-pack advertisement answers 403
 - **THEN** the check fails, naming app 99 and app 4242, and saying that the token may not push and that the app needs Contents read and write
-
-## ADDED Requirements
 
 ### Requirement: A command's token is held until five minutes before its end
 sluice SHALL hold a token the credential command gave for a repository
