@@ -36,3 +36,15 @@ systems = ["aarch64-darwin", "x86_64-linux"]
 [signing]
 key = "~/.config/sluice/signing"
 signer = "host-a"
+
+[telemetry]
+collector = "http://localhost:4318"
+logs = "tail"
+logs_tail_bytes = 4096
+metrics = true
+send = true
+service = "sluice"
+traces = false
+
+[telemetry.attributes]
+"deployment.environment" = "prod"

@@ -140,6 +140,19 @@ in
               env = unset (types.attrsOf types.str) "The variables the cache's clients read, each a string, which every run gets exactly as written.";
             }))
             "`[[caches]]`: the caches every run on the host is given, a compile server's or the task runner's shared cache. Where unset, none (35).";
+        telemetry =
+          unset
+            (table {
+              send = unset types.bool "Whether sluice sends its telemetry, OTLP over HTTP, protobuf, to `collector`: `true` needs a `collector`, and sluice refuses a table that sends and names none, so it never sends where the caller's `OTEL_EXPORTER_OTLP_*` say. Where unset, `false`: nothing is sent unless a command's own `--otel` or `SLUICE_OTEL` asks, which chooses for that command alone, `SLUICE_OTEL=0` turning a `true` here off for it (151).";
+              collector = unset types.str "The collector sluice sends to, an `http://` address: a host, a port and at most a path, such as `\"http://localhost:4318\"`, a receiver on the host that forwards over TLS. sluice sends to its `/v1/traces`, `/v1/metrics` and `/v1/logs`, and none of the caller's `OTEL_EXPORTER_OTLP_*` variables reach it. Needed wherever `send = true`, which sluice refuses without it. Where unset, the table sends nothing, and a command's own `--otel` sends where `OTEL_EXPORTER_OTLP_ENDPOINT` says, else to `\"http://localhost:4318\"`.";
+              service = unset types.str "The service sluice reports as, its `service.name`. Where unset, `\"sluice\"`.";
+              traces = unset types.bool "Whether traces are sent: `false` sends none, whatever OpenTelemetry's variables say. Where unset, `true`.";
+              metrics = unset types.bool "Whether metrics are sent: `false` sends none, whatever OpenTelemetry's variables say. Where unset, `true`.";
+              logs = unset types.str "How much of a failed check's output is sent as logs: `\"off\"`, no logs at all; `\"summary\"`, which task failed and where its output is kept, never the output; or `\"tail\"`, the output's end, scrubbed of what reads as a secret. Where unset, `\"summary\"`.";
+              logs_tail_bytes = unset types.int "At `logs = \"tail\"`, the most of a failed check's output sent, in bytes, from 1 to 65536. Where unset, 8192.";
+              attributes = unset (types.attrsOf types.str) "More resource attributes on everything sluice sends, each a string, such as `\"deployment.environment\" = \"prod\"`. sluice names `service.name`, `service.version` and `host.name`, the host's own name, itself; a `host.name` here names the host in its place. Where unset, none.";
+            })
+            "`[telemetry]`: whether sluice sends its telemetry, where, as what, which signals and how much of a failure. A command's own flag or `SLUICE_OTEL*` variable chooses over it for that command alone. Where unset, OpenTelemetry's variables say where telemetry goes, and nothing is sent unless a command asks (151).";
       };
       default = { };
       description = "The host's own settings, `~/.config/sluice/config.toml`, each key named as the file names it, rendered at evaluation. A key left unset is left out of the file, so sluice's own default holds; a key the module does not declare is written as given, for sluice to judge. The file is in the Nix store, which every user reads: a key is named by its path on the host, never held here.";

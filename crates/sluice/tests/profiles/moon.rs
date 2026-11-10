@@ -14,8 +14,8 @@ use std::time::{Duration, Instant};
 use sluice::instance::{HostCache, Instance};
 use sluice::profiles::checks::Checks;
 use sluice_seams::{
-    FailedBy, Limits, Network, Outcome, Place, Progress, Reading, Reads, Rev, RunHandle, RunReport,
-    RunRequest, Setting, Settings, Source, TaskState, Tests,
+    FailedBy, Limits, Network, NotRun, Outcome, Place, Progress, Reading, Reads, Rev, RunHandle,
+    RunReport, RunRequest, Setting, Settings, Source, TaskState, Tests,
 };
 use support::Repo;
 
@@ -90,6 +90,7 @@ fn checks_in(common: &Path, caches: Vec<HostCache>) -> Checks {
             systems: None,
             caches,
             expire_after: sluice_core::EXPIRE_AFTER,
+            telemetry: None,
         },
     )
     .with_running(common.join("host-running"))
@@ -1124,7 +1125,7 @@ fn proven_drops_a_key_the_tree_does_not_bear_out() {
     let repo = workspace("moon-proven");
     let c = checks(&repo);
     let (run, report) = finish_run(&c, &request(&repo, "p1", &["#check-fast"], None));
-    let mut all = c.proven(&run, &report).unwrap();
+    let mut all = c.proven(&run, &report).unwrap().proven;
     all.sort();
     assert_eq!(all, ["alpha:test", "beta:test"]);
     let alpha = report
@@ -1141,7 +1142,90 @@ fn proven_drops_a_key_the_tree_does_not_bear_out() {
         .unwrap()
         .replace("alpha/value.txt", "alpha/other.txt");
     std::fs::write(&blob, forged).unwrap();
-    assert_eq!(c.proven(&run, &report).unwrap(), ["beta:test"]);
+    assert_eq!(c.proven(&run, &report).unwrap().proven, ["beta:test"]);
+}
+
+/// Record 0105, design D2 to D4 of the change
+/// `a-pass-nothing-proves-blames-no-one` (114): a pass whose manifest is
+/// gone from the store the profile reads is neither proven nor dropped
+/// as a key the tree does not bear out. It is unkept, saying why and
+/// naming the store, read from the file's absence alone.
+#[test]
+fn a_pass_whose_manifest_is_gone_is_unkept_naming_the_store() {
+    let repo = workspace("moon-unkept");
+    let c = checks(&repo);
+    let (run, report) = finish_run(&c, &request(&repo, "p1", &["#check-fast"], None));
+    let alpha = report
+        .tasks
+        .iter()
+        .find(|t| t.task == "alpha:test")
+        .unwrap();
+    assert_eq!(alpha.outcome, Outcome::Pass);
+    let store = repo.dir().join(".moon/cache");
+    std::fs::remove_file(
+        store
+            .join("blobs")
+            .join(&alpha.hash[..2])
+            .join(&alpha.hash[2..]),
+    )
+    .unwrap();
+    let proof = c.proven(&run, &report).unwrap();
+    assert_eq!(proof.proven, ["beta:test"]);
+    assert_eq!(
+        proof.unkept,
+        [NotRun {
+            task: "alpha:test".into(),
+            reason: format!(
+                "it passed, but nothing the run kept proves it ran: \
+                 moon's manifest of it is not in {}",
+                store.display()
+            ),
+        }]
+    );
+}
+
+/// Design D3 of the change `a-pass-nothing-proves-blames-no-one` (114):
+/// only a pass is unkept. A check that failed and whose manifest is gone
+/// from the store is named neither proven nor unkept, read as before.
+#[test]
+fn a_failed_task_whose_manifest_is_gone_is_not_unkept() {
+    let repo = workspace("moon-failed-unkept");
+    change(
+        &repo,
+        &[(
+            "gamma/moon.yml",
+            "tasks:\n  test:\n    command: 'sh -c \"exit 1\"'\n    inputs: ['value.txt']\n    tags: [check-tools]\n",
+        )],
+    );
+    let c = checks(&repo);
+    let (run, report) = finish_run(
+        &c,
+        &request(&repo, "p1", &["#check-fast", "gamma:test"], None),
+    );
+    let gamma = report
+        .tasks
+        .iter()
+        .find(|t| t.task == "gamma:test")
+        .unwrap();
+    assert_eq!(gamma.outcome, Outcome::Fail);
+    assert!(matches!(gamma.source, Source::Ran { .. }));
+    let blob = repo
+        .dir()
+        .join(".moon/cache/blobs")
+        .join(&gamma.hash[..2])
+        .join(&gamma.hash[2..]);
+    if blob.exists() {
+        std::fs::remove_file(&blob).unwrap();
+    }
+    let proof = c.proven(&run, &report).unwrap();
+    assert!(!proof.proven.iter().any(|t| t == "gamma:test"), "{proof:?}");
+    assert!(
+        !proof.unkept.iter().any(|n| n.task == "gamma:test"),
+        "{proof:?}"
+    );
+    let mut proven = proof.proven.clone();
+    proven.sort();
+    assert_eq!(proven, ["alpha:test", "beta:test"]);
 }
 
 /// ADR 0050: before any run, moon in the worktree names each required
@@ -1375,7 +1459,7 @@ fn a_key_is_read_under_the_home_the_toolchain_gives_moon() {
         !manifest(&worktree.join(".moon/cache")).exists(),
         "no manifest in the worktree"
     );
-    assert_eq!(c.proven(&run, &report).unwrap(), ["alpha:test"]);
+    assert_eq!(c.proven(&run, &report).unwrap().proven, ["alpha:test"]);
 }
 
 /// Record 0105 point 1 (C.2 moon and sandbox rows as amended at
