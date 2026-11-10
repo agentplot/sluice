@@ -17,21 +17,26 @@
 //! One fetch at a time holds the repository's fetch lock, and a process
 //! that fetch's git runs, the `reference-transaction` hook above all,
 //! fetches nothing and waits on no lock of its ancestor's (record 0110).
+//! No try outlasts the policy's limit for one: git is ended with
+//! everything it started, and a fetch's lock goes with it (record 0109).
 //!
 //! The remote's address is read as the host's configuration holds it when
 //! each call begins, never kept from the profile's opening: a driver that
 //! runs for days reaches a remote pointed elsewhere since, as at a
 //! repository renamed on its forge, at its next call.
 
+use std::fs::TryLockError;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use sluice_seams::{Branch, Formed, HostCopy, LandingCommit, Moved, ReadRefused, Rev};
 
 use super::local_refs::LocalRefs;
+use crate::bounded::{self, span};
 use crate::identity::{withheld, Credentials, Identity, PASSWORD_VAR, USERNAME_VAR};
 use crate::retry::{Failed, Judged, Kind, Policy};
 
@@ -165,6 +170,8 @@ impl PushedRefs {
         let mut unrenewed = None;
         let mut refused: Vec<String> = Vec::new();
         let mut last = None;
+        // Set while the last try found the fetch lock held past its limit.
+        let mut waited = None;
         let ran = self.policy.run(kind, |t| {
             let given = match &speaker {
                 None => None,
@@ -187,10 +194,16 @@ impl PushedRefs {
             // One fetch at a time in this repository, held for the try
             // alone, never over a pause between tries, and named to its
             // git, so a sluice its git runs waits on no lock its ancestor
-            // holds (record 0110).
+            // holds (record 0110); and waited for no longer than a try may
+            // take: one held past it is a try the remote never judged
+            // (record 0109).
             let fetching = match fetch {
                 true => match self.fetching() {
-                    Ok(held) => Some(held),
+                    Ok(Ok(held)) => Some(held),
+                    Ok(Err(held)) => {
+                        waited = Some(held);
+                        return Err(Failed::new(Judged::Never, ()));
+                    }
                     Err(e) => {
                         fault = Some(e);
                         return Err(Failed::new(Judged::Answered, ()));
@@ -198,12 +211,29 @@ impl PushedRefs {
                 },
                 false => None,
             };
+            waited = None;
             let held = fetching.as_ref().map(|(_, path)| path.as_path());
-            let out = self.git_as(speaker.as_ref(), given.as_ref(), &line, held);
+            let ran = self.git_as(speaker.as_ref(), given.as_ref(), &line, held);
             drop(fetching);
-            let out = match out {
-                Ok(out) if out.status.success() => return Ok(out),
-                Ok(out) => out,
+            let out = match ran {
+                // A try git did not end within its limit: whether the remote
+                // judged it is not known, so a read is tried again and a
+                // push is settled by reading what the remote holds (122).
+                Ok((out, true)) => {
+                    let verb = args.first().copied().unwrap_or("call");
+                    let limit = span(self.policy.try_for());
+                    last = Some(told(
+                        out,
+                        &format!(
+                            "git {verb} with {} was still going after {limit}, the most a try \
+                             may take, and was stopped",
+                            self.remote
+                        ),
+                    ));
+                    return Err(Failed::new(Judged::Unknown, ()));
+                }
+                Ok((out, false)) if out.status.success() => return Ok(out),
+                Ok((out, false)) => out,
                 Err(e) => {
                     fault = Some(e);
                     return Err(Failed::new(Judged::Answered, ()));
@@ -228,6 +258,13 @@ impl PushedRefs {
         };
         if let Some(e) = fault {
             return Err(e);
+        }
+        if let Some(lock) = waited {
+            bail!(
+                "another fetch of this repository held {} past {}, the most a try waits for it",
+                lock.display(),
+                span(self.policy.try_for())
+            );
         }
         let out = last.expect("a try git failed");
         let note =
@@ -254,8 +291,11 @@ impl PushedRefs {
     /// sluice's under `refs/sluice-fetched/` and the remote-tracking refs,
     /// and the one that loses would read its own lock's words as the
     /// remote's refusal (rules core.28, core.29). The lock held, and its
-    /// path, which the fetch's git is told.
-    fn fetching(&self) -> Result<(std::fs::File, PathBuf)> {
+    /// path, which the fetch's git is told (record 0110). It is waited for
+    /// as long as a try may take, and no longer: `Err` with the lock's
+    /// path when another fetch held it all that time, which its own limit
+    /// ends (record 0109).
+    fn fetching(&self) -> Result<std::result::Result<(std::fs::File, PathBuf), PathBuf>> {
         let path = self.fetch_lock()?;
         let file = std::fs::OpenOptions::new()
             .create(true)
@@ -263,9 +303,20 @@ impl PushedRefs {
             .write(true)
             .open(&path)
             .with_context(|| format!("opening {}", path.display()))?;
-        file.lock()
-            .with_context(|| format!("locking {}", path.display()))?;
-        Ok((file, path))
+        let until = Instant::now() + self.policy.try_for();
+        loop {
+            match file.try_lock() {
+                Ok(()) => return Ok(Ok((file, path))),
+                Err(TryLockError::WouldBlock) => {}
+                Err(TryLockError::Error(e)) => {
+                    return Err(e).with_context(|| format!("locking {}", path.display()))
+                }
+            }
+            if Instant::now() >= until {
+                return Ok(Err(path));
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 
     /// The repository's fetch lock, in its common git directory.
@@ -356,17 +407,21 @@ impl PushedRefs {
         .into())
     }
 
-    /// git for the remote: with the host's own credentials when `given`
-    /// is `None`, and otherwise with `speaker`'s helper alone, given them.
-    /// A fetch holding the repository's fetch lock names it, `held`, to
-    /// its git and so to every process its git runs (record 0110).
+    /// git for the remote, one try: with the host's own credentials when
+    /// `given` is `None`, and otherwise with `speaker`'s helper alone, given
+    /// them. A fetch holding the repository's fetch lock names it, `held`,
+    /// to its git and so to every process its git runs (record 0110). It
+    /// runs in a process group of its own for as long as a try may take:
+    /// what git printed, and `true` where that limit came first and the
+    /// group was ended, the remote's helper and any hook with it (134;
+    /// record 0109).
     fn git_as(
         &self,
         speaker: Option<&Speaker>,
         given: Option<&Credentials>,
         args: &[&str],
         held: Option<&Path>,
-    ) -> Result<Output> {
+    ) -> Result<(Output, bool)> {
         let helper;
         let mut cmd = match (speaker, given) {
             (Some(s), Some(c)) => {
@@ -383,8 +438,14 @@ impl PushedRefs {
         if let Some(lock) = held {
             cmd.env(FETCH_HELD_VAR, lock);
         }
-        cmd.output()
-            .with_context(|| format!("running git {}", args.join(" ")))
+        let ended = bounded::output(&mut cmd, self.policy.try_for())
+            .with_context(|| format!("running git {}", args.join(" ")))?;
+        let out = Output {
+            status: ended.status,
+            stdout: ended.stdout,
+            stderr: ended.stderr,
+        };
+        Ok((out, ended.stopped))
     }
 
     /// `git push <args> <the remote> <refspec>` under the retry policy,
@@ -813,10 +874,14 @@ fn answered(out: &Output) -> bool {
     out.stdout.contains(&b'\t')
 }
 
-/// `out` with `said` on the line after what git printed on stderr.
+/// `out` with `said` on the line after what git printed on stderr, or as
+/// all of it where git printed nothing.
 fn told(mut out: Output, said: &str) -> Output {
     out.stderr.truncate(out.stderr.trim_ascii_end().len());
-    out.stderr.extend_from_slice(format!("\n{said}").as_bytes());
+    if !out.stderr.is_empty() {
+        out.stderr.push(b'\n');
+    }
+    out.stderr.extend_from_slice(said.as_bytes());
     out
 }
 

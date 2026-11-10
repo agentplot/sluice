@@ -16,12 +16,13 @@
 //! so no reader of the failure finds a token in them (record 0108 as
 //! amended 2026-11-10; rule core.28).
 
-use std::io::{BufRead, Read, Write};
+use std::io::{BufRead, Write};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use crate::bounded::{self, span, Ended};
 
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
@@ -107,8 +108,8 @@ pub fn helper(operation: &str, input: &mut dyn BufRead, out: &mut dyn Write) -> 
 }
 
 /// How long a credential command has to answer before it is stopped: as
-/// long as an API call has (record 0108).
-pub const COMMAND_LIMIT: Duration = Duration::from_secs(30);
+/// long as a try of any call to a remote has (record 0108).
+pub const COMMAND_LIMIT: Duration = crate::retry::TRY_FOR;
 
 /// The most of a command's standard output, and of its standard error,
 /// that is read; what it writes past it is passed over. Standard error cut
@@ -181,8 +182,9 @@ impl CredentialCommand {
     /// exits non-zero, prints no `password` or gives nothing within its
     /// limit fails, its failure naming the command and giving its standard
     /// error, never its standard output, which may hold a token; at the
-    /// limit its process group is killed, so a child holding its pipes
-    /// open ends with it. The standard error is given as the scrub leaves
+    /// limit its process group is asked to end and then killed
+    /// ([`bounded::finish`]), so a child holding its pipes open ends with
+    /// it. The standard error is given as the scrub leaves
     /// it, every string shaped as a secret it knows replaced by
     /// `[redacted]` before any failure is made, so the failure, and every
     /// report, log line, kept state and status made from it, holds no token
@@ -193,18 +195,20 @@ impl CredentialCommand {
             asked.protocol, asked.host, asked.path
         );
         let mut child = self.spawn("get", true)?;
-        let group = child.id() as i32;
         if let Some(mut stdin) = child.stdin.take() {
             // A command that reads nothing may have ended already.
             let _ = stdin.write_all(input.as_bytes());
         }
-        let out = drain(child.stdout.take());
-        let err = drain(child.stderr.take());
-        let status = self.wait(&mut child, group, &[&out, &err])?;
-        let out = out.join().unwrap_or_default().bytes;
-        let err = err.join().unwrap_or_default();
-        let text = String::from_utf8_lossy(&err.bytes);
-        let text = if err.cut {
+        let Ended {
+            status,
+            stopped,
+            stdout: out,
+            stderr: err,
+            stderr_cut,
+            ..
+        } = bounded::finish(&mut child, self.limit, OUTPUT_LIMIT)?;
+        let text = String::from_utf8_lossy(&err);
+        let text = if stderr_cut {
             text.rfind('\n').map_or("", |end| &text[..end])
         } else {
             &text
@@ -217,15 +221,12 @@ impl CredentialCommand {
             }
             anyhow!(e)
         };
-        let status = match status {
-            None => {
-                return Err(failed(format!(
-                    "gave nothing in {} and was stopped",
-                    span(self.limit)
-                )))
-            }
-            Some(s) => s,
-        };
+        if stopped {
+            return Err(failed(format!(
+                "gave nothing in {} and was stopped",
+                span(self.limit)
+            )));
+        }
         if !status.success() {
             use std::os::unix::process::ExitStatusExt;
             let how = match (status.code(), status.signal()) {
@@ -285,11 +286,10 @@ impl CredentialCommand {
                 return;
             }
         };
-        let group = child.id() as i32;
         if let Some(mut stdin) = child.stdin.take() {
             let _ = stdin.write_all(input.as_bytes());
         }
-        let _ = self.wait(&mut child, group, &[]);
+        let _ = bounded::finish(&mut child, self.limit, 0);
     }
 
     /// The command started for `operation`, its standard input piped, and
@@ -322,78 +322,12 @@ impl CredentialCommand {
             }
         }
     }
-
-    /// The command's exit once it and its readers are done, or `None` when
-    /// its limit came first: its group is then killed, so a child holding
-    /// its pipes open ends with it.
-    fn wait(
-        &self,
-        child: &mut Child,
-        group: i32,
-        readers: &[&JoinHandle<Kept>],
-    ) -> Result<Option<std::process::ExitStatus>> {
-        use nix::sys::signal::{killpg, Signal};
-        use nix::unistd::Pid;
-        let until = Instant::now() + self.limit;
-        let mut status = None;
-        let done = loop {
-            if status.is_none() {
-                status = child.try_wait()?;
-            }
-            if status.is_some() && readers.iter().all(|r| r.is_finished()) {
-                break true;
-            }
-            if Instant::now() >= until {
-                break false;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        };
-        if !done {
-            let _ = killpg(Pid::from_raw(group), Signal::SIGKILL);
-        }
-        let status = match status {
-            Some(s) => s,
-            None => child.wait()?,
-        };
-        Ok(done.then_some(status))
-    }
-}
-
-/// What [`drain`] kept of a pipe, and whether it passed over anything
-/// past [`OUTPUT_LIMIT`].
-#[derive(Default)]
-struct Kept {
-    bytes: Vec<u8>,
-    cut: bool,
-}
-
-/// A thread reading `pipe` to its end, keeping the first [`OUTPUT_LIMIT`]
-/// bytes of it and saying whether it passed over anything past them: a
-/// full kept part followed by anything but a clean end is read as cut, so
-/// a pipe that failed past the limit is never taken whole.
-fn drain(pipe: Option<impl Read + Send + 'static>) -> JoinHandle<Kept> {
-    std::thread::spawn(move || {
-        let mut kept = Kept::default();
-        if let Some(mut pipe) = pipe {
-            let _ = (&mut pipe).take(OUTPUT_LIMIT).read_to_end(&mut kept.bytes);
-            let rest = std::io::copy(&mut pipe, &mut std::io::sink());
-            kept.cut = kept.bytes.len() as u64 == OUTPUT_LIMIT && !matches!(rest, Ok(0));
-        }
-        kept
-    })
-}
-
-/// A limit in the words a person reads: `30s`, or `300ms` under a second.
-fn span(d: Duration) -> String {
-    if d >= Duration::from_secs(1) && d.subsec_millis() == 0 {
-        format!("{}s", d.as_secs())
-    } else {
-        format!("{}ms", d.as_millis())
-    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::time::Instant;
+
     use super::*;
 
     /// A directory of the test's own, made afresh.
