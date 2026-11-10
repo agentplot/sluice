@@ -7,8 +7,10 @@ tasks:
   test:
     command: 'cargo test -p sluice -- --skip sandbox'
     # The flake module's rendered files, which a unit test reads as sluice
-    # reads the host's settings (record 0098), among them.
-    inputs: ['/crates/sluice/**/*', '/crates/sluice-seams/**/*', '/crates/sluice-core/**/*', '/crates/sluice-fakes/**/*', '/plugins/sluice/skills/**/*', '/nix/tests/files/**/*', '/Cargo.toml', '/Cargo.lock', '/devenv.nix', '/devenv.lock']
+    # reads the host's settings (record 0098), and the module's options,
+    # whose `prefixes` a unit test holds to the scrub's GitHub token
+    # prefixes (record 0108), among them.
+    inputs: ['/crates/sluice/**/*', '/crates/sluice-seams/**/*', '/crates/sluice-core/**/*', '/crates/sluice-fakes/**/*', '/plugins/sluice/skills/**/*', '/nix/tests/files/**/*', '/nix/modules/options.nix', '/Cargo.toml', '/Cargo.lock', '/devenv.nix', '/devenv.lock']
     tags: [cargo-test, check-fast]
     options: {runFromWorkspaceRoot: true}
   # The profiles against real tools (git, moon, wt, a container engine,

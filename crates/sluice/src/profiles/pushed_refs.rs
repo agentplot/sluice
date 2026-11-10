@@ -14,6 +14,9 @@
 //! Every call it makes to the remote runs under the retry policy, which
 //! tries again what the remote never judged, a refused credential bought
 //! afresh, and never a push the remote answered (134; rule core.29).
+//! One fetch at a time holds the repository's fetch lock, and a process
+//! that fetch's git runs, the `reference-transaction` hook above all,
+//! fetches nothing and waits on no lock of its ancestor's (record 0110).
 //!
 //! The remote's address is read as the host's configuration holds it when
 //! each call begins, never kept from the profile's opening: a driver that
@@ -141,6 +144,18 @@ impl PushedRefs {
     /// the call began, and the same arguments go every time, so a push
     /// keeps its target, its refspec and its lease (rule core.5).
     fn call(&self, kind: Kind, args: &[&str], refs: &[&str]) -> Result<Called> {
+        let fetch = args.first() == Some(&"fetch");
+        if fetch && self.under_own_fetch()? {
+            tracing::debug!(
+                "a fetch of sluice's own holds this repository's fetch lock above this process, \
+                 so nothing is fetched and its refs are read as they stand"
+            );
+            return Ok(Called {
+                out: fetched_nothing(),
+                note: None,
+                judged: None,
+            });
+        }
         let speaker = self.speaker()?;
         let mut line = args.to_vec();
         line.push(speaker.as_ref().map_or(&self.remote, |s| &s.url));
@@ -170,8 +185,10 @@ impl PushedRefs {
                 },
             };
             // One fetch at a time in this repository, held for the try
-            // alone, never over a pause between tries.
-            let fetching = match args.first() == Some(&"fetch") {
+            // alone, never over a pause between tries, and named to its
+            // git, so a sluice its git runs waits on no lock its ancestor
+            // holds (record 0110).
+            let fetching = match fetch {
                 true => match self.fetching() {
                     Ok(held) => Some(held),
                     Err(e) => {
@@ -181,7 +198,8 @@ impl PushedRefs {
                 },
                 false => None,
             };
-            let out = self.git_as(speaker.as_ref(), given.as_ref(), &line);
+            let held = fetching.as_ref().map(|(_, path)| path.as_path());
+            let out = self.git_as(speaker.as_ref(), given.as_ref(), &line, held);
             drop(fetching);
             let out = match out {
                 Ok(out) if out.status.success() => return Ok(out),
@@ -235,9 +253,10 @@ impl PushedRefs {
     /// process: two at once race to write the refs a fetch writes here,
     /// sluice's under `refs/sluice-fetched/` and the remote-tracking refs,
     /// and the one that loses would read its own lock's words as the
-    /// remote's refusal (rules core.28, core.29).
-    fn fetching(&self) -> Result<std::fs::File> {
-        let path = self.local.common_dir()?.join(FETCH_LOCK);
+    /// remote's refusal (rules core.28, core.29). The lock held, and its
+    /// path, which the fetch's git is told.
+    fn fetching(&self) -> Result<(std::fs::File, PathBuf)> {
+        let path = self.fetch_lock()?;
         let file = std::fs::OpenOptions::new()
             .create(true)
             .truncate(false)
@@ -246,7 +265,41 @@ impl PushedRefs {
             .with_context(|| format!("opening {}", path.display()))?;
         file.lock()
             .with_context(|| format!("locking {}", path.display()))?;
-        Ok(file)
+        Ok((file, path))
+    }
+
+    /// The repository's fetch lock, in its common git directory.
+    fn fetch_lock(&self) -> Result<PathBuf> {
+        Ok(self.local.common_dir()?.join(FETCH_LOCK))
+    }
+
+    /// Whether this process runs under a fetch of sluice's own of this
+    /// repository, as the `reference-transaction` hook a fetch's git runs
+    /// does, its packing of refs included: its environment names this
+    /// repository's fetch lock, as sluice names it to the git of a fetch
+    /// that holds it, and the lock is held. Such a process takes no fetch
+    /// lock and fetches nothing, since the lock is its ancestor's and is
+    /// let go only once it ends (record 0110).
+    fn under_own_fetch(&self) -> Result<bool> {
+        let Some(named) = std::env::var_os(FETCH_HELD_VAR) else {
+            return Ok(false);
+        };
+        let path = self.fetch_lock()?;
+        if std::fs::canonicalize(&named).ok().as_deref() != Some(path.as_path()) {
+            return Ok(false);
+        }
+        let file = match std::fs::OpenOptions::new().write(true).open(&path) {
+            Ok(file) => file,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(e) => return Err(e).with_context(|| format!("opening {}", path.display())),
+        };
+        match file.try_lock() {
+            Ok(()) => Ok(false),
+            Err(std::fs::TryLockError::WouldBlock) => Ok(true),
+            Err(std::fs::TryLockError::Error(e)) => {
+                Err(e).with_context(|| format!("locking {}", path.display()))
+            }
+        }
     }
 
     /// Fetch `refspec`, whose source is `asked`, with `flags` before the
@@ -305,22 +358,32 @@ impl PushedRefs {
 
     /// git for the remote: with the host's own credentials when `given`
     /// is `None`, and otherwise with `speaker`'s helper alone, given them.
+    /// A fetch holding the repository's fetch lock names it, `held`, to
+    /// its git and so to every process its git runs (record 0110).
     fn git_as(
         &self,
         speaker: Option<&Speaker>,
         given: Option<&Credentials>,
         args: &[&str],
+        held: Option<&Path>,
     ) -> Result<Output> {
-        let (Some(s), Some(c)) = (speaker, given) else {
-            return git(self.local.git_dir(), args);
+        let helper;
+        let mut cmd = match (speaker, given) {
+            (Some(s), Some(c)) => {
+                helper = format!("credential.helper={}", s.helper);
+                let mut all = vec!["-c", "credential.helper=", "-c", &helper];
+                all.extend(args);
+                let mut cmd = command(self.local.git_dir(), &all);
+                cmd.env(USERNAME_VAR, &c.username)
+                    .env(PASSWORD_VAR, &c.password);
+                cmd
+            }
+            _ => command(self.local.git_dir(), args),
         };
-        let helper = format!("credential.helper={}", s.helper);
-        let mut all = vec!["-c", "credential.helper=", "-c", &helper];
-        all.extend(args);
-        command(self.local.git_dir(), &all)
-            .env(USERNAME_VAR, &c.username)
-            .env(PASSWORD_VAR, &c.password)
-            .output()
+        if let Some(lock) = held {
+            cmd.env(FETCH_HELD_VAR, lock);
+        }
+        cmd.output()
             .with_context(|| format!("running git {}", args.join(" ")))
     }
 
@@ -655,6 +718,23 @@ const NO_SUCH_REF: &str = "couldn't find remote ref";
 /// The file in the repository's git directory whose lock one fetch holds
 /// at a time ([`PushedRefs::fetching`]).
 const FETCH_LOCK: &str = "sluice-fetch.lock";
+
+/// The variable a fetch holding the repository's fetch lock names its path
+/// in, to its git and every process that runs under it
+/// ([`PushedRefs::under_own_fetch`]).
+const FETCH_HELD_VAR: &str = "SLUICE_FETCH_HELD";
+
+/// What a fetch reads as where it fetched nothing under a fetch of
+/// sluice's own of the repository: done, the refs as that fetch leaves
+/// them, as after a race lost to it (record 0086).
+fn fetched_nothing() -> Output {
+    use std::os::unix::process::ExitStatusExt as _;
+    Output {
+        status: std::process::ExitStatus::from_raw(0),
+        stdout: Vec::new(),
+        stderr: Vec::new(),
+    }
+}
 
 /// Whether git says a fetch could not write a ref of this repository's,
 /// as when another fetch wrote it first: `cannot lock ref '<name>': is at

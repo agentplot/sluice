@@ -317,7 +317,11 @@ fn forge_findings(
             return Ok(found);
         }
     };
-    said(true, format!("[forge] key {} reads", forge.key.display()));
+    // Under a credential command, the check's first finding, that the
+    // command gives a token, does this work (record 0108).
+    if let crate::instance::Source::Key(key) = &forge.source {
+        said(true, format!("[forge] key {} reads", key.display()));
+    }
     let operator = operator_token();
     found.extend(github::check::check(
         &app,
