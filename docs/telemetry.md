@@ -4,27 +4,46 @@ A brief for the repositories that set up the hosts sluice runs on (crew's
 EC2 host, swancloud and its crews, a developer's Mac). sluice sends; the
 host decides where it goes. Nothing here changes sluice. The decision is
 [ADR 0014](adr/0014-telemetry-is-opt-in-otlp-and-decides-nothing.md),
-and for logs [ADR 0022](adr/0022-telemetry-sends-a-failures-output-scrubbed-and-only-as-asked.md).
+for logs [ADR 0022](adr/0022-telemetry-sends-a-failures-output-scrubbed-and-only-as-asked.md),
+and for where it goes, the host's own `[telemetry]`,
+[record 0106](adr/0106-sluices-telemetry-is-a-setting-of-the-hosts-own-settings-file.md)
+(the statement's clause 151; rule core.53).
 
 ## What sluice sends
 
-- **Off unless asked**: `SLUICE_OTEL=1` (or `true`, `yes`, `on`) in the
-  environment of whatever runs sluice, or `--otel` on its command line.
-- **Off again**, by OpenTelemetry's own settings, read as its
-  specification reads them. `OTEL_SDK_DISABLED=true` leaves telemetry
-  off as if it were never asked for: nothing is sent, and a run's checks
-  get nothing of it. `OTEL_TRACES_EXPORTER=none` turns traces alone off:
-  metrics and logs still go, and a run's checks get the setting with
-  sluice's other `OTEL_*` and no `TRACEPARENT`. `OTEL_METRICS_EXPORTER=none`
-  and `OTEL_LOGS_EXPORTER=none` do the same for theirs. A setting only
-  turns a signal off: any other value, `otlp` among them, leaves it on.
-- **Where**: OTLP over plain HTTP, protobuf, to `OTEL_EXPORTER_OTLP_ENDPOINT`,
-  by default `http://localhost:4318` (`/v1/traces`, `/v1/metrics`,
-  `/v1/logs`). No TLS:
-  something on the host receives it and forwards it.
-- **As**: service `sluice` (`SLUICE_OTEL_SERVICE_NAME` changes it), with
-  `service.version` the release's. The standard `OTEL_RESOURCE_ATTRIBUTES`
-  adds the host's own, e.g. `host.name=ec2-crew,deployment.environment=crew`.
+- **Off unless asked**: the host's `[telemetry]`, in
+  `~/.config/sluice/config.toml`, turns it on with `send = true`
+  ([configuration](../site/src/content/docs/reference/configuration.md#telemetry)).
+  A command's own `--otel`, or `SLUICE_OTEL=1` (or `true`, `yes`, `on`),
+  turns it on for that command alone, and `--otel=false` or
+  `SLUICE_OTEL=0` turns it off for that command, whatever the table
+  says.
+- **Off again**, by the table or by OpenTelemetry's own settings. The
+  table's `traces = false`, `metrics = false` or `logs = "off"` turns
+  that signal off, and no variable turns it on again.
+  `OTEL_SDK_DISABLED=true` leaves telemetry off as if it were never
+  asked for: nothing is sent, and a run's checks get nothing of it.
+  `OTEL_TRACES_EXPORTER=none` turns traces alone off: metrics and logs
+  still go, and a run's checks get the setting and no `TRACEPARENT`.
+  `OTEL_METRICS_EXPORTER=none` and `OTEL_LOGS_EXPORTER=none` do the same
+  for theirs. A setting only turns a signal off: any other value, `otlp`
+  among them, leaves it as the table has it.
+- **Where**: OTLP over plain HTTP, protobuf, to the table's `collector`,
+  at its `/v1/traces`, `/v1/metrics` and `/v1/logs`. A table that names
+  one takes none of the caller's `OTEL_EXPORTER_OTLP_*`: an agent's
+  session that sets them for its own tools never sends sluice's
+  telemetry elsewhere, or with its headers. With no `collector`,
+  `OTEL_EXPORTER_OTLP_ENDPOINT` names it, by default
+  `http://localhost:4318`. No TLS: something on the host receives it and
+  forwards it.
+- **As**: service `sluice`, or the table's `service`, with
+  `service.version` the release's and `host.name` the host's own name.
+  The table's `attributes` add the host's own, e.g.
+  `"deployment.environment" = "crew"`, and a `host.name` there names the
+  host in sluice's place. A command's `--otel-service-name` or
+  `SLUICE_OTEL_SERVICE_NAME` names the service for that command. With no
+  table, the standard `OTEL_RESOURCE_ATTRIBUTES` adds the host's own
+  instead; with one, sluice reads it not at all.
 - **Traces**: one per round of a branch, `sluice.round`, with
   `sluice.recover`, `sluice.decide` and `sluice.perform` beneath it, and
   `sluice.form`, `sluice.start`, `sluice.verdict`, `sluice.blame` and
@@ -52,59 +71,83 @@ and for logs [ADR 0022](adr/0022-telemetry-sends-a-failures-output-scrubbed-and-
   `sluice.task`, `sluice.kept` (where its output is kept on the host),
   `sluice.bytes` and `sluice.replayed`; one for a preview whose command
   failed, with `sluice.preview`; and sluice's own warnings and errors.
-  How much of a failure's output goes is `SLUICE_OTEL_LOGS` (or
-  `--otel-logs`):
+  How much of a failure's output goes is the table's `logs`, or a
+  command's `--otel-logs` or `SLUICE_OTEL_LOGS`:
 
   | Level | A failure's record carries |
   |---|---|
   | `off` | no logs are sent at all |
   | `summary` (default) | which task failed and where its output is kept, never the output |
-  | `tail` | the end of the output, at most `SLUICE_OTEL_LOGS_LIMIT` bytes (8192 by default, 65536 at most) |
+  | `tail` | the end of the output, at most the table's `logs_tail_bytes`, or a command's `SLUICE_OTEL_LOGS_LIMIT`, in bytes (8192 by default, 65536 at most) |
 
   Every body sent is scrubbed first: the value of any variable in
-  sluice's environment whose name holds `TOKEN`, `SECRET`, `KEY`, `PASS`,
-  `AUTH`, `CREDENTIAL` or `HEADERS`, and anything shaped like a GitHub,
+  sluice's environment as the command started, the caller's
+  `OTEL_EXPORTER_OTLP_HEADERS` among them, whose name holds `TOKEN`,
+  `SECRET`, `KEY`, `PASS`, `AUTH`, `CREDENTIAL` or `HEADERS`, and
+  anything shaped like a GitHub,
   AWS, Slack or Anthropic token, a JWT, a bearer token or a private key,
   becomes `[redacted]`. The output kept on disk is unchanged and stays
   the record; a log record lost on the way is never sent again.
-- **The checks inside a run**: with telemetry on, a run gets sluice's
-  `OTEL_*` variables, and moon runs with `--otel`, so moon's own traces
-  and metrics arrive as service `moon`. moon does not nest them under
-  sluice's: each carries `sluice.trace_id`, `sluice.span_id`,
-  `sluice.place` and `sluice.revision` as resource attributes, so a
-  search for the round's trace id finds them.
+- **The checks inside a run**: with telemetry on, a run gets the
+  collector sluice sends to and the signals it sends, and moon runs with
+  `--otel`, so moon's own traces and metrics arrive as service `moon`.
+  With a `[telemetry]`, a run gets the table's collector, or the
+  caller's where the table names none, and none of the caller's other
+  `OTEL_*`. Each signal sluice does not send goes to it as
+  `OTEL_<SIGNAL>_EXPORTER=none`. With no table, a run gets sluice's
+  `OTEL_*` as they are. moon does not nest its spans under sluice's:
+  each carries `host.name`, the table's attributes, `sluice.trace_id`,
+  `sluice.span_id`, `sluice.place` and `sluice.revision` as resource
+  attributes, so a search for the round's trace id finds them.
 
 ## What a host needs
 
 1. **A receiver on `localhost:4318`**, OTLP/HTTP. It must listen on
    localhost: sluice's sandboxed runs reach localhost and nothing else.
-2. **`SLUICE_OTEL=1`** where sluice runs: the shell or role environment
-   of every session that runs `wt submit` or `sluice submit`, and the
-   service or timer that runs `sluice run` or `sluice step`, if any.
-3. **`OTEL_RESOURCE_ATTRIBUTES`** naming the host
-   (`host.name=…,deployment.environment=…`), so hosts sending to one
-   backend can be told apart.
-4. **`SLUICE_OTEL_LOGS`**, where sluice runs, if not `summary`:
+2. **A `[telemetry]` table** in the host's own settings,
+   `~/.config/sluice/config.toml`, that sends to it and names what the
+   host adds, written where the host's configuration is managed: on
+   nix-darwin and NixOS, sluice's module writes it from
+   `services.sluice.settings.telemetry`.
 
-   | Host | Level |
+   ```toml
+   [telemetry]
+   send = true
+   collector = "http://localhost:4318"
+   logs = "summary"
+
+   [telemetry.attributes]
+   "deployment.environment" = "crew"
+   ```
+
+   Nothing goes in a session's environment, and nothing wraps sluice:
+   every command on the host reads the table, an agent's `sluice submit`
+   or `wt submit` and a `sluice run` or `sluice step` alike. sluice names
+   the host itself, `host.name`, so hosts sending to one backend can be
+   told apart. Write the table once the host's sluice reads it: an older
+   sluice refuses the file, as it refuses any table it does not know.
+   Drop a wrapper that sets `SLUICE_OTEL*` or unsets the caller's OTLP
+   variables in the same change.
+3. **The table's `logs`**, if not `summary`:
+
+   | Host | `logs` |
    |---|---|
-   | a developer's Mac, to a local viewer | `tail` |
-   | crew's EC2 host, to Datadog | `tail` only when everyone who reads the Datadog organisation may read the repository's check output; otherwise `summary` |
-   | swancloud | `summary`, until its backend's access and retention are settled |
+   | a developer's Mac, to a local viewer | `"tail"` |
+   | crew's EC2 host, to Datadog | `"tail"` only when everyone who reads the Datadog organisation may read the repository's check output; otherwise `"summary"` |
+   | swancloud | `"summary"`, until its backend's access and retention are settled |
 
    Scrubbing lowers the chance a secret is sent; it does not rule it
    out.
-5. **`OTEL_TRACES_EXPORTER=none`** where sluice runs, for a host that
-   keeps no traces: sluice, and moon inside its runs, then send metrics
-   and logs alone.
-6. **No secrets in sluice's environment.** A run's checks see sluice's
-   `OTEL_*`, `OTEL_EXPORTER_OTLP_HEADERS` included. An API key belongs to
-   the receiver's own configuration.
+4. **The table's `traces = false`**, for a host that keeps no traces:
+   sluice, and moon inside its runs, then send metrics and logs alone.
+5. **No secrets in sluice's settings.** An API key belongs to the
+   receiver's own configuration. sluice's file names no headers, and a
+   module may write it where every user can read it.
 
 When nothing is listening, sluice loses its telemetry and carries on: a
 refused connection costs nothing. A receiver that accepts and never
-answers delays each `sluice step`'s exit by up to the exporter's timeout
-(`OTEL_EXPORTER_OTLP_TIMEOUT`, 10 seconds by default).
+answers delays each `sluice step`'s exit by up to the exporter's
+timeout, 10 seconds.
 
 ## Receivers
 
@@ -177,7 +220,8 @@ the host's secrets; the header name is the backend's.
 
 ## Done when
 
-On the host, with the receiver up and `SLUICE_OTEL=1` set:
+On the host, with the receiver up and the `[telemetry]` table above in
+`~/.config/sluice/config.toml`:
 
 ```sh
 sluice step <branch>      # in a repository sluice serves
@@ -191,5 +235,7 @@ sluice step <branch>      # in a repository sluice serves
   `sluice` with `sluice.task` the failed task, whose trace id is a
   `sluice.round`'s: at `summary` its body names where the output is
   kept; at `tail` it is the output's end.
-- The host's `OTEL_RESOURCE_ATTRIBUTES` appear on all of them.
-- No API key appears in the environment of a session or of sluice.
+- The host's `host.name` and the table's `attributes` appear on all of
+  them.
+- No `SLUICE_OTEL*` and no API key appears in the environment of a
+  session or of sluice.

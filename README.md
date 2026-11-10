@@ -270,12 +270,22 @@ cores = 12 # default: what the host gives sluice; set it on a Mac to leave cores
 
 ## Telemetry
 
-With `SLUICE_OTEL=1`, sluice sends traces and metrics over OTLP to
-`localhost:4318`: a trace per round, with each candidate's forming,
+A host turns telemetry on in its own settings,
+`~/.config/sluice/config.toml`, and names its collector there:
+
+```toml
+[telemetry]
+send = true
+collector = "http://localhost:4318"
+```
+
+sluice then sends traces, metrics and logs over OTLP to that collector,
+and to nowhere else: a trace per round, with each candidate's forming,
 testing, verdict and landing, and metrics for queue depth, time to land,
 failures and cache use. moon's traces from inside each run carry the
-round's trace id. Nothing reads them back: the queue never depends on
-its telemetry.
+round's trace id. A command's own `--otel` or `SLUICE_OTEL` chooses for
+that command alone. Nothing reads telemetry back: the queue never
+depends on it.
 
 ```sh
 nix run nixpkgs#otel-tui    # watch it in a terminal

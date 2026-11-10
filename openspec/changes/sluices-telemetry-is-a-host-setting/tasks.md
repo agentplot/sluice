@@ -140,11 +140,11 @@ tool of ours on a page (core.26).
   - "The checks inside a run" says a run gets the collector and the signals sluice sends.
 
   Link the configuration reference's `[telemetry]`. True when `sluice exec bolt/sluices-telemetry-is-a-host-setting -- moon run site:prose` passes with no warning on the page.
-- [ ] 6.4 Rewrite `docs/telemetry.md` for the table, as D8 says:
+- [x] 6.4 Rewrite `docs/telemetry.md` for the table, as D8 says:
   - "What sluice sends" as 6.3's page says it;
   - "What a host needs" as a receiver on localhost and the table, each host's level of logs its `logs`;
   - "Done when" with the table in place of `SLUICE_OTEL=1`.
 
   No check of the gate reads `*.md` outside the site (core.21's details), so this task is done when the page says it.
-- [ ] 6.5 In `README.md`, have "Telemetry" say that a host turns it on with `[telemetry] send = true` in `~/.config/sluice/config.toml`, and names its collector there. No check of the gate reads `README.md`, so this task is done when it says it.
-- [ ] 6.6 In record 0014, `docs/adr/0014-telemetry-is-opt-in-otlp-and-decides-nothing.md`, add after its 2026-11-08 amendment a dated line saying that where telemetry goes is the host's own setting, `[telemetry]`, by record 0106 (151; rule core.53). No check of the gate reads `docs/adr/` (core.21's details), so this task is done when the record says it.
+- [x] 6.5 In `README.md`, have "Telemetry" say that a host turns it on with `[telemetry] send = true` in `~/.config/sluice/config.toml`, and names its collector there. No check of the gate reads `README.md`, so this task is done when it says it.
+- [x] 6.6 In record 0014, `docs/adr/0014-telemetry-is-opt-in-otlp-and-decides-nothing.md`, add after its 2026-11-08 amendment a dated line saying that where telemetry goes is the host's own setting, `[telemetry]`, by record 0106 (151; rule core.53). No check of the gate reads `docs/adr/` (core.21's details), so this task is done when the record says it.
