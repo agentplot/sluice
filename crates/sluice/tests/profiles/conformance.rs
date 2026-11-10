@@ -483,6 +483,7 @@ impl Real {
                 systems: None,
                 caches: vec![moon_cache],
                 expire_after: sluice_core::EXPIRE_AFTER,
+                telemetry: None,
             },
             std::rc::Rc::new(sluice::retry::Policy::command().recording()),
         )

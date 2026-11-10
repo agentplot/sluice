@@ -23,9 +23,9 @@ use opentelemetry::trace::{SpanId, TraceId};
 use opentelemetry::Value;
 use opentelemetry_sdk::logs::{InMemoryLogExporter, SdkLogRecord};
 use opentelemetry_sdk::trace::{InMemorySpanExporter, SpanData};
-use sluice::instance::Instance;
+use sluice::instance::{HostTelemetry, Instance};
 use sluice::profiles::checks::Checks;
-use sluice::telemetry::{Logs, Telemetry};
+use sluice::telemetry::{Choices, Logs, Settings as Chosen, Telemetry};
 use sluice::{run, Cli, Followed, Opened, Pause, PullRequests, FAILED, LANDED};
 use sluice_core::{Clock, Seams, SubmitHead, SubmitRefusal, OUTPUT};
 use sluice_fakes::Fakes;
@@ -81,12 +81,29 @@ fn nobody() -> String {
     format!("http://{}", free.local_addr().unwrap())
 }
 
+/// The settings a command given `--otel` and `choices` chooses on a host
+/// with no `[telemetry]`, named `host-a`, in this process's environment.
+fn asked(choices: Choices) -> Chosen {
+    let choices = Choices {
+        otel: Some(true),
+        ..choices
+    };
+    Chosen::choose(choices, None, "host-a", std::env::vars())
+}
+
+/// The settings `asked` chooses at `logs`.
+fn at(logs: Logs) -> Chosen {
+    asked(Choices {
+        logs: Some(logs),
+        ..Choices::default()
+    })
+}
+
 /// Telemetry sending spans and, unless `logs` is off, logs to memory.
 fn start(logs: Logs) -> (Telemetry, InMemorySpanExporter, InMemoryLogExporter) {
     let spans = InMemorySpanExporter::default();
     let records = InMemoryLogExporter::default();
-    let telemetry =
-        Telemetry::start_with("sluice", logs, 8192, spans.clone(), Some(records.clone())).unwrap();
+    let telemetry = Telemetry::start_with(&at(logs), spans.clone(), Some(records.clone())).unwrap();
     (telemetry, spans, records)
 }
 
@@ -489,6 +506,7 @@ fn a_run_s_environment() -> (String, String) {
             systems: None,
             caches: Vec::new(),
             expire_after: sluice_core::EXPIRE_AFTER,
+            telemetry: None,
         },
     )
     .with_running(repo.dir().join(".git/host-running"));
@@ -543,8 +561,9 @@ fn var(env: &str, k: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// A run's checks get sluice's `OTEL_*`, its resource attributes extended
-/// with the round's trace and span, the place and the revision, each
+/// With no `[telemetry]`, a run's checks get sluice's `OTEL_*`, its
+/// resource attributes extended with the host's name, which sluice names
+/// itself, the round's trace and span, the place and the revision, each
 /// value encoded where the variable's syntax would read it, and the span
 /// that started the run as `TRACEPARENT`.
 #[test]
@@ -566,16 +585,78 @@ fn a_run_s_checks_join_the_round() {
     assert_eq!(
         var("OTEL_RESOURCE_ATTRIBUTES"),
         format!(
-            "deployment.environment=test,sluice.trace_id={trace},sluice.span_id={span},\
-             sluice.place=p%201,sluice.revision={revision}"
+            "deployment.environment=test,host.name=host-a,sluice.trace_id={trace},\
+             sluice.span_id={span},sluice.place=p%201,sluice.revision={revision}"
         )
     );
     telemetry.finish();
 }
 
+/// 151: where the host's table names a collector, a run's checks get it,
+/// protobuf, each signal sluice does not send as `none`, and its resource
+/// attributes as sluice names them, `host.name` and the table's, before
+/// the round's and the run's own; and none of the caller's OTLP settings
+/// or attributes (record 0106; rule core.53; design D6).
+#[test]
+fn with_the_tables_collector_a_run_gets_it_and_none_of_the_callers() {
+    if !alone("with_the_tables_collector_a_run_gets_it_and_none_of_the_callers") {
+        return;
+    }
+    std::env::set_var("OTEL_EXPORTER_OTLP_HEADERS", "x-session=s3cr3t-session");
+    std::env::set_var("OTEL_RESOURCE_ATTRIBUTES", "deployment.environment=session");
+    let collector = nobody();
+    let table = sending(
+        &collector,
+        HostTelemetry {
+            metrics: Some(false),
+            attributes: [("deployment.environment".into(), "prod".into())].into(),
+            ..HostTelemetry::default()
+        },
+    );
+    let settings = Chosen::choose(Choices::default(), Some(&table), "host-a", std::env::vars());
+    let spans = InMemorySpanExporter::default();
+    let telemetry = Telemetry::start_with(
+        &settings,
+        spans.clone(),
+        Some(InMemoryLogExporter::default()),
+    )
+    .unwrap();
+    let (env, revision) = a_run_s_environment();
+    telemetry.flush();
+
+    let ids = span(&spans, "sluice.start").span_context;
+    let (trace, span) = (ids.trace_id().to_string(), ids.span_id().to_string());
+    let var = |k: &str| var(&env, k).unwrap_or_else(|| panic!("no {k} in {env}"));
+    assert_eq!(var("OTEL_EXPORTER_OTLP_ENDPOINT"), collector);
+    assert_ne!(
+        std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").as_deref(),
+        Ok(collector.as_str())
+    );
+    assert_eq!(var("OTEL_EXPORTER_OTLP_PROTOCOL"), "http/protobuf");
+    assert_eq!(var("OTEL_METRICS_EXPORTER"), "none");
+    assert_eq!(var("TRACEPARENT"), format!("00-{trace}-{span}-01"));
+    assert_eq!(
+        var("OTEL_RESOURCE_ATTRIBUTES"),
+        format!(
+            "host.name=host-a,deployment.environment=prod,sluice.trace_id={trace},\
+             sluice.span_id={span},sluice.place=p%201,sluice.revision={revision}"
+        )
+    );
+    for line in env.lines() {
+        assert!(!line.starts_with("OTEL_EXPORTER_OTLP_HEADERS="), "{line}");
+        assert!(!line.contains("session"), "{line}");
+        assert!(
+            !line.starts_with("OTEL_TRACES_EXPORTER=") && !line.starts_with("OTEL_LOGS_EXPORTER="),
+            "{line}"
+        );
+    }
+    telemetry.finish();
+}
+
 /// With traces off a run's checks join no trace: they get sluice's
-/// `OTEL_*`, the setting among them, and the place and the revision as
-/// resource attributes, with no `TRACEPARENT` and no trace or span id.
+/// `OTEL_*`, the setting among them, and the host's name, the place and
+/// the revision as resource attributes, with no `TRACEPARENT` and no
+/// trace or span id.
 #[test]
 fn with_traces_off_a_run_s_checks_join_no_trace() {
     if !alone("with_traces_off_a_run_s_checks_join_no_trace") {
@@ -594,7 +675,8 @@ fn with_traces_off_a_run_s_checks_join_no_trace() {
     assert_eq!(
         var(&env, "OTEL_RESOURCE_ATTRIBUTES"),
         Some(format!(
-            "deployment.environment=test,sluice.place=p%201,sluice.revision={revision}"
+            "deployment.environment=test,host.name=host-a,sluice.place=p%201,\
+             sluice.revision={revision}"
         ))
     );
     telemetry.finish();
@@ -610,7 +692,11 @@ fn telemetry_goes_to_the_endpoint_as_otlp_over_http() {
     }
     let collector = support::http::Fake::start(|_| (200, Vec::new(), String::new()));
     std::env::set_var("OTEL_EXPORTER_OTLP_ENDPOINT", collector.url());
-    let telemetry = Telemetry::start("sluice-under-test", Logs::Summary, 8192).unwrap();
+    let telemetry = Telemetry::start(&asked(Choices {
+        service: Some("sluice-under-test".into()),
+        ..Choices::default()
+    }))
+    .unwrap();
     let f = setup();
     assert_eq!(
         submit(&f, "unit/a", &[("tests/t_a.py", Some("broken"))]),
@@ -638,7 +724,7 @@ fn telemetry_goes_to_the_endpoint_as_otlp_over_http() {
 fn sent(logs: Logs) -> Vec<String> {
     let collector = support::http::Fake::start(|_| (200, Vec::new(), String::new()));
     std::env::set_var("OTEL_EXPORTER_OTLP_ENDPOINT", collector.url());
-    let telemetry = Telemetry::start("sluice", logs, 8192).unwrap();
+    let telemetry = Telemetry::start(&at(logs)).unwrap();
     let f = setup();
     assert_eq!(
         submit(&f, "unit/a", &[("tests/t_a.py", Some("broken"))]),
@@ -646,6 +732,125 @@ fn sent(logs: Logs) -> Vec<String> {
     );
     telemetry.finish();
     collector.requests().into_iter().map(|r| r.path).collect()
+}
+
+/// A host's `[telemetry]` sending to `collector`, as `table` sets the rest.
+fn sending(collector: &str, table: HostTelemetry) -> HostTelemetry {
+    HostTelemetry {
+        send: Some(true),
+        collector: Some(collector.to_string()),
+        ..table
+    }
+}
+
+/// 151: the table's collector takes every signal sluice sends, protobuf
+/// at `/v1/<signal>`, and none of the caller's OTLP settings reach it: a
+/// session's collector is sent nothing, and its headers go with nothing
+/// (record 0106; rule core.53; design D4).
+#[test]
+fn the_tables_collector_takes_sluices_telemetry_and_none_of_the_callers() {
+    if !alone("the_tables_collector_takes_sluices_telemetry_and_none_of_the_callers") {
+        return;
+    }
+    let ok = |_: &support::http::Request| (200, Vec::new(), String::new());
+    let table = support::http::Fake::start(ok);
+    let session = support::http::Fake::start(ok);
+    std::env::set_var("OTEL_EXPORTER_OTLP_ENDPOINT", session.url());
+    std::env::set_var("OTEL_EXPORTER_OTLP_HEADERS", "x-session=s3cr3t-session");
+    std::env::set_var("OTEL_EXPORTER_OTLP_PROTOCOL", "grpc");
+    let settings = Chosen::choose(
+        Choices::default(),
+        Some(&sending(table.url(), HostTelemetry::default())),
+        "host-a",
+        std::env::vars(),
+    );
+    assert!(settings.send);
+    let telemetry = Telemetry::start(&settings).unwrap();
+    let f = setup();
+    assert_eq!(
+        submit(&f, "unit/a", &[("tests/t_a.py", Some("broken"))]),
+        FAILED
+    );
+    telemetry.finish();
+
+    let seen = table.requests();
+    for path in ["/v1/traces", "/v1/metrics", "/v1/logs"] {
+        let r = seen
+            .iter()
+            .find(|r| r.path == path)
+            .unwrap_or_else(|| panic!("nothing to {path}: {seen:?}"));
+        assert_eq!(r.method, "POST");
+        assert_eq!(r.header("content-type"), Some("application/x-protobuf"));
+    }
+    for r in &seen {
+        assert_eq!(r.header("x-session"), None, "{r:?}");
+    }
+    let elsewhere = session.requests();
+    assert!(elsewhere.is_empty(), "{elsewhere:?}");
+}
+
+/// 151: a table that sends and names no collector sends where
+/// `OTEL_EXPORTER_OTLP_ENDPOINT` says, as a host with no table does
+/// (record 0106; design D4).
+#[test]
+fn with_no_collector_in_the_table_the_environment_names_it() {
+    if !alone("with_no_collector_in_the_table_the_environment_names_it") {
+        return;
+    }
+    let collector = support::http::Fake::start(|_| (200, Vec::new(), String::new()));
+    std::env::set_var("OTEL_EXPORTER_OTLP_ENDPOINT", collector.url());
+    let table = HostTelemetry {
+        send: Some(true),
+        ..HostTelemetry::default()
+    };
+    let settings = Chosen::choose(Choices::default(), Some(&table), "host-a", std::env::vars());
+    let telemetry = Telemetry::start(&settings).unwrap();
+    let f = setup();
+    assert_eq!(
+        submit(&f, "unit/a", &[("tests/t_a.py", Some("broken"))]),
+        FAILED
+    );
+    telemetry.finish();
+    let seen: Vec<String> = collector.requests().into_iter().map(|r| r.path).collect();
+    for path in ["/v1/traces", "/v1/metrics", "/v1/logs"] {
+        assert!(
+            seen.iter().any(|p| p == path),
+            "nothing to {path}: {seen:?}"
+        );
+    }
+}
+
+/// The paths the collector the host's table names is sent to, its other
+/// keys as `table` sets them, while a submission's combination fails its
+/// gate.
+fn sent_by(table: HostTelemetry) -> Vec<String> {
+    let collector = support::http::Fake::start(|_| (200, Vec::new(), String::new()));
+    let table = sending(collector.url(), table);
+    let settings = Chosen::choose(Choices::default(), Some(&table), "host-a", std::env::vars());
+    let telemetry = Telemetry::start(&settings).unwrap();
+    let f = setup();
+    assert_eq!(
+        submit(&f, "unit/a", &[("tests/t_a.py", Some("broken"))]),
+        FAILED
+    );
+    telemetry.finish();
+    collector.requests().into_iter().map(|r| r.path).collect()
+}
+
+/// 151: the table's `traces = false` sends no span, whatever
+/// `OTEL_TRACES_EXPORTER` says; the metrics and a failure's record still
+/// go (record 0106; design D3).
+#[test]
+fn the_table_turns_traces_off_whatever_the_environment_says() {
+    if !alone("the_table_turns_traces_off_whatever_the_environment_says") {
+        return;
+    }
+    std::env::set_var("OTEL_TRACES_EXPORTER", "otlp");
+    let seen = sent_by(HostTelemetry {
+        traces: Some(false),
+        ..HostTelemetry::default()
+    });
+    sent_to(&seen, &["/v1/metrics", "/v1/logs"], "/v1/traces");
 }
 
 /// That `seen` holds a request to each path of `to` and none to `not`.
@@ -705,7 +910,7 @@ fn with_the_sdk_disabled_nothing_is_sent() {
     std::env::set_var("OTEL_SDK_DISABLED", "true");
     let collector = support::http::Fake::start(|_| (200, Vec::new(), String::new()));
     std::env::set_var("OTEL_EXPORTER_OTLP_ENDPOINT", collector.url());
-    let telemetry = Telemetry::start("sluice", Logs::Tail, 8192).unwrap();
+    let telemetry = Telemetry::start(&at(Logs::Tail)).unwrap();
     assert!(!sluice::telemetry::on());
     assert!(sluice::telemetry::run_env(&[("sluice.place", "p")]).is_empty());
     let f = setup();
@@ -754,7 +959,7 @@ fn a_collector_out_of_reach_fails_nothing() {
     if !alone("a_collector_out_of_reach_fails_nothing") {
         return;
     }
-    let telemetry = Telemetry::start("sluice", Logs::Tail, 8192).unwrap();
+    let telemetry = Telemetry::start(&at(Logs::Tail)).unwrap();
     let f = setup();
     assert_eq!(
         submit(&f, "unit/a", &[("lib/a.py", Some("changed"))]),
