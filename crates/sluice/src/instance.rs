@@ -972,6 +972,37 @@ mod tests {
         );
     }
 
+    /// The forge-identity spec's "A command in place of a key", for branch
+    /// protection: guarding reads a credential command as every other
+    /// command does, and refuses a table that names both a key and a
+    /// command as they do (124; records 0059, 0108).
+    #[test]
+    fn guarding_reads_a_forge_credential() {
+        let dir = std::env::temp_dir().join(format!("sluice-guarding-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        std::fs::write(
+            &path,
+            "[forge]\napp_id = 42\ncredential = [\"/opt/forge/bin/token-helper\", \"--app\", \"sluice\"]\n",
+        )
+        .unwrap();
+        let guarding = Instance::guarding_from(Some(&path)).unwrap().forge;
+        let full = Instance::from_host(Some(&path), 4, 4).unwrap().forge;
+        assert!(guarding.is_some());
+        assert_eq!(guarding, full);
+        std::fs::write(
+            &path,
+            "[forge]\napp_id = 42\nkey = \"/nowhere/app.pem\"\ncredential = [\"/opt/forge/bin/token-helper\"]\n",
+        )
+        .unwrap();
+        let by_guarding = format!("{:#}", Instance::guarding_from(Some(&path)).unwrap_err());
+        let by_host = format!("{:#}", Instance::from_host(Some(&path), 4, 4).unwrap_err());
+        let _ = std::fs::remove_dir_all(&dir);
+        for e in [by_guarding, by_host] {
+            assert!(e.contains("names both key and credential"), "{e}");
+        }
+    }
+
     /// 51: an outcome is owed a week where the host sets no `[deliveries]
     /// expire_after`, and the span it sets where it does (weir 104; design
     /// D9).
