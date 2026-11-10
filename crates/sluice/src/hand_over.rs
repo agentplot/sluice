@@ -217,4 +217,30 @@ mod tests {
         let read: HandOver = serde_json::from_str(doc.to_str().unwrap()).unwrap();
         assert_eq!(read, handed);
     }
+
+    /// The settings-take-up spec's "An executable that cannot start": the
+    /// start answers the system's words naming the executable, and the
+    /// driver's descriptor it would have handed over is closed, so the
+    /// lock is free once the driver is (core.54; design D5).
+    #[test]
+    fn a_hand_over_that_cannot_start_says_why() {
+        use crate::reader::Driver;
+        const REPO: &str = "/Users/someone/project/project.git";
+        let dir = std::env::temp_dir().join(format!("sluice-hand-over-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let driver = Driver::take(&dir, REPO).unwrap().expect("the driver");
+        let handed = driver.hand_over().unwrap();
+        drop(driver);
+        let program = dir.join("no-such-sluice");
+        let e = every().start(&program, &[], &[], Some(handed));
+        let words = format!("{e:#}");
+        let taken = Driver::take(&dir, REPO).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(words.contains(&program.display().to_string()), "{words}");
+        assert!(words.contains("No such file or directory"), "{words}");
+        assert!(
+            taken.is_some(),
+            "the descriptor handed over still holds the lock"
+        );
+    }
 }
