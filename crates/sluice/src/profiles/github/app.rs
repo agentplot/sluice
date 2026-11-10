@@ -61,6 +61,9 @@ pub const API: &str = "https://api.github.com";
 /// Where the API calls go instead of [`API`]: a fake one, in tests.
 pub const API_VAR: &str = "SLUICE_FORGE_API";
 
+/// Where git reaches GitHub's repositories.
+pub const GIT: &str = "https://github.com";
+
 /// How long a JWT is good for, the most GitHub takes.
 const JWT_LIFE: i64 = 600;
 /// How far back a JWT is dated, for a host clock a little ahead.
@@ -213,6 +216,8 @@ pub struct App {
     id: u64,
     mint: Mint,
     api: String,
+    /// Where git reaches the repositories: [`GIT`], or a test's fake.
+    git: String,
     now: Now,
     http: ureq::Agent,
     tokens: RefCell<BTreeMap<Repo, Token>>,
@@ -272,6 +277,7 @@ impl App {
             id,
             mint,
             api: api.trim_end_matches('/').into(),
+            git: GIT.into(),
             now,
             http: http_config().into(),
             tokens: RefCell::default(),
@@ -296,7 +302,8 @@ impl App {
     /// minted with its key, or given by its credential command, which is
     /// run only once a token is needed (record 0108).
     pub fn open(forge: &Forge, policy: Rc<Policy>) -> Result<App> {
-        let api = std::env::var(API_VAR).unwrap_or_else(|_| API.into());
+        let faked = std::env::var(API_VAR).ok();
+        let api = faked.clone().unwrap_or_else(|| API.into());
         let app = match &forge.source {
             Source::Key(key) => {
                 let pem = std::fs::read(key)
@@ -312,7 +319,20 @@ impl App {
                 policy,
             ),
         };
+        // Only a test's fake is named there, and it answers git's address
+        // too.
+        let app = match faked {
+            Some(base) => app.serving_git(&base),
+            None => app,
+        };
         Ok(app.keeping(Kept::new(&crate::instance::state_dir()?)))
+    }
+
+    /// `self`, reaching the repositories' git at `base` instead of
+    /// [`GIT`]: a test's fake.
+    pub fn serving_git(mut self, base: &str) -> App {
+        self.git = base.trim_end_matches('/').into();
+        self
     }
 
     /// `self`, keeping its answers and pauses in `kept`.
@@ -384,6 +404,62 @@ impl App {
         };
         *self.login.borrow_mut() = Some(login.clone());
         Ok(login)
+    }
+
+    /// The app whose token `repo`'s is, by GitHub's word: its id and its
+    /// slug, the viewer's login with its `[bot]` taken off, the app's
+    /// record read by that slug with the token. What tells a command's
+    /// token of another app, which would pass a ruleset's check against
+    /// `[forge] app_id` and fail every push (record 0108).
+    pub fn app_of_token(&self, repo: &Repo) -> Result<(u64, String)> {
+        let login = self.viewer(repo)?;
+        let Some(slug) = login.strip_suffix("[bot]") else {
+            bail!("GitHub names the token {login}, who is no app's bot");
+        };
+        let v = self
+            .get(&format!("/apps/{slug}"), Bearer::Repo(repo))
+            .with_context(|| format!("reading app {slug}"))?;
+        let id = v["id"]
+            .as_u64()
+            .ok_or_else(|| anyhow!("GitHub gave app {slug} no id"))?;
+        Ok((id, slug.to_string()))
+    }
+
+    /// GitHub's status for git's first ask of a push to `repo` with its
+    /// token, the receive-pack advertisement: 200 where the token may
+    /// push, and 401, 403 or 404 where it may not. Read under the retry
+    /// policy as a read (record 0108).
+    pub fn may_push(&self, repo: &Repo) -> Result<u16> {
+        use base64::Engine;
+        let token = self.token(repo)?;
+        let path = format!(
+            "/{}/{}.git/info/refs?service=git-receive-pack",
+            repo.owner, repo.name
+        );
+        let url = format!("{}{path}", self.git);
+        let basic = base64::engine::general_purpose::STANDARD
+            .encode(format!("{}:{token}", super::TOKEN_USER));
+        let auth = format!("Basic {basic}");
+        self.policy
+            .run(Kind::Read, |_| {
+                let resp = self
+                    .http
+                    .get(&url)
+                    .header("Authorization", &auth)
+                    .header("Git-Protocol", "version=2")
+                    .call()
+                    .map_err(|e| {
+                        Failed::new(sent(&e), anyhow!(e).context(format!("GET {path}")))
+                    })?;
+                match resp.status().as_u16() {
+                    s @ 500..=599 => Err(Failed::new(
+                        Judged::Never,
+                        Unanswered(format!("GET {path}: {s}")).into(),
+                    )),
+                    s => Ok(s),
+                }
+            })
+            .map_err(|s| s.into_error())
     }
 
     /// Who GitHub says `repo`'s token is, GraphQL's `viewer`: the bot of

@@ -52,13 +52,16 @@ impl Clock {
 }
 
 /// What the fake's GitHub holds for the app: its installation's
-/// permissions, the repositories a token it gives reaches, and each
-/// ruleset's bypass actors on `main`.
+/// permissions, the repositories a token it gives reaches, each ruleset's
+/// bypass actors on `main`, the id it gives the app `sluice-test`, and
+/// what it answers git's push to `o/r`.
 #[derive(Clone)]
 struct Forge {
     permissions: serde_json::Value,
     reaches: serde_json::Value,
     rulesets: Vec<(u64, serde_json::Value)>,
+    app: u64,
+    push: u16,
     clock: Clock,
 }
 
@@ -74,6 +77,8 @@ impl Forge {
                 11,
                 json!([{ "actor_id": APP, "actor_type": "Integration", "bypass_mode": "always" }]),
             )],
+            app: APP,
+            push: 200,
             clock: clock.clone(),
         }
     }
@@ -109,6 +114,26 @@ impl Forge {
         }
         if path == "/app" && r.method == "GET" {
             return json(200, json!({ "id": APP, "slug": "sluice-test" }));
+        }
+        if path == "/apps/sluice-test" && r.method == "GET" {
+            return json(200, json!({ "id": self.app, "slug": "sluice-test" }));
+        }
+        // git's first ask of a push: its answer to any token sent as git
+        // sends one.
+        if path == "/o/r.git/info/refs?service=git-receive-pack" && r.method == "GET" {
+            use base64::Engine;
+            let given = r
+                .header("Authorization")
+                .and_then(|a| a.strip_prefix("Basic "))
+                .and_then(|b| base64::engine::general_purpose::STANDARD.decode(b).ok())
+                .map(|b| String::from_utf8_lossy(&b).to_string())
+                .unwrap_or_default();
+            let status = if given.starts_with("x-access-token:") {
+                self.push
+            } else {
+                401
+            };
+            return (status, vec![], String::new());
         }
         // Who a token is, as GitHub answers its holder.
         if path == "/graphql" && r.method == "POST" && r.body.contains("viewer") {
@@ -698,6 +723,66 @@ fn forge_check_names_each_failure() {
     assert!(
         found[0].what.contains("makes no token for o/r"),
         "{found:?}"
+    );
+}
+
+/// The app on `fake` whose tokens a script the test writes gives, each
+/// `token-<n>`, reaching the fake's git there too.
+fn commanded_on(fake: &Fake, name: &str, clock: &Clock) -> (support::Scratch, App) {
+    let scratch = support::Scratch::new(name);
+    let command = credential_script(&scratch, &counting(""));
+    let app = commanded(fake.url(), command, ticking(clock)).serving_git(fake.url());
+    (scratch, app)
+}
+
+/// The forge-identity spec's "A command, all set": under a credential
+/// command the check finds a token comes, it is the app's and may push,
+/// and the ruleset lets only the app through, naming no key, installation
+/// or permission (record 0108).
+#[test]
+fn forge_check_with_a_command_all_set() {
+    let clock = Clock::new();
+    let fake = Forge::new(&clock).start();
+    let (_scratch, app) = commanded_on(&fake, "forge-check-command", &clock);
+    let found = check(&app, &repo(), "main", Some("operator"));
+    assert!(failures(&found).is_empty(), "{found:?}");
+    let said: Vec<&str> = found.iter().map(|f| f.what.as_str()).collect();
+    assert_eq!(said.len(), 4, "{said:?}");
+    assert!(
+        said[0].starts_with("[forge] credential ") && said[0].ends_with(" gives a token for o/r"),
+        "{said:?}"
+    );
+    assert_eq!(said[1], "the token is app 4242's");
+    assert_eq!(said[2], "the token may push to o/r");
+    assert!(said[3].contains("lets only app 4242 through"), "{said:?}");
+    for word in ["key", "installation", "permission"] {
+        assert!(said.iter().all(|s| !s.contains(word)), "{word}: {said:?}");
+    }
+}
+
+/// The forge-identity spec's "A command that gives another app's token,
+/// one that may not push": the check fails naming both apps, and says the
+/// token may not push and the app needs Contents read and write (record
+/// 0108).
+#[test]
+fn forge_check_with_a_command_names_each_failure() {
+    let clock = Clock::new();
+    let mut forge = Forge::new(&clock);
+    forge.app = 99;
+    forge.push = 403;
+    let fake = forge.start();
+    let (_scratch, app) = commanded_on(&fake, "forge-check-command-fails", &clock);
+    let found = check(&app, &repo(), "main", Some("operator"));
+    let f = failures(&found);
+    assert_eq!(f.len(), 2, "{found:?}");
+    assert!(
+        f[0].contains("is app 99's (sluice-test), not app 4242's"),
+        "{f:?}"
+    );
+    assert!(
+        f[1].contains("the token may not push to o/r")
+            && f[1].contains("give the app Contents read and write"),
+        "{f:?}"
     );
 }
 
