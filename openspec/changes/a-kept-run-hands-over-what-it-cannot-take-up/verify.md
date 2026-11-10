@@ -1,132 +1,108 @@
 # Verify: a-kept-run-hands-over-what-it-cannot-take-up
 
-Verified on 2026-11-10 at `0fd70db2`, on
+Verified on 2026-11-10 at `5a22a4ac`, on
 `change/a-kept-run-hands-over-what-it-cannot-take-up`, against its base
 `bolt/a-kept-run-hands-over-what-it-cannot-take-up` (`ace2b2da`), with
 sluice 0.78.1.
 
-**Verdict: not ready to archive.** The bolt's gate fails on one unit
-test, and one requirement of the delta spec is met for only one of its
-two causes.
+**Verdict: ready to archive.** The bolt's gate passes, every task is
+ticked, and every requirement and scenario of the delta spec is met by
+a test that passes.
 
 ## The whole checks
 
 `sluice exec bolt/a-kept-run-hands-over-what-it-cannot-take-up`, the
-bolt's gate (`#check-fast`), run once: **failed, exit 1**. 12 tasks
-passed and 1 failed. sluice recorded 13 results under their keys for
-`0fd70db`.
+bolt's gate (`#check-fast`), run once: **passed, exit 0**. 13 tasks
+passed, and sluice recorded 13 results under their keys for `5a22a4a`.
 
 | Task | Outcome |
 |---|---|
 | `site:rules`, `site:prose`, `plugin-sluice:validate`, `nix:typecheck` | passed |
 | `root:adrs`, `root:changes`, `root:format`, `root:lint` | passed |
 | `core:test`, `fakes:test`, `seams:test`, `conformance:test` | passed |
-| `cli:test` (`cargo test -p sluice -- --skip sandbox`) | **failed** |
+| `cli:test` (`cargo test -p sluice -- --skip sandbox`) | passed |
 
-`cli:test`'s lib tests: 250 passed and 1 failed.
+In `cli:test`, the lib's tests passed 252 of 252, `host_count`'s four
+among them, and `tests/cli.rs` passed 216 of 216.
 
-```
----- host_count::tests::an_entry_whose_hold_and_run_are_free_counts_nothing_and_goes stdout ----
-thread '…' panicked at crates/sluice/src/host_count.rs:285:43:
-called `Result::unwrap()` on an `Err` value: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
-```
+moon warned 26 times that it could not store or package outputs in its
+cache, among them "Failed to store blobs" under
+`sluice.git/moon-home/cache/shared`. These are warnings only; no task
+failed on them.
 
-Line 285 is the test's `Scratch::new`. It calls `create_dir_all` on
-`std::env::temp_dir()/sluice-host-count-dead-<pid>`, and that call was
-refused with `EPERM`. This change does not touch `host_count.rs`. Run
-alone under the same sandbox, the four `host_count` tests pass:
+## The tools tests
+
+Three scenarios' tests are of the `tools` feature, which `#check-fast`
+does not run; main's `#check-tools` runs them when the bolt lands. They
+were run by name, as tasks 4.3 and 6.2 name them:
 `sluice exec bolt/a-kept-run-hands-over-what-it-cannot-take-up --
-cargo test -p sluice --lib host_count`, 4 passed. The failure therefore
-shows up in the whole lib run and not alone. Its cause was not found
-here.
-
-Because the lib binary failed, cargo stopped before the integration
-tests of `cli:test`. `crates/sluice/tests/cli.rs`, including this
-change's `a_run_handed_over_keeps_driving_and_counts_its_passes`, did
-not run in the gate.
-
-The run also printed moon warnings that the shared cache store under
-`sluice.git/moon-home/cache/shared` could not be written ("Failed to
-store blobs"). These are warnings only, and no task failed on them.
+cargo test -p sluice --features tools --test instance --
+a_run_takes_up_a_changed_bound_at_its_next_pass
+a_run_takes_a_changed_telemetry_table_up_by_starting_afresh
+a_run_keeps_its_settings_when_a_change_it_starts_afresh_for_does_not_bind`:
+**3 passed, exit 0**.
 
 ## Tasks
 
-All 13 tasks in `tasks.md` are ticked. `openspec validate
+All 15 tasks in `tasks.md` are ticked. `openspec validate
 a-kept-run-hands-over-what-it-cannot-take-up --strict`: valid.
 
 ## Requirements and scenarios
 
-| Requirement / scenario | Test | In the gate run |
+| Requirement / scenario | Test | Outcome |
 |---|---|---|
-| A take-up says which tables changed: "The run says what it took up" | `a_run_takes_up_a_changed_bound_at_its_next_pass` (`tests/instance.rs`, tools) | not in `#check-fast` |
-| "Which tables changed" | `the_tables_a_change_moves_are_named` | passed |
-| "A changed telemetry table is named" | `a_changed_telemetry_table_is_named_and_taken_up_afresh` | passed |
-| A change no binding takes up in place starts the run afresh: "Which tables start the run afresh" | `a_changed_telemetry_table_is_named_and_taken_up_afresh` | passed |
-| "A kept run sends to the collector it is changed to" | `a_run_takes_a_changed_telemetry_table_up_by_starting_afresh` (`tests/instance.rs`, tools) | not in `#check-fast` (main's `#check-tools`) |
-| The run started afresh is the run as it was started: "The hand-over's command" | `the_run_started_afresh_is_the_one_that_started` | passed |
-| The driver stays the driver: "A driver's lock handed over" | `a_driver_handed_its_lock_holds_it` | passed |
-| "A run handed over counts its passes" | `a_run_handed_over_keeps_driving_and_counts_its_passes` (`tests/cli.rs`) | **did not run** (cargo stopped at the lib failure) |
-| The run started afresh starts on the settings handed over: "The first look after a hand-over" | `a_run_handed_over_holds_what_it_was_handed_and_reads_the_file_once` | passed |
-| A hand-over that cannot start leaves the run as it was: "An executable that cannot start" | `a_hand_over_that_cannot_start_says_why` | passed |
-| Runs started before a hand-over are reaped: "A supervisor handed over" | `a_supervisor_handed_over_is_reaped` | passed |
+| A take-up says which tables changed: "The run says what it took up" | `a_run_takes_up_a_changed_bound_at_its_next_pass` (`tests/instance.rs`, tools) | passed |
+| "Which tables changed" | `the_tables_a_change_moves_are_named` | passed in the gate |
+| "A changed telemetry table is named" | `a_changed_telemetry_table_is_named_and_taken_up_afresh` | passed in the gate |
+| A change no binding takes up in place starts the run afresh: "Which tables start the run afresh" | `a_changed_telemetry_table_is_named_and_taken_up_afresh` | passed in the gate |
+| "A kept run sends to the collector it is changed to" | `a_run_takes_a_changed_telemetry_table_up_by_starting_afresh` (`tests/instance.rs`, tools) | passed |
+| The run started afresh is the run as it was started: "The hand-over's command" | `the_run_started_afresh_is_the_one_that_started` | passed in the gate |
+| The driver stays the driver across a hand-over: "A driver's lock handed over" | `a_driver_handed_its_lock_holds_it` | passed in the gate |
+| "A run handed over counts its passes" | `a_run_handed_over_keeps_driving_and_counts_its_passes` (`tests/cli.rs`) | passed in the gate |
+| The run started afresh starts on the settings handed over: "The first look after a hand-over" | `a_run_handed_over_holds_what_it_was_handed_and_reads_the_file_once` | passed in the gate |
+| A hand-over that cannot start leaves the run as it was: "An executable that cannot start" | `a_hand_over_that_cannot_start_says_why` | passed in the gate |
+| "A start that fails leaves the process as it was" | `a_hand_over_that_cannot_start_leaves_the_process_as_it_was` | passed in the gate |
+| "Settings it would start afresh for that do not bind" | `a_run_keeps_its_settings_when_a_change_it_starts_afresh_for_does_not_bind` (`tests/instance.rs`, tools) | passed |
+| Runs started before a hand-over are reaped: "A supervisor handed over" | `a_supervisor_handed_over_is_reaped` | passed in the gate |
 
-The code agrees with each requirement on reading, with one exception.
+Read against the code, each requirement holds:
 
-**"A hand-over that cannot start leaves the run as it was" is met for
-one of its two causes.** The requirement covers two causes: the run's
-settings do not bind, or its process cannot start afresh. For both, it
-says `sluice run` "SHALL say on stderr once for that change the file,
-the tables, and why".
+- `keep_running` (`crates/sluice/src/main.rs`) says a change that moves
+  a table of `AFRESH` and does not bind, or binds and cannot start
+  afresh, in one warning naming the file, the tables and why. A change
+  that moves no such table and does not bind is said as the refusal it
+  is. Each is said once, since `HostSettings::look` keeps the sign it
+  read under, whatever the take-up made of it.
+- `HandOver::start` replaces the image by `nix::unistd::execve` with the
+  command's program, arguments and environment. A failed start leaves
+  the process's environment and `SIGPIPE` as they were, and closes the
+  driver's descriptor it would have handed over. The process blocks no
+  signal, so the new image inherits no mask; its one handler, SIGINT's,
+  is reset by the start.
+- The folder is kept by the start, and no `set_current_dir` is in
+  `crates/sluice/src`.
+- Every field `Instance` compares is named by `changed_tables`, so no
+  take-up names no table.
+- The environment and executable are taken first in `main`, before
+  telemetry and without `SLUICE_HANDED_OVER`, the executable resolved
+  through `canonicalize`.
 
-- **The start fails:** met. The warning names the file, the tables and
-  why.
-- **The settings do not bind:** not met. A `[telemetry]` change whose
-  settings do not bind takes the `Err(e)` arm of `keep_running`
-  (`crates/sluice/src/main.rs`). That arm says the plain refusal,
-  `sluice: warning: <file> is refused, so this sluice run keeps the
-  settings it holds until the file changes: <why>`, which names no
-  table.
-
-The design (D5, step 1) and task 4.3 chose "the refusal the take-up says
-today for a bind", and the proposal says "naming the file and why". So
-the delta spec is the one artifact that asks for the tables. Two ways
-close the gap:
-
-- the bind refusal names the tables where the change moves a table of
-  `AFRESH`;
-- the delta spec's requirement says what the design chose.
-
-The other requirements read as met in the code:
-
-- the folder is kept by `exec`, and no `set_current_dir` is in
-  `crates/sluice/src`;
-- every field `Instance` compares is named by `changed_tables`, so no
-  take-up names no table;
-- the sign is kept on a failed start, so it is said once;
-- the environment is taken before telemetry and without
-  `SLUICE_HANDED_OVER`;
-- the executable is resolved through `canonicalize` at start.
+The proposal's "What Changes" says a hand-over that cannot start is said
+"naming the file and why". The requirement, design D5 and record 0107's
+decision 5 add the tables, and the code names them.
 
 ## Docs and records
 
-These were checked by reading the diff:
+Checked by reading the diff:
 
-- task 5.1: the configuration, commands and telemetry references;
-- task 5.2: `docs/telemetry.md`, "starting itself afresh";
+- task 5.1: the configuration, commands and telemetry references on the
+  site;
+- task 5.2: `docs/telemetry.md`, line 129, "starting itself afresh";
 - task 5.3: the setup skill;
-- task 5.4: record 0107's amendment of 2026-11-10, with D1 to D7 and
-  the paths not taken, and core.54's added "Also rules out".
+- task 5.4: record 0107's amendment of 2026-11-10, decisions 1 to 7 with
+  the paths not taken, decision 2 naming `execve` over std's
+  `CommandExt::exec` and decision 5 the tables for both causes; and
+  core.54's "Also rules out (record 0107 as amended 2026-11-10)".
 
 Each holds what its task asks. `site:prose`, `plugin-sluice:validate`
 and `root:adrs` passed in the gate.
-
-## What goes back to the code stage
-
-1. Make `cli:test` pass in the bolt's gate. The failure is
-   `host_count::tests::an_entry_whose_hold_and_run_are_free_counts_nothing_and_goes`,
-   `EPERM` from `create_dir_all` under `temp_dir()` at
-   `host_count.rs:285`. It fails in the whole lib run and passes alone.
-   Then confirm `tests/cli.rs` runs and passes in the gate.
-2. Close the gap between the requirement "A hand-over that cannot start
-   leaves the run as it was" and the bind failure's words. Either name
-   the tables, or amend the delta spec to match design D5.
