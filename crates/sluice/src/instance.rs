@@ -1225,6 +1225,33 @@ dir = "/caches/moon"
         assert_eq!(before.changed_tables(&again), Vec::<&str>::new());
     }
 
+    /// The host-settings-module spec's "Reading the module's credential
+    /// command": the file the module renders with `forge.credential` set
+    /// reads as the app, the command and its arguments in their order, no
+    /// key, and the discovery (record 0108).
+    #[test]
+    fn the_modules_credential_file_is_read_as_written() {
+        let read = Instance::from_text(
+            include_str!("../../../nix/tests/files/credential.toml"),
+            None,
+            16,
+            16,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            read.forge,
+            Some(Forge {
+                app_id: 123456,
+                source: Source::Credential(Command {
+                    program: PathBuf::from("/opt/forge/bin/token-helper"),
+                    args: vec!["--app".into(), "sluice".into()],
+                }),
+                discovery: Duration::from_secs(60),
+            })
+        );
+    }
+
     /// 35, 51, 71, 74, 78, 87, 136; records 0098, 0102: the file sluice's
     /// flake module renders with every key it declares set, read by the
     /// reader that refuses a field it does not know, as its settings name
