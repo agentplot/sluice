@@ -5,7 +5,10 @@
 //! - `branch.json`: the queue's own state, one document;
 //! - `submissions/<id>.json`: one document per submission;
 //! - `log.jsonl`: every submission, run, result, blame and landing, one
-//!   event per line, appended and never rewritten (16).
+//!   event per line, appended and never rewritten (16);
+//! - `deliveries.jsonl`: each decided outcome a reader is owed, as weir's
+//!   delivery records, one to a line in C.8's JSON, in the order added
+//!   (51; record 0102).
 //!
 //! and beside every branch, one `results.jsonl` for the repository: every
 //! check's outcome under its key, for any branch's gate to read (69).
@@ -38,6 +41,9 @@ fn result_schema() -> String {
 
 pub const BRANCH_FILE: &str = "branch.json";
 pub const LOG_FILE: &str = "log.jsonl";
+/// 51: the branch's deliveries, weir's records in C.8's JSON (record 0102;
+/// design D3).
+pub const DELIVERIES_FILE: &str = "deliveries.jsonl";
 
 pub fn submission_file(id: u64) -> String {
     format!("submissions/{id}.json")
@@ -251,16 +257,6 @@ pub struct Submission {
     pub conflict: Option<ConflictRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub withdrawn: Option<Withdrawal>,
-    /// 51: when its outcome was delivered to its session; `None` while it
-    /// stands pending. Read under `told` too, the name an earlier sluice
-    /// wrote it under (record 0070).
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "told")]
-    pub delivered: Option<String>,
-    /// 51: the session its outcome was delivered to, as its carrier named
-    /// it; `None` while pending, and in records delivered before it was
-    /// kept. Read under `told_to` too (record 0070).
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "told_to")]
-    pub delivered_to: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub landed_as: Option<Rev>,
     /// 122: landed by a landing this queue did not make, found when the
@@ -479,6 +475,24 @@ pub struct SystemRun {
     /// that answers, with why; a host's entry goes when it claims the run.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub declined: BTreeMap<String, String>,
+    /// 114, record 0105 (design D7 of the change
+    /// `a-pass-nothing-proves-blames-no-one`): why its last run had no
+    /// outcome, for every cause 114 gives, kept from the read that opened
+    /// it again until its next report is read; `None` otherwise, and in
+    /// records written before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lost: Option<LostRun>,
+}
+
+/// 114, record 0105 (design D7): a run that left checks not run and
+/// judged nothing, read on `host`, the run's system where the policy names
+/// one, and each check it left not run with why, in the run's order.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LostRun {
+    pub host: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system: Option<String>,
+    pub not_run: Vec<NotRun>,
 }
 
 /// A run's state, from open to its own verdict.
@@ -608,6 +622,7 @@ impl From<CandidateForm> for Candidate {
                 no_replay: false,
                 host: None,
                 declined: BTreeMap::new(),
+                lost: None,
             });
         }
         Candidate {
@@ -823,6 +838,25 @@ pub struct BranchDoc {
     /// per host, ref and command; each host writes its own.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub refused_writes: Vec<RefusedWrite>,
+    /// 114, record 0105 (design D6 of the change
+    /// `a-pass-nothing-proves-blames-no-one`): each cause of passes a
+    /// host's runs kept no proof of, standing until that host's next run
+    /// proves its passes; one entry per host and reason, each host's
+    /// written by the round that reads its run. No round, gate or landing
+    /// reads it (rule core.14).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub proof_missing: Vec<ProofMissing>,
+}
+
+/// 114, record 0105 (design D6): a cause of passes `host`'s runs kept no
+/// proof of, in the check profile's words `why`, since the run that first
+/// met it, and how many of that host's runs it touched.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProofMissing {
+    pub host: String,
+    pub why: String,
+    pub since: String,
+    pub runs: u64,
 }
 
 /// 121: a branch read at a revision that lacks the landing its records
@@ -889,6 +923,7 @@ impl BranchDoc {
             held: None,
             copies: BTreeMap::new(),
             refused_writes: Vec::new(),
+            proof_missing: Vec::new(),
         }
     }
 }
@@ -1130,6 +1165,27 @@ pub enum Event {
         stood: u64,
         rounds: u64,
     },
+    /// 114, record 0105 (design D6 of the change
+    /// `a-pass-nothing-proves-blames-no-one`; rule core.28's way): a run
+    /// read on `host` kept no proof of a pass, for the reason `why`; once
+    /// per host and reason while it stands, never once per run.
+    #[serde(rename = "proof-missing")]
+    ProofMissing {
+        host: String,
+        why: String,
+    },
+    /// 114, record 0105 (design D6): the first run on `host` that proved
+    /// its passes and left none without proof, ending the cause `why`:
+    /// when it began, how many seconds it stood and how many of the host's
+    /// runs it touched.
+    #[serde(rename = "proof-kept")]
+    ProofKept {
+        host: String,
+        why: String,
+        since: String,
+        stood: u64,
+        runs: u64,
+    },
     /// A landing that found the branch elsewhere (24; rule core.5).
     Refused {
         ids: Vec<u64>,
@@ -1199,19 +1255,40 @@ pub enum Event {
         first: String,
         last: String,
     },
-    /// 51: an outcome a carrier delivered to its session. Read under
-    /// `told` too, the name an earlier sluice wrote it under (record 0070).
+    /// 51: an outcome a carrier delivered to its session, as an earlier
+    /// sluice marked it; kept as written and read as history (record 0102;
+    /// rule core.41). Read under `told` too, the name a sluice before it
+    /// wrote it under (record 0070).
     #[serde(alias = "told")]
     Delivered {
         id: u64,
         notification: String,
     },
     /// 51: an outcome its driver did not deliver, and why in the carrier's
-    /// words; it stands decided and pending, and no round pushes it again.
+    /// words; it stays owed, and no round pushes it again.
     Pending {
         id: u64,
         notification: String,
         why: String,
+    },
+    /// 51: an outcome handed to its reader `by` a way, `notice`,
+    /// `pull-request`, `inbox` or `wait`, reaching `to` as the carrier
+    /// names it, the pane, the request, the path or the agent; it confirms
+    /// nothing by itself (weir 103; record 0102; design D5).
+    Handed {
+        id: u64,
+        key: String,
+        by: String,
+        to: String,
+    },
+    /// 51: an outcome confirmed for `reader`, `by` the way that confirmed
+    /// it on receipt, `confirm`, `operator` or `resubmission` (weir 102;
+    /// design D5, D7, D16).
+    Confirmed {
+        id: u64,
+        key: String,
+        reader: String,
+        by: String,
     },
 }
 
@@ -1628,6 +1705,112 @@ mod tests {
         assert_eq!(back, lines);
     }
 
+    /// 114, record 0105 (design D6, D7): a missing proof and its end are
+    /// the spec's lines, and a branch's document and a run written before
+    /// `proof_missing` and `lost` read with none and write back without
+    /// them.
+    #[test]
+    fn a_missing_proof_and_its_end_are_log_lines() {
+        let why = "it passed, but nothing the run kept proves it ran: \
+                   moon's manifest of it is not in /repo/.moon/cache";
+        let lines = [
+            LogLine {
+                schema: LOG_SCHEMA.into(),
+                at: "2026-11-09T09:16:40Z".into(),
+                event: Event::ProofMissing {
+                    host: "build-1".into(),
+                    why: why.into(),
+                },
+            },
+            LogLine {
+                schema: LOG_SCHEMA.into(),
+                at: "2026-11-09T09:46:40Z".into(),
+                event: Event::ProofKept {
+                    host: "build-1".into(),
+                    why: why.into(),
+                    since: "2026-11-09T09:16:40Z".into(),
+                    stood: 1800,
+                    runs: 3,
+                },
+            },
+        ];
+        let text: Vec<String> = lines
+            .iter()
+            .map(|l| String::from_utf8(to_line(l)).unwrap())
+            .collect();
+        assert_eq!(
+            text,
+            [
+                format!("{{\"schema\":\"sluice/log@1\",\"at\":\"2026-11-09T09:16:40Z\",\"event\":\"proof-missing\",\"host\":\"build-1\",\"why\":\"{why}\"}}\n"),
+                format!("{{\"schema\":\"sluice/log@1\",\"at\":\"2026-11-09T09:46:40Z\",\"event\":\"proof-kept\",\"host\":\"build-1\",\"why\":\"{why}\",\"since\":\"2026-11-09T09:16:40Z\",\"stood\":1800,\"runs\":3}}\n"),
+            ]
+        );
+        let back: Vec<LogLine> = parse_lines(text.concat().as_bytes()).unwrap();
+        assert_eq!(back, lines);
+
+        // A branch's document written before `proof_missing`.
+        let old = r#"{
+  "schema": "sluice/branch@1",
+  "branch": "main",
+  "log": "sluice/log@1",
+  "base": "c43609b",
+  "verified": true,
+  "window": 4,
+  "next_place": 3,
+  "next_candidate": 5,
+  "candidates": [],
+  "landing": null,
+  "release": [],
+  "outbox": []
+}
+"#;
+        let doc: BranchDoc = serde_json::from_str(old).unwrap();
+        assert!(doc.proof_missing.is_empty());
+        assert_eq!(String::from_utf8(to_document(&doc)).unwrap(), old);
+        let mut standing = doc.clone();
+        standing.proof_missing.push(ProofMissing {
+            host: "build-1".into(),
+            why: why.into(),
+            since: "2026-11-09T09:16:40Z".into(),
+            runs: 3,
+        });
+        let v = serde_json::to_value(&standing).unwrap();
+        assert_eq!(
+            v["proof_missing"],
+            serde_json::json!([{
+                "host": "build-1",
+                "why": why,
+                "since": "2026-11-09T09:16:40Z",
+                "runs": 3,
+            }])
+        );
+        assert_eq!(serde_json::from_value::<BranchDoc>(v).unwrap(), standing);
+
+        // A run written before `lost`.
+        let run = r#"{"checks":["a:test"],"state":"open"}"#;
+        let read: SystemRun = serde_json::from_str(run).unwrap();
+        assert_eq!(read.lost, None);
+        assert_eq!(serde_json::to_string(&read).unwrap(), run);
+        let mut lost = read.clone();
+        lost.lost = Some(LostRun {
+            host: "build-1".into(),
+            system: None,
+            not_run: vec![NotRun {
+                task: "a:test".into(),
+                reason: why.into(),
+            }],
+        });
+        let v = serde_json::to_value(&lost).unwrap();
+        assert_eq!(
+            v["lost"],
+            serde_json::json!({
+                "host": "build-1",
+                "not_run": [{"task": "a:test", "reason": why}],
+            })
+        );
+        assert_eq!(serde_json::from_value::<SystemRun>(v).unwrap(), lost);
+    }
+
     /// 148: a branch's document written before refused writes were counted
     /// reads with none standing and writes back unchanged, and a
     /// `protected` line written before it named its host reads as before.
@@ -1889,46 +2072,25 @@ mod tests {
         assert_eq!(serde_json::from_str::<Submitter>(&text).unwrap(), both);
     }
 
-    /// 51, record 0070: a submission an earlier sluice marked under `told`
-    /// and `told_to` reads them as `delivered` and `delivered_to`, and
-    /// writes them back under the new names.
+    /// 51, record 0102 (D12): a submission holds no `delivered` mark; one
+    /// an earlier sluice wrote, under that name or `told`, is passed over
+    /// and written back without it.
     #[test]
-    fn a_submission_marked_told_reads_as_delivered() {
+    fn a_submission_holds_no_delivered_mark() {
         let old = submission(None);
         let doc = String::from_utf8(to_document(&old)).unwrap();
-        let earlier = doc.replacen(
-            "\"state\": \"queued\"",
+        let landed = doc.replacen("\"state\": \"queued\"", "\"state\": \"landed\"", 1);
+        for marked in [
+            "\"state\": \"landed\",\n  \"delivered\": \"2026-10-27T10:00:00Z\",\n  \"delivered_to\": \"/w/review\"",
             "\"state\": \"landed\",\n  \"told\": \"2026-10-27T10:00:00Z\",\n  \"told_to\": \"/w/review\"",
-            1,
-        );
-        let read: Submission = serde_json::from_str(&earlier).unwrap();
-        assert_eq!(read.delivered.as_deref(), Some("2026-10-27T10:00:00Z"));
-        assert_eq!(read.delivered_to.as_deref(), Some("/w/review"));
-        let written = String::from_utf8(to_document(&read)).unwrap();
-        assert_eq!(
-            written,
-            earlier
-                .replace("\"told\":", "\"delivered\":")
-                .replace("\"told_to\":", "\"delivered_to\":")
-        );
-        assert!(!written.contains("told"), "{written}");
-    }
-
-    /// 51: a submission delivered before `delivered_to` was kept reads with
-    /// none and writes back unchanged.
-    #[test]
-    fn a_submission_delivered_before_its_session_reads_as_it_was() {
-        let old = submission(None);
-        let mut doc = String::from_utf8(to_document(&old)).unwrap();
-        doc = doc.replacen(
-            "\"state\": \"queued\"",
-            "\"state\": \"landed\",\n  \"delivered\": \"2026-10-27T10:00:00Z\"",
-            1,
-        );
-        let read: Submission = serde_json::from_str(&doc).unwrap();
-        assert_eq!(read.delivered.as_deref(), Some("2026-10-27T10:00:00Z"));
-        assert_eq!(read.delivered_to, None);
-        assert_eq!(String::from_utf8(to_document(&read)).unwrap(), doc);
+        ] {
+            let earlier = doc.replacen("\"state\": \"queued\"", marked, 1);
+            let read: Submission = serde_json::from_str(&earlier).unwrap();
+            let written = String::from_utf8(to_document(&read)).unwrap();
+            assert_eq!(written, landed);
+            assert!(!written.contains("delivered"), "{written}");
+            assert!(!written.contains("told"), "{written}");
+        }
     }
 
     /// 51, record 0070: a `told` line an earlier sluice wrote reads as

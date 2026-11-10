@@ -1331,12 +1331,27 @@ fn status_lists_the_queue() {
         lines[1].starts_with(&format!("  testing {BRANCH} + #3 unit/forecast · ")),
         "{out}"
     );
+    // D13 (51; record 0102): after the queue, what is owed, since nobody
+    // confirmed #1's landing or #2's blame.
     assert_eq!(
         lines[2..],
         [
             format!("  #3 unit/forecast  testing   crw-1-unit-3  unit/forecast   {BRANCH} + #3"),
             format!("2 no longer in the queue: sluice status {BRANCH} --all"),
-        ]
+            "OWED".to_string(),
+            "  unit/batch-review · never confirmed".to_string(),
+            "    2:failed #2  owed until 2026-10-18T09:00:09Z · handed over by notice at \
+             2026-10-11T09:00:15Z"
+                .to_string(),
+            "  unit/touches · never confirmed".to_string(),
+            "    1:landed #1  owed until 2026-10-18T09:00:10Z · handed over by notice at \
+             2026-10-11T09:00:16Z"
+                .to_string(),
+            "confirm one with: sluice confirm <key>, in its worktree, or sluice confirm <key> \
+             --as operator"
+                .to_string(),
+        ],
+        "{out}"
     );
 
     let (code, out) = sluice(&f, &["status", BRANCH, "--all"]);
@@ -4200,6 +4215,53 @@ fn the_first_run_stops() {
     let (code, out) = sluice_with(&f, &pause, &["run"]);
     assert_eq!(code, sluice::STOPPED, "{out}");
     assert_eq!(state_of(&f, 1), "landed");
+    assert!(soon(|| !driver_live()));
+}
+
+/// The settings-take-up spec's "A pass under a new binding" (135; record
+/// 0107; design D3): a run whose every pass runs under seams and a host
+/// made afresh, as a run that took up changed settings binds them, stays
+/// the repository's driver throughout, never says another run drives it,
+/// and its rounds land the submission.
+#[test]
+fn a_run_keeps_driving_across_a_new_binding() {
+    if let Some(err) = stderr_of("a_run_keeps_driving_across_a_new_binding") {
+        assert!(!err.contains(BESIDE), "{err}");
+        return;
+    }
+    let f = one_queued();
+    let mut driving = sluice::Driving::new(None);
+    let pause = Rounds(Cell::new(0));
+    let mut out = Vec::new();
+    let mut passes = 0;
+    while state_of(&f, 1) != "landed" {
+        assert!(passes < 12, "{}", String::from_utf8_lossy(&out));
+        let bound = sluice_fakes::Fakes::of(f.world.clone());
+        let host = support::FakeHost {
+            world: f.world.clone(),
+            reserved: 0,
+        };
+        let driven = sluice::drive(
+            &mut driving,
+            bound.seams(),
+            &host,
+            &(),
+            &f.clock,
+            &pause,
+            &mut out,
+        )
+        .unwrap();
+        assert_eq!(driven, sluice::Driven::Next);
+        passes += 1;
+        assert!(
+            sluice::reader::Driver::take(&support::readers(), REPOSITORY)
+                .unwrap()
+                .is_none(),
+            "the driver's lock let go after pass {passes}"
+        );
+    }
+    assert!(passes > 1, "{}", String::from_utf8_lossy(&out));
+    drop(driving);
     assert!(soon(|| !driver_live()));
 }
 
@@ -7289,6 +7351,15 @@ fn status_and_overview_show_a_hold_while_it_lasts() {
             held.clone(),
             "  #2 unit/b  queued    agent-b  unit/b".to_string(),
             format!("1 no longer in the queue: sluice status {BRANCH} --all"),
+            // D13 (51; record 0102): #1's landing, which nobody confirmed.
+            "OWED".to_string(),
+            "  unit/a · never confirmed".to_string(),
+            "    1:landed #1  owed until 2026-10-18T09:00:12Z · handed over by notice at \
+             2026-10-11T09:00:16Z, wait at 2026-10-11T09:00:19Z"
+                .to_string(),
+            "confirm one with: sluice confirm <key>, in its worktree, or sluice confirm <key> \
+             --as operator"
+                .to_string(),
         ],
         "{out}"
     );
@@ -9312,6 +9383,66 @@ mod read_once {
         assert_eq!(state_of(&f, dir.path(), 2), "landed", "{out}");
         assert!(files.read(BRANCH).unwrap().version > 0);
     }
+}
+
+/// 114, record 0105 (design D7 of the change
+/// `a-pass-nothing-proves-blames-no-one`); the run-outcome spec's "Status
+/// and wait", "A submission's status and its wait" and "Its next run has a
+/// result": a combination tested again after a run that left a check not
+/// run says on which host and why, in `status`, its `--json` and
+/// `wait --json`, until its next run has a result.
+#[test]
+fn status_and_wait_say_why_a_combinations_last_run_had_no_outcome() {
+    let why = "the engine is down";
+    let f = Fakes::new();
+    f.world.init(
+        BRANCH,
+        &[
+            (".config/sluice.toml", POLICY),
+            ("plugin/lib/plan.py", "plan"),
+        ],
+    );
+    f.world.task("plugin:test", "plugin/");
+    f.world.cannot_run("plugin:test", Some(why));
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"]);
+
+    let said =
+        format!("its last run, on this-host, had no outcome: plugin:test could not run: {why}");
+    let testing = |text: &str| {
+        text.lines()
+            .find(|l| l.starts_with(&format!("  testing {BRANCH} + #1 ")))
+            .map(str::to_string)
+    };
+    for _ in 0..8 {
+        sluice(&f, &["step", BRANCH]);
+        let (_, text) = sluice(&f, &["status", BRANCH]);
+        if testing(&text).is_some_and(|l| l.contains("had no outcome")) {
+            break;
+        }
+    }
+    let (_, text) = sluice(&f, &["status", BRANCH]);
+    assert!(testing(&text).is_some_and(|l| l.ends_with(&said)), "{text}");
+    let lost = serde_json::json!([{
+        "host": "this-host",
+        "not_run": [{ "task": "plugin:test", "reason": why }],
+    }]);
+    let (_, one) = sluice(&f, &["status", "1", "--json"]);
+    assert_eq!(json(&one)["lost"], lost, "{one}");
+    let (code, out) = sluice(&f, &["wait", "1", "--timeout", "2s", "--json"]);
+    assert_eq!(code, sluice::WAITING, "{out}");
+    assert_eq!(json(&out)["lost"], lost, "{out}");
+
+    // Its next run has a result: nothing is said of the one that had none.
+    f.world.cannot_run("plugin:test", None);
+    let (code, out) = sluice(&f, &["wait", "1", "--timeout", "60s"]);
+    assert_eq!(code, 0, "{out}");
+    let (_, text) = sluice(&f, &["status", BRANCH]);
+    assert!(!text.contains("had no outcome"), "{text}");
+    let (_, one) = sluice(&f, &["status", "1", "--json"]);
+    let one = json(&one);
+    assert_eq!(one["state"], "landed", "{one}");
+    assert!(one.get("lost").is_none(), "{one}");
 }
 
 /// 84, record 0074; the host-requirements spec's "Status says what it

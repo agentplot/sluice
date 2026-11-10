@@ -29,6 +29,7 @@
       alive = "2m";
       name = "host-a";
     };
+    deliveries.expire_after = "72h";
     caches = [
       {
         dir = "~/.cache/sccache";
@@ -43,5 +44,29 @@
         env.MOON_CACHE_SHARED_WORKTREE_CACHE = "true";
       }
     ];
+    telemetry = {
+      send = true;
+      collector = "http://localhost:4318";
+      service = "sluice";
+      traces = false;
+      metrics = true;
+      logs = "tail";
+      logs_tail_bytes = 4096;
+      attributes."deployment.environment" = "prod";
+    };
+  };
+
+  # "A forge credential command": the app and the command that gives its
+  # token, in place of its key.
+  credential = {
+    forge = {
+      app_id = 123456;
+      credential = [
+        "/opt/forge/bin/token-helper"
+        "--app"
+        "sluice"
+      ];
+      discovery = "60s";
+    };
   };
 }

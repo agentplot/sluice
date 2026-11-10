@@ -24,6 +24,8 @@ readable with plain tools whether or not sluice is running.
     finished.jsonl     one line for each submission in .finished/: its id,
                        state and worktree
     log.jsonl          every submission, test run, result, blame and landing, in order
+    deliveries.jsonl   each decided outcome owed to the work that submitted it,
+                       its hand-overs and confirmations, in the order added
     lock               held by a round of this branch
   .logs/feature/concurrent-units/<candidate>/<task>.log
                        what each failed test printed, for the last 20 failed combinations
@@ -102,9 +104,12 @@ every repository on the host and never pushed:
                        GitHub's last answer at one address, with the ETag
                        and time it came with, so the next read asks GitHub
                        only whether it changed
-  forge/pauses/<app>-<installation>-<allowance>.json
+  forge/pauses/<app>-<owner>-<allowance>.json
                        until when GitHub said the app's allowance of calls
-                       on that installation is spent, in GitHub's words
+                       is spent, in GitHub's words; the owner, the account
+                       the repository is on, names the app's one
+                       installation there, whether its token was minted
+                       from the app's key or given by a credential command
   forge/requests/<owner>/<repository>/<branch>.json
                        when sluice last asked GitHub for the open pull
                        requests into the branch, and what it read and
@@ -247,8 +252,8 @@ rest to go on:
 
 ```
 refs/sluice/state/<branch>       one commit: the branch's files above, branch.json,
-                                 submissions/, .finished/, log.jsonl and version,
-                                 replaced on every write
+                                 submissions/, .finished/, log.jsonl,
+                                 deliveries.jsonl and version, replaced on every write
 refs/sluice/runs/<signer>        each signer's signed results, only ever added to:
                                  <combination>/<system>/<n>.json, one run's results
                                  in a signed envelope
@@ -349,6 +354,16 @@ written as `<revision>`. `from` and `to` are the last refused write's,
 show those refused in the last day; read them there, since this form
 is sluice's own. The field is left out when it is empty.
 
+`proof_missing` holds, on a branch whose state is on its remote, each
+reason a host's runs kept no proof of a test that passed, while it
+stands, one for each host and reason: `[{"host": "build-1", "why": "it
+passed, but nothing the run kept proves it ran: moon's manifest of it
+is not in /home/me/app/.moon/cache", "since": "2026-11-09T09:16:40Z",
+"runs": 3}]`. `since` is when the first such run was read, and `runs`
+counts that host's runs it touched. A reason leaves the list with its
+`proof-kept` event. No round, gate or landing reads it. The field is
+left out when it is empty, and an older sluice passes over it.
+
 ## A submission
 
 ```json
@@ -368,9 +383,7 @@ is sluice's own. The field is left out when it is empty.
   "tested": { "combination": "e20a6f9b48", "on": "c41e8f2d90", "submissions": [12, 13] },
   "result": "failed",
   "failed": [ { "task": "tests:t-batch-cards", "hash": "5c0e97aa21",
-               "log": ".git/sluice/.logs/feature/concurrent-units/c7/tests:t-batch-cards.log" } ],
-  "delivered": "2026-10-11T09:21:55Z",
-  "delivered_to": "herdr:w1:p2@/tmp/herdr/herdr.sock"
+               "log": ".git/sluice/.logs/feature/concurrent-units/c7/tests:t-batch-cards.log" } ]
 }
 ```
 
@@ -418,30 +431,35 @@ the outcome types a notice into that pane, one line to the agent there,
 when the round runs on the same host:
 
 ```text
-[sluice] #13 failed on feature/concurrent-units: tests:t-batch-cards. sluice wait 13 shows why.
+[sluice] #13 failed on feature/concurrent-units: tests:t-batch-cards. sluice wait 13 shows why. sluice confirm 13:failed once you have read it.
 ```
 
-`delivered` is when the outcome was delivered, and `delivered_to` is
-who it was delivered to. An outcome is delivered only when something
-put it before the session that submitted it. herdr took the notice into
-the pane, and `delivered_to` is the session. The pull request was
-posted on, and it's `pull/41`. `sluice inbox` printed it, or a wait on
-the submission reported it, and it's the session's herdr pane, as
-`herdr:<pane>@<socket>`, or the worktree's path where the session runs
-in no herdr pane. Read in a bare repository or a git directory, which
-has no files checked out, and in no herdr pane, it's the agent:
-`SLUICE_AGENT`, else the branch.
+The notice ends with the key the agent confirms the outcome by, once it
+has acted on it. The outcome itself is kept in the branch's
+[`deliveries.jsonl`](#outcomes-owed), owed to the work that submitted
+it until that work confirms it, and a submission's record holds no mark
+of it. `sluice status <id> --json`, a wait's `--json` and each element
+of `sluice inbox --json` give a decided submission's `delivery`, where
+it stands:
 
-Until then the outcome is pending: the submission stands decided with
-neither field. The log has one `pending` event saying why it wasn't
-delivered: the submit ran in no pane or on another host, or herdr
-refused the notice, in herdr's words. No round pushes it again;
-`sluice inbox` or a wait delivers it.
+```json
+"delivery": { "key": "13:failed", "reader": "batch-review", "state": "owed",
+              "recorded_at": "2026-10-11T09:21:50Z", "expires_at": "2026-10-18T09:21:50Z",
+              "handed": [ { "by": "notice", "at": "2026-10-11T09:21:55Z" } ],
+              "confirmed": null, "known": true }
+```
 
-A submission written by an older sluice may say `told` and `told_to`
-for the same two fields, or `told` alone; sluice reads them as
-`delivered` and `delivered_to`, and writes the new names. An outcome
-the round has yet to push waits in `branch.json`'s `outbox`, each item
+`state` is `owed`, `expired` once it has gone unconfirmed past its
+expiry, or `done` once its reader has confirmed it, at `confirmed`.
+`handed` lists each time it was handed over and how; `known` says
+whether anything has been confirmed under the reader's name. One done
+and let go of gives its `key` and `state` alone. A submission by name,
+a withdrawn one and one not decided have none.
+
+A submission written by an older sluice may hold `delivered` and
+`delivered_to`, or `told` and `told_to`: sluice reads none of them, and
+drops them the next time it writes a live submission. An outcome the
+round has yet to push waits in `branch.json`'s `outbox`, each item
 holding it under the key `told`, which an older sluice on another host
 still reads.
 
@@ -495,8 +513,9 @@ has no `path` and no `session`, wherever the submit ran. Its agent is
 otherwise. `from.head` equal to `from.worktree` marks a submission by
 name, and no other field does: a worktree's own submission has no
 `head`, and a pull request's `worktree` is `pull/<n>`. Its outcome goes
-to no session, so it never has `delivered` or `delivered_to`, and the
-log holds no `pending` or `delivered` event for it. A worktree that has
+to no session, so it is owed to no one: `deliveries.jsonl` holds
+nothing for it, it gives no `delivery`, and the log holds no `pending`,
+`handed` or `confirmed` event for it. A worktree that has
 checked out the branch submits the same work, by `from.worktree`, so
 each withdraws the other's earlier submission and `attempt` counts both.
 To a branch with pull requests, the submission is the pull request's,
@@ -531,14 +550,52 @@ run:
 round that crashes between the two is finished correctly by the next
 one.
 
-`delivered` is logged when a submission's outcome is delivered.
-`pending` is logged once when it isn't, with `why` in the words of whatever didn't
-deliver it, and no round tries again:
+`handed` is logged each time a submission's outcome is handed over,
+with its key, `by` the way, `notice` (typed into the session's pane),
+`pull-request` (posted on the request), `inbox` or `wait`, and `to`
+where it reached: the pane, the request, the worktree's path or the
+agent. `confirmed` is logged when its reader confirms it, with the
+`reader` and `by` who: `confirm`, `operator`, `resubmission` (the
+worktree submitted again), or the way that confirmed it on receipt.
+`pending` is logged once when the round's push isn't taken, with `why`
+in the words of whatever didn't take it, and no round tries again. A
+log written by an older sluice may hold `delivered` lines; they read as
+they were written:
 
 ```json
-{"schema":"sluice/log@1","event":"delivered","id":12,"notification":"12:landed"}
+{"schema":"sluice/log@1","event":"handed","id":12,"key":"12:landed","by":"notice","to":"herdr:w1:p2@/tmp/herdr/herdr.sock"}
+{"schema":"sluice/log@1","event":"confirmed","id":12,"key":"12:landed","reader":"batch-review","by":"confirm"}
 {"schema":"sluice/log@1","event":"pending","id":13,"notification":"13:failed","why":"agent is blocked"}
 ```
+
+## Outcomes owed
+
+`deliveries.jsonl` holds each decided outcome a worktree or a pull
+request is owed, one JSON record per row, in the order added. The round
+that decides a submission landed, blamed or in conflict records it
+once, under its key, `<id>:landed`, `<id>:failed` or `<id>:conflict`.
+It is owed to the submission's work, the worktree's branch or `pull/<n>`,
+with the notice as its message, and expires after the host's
+[`[deliveries] expire_after`](/sluice/reference/configuration/#deliveries),
+a week where unset. Each hand-over and each confirmation is a record of
+its own beside it, and so is a name the first time anything is confirmed
+under it:
+
+```json
+{"format": "weir-delivery/1", "key": "12:landed", "readers": ["batch-review"], "message": "[sluice] #12 landed on feature/concurrent-units as b7d2e94.", "recorded_at": "2026-10-11T09:21:50Z", "expires_at": "2026-10-18T09:21:50Z"}
+{"format": "weir-handover/1", "key": "12:landed", "reader": "batch-review", "by": "notice", "at": "2026-10-11T09:21:55Z"}
+{"format": "weir-confirmation/1", "key": "12:landed", "reader": "batch-review", "at": "2026-10-11T09:40:12Z"}
+{"format": "weir-known/1", "reader": "batch-review", "known_at": "2026-10-11T09:40:12Z"}
+```
+
+An outcome nobody confirms stays, expired, and `sluice status <branch>`
+shows it under its reader until someone confirms it, the operator with
+`sluice confirm <key> --as operator` for a worktree that is gone. Once
+every reader has confirmed it, it is let go of whole, its hand-overs and
+confirmations with it, by the write that moves its submission out of
+the queue or the first write after; a name stays known. A line sluice
+cannot read stops the branch's reads, naming `deliveries.jsonl` and
+what was wrong with it.
 
 `held` is logged once for each revision a held branch is read at, with
 the landing it lacks, and `accepted` when the operator accepts that
@@ -572,6 +629,22 @@ that host's rounds it refused:
 ```json
 {"schema":"sluice/log@1","event":"read-refused","host":"build-1","remote":"origin","asked":"refs/heads/main","said":"remote: Repository not found.\nfatal: repository 'https://github.com/acme/app.git/' not found"}
 {"schema":"sluice/log@1","event":"read-again","host":"build-1","remote":"origin","since":"2026-10-26T09:16:40Z","stood":1800,"rounds":12}
+```
+
+`proof-missing` is logged when a run on a branch whose state is on its
+remote passed a test and kept no proof of it, so the pass has no result.
+It names the host that read the run and why, which names the store the
+proof was looked for in. It's logged once for each reason while that
+host's runs keep no proof, never once a run, and each host logs its
+own. The first run on that host that proves a test that passed, and
+leaves none without proof, logs `proof-kept`. `since` is when the first
+such run was read, `stood` how many seconds since then, and `runs` how
+many of that host's runs it touched. A run that passed nothing ends
+nothing:
+
+```json
+{"schema":"sluice/log@1","event":"proof-missing","host":"build-1","why":"it passed, but nothing the run kept proves it ran: moon's manifest of it is not in /home/me/app/.moon/cache"}
+{"schema":"sluice/log@1","event":"proof-kept","host":"build-1","why":"it passed, but nothing the run kept proves it ran: moon's manifest of it is not in /home/me/app/.moon/cache","since":"2026-11-09T09:16:40Z","stood":1800,"runs":3}
 ```
 
 `protected` is logged once for each command a host's protection

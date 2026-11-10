@@ -3855,7 +3855,7 @@ impl Pulls {
                     // sluice opened, never one a person opened; none leaves
                     // the title as it is.
                     let title = match subject {
-                        Some(s) if s != p.title && p.author == forge.login()? => Some(s),
+                        Some(s) if s != p.title && p.author == forge.login(&t.repo)? => Some(s),
                         _ => None,
                     };
                     if p.body != body || title.is_some() {
@@ -4076,7 +4076,11 @@ impl Pulls {
             )
         })?;
         if matches!(outcome, Outcome::Landed { .. }) {
-            return Ok(Delivery::Delivered { to });
+            return Ok(Delivery::Handed {
+                way: "pull-request".into(),
+                to,
+                confirms: true,
+            });
         }
         // Its body, as intake read it this round, says whether a submit
         // opened it.
@@ -4093,7 +4097,11 @@ impl Pulls {
         if let Some(body) = comment(&n.branch, &outcome, &names, from) {
             reading(&mut |r| self.comment_once(forge, &e.repo, e.number, &n.id, &body, r))?;
         }
-        Ok(Delivery::Delivered { to })
+        Ok(Delivery::Handed {
+            way: "pull-request".into(),
+            to,
+            confirms: true,
+        })
     }
 }
 

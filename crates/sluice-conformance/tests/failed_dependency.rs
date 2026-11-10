@@ -367,6 +367,7 @@ fn signer(h: &Harness) -> Sluice<'_> {
         alive: Duration::from_secs(120),
         signer: Some("box".into()),
         systems: None,
+        expire_after: sluice_core::EXPIRE_AFTER,
     })
 }
 

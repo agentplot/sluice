@@ -2,8 +2,10 @@
 # evaluated alone: each of the spec's settings renders the text of its
 # file under nix/tests/files, byte for byte; a key the module does not
 # declare is written as given; a value the file cannot hold fails,
-# naming its option; and a key in the store, a key's text or a key given
-# as a Nix path fails evaluation.
+# naming its option; a key in the store, a key's text or a key given as a
+# Nix path fails evaluation; so does a forge credential given as a string
+# or holding a token's text (record 0108); and each telemetry option says
+# its unit and values (principle 13; record 0106).
 t:
 let
   inherit (t) lib;
@@ -11,9 +13,9 @@ let
   pkgs = t.inputs.nixpkgs.legacyPackages.x86_64-linux;
 
   # options.nix enabled with `given`, beside a system's `assertions`.
-  evaluated =
+  evaluation =
     given:
-    (lib.evalModules {
+    lib.evalModules {
       modules = [
         (import ../modules/options.nix { inherit (t.outputs) packages; })
         {
@@ -30,7 +32,23 @@ let
           };
         }
       ];
-    }).config;
+    };
+  evaluated = given: (evaluation given).config;
+
+  # The description of `settings.telemetry.<name>`, from the evaluated
+  # module's options.
+  telemetry =
+    ((evaluation { }).options.services.sluice.settings.type.getSubOptions [ ])
+    .telemetry.type.getSubOptions
+      [ ];
+  describes =
+    name: words:
+    lib.concatMap (
+      w:
+      t.expect (lib.hasInfix w
+        telemetry.${name}.description
+      ) "settings.telemetry.${name}'s description says no ${w}: ${telemetry.${name}.description}"
+    ) words;
 
   # The messages of the assertions `given` fails.
   failures = given: map (a: a.message) (lib.filter (a: !a.assertion) (evaluated given).assertions);
@@ -73,6 +91,22 @@ let
   nixPath = builtins.tryEval (
     builtins.seq (evaluated { forge.key = ./settings.nix; }).services.sluice.settings.forge.key true
   );
+
+  # A credential command written as a shell line, which the option's type
+  # refuses, naming the option; and one holding a token's text.
+  shellLine = builtins.tryEval (
+    builtins.seq
+      (evaluated {
+        forge.credential = "token-helper --app sluice";
+      }).services.sluice.settings.forge.credential
+      true
+  );
+  tokenText = {
+    forge.credential = [
+      "/opt/forge/bin/token-helper"
+      "ghs_notarealtoken"
+    ];
+  };
 
   refused =
     given: option: words:
@@ -122,7 +156,36 @@ in
     "Nix store, which every user reads"
   ];
 
+  "The telemetry options say their units and values" =
+    describes "logs" [
+      "off"
+      "summary"
+      "tail"
+    ]
+    ++ describes "logs_tail_bytes" [
+      "bytes"
+      "65536"
+    ]
+    ++ describes "collector" [
+      "http://"
+      "send = true"
+    ]
+    ++ describes "send" [
+      "false"
+      "collector"
+    ];
+
   "A key given as a Nix path" = t.expect (
     !nixPath.success
   ) "services.sluice.settings.forge.key evaluates as the Nix path ./settings.nix";
+
+  "A forge credential command" = rendersAs "credential";
+
+  "A token's text in the credential" = refused tokenText "services.sluice.settings.forge.credential" [
+    "Nix store, which every user reads"
+  ];
+
+  "A credential given as a string" = t.expect (
+    !shellLine.success
+  ) "services.sluice.settings.forge.credential evaluates as the string \"token-helper --app sluice\"";
 }

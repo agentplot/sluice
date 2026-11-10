@@ -417,8 +417,8 @@ Host settings live in one file on the host, never in the repository:
 `$XDG_CONFIG_HOME/sluice/config.toml`, `~/.config/sluice/config.toml` when
 `XDG_CONFIG_HOME` is unset. Every repository on the host shares it. sluice
 reads it as each command starts and never writes it; a `sluice run` kept
-running takes a change once restarted. Before writing it, find out who
-writes it:
+running takes a change up before its next pass, so nothing restarts it.
+Before writing it, find out who writes it:
 
 ```sh
 f="${XDG_CONFIG_HOME:-$HOME/.config}/sluice/config.toml"
@@ -447,7 +447,12 @@ The host is one of three setups:
    `nixosModules.sluice`), the tables go in `services.sluice.settings`,
    each key named as in the file (`runs.max = 3;`,
    `forge.key = "~/.config/sluice/app.pem";`), and a key file by its path
-   as a string, never a Nix path, which evaluation refuses.
+   as a string, never a Nix path, which evaluation refuses. Where the
+   host's own tool gives the app's token, `forge.credential` names that
+   command in place of `forge.key`, a list of its program and then each
+   argument, `forge.credential = [ "<program>" "<argument>" ];` with both
+   placeholders for the tool's own; evaluation refuses a string there and
+   a token's text.
 3. **Several hosts as peers.** Each host has its own file, checked and
    written on that host as 1 or 2 says. Each holds what is that host's
    alone: its signer and key, the systems it runs, its bound, its name
@@ -460,7 +465,7 @@ What the file holds:
 |---|---|---|
 | `[runs]` `max`, `cores`, `reserved` | runs at once, the cores they use, runs kept for submissions | always; each has a default |
 | `[runs] systems` | the systems the host runs | it runs only some of the policy's systems |
-| `[forge]` | the GitHub App sluice pushes as | it lands on a branch on GitHub ([github-app](references/profiles/github-app.md)) |
+| `[forge]` | the GitHub App sluice pushes as, by its key or by a command that gives its token | it lands on a branch on GitHub ([github-app](references/profiles/github-app.md)) |
 | `[signing]` | its signer and SSH key | it runs checks for a branch whose state is on its remote ([peers](references/profiles/peers.md)) |
 | `[peers]` | `lease`, `alive`, `name` | it shares a branch's remote with other hosts |
 | `[[caches]]` | the caches every run on the host shares | its builds share a cache ([checkout](references/profiles/checkout.md)) |

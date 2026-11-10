@@ -4,9 +4,10 @@
 // conflict. Everything is read from `sluice overview --json --watch`
 // (sluice/overview@1; ADR 0023), never from a one-shot read of the records in
 // its place (129), from `sluice submit --check` for its own worktree, and
-// from `sluice inbox`, which alone records an outcome as delivered to the
-// session (51): the board decides nothing and writes nothing of sluice's but
-// through a sluice command.
+// from `sluice inbox`, which alone records an outcome handed over to the
+// session, owed until its agent confirms it (51; record 0102): the board
+// decides nothing, keeps no list of what it handed over, and writes nothing
+// of sluice's but through a sluice command.
 
 import type { EngineInterface, Register } from "claude-code";
 import { atom, read, update } from "claude-code";
@@ -226,7 +227,12 @@ async function take($: $, next: Overview, cwd: string, how: How, loaded: boolean
   // What happened before the first overview is sluice's to tell, not news.
   const found = prev === null ? [] : outcomes(prev, next, known);
   for (const o of found) raise($, o);
-  if (how.wake && (prev === null || loaded || found.length > 0)) void collect($, cwd);
+  // 51, D14: the first overview collects everything still owed, so a
+  // restarted session or a reload is handed again what was never
+  // confirmed; a new outcome only what no way has handed over yet, so a
+  // notice the round pushed is not handed over twice.
+  const first = prev === null || loaded;
+  if (how.wake && (first || found.length > 0)) void collect($, cwd, first);
 }
 
 /** What a command printed as JSON, or null when it is none. */
@@ -249,18 +255,22 @@ async function output($: $, argv: string[], cwd: string): Promise<string | null>
 let running = false;
 let again = false;
 // One collect at a time: however many are wanted while one runs, one more is
-// made once it has ended.
+// made once it has ended, of everything owed where any of them asked for it.
 let collecting = false;
 let collectAgain = false;
+let collectAll = false;
 
 /**
- * Collect the session's pending outcomes from sluice (51; ADR 0068, record
- * 0070), and start a turn with its words, as printed: `sluice inbox` in the
- * session's worktree marks each outcome it prints delivered, and prints
- * nothing for one the round's notice or an earlier collect delivered. A
+ * Collect the session's outcomes from sluice (51; ADR 0068, records 0070,
+ * 0102), and start a turn with its words, as printed: `sluice inbox` in the
+ * session's worktree hands over every outcome still owed to it, each ending
+ * with the key its agent confirms it by; with `all` false, `sluice inbox
+ * --new` hands over only those no way has handed over yet, and prints
+ * nothing for one the round's notice or an earlier collect handed over. A
  * branch it could not read, or a collect it refused, is a toast.
  */
-async function collect($: $, cwd: string) {
+async function collect($: $, cwd: string, all: boolean) {
+  collectAll ||= all;
   if (collecting) {
     collectAgain = true;
     return;
@@ -269,9 +279,11 @@ async function collect($: $, cwd: string) {
   try {
     do {
       collectAgain = false;
+      const argv = collectAll ? ["sluice", "inbox"] : ["sluice", "inbox", "--new"];
+      collectAll = false;
       const root = (await read($, mine)).root ?? cwd;
       const got: Collected = await $.process
-        .run(["sluice", "inbox"], { cwd: root, timeoutMs: 120_000 })
+        .run(argv, { cwd: root, timeoutMs: 120_000 })
         .catch(() => null);
       const { text, toast } = collectedWords(got);
       if (text !== null) await $.prompt.submit({ text }).catch(() => undefined);
@@ -378,8 +390,9 @@ function raise($: $, o: Outcome) {
 }
 
 // Whether the board's watch loop runs, once a load; how it follows sluice
-// once a watch has printed its first overview; and, while the loop waits to
-// start the next watch, what starts it at once.
+// once a watch has printed the first overview since the session's last
+// start; and, while the loop waits to start the next watch, what starts it
+// at once.
 let watching = false;
 let following: How | null = null;
 // The host's sluice is outside the releases the board runs with: it runs no
@@ -389,8 +402,8 @@ let stopped = false;
 /**
  * Where the host's sluice is outside the releases `.claude-plugin/sluice.json`
  * names, what the board says, else null: a board older than the sluice it
- * runs against would deliver outcomes its own way (rule core.31), and one
- * newer would ask for an `inbox` that is not there.
+ * runs against would hand outcomes over its own way (rule core.31), and one
+ * newer would ask for an `inbox --new` that is not there.
  */
 async function refusal($: $, cwd: string): Promise<string | null> {
   const text = await $.fs.read(`${$.plugin.root}/.claude-plugin/sluice.json`).catch(() => null);
@@ -578,6 +591,11 @@ export const register: Register = (on, options) => {
   on("session.start", async ($, e, next) => {
     const started = await next(e);
     await $.command.register({ name: "sluice", description: "Show sluice's queue in a pane" });
+    // A later start is a load of the mod, a reload, an enable or a respawn:
+    // its next overview is a first overview, which collects everything still
+    // owed to the session (51, D14), whether or not this module's state was
+    // made afresh.
+    following = null;
     if (!watching) {
       watching = true;
       // It ends only when the engine refuses it, as once the mod is unloaded.

@@ -20,7 +20,7 @@ use sluice_seams::{
     Adopted, AtBound, Branch, Changes, CheckedOut, Checkout, Delivery, Driver, Enforced, Equip,
     EquipStep, Equipped, Formed, GoneRelease, Guard, HostCopy, HostRun, KeptOutTask, LandingCommit,
     LastResult, Moved, Network, NotRun, Notification, Outcome, Place, PreviewPlace, Progress,
-    ReadRefused, Reading, Reads, ReleaseFailure, ReleasePolicy, Released, Rev, RunHandle,
+    Proof, ReadRefused, Reading, Reads, ReleaseFailure, ReleasePolicy, Released, Rev, RunHandle,
     RunReport, RunRequest, Running, Session, SessionPlace, Settings, Snapshot, Source, State,
     Submitter, TaskLog, TaskProgress, TaskResult, Tests, Unanswered, Written,
 };
@@ -246,6 +246,9 @@ struct Inner {
     /// Tasks whose reported keys the candidate's tree does not bear out
     /// (design D9).
     forged: BTreeSet<String>,
+    /// Where the run's record of a pass is looked for and not found:
+    /// while set, every ran pass is unkept (114; record 0105).
+    no_proof: Option<String>,
     /// Submissions left behind when a branch's records moved to its
     /// remote, by branch (design D10).
     left: BTreeMap<String, Vec<Vec<u8>>>,
@@ -1171,6 +1174,17 @@ impl World {
         self.0.borrow_mut().forged.insert(task.into());
     }
 
+    /// Design D8 of the change `a-pass-nothing-proves-blames-no-one` (114;
+    /// record 0105): with `Some(store)`, from now on each ran pass of a run
+    /// is unkept, its record not in `store`, and no longer proven; fails,
+    /// the tasks a check was failed by and replays are proven as before.
+    /// A run that keeps no proof keeps no pass to replay either, as a
+    /// store a run could not write holds neither. `None` keeps proof
+    /// again.
+    pub fn keeps_no_proof(&self, store: Option<&str>) {
+        self.0.borrow_mut().no_proof = store.map(str::to_string);
+    }
+
     /// The system the host's executor is, as `(os, arch)`: `linux` on
     /// `x86_64` unless set.
     pub fn platform(&self, os: &str, arch: &str) {
@@ -1511,8 +1525,10 @@ impl World {
             }
             None => Outcome::Pass,
         };
-        if outcome == Outcome::Pass {
-            // Like a content-keyed cache: only a pass is kept.
+        // Like a content-keyed cache: only a pass is kept, and nothing by
+        // a run that keeps no proof, whose store holds neither (record
+        // 0105).
+        if outcome == Outcome::Pass && inner.no_proof.is_none() {
             let at = inner.now.to_rfc3339();
             inner.cache.insert(key, at);
         }
@@ -2320,15 +2336,38 @@ impl Tests for FakeTests {
             .collect())
     }
 
-    fn proven(&self, _run: &RunHandle, report: &RunReport) -> Result<Vec<String>> {
+    fn proven(&self, _run: &RunHandle, report: &RunReport) -> Result<Proof> {
         let inner = self.0 .0.borrow();
-        Ok(report
-            .tasks
-            .iter()
-            .chain(&report.dependencies)
-            .filter(|t| !inner.forged.contains(&t.task))
-            .map(|t| t.task.clone())
-            .collect())
+        let unkept = |t: &TaskResult| {
+            inner
+                .no_proof
+                .as_ref()
+                .filter(|_| matches!(t.source, Source::Ran { .. }) && t.outcome == Outcome::Pass)
+        };
+        let mut proof = Proof::default();
+        for t in &report.tasks {
+            if inner.forged.contains(&t.task) {
+                continue;
+            }
+            match unkept(t) {
+                Some(store) => proof.unkept.push(NotRun {
+                    task: t.task.clone(),
+                    reason: format!(
+                        "it passed, but nothing the run kept proves it ran: \
+                         its record is not in {store}"
+                    ),
+                }),
+                None => proof.proven.push(t.task.clone()),
+            }
+        }
+        proof.proven.extend(
+            report
+                .dependencies
+                .iter()
+                .filter(|t| !inner.forged.contains(&t.task))
+                .map(|t| t.task.clone()),
+        );
+        Ok(proof)
     }
 
     fn logs(&self, run: &RunHandle, tasks: &[String]) -> Result<Vec<TaskLog>> {
@@ -2934,8 +2973,10 @@ impl Driver for FakeDriver {
         if std::mem::take(&mut inner.crash_notify) {
             bail!("crashed after delivering {}", notification.id);
         }
-        Ok(Delivery::Delivered {
+        Ok(Delivery::Handed {
+            way: "notice".into(),
             to: to.session.clone().unwrap_or_else(|| to.agent.clone()),
+            confirms: false,
         })
     }
 }
@@ -3340,7 +3381,11 @@ mod tests {
             },
             report: None,
         };
-        let delivered = |to: &str| Delivery::Delivered { to: to.into() };
+        let delivered = |to: &str| Delivery::Handed {
+            way: "notice".into(),
+            to: to.into(),
+            confirms: false,
+        };
         assert_eq!(f.driver.notify(&to("unit/a")).unwrap(), delivered("pane-1"));
         assert_eq!(
             f.driver.notify(&to("unit/b")).unwrap(),
@@ -3443,7 +3488,7 @@ mod tests {
         );
         let logs = f.tests.logs(&h, &["api:integration".into()]).unwrap();
         assert!(logs[0].text.starts_with("api:integration failed"));
-        assert_eq!(f.tests.proven(&h, &r).unwrap(), ["api:integration"]);
+        assert_eq!(f.tests.proven(&h, &r).unwrap().proven, ["api:integration"]);
 
         // A dependency that is itself a check is reported as one.
         let (_, r) = run(&["api:integration", "root:integration"]);
@@ -3490,6 +3535,70 @@ mod tests {
         assert!(r.failed_by.is_empty() && r.dependencies.is_empty());
         assert_eq!(r.tasks[0].task, "root:integration");
         assert_eq!(r.tasks[0].outcome, Outcome::Pass);
+    }
+
+    /// Design D8 (114; record 0105): a world that keeps no proof answers
+    /// each ran pass unkept, with why, and a fail proven as before; once
+    /// it keeps proof again, both are proven.
+    #[test]
+    fn a_world_that_keeps_no_proof_answers_each_ran_pass_unkept() {
+        let f = Fakes::new();
+        let rev = f.world.init("main", &[("a/x", "1"), ("b/x", "1")]);
+        f.world.task("a:test", "a/");
+        f.world.task("b:test", "b/");
+        f.world.fails_with("a:test", "a/x", "1");
+        let n = std::cell::Cell::new(0);
+        let run = || -> (RunHandle, RunReport) {
+            n.set(n.get() + 1);
+            let request = RunRequest {
+                place: f
+                    .checkout
+                    .materialize(
+                        &format!("sluice/try/main/{}", n.get()),
+                        &rev,
+                        &Settings::new(),
+                    )
+                    .unwrap(),
+                revision: rev.clone(),
+                required: vec!["a:test".into(), "b:test".into()],
+                since: None,
+                limit: None,
+                limits: Default::default(),
+                tests: Settings::new(),
+                command: None,
+                replay: false,
+                system: None,
+            };
+            let h = f.tests.start(&request).unwrap();
+            match f.tests.progress(&h).unwrap() {
+                Progress::Finished(r) => (h, r),
+                other => panic!("{other:?}"),
+            }
+        };
+        f.world.keeps_no_proof(Some("/the/store"));
+        let (h, r) = run();
+        let outcome = |task: &str| r.tasks.iter().find(|t| t.task == task).unwrap().outcome;
+        assert_eq!(
+            (outcome("a:test"), outcome("b:test")),
+            (Outcome::Fail, Outcome::Pass)
+        );
+        let proof = f.tests.proven(&h, &r).unwrap();
+        assert_eq!(proof.proven, ["a:test"]);
+        assert_eq!(
+            proof.unkept,
+            [NotRun {
+                task: "b:test".into(),
+                reason: "it passed, but nothing the run kept proves it ran: \
+                         its record is not in /the/store"
+                    .into(),
+            }]
+        );
+        f.world.keeps_no_proof(None);
+        let (h, r) = run();
+        let mut proven = f.tests.proven(&h, &r).unwrap().proven;
+        proven.sort();
+        assert_eq!(proven, ["a:test", "b:test"]);
+        assert!(f.tests.proven(&h, &r).unwrap().unkept.is_empty());
     }
 
     /// 71: the host's count holds other repositories' runs beside its own,

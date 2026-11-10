@@ -60,7 +60,7 @@ use anyhow::{anyhow, bail, Context as _, Result};
 use serde::{Deserialize, Serialize};
 use sluice_seams::{
     log_tail, AtBound, Enforced, Equip, EquipStep, Equipped, HostRun, KeptOutTask, Limits, Network,
-    NotRun, Outcome, Place, Progress, Reading, Reads, Rev, RunHandle, RunReport, RunRequest,
+    NotRun, Outcome, Place, Progress, Proof, Reading, Reads, Rev, RunHandle, RunReport, RunRequest,
     Running, Setting, Settings, Source, TaskLog, TaskProgress, TaskResult, Tests, Through,
 };
 
@@ -1870,14 +1870,26 @@ impl Tests for Checks {
         self.host_count()?.running()
     }
 
-    /// A command runner's one key is sluice's own; a moon task's is
-    /// checked against the candidate's tree by its manifest (design D9).
-    fn proven(&self, run: &RunHandle, report: &RunReport) -> Result<Vec<String>> {
+    /// A command runner's one key is sluice's own, so every task is
+    /// proven. A moon task's key is checked against the candidate's tree
+    /// by its manifest, read in the store the run's moon kept it in
+    /// (design D9; C.2 moon row). A ran check that passed whose manifest,
+    /// or a dependency's, is missing there is unkept: the run kept no
+    /// proof of it, which says nothing of the work, so it is not warned of
+    /// and has no outcome (114; record 0105; the change
+    /// `a-pass-nothing-proves-blames-no-one`, design D2 to D4). Every
+    /// other key the check refuses is one the tree does not bear out, in
+    /// neither list and warned of. A fail, a task a check was failed by
+    /// (149) and a replay (108) are never unkept.
+    fn proven(&self, run: &RunHandle, report: &RunReport) -> Result<Proof> {
         let meta: Meta = serde_json::from_value(self.runs.request(&run.0)?.meta)
             .with_context(|| format!("reading run {}", run.0))?;
         let tasks = report.tasks.iter().chain(&report.dependencies);
         if meta.runner != "moon" {
-            return Ok(tasks.map(|t| t.task.clone()).collect());
+            return Ok(Proof {
+                proven: tasks.map(|t| t.task.clone()).collect(),
+                unkept: Vec::new(),
+            });
         }
         let store = meta
             .store
@@ -1885,18 +1897,38 @@ impl Tests for Checks {
             .unwrap_or_else(|| meta.place.join(".moon/cache"));
         let blob = |k: &str| super::moon::blob_in(&store, k);
         let tree = |p: &str| super::moon::file_at(&meta.place, &meta.revision, p);
-        let mut out = Vec::new();
-        for t in tasks {
-            match super::moon::check_key(&t.hash, &t.task, &blob, &tree) {
-                Ok(()) => out.push(t.task.clone()),
-                Err(e) => tracing::warn!(
-                    sluice.task = %t.task,
-                    sluice.hash = %t.hash,
-                    "a key the combination's tree does not bear out is not signed: {e:#}"
-                ),
+        // A task a check was failed by is no check of the run (149).
+        let checks = report.tasks.iter().map(|t| (t, true));
+        let dependencies = report.dependencies.iter().map(|t| (t, false));
+        let mut proof = Proof::default();
+        for (t, check) in checks.chain(dependencies) {
+            let e = match super::moon::check_key(&t.hash, &t.task, &blob, &tree) {
+                Ok(()) => {
+                    proof.proven.push(t.task.clone());
+                    continue;
+                }
+                Err(e) => e,
+            };
+            let ran_pass =
+                check && matches!(t.source, Source::Ran { .. }) && t.outcome == Outcome::Pass;
+            if ran_pass && e.downcast_ref::<moon::NoManifest>().is_some() {
+                proof.unkept.push(NotRun {
+                    task: t.task.clone(),
+                    reason: format!(
+                        "it passed, but nothing the run kept proves it ran: \
+                         moon's manifest of it is not in {}",
+                        store.display()
+                    ),
+                });
+                continue;
             }
+            tracing::warn!(
+                sluice.task = %t.task,
+                sluice.hash = %t.hash,
+                "a key the combination's tree does not bear out is not signed: {e:#}"
+            );
         }
-        Ok(out)
+        Ok(proof)
     }
 
     fn session_runs(&self) -> Result<Vec<HostRun>> {

@@ -648,6 +648,14 @@ fn answer(forge: &FileForge, bare: Option<&Path>, failing: &Failing, r: &Request
                     "permissions": { "contents": "write", "checks": "write", "pull_requests": "write" } }),
         );
     }
+    // What a token reaches, as GitHub answers its holder (record 0108).
+    if path == "/installation/repositories" && m == "GET" {
+        return json(
+            200,
+            json!({ "total_count": 1, "repository_selection": "selected",
+                    "repositories": [{ "full_name": "o/r" }] }),
+        );
+    }
     if path == format!("/app/installations/{INSTALLATION}/access_tokens") {
         let ends = chrono::Utc::now() + chrono::TimeDelta::hours(1);
         return json(

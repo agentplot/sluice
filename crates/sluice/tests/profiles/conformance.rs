@@ -206,7 +206,11 @@ impl Tests for RecordedChecks {
         self.inner.running()
     }
 
-    fn proven(&self, run: &RunHandle, report: &sluice_seams::RunReport) -> Result<Vec<String>> {
+    fn proven(
+        &self,
+        run: &RunHandle,
+        report: &sluice_seams::RunReport,
+    ) -> Result<sluice_seams::Proof> {
         self.inner.proven(run, report)
     }
 
@@ -284,11 +288,14 @@ impl Branch for RecordedRefs {
 }
 
 /// The driver, with each session's agent named by the rig, and every
-/// outcome the round asked it to deliver kept, delivered or not.
+/// outcome the round asked it to hand over kept, whether its carrier
+/// answered `Handed`, which the core records as a hand-over by its way,
+/// or `Undelivered`, as the real driver answers a session in no pane (51;
+/// record 0102).
 struct Sessions {
     inner: Drivers,
     agents: RefCell<BTreeMap<String, String>>,
-    delivered: RefCell<Vec<Notification>>,
+    asked: RefCell<Vec<Notification>>,
 }
 
 impl Driver for Sessions {
@@ -315,7 +322,13 @@ impl Driver for Sessions {
 
     fn notify(&self, n: &Notification) -> Result<Delivery> {
         let delivery = self.inner.notify(n)?;
-        self.delivered.borrow_mut().push(n.clone());
+        // The rig's sessions are in no pane, so the real driver hands
+        // nothing over: an answer that did is the core's to record by its
+        // way, `notice`, and confirms nothing (D5).
+        if let Delivery::Handed { confirms, .. } = &delivery {
+            assert!(!confirms, "a notice confirms nothing: {delivery:?}");
+        }
+        self.asked.borrow_mut().push(n.clone());
         Ok(delivery)
     }
 }
@@ -469,6 +482,8 @@ impl Real {
                 peers: Default::default(),
                 systems: None,
                 caches: vec![moon_cache],
+                expire_after: sluice_core::EXPIRE_AFTER,
+                telemetry: None,
             },
             std::rc::Rc::new(sluice::retry::Policy::command().recording()),
         )
@@ -509,7 +524,7 @@ impl Real {
             driver: Sessions {
                 inner: driver,
                 agents: RefCell::default(),
-                delivered: RefCell::default(),
+                asked: RefCell::default(),
             },
             state,
             _blocks: blocks,
@@ -702,7 +717,7 @@ impl Rig for Real {
 
     fn delivered_to(&self, agent: &str) -> Vec<Notification> {
         self.driver
-            .delivered
+            .asked
             .borrow()
             .iter()
             .filter(|n| n.to.agent == agent)

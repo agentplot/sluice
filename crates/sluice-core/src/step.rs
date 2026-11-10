@@ -35,13 +35,13 @@ use crate::overview::Room;
 use crate::policy::{Rules, POLICY_PATH};
 use crate::records::{
     Beside, BesideWhy, BranchHold, Candidate, CandidateState, ConflictRecord, CopyBehind,
-    DecidedRecord, Event, FailedTask, Held, LandingCommitRecord, LandingIntent, OutboxItem,
-    Recorded, ResultKind, ResultLine, RunState, State, SystemRun, Tested,
+    DecidedRecord, Event, FailedTask, Held, LandingCommitRecord, LandingIntent, LostRun,
+    OutboxItem, Recorded, ResultKind, ResultLine, RunState, State, SystemRun, Tested,
 };
 use crate::refused::Refusal;
 use crate::release::{ReleaseOutcome, Releasing};
 use crate::text::{beside_message, landing_message};
-use crate::{verdict, Serves, Sluice, OUTPUT};
+use crate::{proof, verdict, Serves, Sluice, OUTPUT};
 
 /// Could-not-run-1 115: the deployment's bound on a candidate's runs in a
 /// row that leave a check not run and fail none on its own result.
@@ -485,7 +485,7 @@ impl Sluice<'_> {
                                 covered_by,
                             },
                         };
-                        l.push_outcome(item);
+                        l.push_outcome(item, &now, self.peer.expire_after)?;
                     }
                     l.log(
                         &now,
@@ -612,16 +612,37 @@ impl Sluice<'_> {
     }
 
     /// 50, 51: push each outcome's notice to its submission's session
-    /// alone, once: marked delivered only when its driver delivered it, and
-    /// an outcome not delivered left decided and pending, for `sluice inbox`
-    /// or a wait, with nothing pushed again. A step that stops
-    /// between a delivery and its record pushes it again, under the same id.
+    /// alone, at most once: only an outcome owed to its reader with no
+    /// hand-over and no confirmation, as `owed` reads them, is pushed, and
+    /// its item goes whatever the carrier answered (design D10). A push the
+    /// carrier took is recorded as a hand-over by its way with weir's
+    /// `hand`, confirming it only where the carrier says its reader
+    /// confirms on receipt, and logged `handed`, and `confirmed` where it
+    /// confirms; one it refused stays owed, logged `pending`, and is pushed
+    /// by no later round (weir 103, 109, 111; record 0102; design D5). A
+    /// step that stops between a push and its record pushes it again, under
+    /// the same key.
     fn perform_outbox(&self, branch: &str) -> Result<()> {
         let line = self.read_line(branch)?;
+        let now = self.now();
+        let owed = weir_delivery::owed(line.deliveries(), &now)
+            .map_err(|refused| anyhow!("reading {branch}'s deliveries: {refused}"))?;
         for item in line.doc.outbox.clone() {
             let sub = line.sub(item.submission)?;
-            let delivery = if sub.delivered.is_some() {
-                // 51: no push of an outcome already delivered.
+            let reader = sub.from.worktree.as_str();
+            // 51: no push of an outcome handed to its reader by any way, or
+            // confirmed: owed with no hand-over alone, or one decided
+            // before its delivery was recorded, which has none.
+            let recorded = line.deliveries().iter().any(
+                |r| matches!(r, weir_delivery::Record::Delivery(d) if d.key().as_str() == item.id),
+            );
+            let unhanded = owed
+                .readers
+                .iter()
+                .filter(|o| o.reader.as_str() == reader)
+                .flat_map(|o| &o.deliveries)
+                .any(|d| d.delivery.key().as_str() == item.id && d.handovers.is_empty());
+            let delivery = if recorded && !unhanded {
                 None
             } else {
                 // ADR 0044: the report as it stands, for a driver that shows
@@ -644,17 +665,8 @@ impl Sluice<'_> {
                 l.doc.outbox.remove(n);
                 match &delivery {
                     None => {}
-                    Some(Delivery::Delivered { to }) => {
-                        let s = l.sub_mut(item.submission);
-                        s.delivered = Some(now.clone());
-                        s.delivered_to = Some(to.clone());
-                        l.log(
-                            &now,
-                            Event::Delivered {
-                                id: item.submission,
-                                notification: item.id.clone(),
-                            },
-                        );
+                    Some(Delivery::Handed { way, to, confirms }) => {
+                        l.hand(item.submission, &item.id, reader, way, to, *confirms, &now)?;
                     }
                     Some(Delivery::Undelivered { why }) => {
                         l.log(
@@ -942,7 +954,8 @@ impl Sluice<'_> {
             }
             let system = xr.system.clone();
             let system = system.as_deref().or(home);
-            if let Some(named) = read_not_run(l, c, i, &report.not_run, false, system, &now) {
+            let host = &self.peer.name;
+            if let Some(named) = read_not_run(l, c, i, &report.not_run, false, system, host, &now) {
                 let x = l.candidate_mut(&c.id).expect("a read candidate");
                 let xr = &mut x.runs[i];
                 xr.state = RunState::Failed;
@@ -1191,15 +1204,19 @@ impl Sluice<'_> {
                 s.landed_as = Some(to.clone());
                 s.landed_elsewhere = true;
                 s.held = None;
-                line.push_outcome(OutboxItem {
-                    id: format!("{id}:landed"),
-                    submission: id,
-                    outcome: DecidedRecord::Landed {
-                        landed_as: to.clone(),
-                        beside: false,
-                        covered_by: None,
+                line.push_outcome(
+                    OutboxItem {
+                        id: format!("{id}:landed"),
+                        submission: id,
+                        outcome: DecidedRecord::Landed {
+                            landed_as: to.clone(),
+                            beside: false,
+                            covered_by: None,
+                        },
                     },
-                });
+                    now,
+                    self.peer.expire_after,
+                )?;
             }
             line.log(now, Event::FoundLanded { ids, to });
         }
@@ -1309,8 +1326,6 @@ impl Sluice<'_> {
                     failed: Vec::new(),
                     conflict: None,
                     withdrawn: None,
-                    delivered: None,
-                    delivered_to: None,
                     landed_as: None,
                     was: Some(old.id),
                     ..old
@@ -1562,12 +1577,17 @@ impl Sluice<'_> {
         c: &Candidate,
         i: usize,
         run: &RunHandle,
-        report: sluice_seams::RunReport,
+        mut report: sluice_seams::RunReport,
         rules: &Rules,
         home: Option<&str>,
         now: &str,
     ) -> Result<()> {
         let r = &c.runs[i];
+        // Design D7 (114; record 0105): why its last run had no outcome
+        // goes once its next report is read, whatever that says.
+        if let Some(xr) = line.candidate_mut(&c.id).and_then(|x| x.runs.get_mut(i)) {
+            xr.lost = None;
+        }
         let system = r.system.as_deref().or(home);
         let span = info_span!(
             "sluice.verdict",
@@ -1588,7 +1608,35 @@ impl Sluice<'_> {
         // result is recorded signed, and only for a key the candidate's
         // tree bears out, a task a check was failed by as a check (149).
         let proven: Option<Vec<String>> = if rules.signed {
-            Some(self.seams.tests.proven(run, &report)?)
+            let proof = self.seams.tests.proven(run, &report)?;
+            // 114, 16, record 0105 (design D5, D6 of the change
+            // `a-pass-nothing-proves-blames-no-one`; rule core.35): a pass
+            // the run kept no proof of has no outcome. It leaves the
+            // checks the run judged for those it did not, with the
+            // profile's words, before anything is recorded, so nothing is
+            // recorded under its key and no verdict reads it; the reading
+            // of what the run left not run does the rest. Its cause is
+            // noted on the host that read the run, which ran it, before
+            // anything returns early.
+            let proved = report.tasks.iter().any(|t| {
+                matches!(t.source, Source::Ran { .. })
+                    && t.outcome == Outcome::Pass
+                    && proof.proven.contains(&t.task)
+            });
+            for event in proof::note(
+                &mut line.doc.proof_missing,
+                &self.peer.name,
+                &proof.unkept,
+                proved,
+                now,
+            ) {
+                line.log(now, event);
+            }
+            report
+                .tasks
+                .retain(|t| !proof.unkept.iter().any(|n| n.task == t.task));
+            report.not_run.extend(proof.unkept);
+            Some(proof.proven)
         } else {
             None
         };
@@ -1719,7 +1767,8 @@ impl Sluice<'_> {
         let not_run: Vec<NotRun> = report.not_run.iter().chain(&v.unjudged).cloned().collect();
         if !not_run.is_empty() {
             let judged = !v.failed.is_empty() || v.timed_out;
-            let Some(named) = read_not_run(line, c, i, &not_run, judged, system, now) else {
+            let host = &self.peer.name;
+            let Some(named) = read_not_run(line, c, i, &not_run, judged, system, host, now) else {
                 return Ok(());
             };
             v.passed = false;
@@ -1967,7 +2016,7 @@ impl Sluice<'_> {
                     prefix.pop();
                     let work = |id| line.sub(id).map(|s| (s.head.clone(), s.from.clone()));
                     let with = self.contested(&work, &base, &ahead, &head)?;
-                    self.remove_conflict(line, id, paths, with, now);
+                    self.remove_conflict(line, id, paths, with, now)?;
                     removed = true;
                 }
             }
@@ -2004,7 +2053,7 @@ impl Sluice<'_> {
                 continue;
             }
             if c.state.failed() {
-                self.blame(line, &c, rules, now);
+                self.blame(line, &c, rules, now)?;
                 removed = true;
             }
             break;
@@ -2067,7 +2116,7 @@ impl Sluice<'_> {
         paths: Vec<String>,
         with: Vec<Contested>,
         now: &str,
-    ) {
+    ) -> Result<()> {
         info!(monotonic_counter.sluice.conflicts = 1u64, sluice.branch = %line.branch);
         let s = line.sub_mut(id);
         s.state = State::Conflict;
@@ -2083,16 +2132,20 @@ impl Sluice<'_> {
                 with: with.iter().map(|c| c.id).collect(),
             },
         );
-        line.push_outcome(OutboxItem {
-            id: format!("{id}:conflict"),
-            submission: id,
-            outcome: DecidedRecord::Conflict { paths, with },
-        });
+        line.push_outcome(
+            OutboxItem {
+                id: format!("{id}:conflict"),
+                submission: id,
+                outcome: DecidedRecord::Conflict { paths, with },
+            },
+            now,
+            self.peer.expire_after,
+        )
     }
 
     /// 17, 20, 21, 13: blame the newest submission of a failed
     /// candidate, tell its session alone, and test fewer at once.
-    fn blame(&self, line: &mut Line, c: &Candidate, rules: &Rules, now: &str) {
+    fn blame(&self, line: &mut Line, c: &Candidate, rules: &Rules, now: &str) -> Result<()> {
         let id = c.newest();
         let _span = info_span!(
             "sluice.blame",
@@ -2118,27 +2171,32 @@ impl Sluice<'_> {
                 combination: c.revision.clone(),
             },
         );
-        line.push_outcome(OutboxItem {
-            id: format!("{id}:failed"),
-            submission: id,
-            outcome: DecidedRecord::Failed {
-                failed: c.failed.iter().map(|f| f.task.clone()).collect(),
-                combination: c.revision.clone(),
-                submissions: c.submissions.clone(),
-                timed_out: c.state == CandidateState::TimedOut,
-                logs: c
-                    .failed
-                    .iter()
-                    .filter_map(|f| {
-                        f.log.clone().map(|at| TaskLog {
-                            task: f.task.clone(),
-                            text: at,
+        line.push_outcome(
+            OutboxItem {
+                id: format!("{id}:failed"),
+                submission: id,
+                outcome: DecidedRecord::Failed {
+                    failed: c.failed.iter().map(|f| f.task.clone()).collect(),
+                    combination: c.revision.clone(),
+                    submissions: c.submissions.clone(),
+                    timed_out: c.state == CandidateState::TimedOut,
+                    logs: c
+                        .failed
+                        .iter()
+                        .filter_map(|f| {
+                            f.log.clone().map(|at| TaskLog {
+                                task: f.task.clone(),
+                                text: at,
+                            })
                         })
-                    })
-                    .collect(),
+                        .collect(),
+                },
             },
-        });
+            now,
+            self.peer.expire_after,
+        )?;
         line.doc.window = (line.doc.window / 2).clamp(1, rules.parallel);
+        Ok(())
     }
 
     /// 140, 23: the revision whose tree `c` lands as: its tested revision
@@ -3493,8 +3551,13 @@ impl Sluice<'_> {
 /// `judged` says a check failed on its own result or the time limit ended
 /// the run. Unjudged and under the bound, the run is open again for any
 /// host, its place to be released and its loss logged, and nobody is
-/// blamed: `None`. Past the bound, or judged, each check is returned
-/// named with why, to be read as failed.
+/// blamed: `None`; the run keeps, until its next report is read, that
+/// `host`, the host reading it, had no outcome of it, on the run's system,
+/// and each check not run with why (design D7 of the change
+/// `a-pass-nothing-proves-blames-no-one`; record 0105). Past the bound,
+/// or judged, each check is returned named with why, to be read as
+/// failed.
+#[allow(clippy::too_many_arguments)]
 fn read_not_run(
     line: &mut Line,
     c: &Candidate,
@@ -3502,6 +3565,7 @@ fn read_not_run(
     not_run: &[NotRun],
     judged: bool,
     system: Option<&str>,
+    host: &str,
     now: &str,
 ) -> Option<Vec<FailedTask>> {
     let x = line.candidate_mut(&c.id).expect("a read candidate");
@@ -3512,6 +3576,11 @@ fn read_not_run(
             xr.state = RunState::Open;
             xr.run = None;
             xr.host = None;
+            xr.lost = Some(LostRun {
+                host: host.to_string(),
+                system: xr.system.clone(),
+                not_run: not_run.to_vec(),
+            });
             if let Some(p) = xr.place.take() {
                 line.doc.release.push(p);
             }
@@ -3652,6 +3721,7 @@ fn open_runs(rules: &Rules, home: Option<&str>) -> Vec<SystemRun> {
         no_replay: false,
         host: None,
         declined: BTreeMap::new(),
+        lost: None,
     };
     if by.is_empty() {
         return vec![run(None, any)];

@@ -13,9 +13,11 @@ serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true
 tracing.workspace = true
+weir-delivery.workspace = true
 
 [dev-dependencies]
 sluice-fakes = { path = "../sluice-fakes" }
+weir-pack.workspace = true
 
 [lib]
 doctest = false

@@ -16,7 +16,7 @@ use opentelemetry_sdk::logs::InMemoryLogExporter;
 use opentelemetry_sdk::trace::InMemorySpanExporter;
 use sluice::profiles::checks::Context;
 use sluice::profiles::moon::Moon;
-use sluice::telemetry::{Logs, Telemetry};
+use sluice::telemetry::{Choices, Logs, Settings as Chosen, Telemetry};
 use sluice_seams::{Limits, Place, Rev, RunRequest, Settings};
 
 /// What the runner asks moon before a run: its version, its tasks and
@@ -35,10 +35,31 @@ fn moon_runs_with_otel_while_telemetry_is_on() {
     let nobody = format!("http://{}", free.local_addr().unwrap());
     drop(free);
     std::env::set_var("OTEL_EXPORTER_OTLP_ENDPOINT", nobody);
+    // This binary runs with the host's environment: a host, or a sluice
+    // run, that turns OpenTelemetry's signals off would leave telemetry
+    // off here.
+    for setting in [
+        "OTEL_SDK_DISABLED",
+        "OTEL_TRACES_EXPORTER",
+        "OTEL_METRICS_EXPORTER",
+        "OTEL_LOGS_EXPORTER",
+    ] {
+        std::env::remove_var(setting);
+    }
+    // Chosen as a command given `--otel --otel-logs off` chooses on a host
+    // with no `[telemetry]`, so the environment says where it goes.
+    let settings = Chosen::choose(
+        Choices {
+            otel: Some(true),
+            logs: Some(Logs::Off),
+            ..Choices::default()
+        },
+        None,
+        "host-a",
+        std::env::vars(),
+    );
     let telemetry = Telemetry::start_with(
-        "sluice",
-        Logs::Off,
-        8192,
+        &settings,
         InMemorySpanExporter::default(),
         None::<InMemoryLogExporter>,
     )

@@ -27,6 +27,8 @@
 //! [forge]
 //! app_id = 123456
 //! key = "~/.config/sluice/app.pem"
+//! # or, in place of key, a command that gives the app's token:
+//! # credential = ["/opt/forge/bin/token-helper", "--app", "sluice"]
 //! discovery = "60s"
 //!
 //! [signing]
@@ -37,6 +39,9 @@
 //! lease = "5m"
 //! alive = "2m"
 //!
+//! [deliveries]
+//! expire_after = "168h"
+//!
 //! [[caches]]                       # a compile server's cache
 //! dir = "~/.cache/sccache"
 //! socket = "~/.cache/sccache/server.sock"
@@ -45,6 +50,15 @@
 //! [[caches]]                       # the task runner's shared cache
 //! dir = "~/.moon/cache/shared"
 //! env = { MOON_CACHE_SHARED_WORKTREE_CACHE = "true" }
+//!
+//! [telemetry]
+//! send = true
+//! collector = "http://localhost:4318"
+//! logs = "tail"
+//! logs_tail_bytes = 4096
+//!
+//! [telemetry.attributes]
+//! "deployment.environment" = "prod"
 //! ```
 //!
 //! `reserved` keeps that many runs of the bound for submissions, which
@@ -52,7 +66,9 @@
 //! `[runs] systems` names the systems this host runs, of those the
 //! policy names (85, 87); `[signing]` the signer it signs its runs as
 //! and its SSH key (78); `[peers]` the lease and the bound on a host's
-//! sign of life, the host's and never a branch's (74).
+//! sign of life, the host's and never a branch's (74); `[deliveries]
+//! expire_after` how long an outcome its rounds record is owed before it
+//! expires, a week where unset (51; weir 104; record 0102).
 //!
 //! `[[caches]]` are the host's shared caches, as its keeper declares them
 //! (35, 71; ADR 0049): each a directory outside every checkout, `dir`,
@@ -62,6 +78,19 @@
 //! the host is given them, and a sandboxed run may write each `dir` and
 //! reach each `socket`. sluice names no cache's tool and runs no cache's
 //! server: the keeper does, as it runs the container engine.
+//!
+//! `[forge]` names the app and one way to its token on this host: `key`,
+//! the path of its private key, or `credential`, a command that gives the
+//! token, written as a list of its program and then each argument, which
+//! sluice runs with no shell as git runs a credential helper (record
+//! 0108; [`crate::identity::CredentialCommand`]).
+//!
+//! `[telemetry]` says whether sluice sends its telemetry, where, as what,
+//! which signals and how much of a failure (151, C.7; record 0106; rule
+//! core.53): [`HostTelemetry`], each key unset where the file leaves it
+//! out, and no table at all where the file holds none. A command's own
+//! flag or variable chooses over it, for that command alone
+//! (`crate::telemetry::Settings::choose`).
 //!
 //! Branch protection's hook reads only `[forge]`, how sluice reaches a
 //! branch's remote, and passes over every other table and field, known
@@ -74,6 +103,10 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
+
+use sluice_seams::LOG_LIMIT;
+
+use crate::telemetry::Logs;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Instance {
@@ -98,6 +131,39 @@ pub struct Instance {
     pub systems: Option<Vec<String>>,
     /// The host's shared caches, which every run is given (35, 71).
     pub caches: Vec<HostCache>,
+    /// 51: how long an outcome this host's rounds record is owed before it
+    /// expires, `[deliveries] expire_after` (weir 104; design D9).
+    pub expire_after: Duration,
+    /// 151: where sluice's telemetry goes, `[telemetry]`; `None` where the
+    /// file holds no table, which is not a table with nothing set (record
+    /// 0106; design D1).
+    pub telemetry: Option<HostTelemetry>,
+}
+
+/// The host's `[telemetry]` table (151, C.7; record 0106): each key as the
+/// file sets it, `None` where it leaves it out, so sluice's default, or a
+/// command's own choice, holds (`crate::telemetry::Settings::choose`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HostTelemetry {
+    /// Whether telemetry is sent; nothing is while unset or `false`.
+    pub send: Option<bool>,
+    /// The `http://` address sluice sends OTLP to, its final `/` taken off;
+    /// set wherever `send` is `true`, since a table that sends and names
+    /// none is refused.
+    pub collector: Option<String>,
+    /// The service sluice reports as; `sluice` where unset.
+    pub service: Option<String>,
+    /// Whether traces are sent; `true` where unset.
+    pub traces: Option<bool>,
+    /// Whether metrics are sent; `true` where unset.
+    pub metrics: Option<bool>,
+    /// How much of a failed check's output is sent; `summary` where unset.
+    pub logs: Option<Logs>,
+    /// At `tail`, the most of a failed check's output sent, in bytes, 1 to
+    /// 65536; 8192 where unset.
+    pub logs_tail_bytes: Option<usize>,
+    /// More resource attributes, each a string.
+    pub attributes: BTreeMap<String, String>,
 }
 
 /// One of the host's `[[caches]]`: a directory outside every checkout,
@@ -148,15 +214,43 @@ pub fn this_system() -> (&'static str, &'static str) {
     (std::env::consts::OS, std::env::consts::ARCH)
 }
 
-/// The host's `[forge]` table: the app sluice is on the forge, the path
-/// of its private key on this host, which no repository holds, and how
-/// often a branch's open pull requests are asked for while nothing on the
-/// host moves (136).
+/// The host's `[forge]` table: the app sluice is on the forge, how this
+/// host gives sluice its token, which no repository holds, and how often a
+/// branch's open pull requests are asked for while nothing on the host
+/// moves (136).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Forge {
     pub app_id: u64,
-    pub key: PathBuf,
+    pub source: Source,
     pub discovery: Duration,
+}
+
+/// How the host gives sluice the app's token: the path of the app's
+/// private key, which sluice mints tokens with, or a command that gives
+/// one (record 0108).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Source {
+    Key(PathBuf),
+    Credential(Command),
+}
+
+/// A command the host names: its program, then each argument, run with no
+/// shell (record 0108; rule core.51).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Command {
+    pub program: PathBuf,
+    pub args: Vec<String>,
+}
+
+impl std::fmt::Display for Command {
+    /// The program and its arguments, space-separated.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.program.display())?;
+        for a in &self.args {
+            write!(f, " {a}")?;
+        }
+        Ok(())
+    }
 }
 
 /// How often a branch's open pull requests are asked for where the host
@@ -175,10 +269,53 @@ struct ConfigForm {
     signing: Option<SigningForm>,
     #[serde(default)]
     peers: PeersForm,
+    #[serde(default)]
+    deliveries: DeliveriesForm,
     /// Each read on its own, so what is wrong with one is named by its
     /// place among them.
     #[serde(default)]
     caches: Vec<toml::Value>,
+    #[serde(default, deserialize_with = "telemetry_form")]
+    telemetry: Option<TelemetryForm>,
+}
+
+/// `[telemetry]` as the file writes it (design D1).
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct TelemetryForm {
+    send: Option<bool>,
+    collector: Option<String>,
+    service: Option<String>,
+    traces: Option<bool>,
+    metrics: Option<bool>,
+    logs: Option<String>,
+    logs_tail_bytes: Option<i64>,
+    #[serde(default)]
+    attributes: BTreeMap<String, String>,
+}
+
+/// `[telemetry]`, a field that does not read refused naming the table and
+/// the key: each key is read alone first, since the form, read whole,
+/// names an unknown key but not the key whose value is of the wrong type.
+fn telemetry_form<'de, D>(d: D) -> std::result::Result<Option<TelemetryForm>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error as _;
+    let table = toml::Table::deserialize(d)?;
+    for (key, value) in &table {
+        let alone = toml::Table::from_iter([(key.clone(), value.clone())]);
+        if let Err(e) = toml::Value::Table(alone).try_into::<TelemetryForm>() {
+            return Err(D::Error::custom(format!(
+                "[telemetry] {key}: {}",
+                e.message().trim()
+            )));
+        }
+    }
+    toml::Value::Table(table)
+        .try_into()
+        .map(Some)
+        .map_err(|e| D::Error::custom(format!("[telemetry]: {}", e.message().trim())))
 }
 
 #[derive(Deserialize)]
@@ -205,11 +342,19 @@ struct PeersForm {
     name: Option<String>,
 }
 
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct DeliveriesForm {
+    expire_after: Option<String>,
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ForgeForm {
     app_id: u64,
-    key: String,
+    key: Option<String>,
+    /// Read whole, so a string is refused in sluice's words, not serde's.
+    credential: Option<toml::Value>,
     discovery: Option<String>,
 }
 
@@ -223,7 +368,8 @@ struct GuardingForm {
 #[derive(Deserialize)]
 struct GuardingForgeForm {
     app_id: u64,
-    key: String,
+    key: Option<String>,
+    credential: Option<toml::Value>,
 }
 
 #[derive(Deserialize, Default)]
@@ -341,6 +487,8 @@ impl Instance {
             s => s,
         };
         let caches = caches(form.caches, home)?;
+        let expire_after = expire_after(form.deliveries.expire_after)?;
+        let telemetry = form.telemetry.map(telemetry).transpose()?;
         Ok(Instance {
             bound,
             reserved,
@@ -350,6 +498,8 @@ impl Instance {
             peers,
             systems,
             caches,
+            expire_after,
+            telemetry,
         })
     }
 
@@ -370,6 +520,7 @@ impl Instance {
                 let f = ForgeForm {
                     app_id: f.app_id,
                     key: f.key,
+                    credential: f.credential,
                     discovery: None,
                 };
                 forge(f, home().as_deref())
@@ -384,6 +535,8 @@ impl Instance {
             peers: Peers::default(),
             systems: None,
             caches: Vec::new(),
+            expire_after: sluice_core::EXPIRE_AFTER,
+            telemetry: None,
         })
     }
 
@@ -393,6 +546,129 @@ impl Instance {
     pub fn jobs(&self) -> usize {
         (self.processors / self.bound).max(1)
     }
+
+    /// The tables whose settings differ between these and `other`, in the
+    /// configuration reference's order: `[runs]` for the bound, the
+    /// reserve, the cores sluice may use and the systems; `[forge]`;
+    /// `[signing]`; `[peers]`; `[deliveries]` for the span an outcome is
+    /// owed; `[[caches]]`. What a process that took `other` up says it
+    /// took up (135; record 0107; design D5).
+    pub fn changed_tables(&self, other: &Instance) -> Vec<&'static str> {
+        [
+            (
+                "[runs]",
+                (self.bound, self.reserved, self.processors, &self.systems)
+                    != (
+                        other.bound,
+                        other.reserved,
+                        other.processors,
+                        &other.systems,
+                    ),
+            ),
+            ("[forge]", self.forge != other.forge),
+            ("[signing]", self.signing != other.signing),
+            ("[peers]", self.peers != other.peers),
+            ("[deliveries]", self.expire_after != other.expire_after),
+            ("[[caches]]", self.caches != other.caches),
+        ]
+        .into_iter()
+        .filter_map(|(table, differs)| differs.then_some(table))
+        .collect()
+    }
+}
+
+/// 51: `[deliveries] expire_after`, a duration as sluice's settings write
+/// one, a week where unset; refused, naming the setting, where it does not
+/// read or is under a second, which weir's span cannot be (weir 104;
+/// design D9).
+fn expire_after(text: Option<String>) -> Result<Duration> {
+    let Some(text) = text else {
+        return Ok(sluice_core::EXPIRE_AFTER);
+    };
+    let span = sluice_core::policy::parse_duration(&text).context("[deliveries] expire_after")?;
+    if span < Duration::from_secs(1) {
+        bail!(
+            "[deliveries] expire_after = {text:?} is under a second, the least an outcome is owed"
+        );
+    }
+    Ok(span)
+}
+
+/// 151: the host's `[telemetry]`, each key as written, the collector's
+/// final `/` taken off; refused, naming `[telemetry]` and the key, where a
+/// key does not read as D1's table says, or where `send = true` names no
+/// `collector`, so the table never sends where the caller's
+/// `OTEL_EXPORTER_OTLP_*` say, a session's collector and its headers
+/// among them (record 0106 as amended; rule core.53; design D1).
+fn telemetry(form: TelemetryForm) -> Result<HostTelemetry> {
+    let collector = form.collector.as_deref().map(collector).transpose()?;
+    if form.send == Some(true) && collector.is_none() {
+        bail!(
+            "[telemetry] collector is unset while send = true: name the http:// address \
+             sluice sends to, such as \"http://localhost:4318\", since sluice never sends \
+             the table's telemetry where the caller's OTEL_EXPORTER_OTLP_* say"
+        );
+    }
+    if form.service.as_deref() == Some("") {
+        bail!("[telemetry] service is empty: name the service sluice reports as, or leave it out for sluice");
+    }
+    let logs = form
+        .logs
+        .map(|word| {
+            Logs::deserialize(toml::Value::String(word.clone()))
+                .map_err(|_| anyhow!("[telemetry] logs = {word:?} is none of off, summary or tail"))
+        })
+        .transpose()?;
+    let logs_tail_bytes = match form.logs_tail_bytes {
+        None => None,
+        Some(n) if (1..=LOG_LIMIT as i64).contains(&n) => Some(n as usize),
+        Some(n) => bail!(
+            "[telemetry] logs_tail_bytes = {n} is outside 1 to {LOG_LIMIT}: \
+             the most of a failed check's output sent, in bytes"
+        ),
+    };
+    for name in form.attributes.keys() {
+        match name.as_str() {
+            "" => bail!("[telemetry] attributes names an attribute with no name"),
+            "service.name" | "service.version" => bail!(
+                "[telemetry] attributes names {name}, which sluice sets itself: \
+                 the service is named by [telemetry] service"
+            ),
+            _ => {}
+        }
+    }
+    Ok(HostTelemetry {
+        send: form.send,
+        collector,
+        service: form.service,
+        traces: form.traces,
+        metrics: form.metrics,
+        logs,
+        logs_tail_bytes,
+        attributes: form.attributes,
+    })
+}
+
+/// `[telemetry] collector`: an `http://` address naming a host, its final
+/// `/` taken off (record 0014: sluice sends plain HTTP to a receiver on
+/// the host, which forwards over TLS).
+fn collector(text: &str) -> Result<String> {
+    let Some(rest) = text.strip_prefix("http://") else {
+        bail!(
+            "[telemetry] collector = {text:?} is no http:// address: sluice sends plain HTTP \
+             to a receiver on the host, which forwards over TLS"
+        );
+    };
+    let rest = rest.trim_end_matches('/');
+    let authority = rest.split('/').next().unwrap_or_default();
+    let host = match authority.strip_prefix('[') {
+        Some(v6) => v6.split(']').next().unwrap_or_default(),
+        None => authority.split(':').next().unwrap_or_default(),
+    };
+    if host.is_empty() {
+        bail!("[telemetry] collector = {text:?} names no host: give http://, a host, a port and at most a path");
+    }
+    Ok(format!("http://{rest}"))
 }
 
 /// The host's `[[caches]]`, `~` expanded in each `dir` and `socket`;
@@ -485,10 +761,24 @@ fn ordinal(n: usize) -> String {
     }
 }
 
-/// The `[forge]` table, its key's path with `~` expanded. A key anyone
-/// but its owner may read is refused, and so is a `discovery` shorter
-/// than [`LEAST_DISCOVERY`] (136).
+/// The `[forge]` table, its key's path, or its credential command's
+/// program, with `~` expanded. A table that names both or neither is
+/// refused, naming both; so is a key anyone but its owner may read, a
+/// credential that is no list of its program and arguments, and a
+/// `discovery` shorter than [`LEAST_DISCOVERY`] (136; record 0108).
 fn forge(form: ForgeForm, home: Option<&Path>) -> Result<Forge> {
+    let source = match (form.key, form.credential) {
+        (Some(_), Some(_)) => bail!(
+            "[forge] names both key and credential: name one, the app's private key or the \
+             command that gives its token"
+        ),
+        (None, None) => bail!(
+            "[forge] names neither key, the app's private key, nor credential, a command that \
+             gives its token: name one"
+        ),
+        (Some(key), None) => Source::Key(private_key("[forge] key", &key, home)?),
+        (None, Some(c)) => Source::Credential(credential(c, home)?),
+    };
     let discovery = match form.discovery {
         None => DISCOVERY,
         Some(t) => {
@@ -505,8 +795,51 @@ fn forge(form: ForgeForm, home: Option<&Path>) -> Result<Forge> {
     };
     Ok(Forge {
         app_id: form.app_id,
-        key: private_key("[forge] key", &form.key, home)?,
+        source,
         discovery,
+    })
+}
+
+/// `[forge] credential`: a list of the command's program and then each
+/// argument, the program absolute, under `~/`, which is expanded, or a
+/// name the PATH finds; the arguments as written (record 0108). Whether
+/// an argument is a token's text is the module's to guard, where the file
+/// lands in the store (rule core.51).
+fn credential(value: toml::Value, home: Option<&Path>) -> Result<Command> {
+    let words = match value {
+        toml::Value::String(_) => bail!(
+            "[forge] credential is a string: name the command as a list of its program and then \
+             each argument, which sluice runs with no shell, \
+             credential = [\"<program>\", \"<argument>\"]"
+        ),
+        toml::Value::Array(words) => words,
+        _ => bail!("[forge] credential is no list of strings"),
+    };
+    let mut words = words
+        .into_iter()
+        .map(|w| match w {
+            toml::Value::String(s) => Ok(s),
+            _ => Err(anyhow!("[forge] credential is no list of strings")),
+        })
+        .collect::<Result<Vec<_>>>()?
+        .into_iter();
+    let Some(program) = words.next().filter(|p| !p.is_empty()) else {
+        bail!("[forge] credential names no program");
+    };
+    let program = match (program.strip_prefix("~/"), home) {
+        (Some(rest), Some(home)) => home.join(rest),
+        (Some(_), None) => {
+            bail!("[forge] credential's program {program}: no home directory to expand ~ in")
+        }
+        (None, _) if program.starts_with('/') || !program.contains('/') => PathBuf::from(program),
+        (None, _) => bail!(
+            "[forge] credential's program {program} is a relative path: name it absolutely, \
+             under ~/, or by a name the PATH finds"
+        ),
+    };
+    Ok(Command {
+        program,
+        args: words.collect(),
     })
 }
 
@@ -560,7 +893,9 @@ pub fn state_dir() -> Result<PathBuf> {
     Ok(state.join("sluice"))
 }
 
-fn config_path() -> Option<PathBuf> {
+/// The host's settings file, `$XDG_CONFIG_HOME/sluice/config.toml` (default
+/// `~/.config`); none where the host has no home to name it in.
+pub(crate) fn config_path() -> Option<PathBuf> {
     let base = match std::env::var_os("XDG_CONFIG_HOME") {
         Some(d) if !d.is_empty() => PathBuf::from(d),
         _ => home()?.join(".config"),
@@ -688,7 +1023,7 @@ mod tests {
             with(&table, 4).unwrap().forge,
             Some(Forge {
                 app_id: 42,
-                key: key.clone(),
+                source: Source::Key(key.clone()),
                 discovery: DISCOVERY,
             })
         );
@@ -705,15 +1040,171 @@ mod tests {
         let home = forge(
             ForgeForm {
                 app_id: 1,
-                key: "~/app.pem".into(),
+                key: Some("~/app.pem".into()),
+                credential: None,
                 discovery: None,
             },
             Some(&dir),
         )
         .unwrap();
-        assert_eq!(home.key, key);
+        assert_eq!(home.source, Source::Key(key.clone()));
         assert!(with("[forge]\napp_id = 1\n", 4).is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The forge-identity spec's "A command in place of a key", "Both a key
+    /// and a command" and "A command written as a shell line": `[forge]`
+    /// names a key or a command, never both or neither, and a command is a
+    /// list of its program, absolute, under `~/` or a name, and arguments
+    /// (record 0108).
+    #[test]
+    fn the_forge_table_names_a_key_or_a_command() {
+        let home = std::env::temp_dir().join(format!("sluice-credential-{}", std::process::id()));
+        let read = |table: &str| {
+            Instance::from_text(
+                &format!("[forge]\napp_id = 42\n{table}"),
+                None,
+                4,
+                4,
+                Some(&home),
+            )
+        };
+        let forge = read("credential = [\"/opt/forge/bin/token-helper\", \"--app\", \"sluice\"]\n")
+            .unwrap()
+            .forge
+            .unwrap();
+        assert_eq!(
+            forge,
+            Forge {
+                app_id: 42,
+                source: Source::Credential(Command {
+                    program: PathBuf::from("/opt/forge/bin/token-helper"),
+                    args: vec!["--app".into(), "sluice".into()],
+                }),
+                discovery: DISCOVERY,
+            }
+        );
+        let Source::Credential(c) = &forge.source else {
+            panic!("no command");
+        };
+        assert_eq!(c.to_string(), "/opt/forge/bin/token-helper --app sluice");
+        let homed = read("credential = [\"~/bin/token-helper\"]\n")
+            .unwrap()
+            .forge
+            .unwrap();
+        assert_eq!(
+            homed.source,
+            Source::Credential(Command {
+                program: home.join("bin/token-helper"),
+                args: vec![],
+            })
+        );
+        let named = read("credential = [\"token-helper\"]\n")
+            .unwrap()
+            .forge
+            .unwrap();
+        assert_eq!(
+            named.source,
+            Source::Credential(Command {
+                program: PathBuf::from("token-helper"),
+                args: vec![],
+            })
+        );
+
+        let refused = |table: &str| format!("{:#}", read(table).unwrap_err());
+        assert_eq!(
+            refused("key = \"~/app.pem\"\ncredential = [\"/opt/forge/bin/token-helper\"]\n"),
+            "[forge] names both key and credential: name one, the app's private key or the \
+             command that gives its token"
+        );
+        assert_eq!(
+            refused(""),
+            "[forge] names neither key, the app's private key, nor credential, a command that \
+             gives its token: name one"
+        );
+        let shell = refused("credential = \"token-helper --app sluice\"\n");
+        assert!(
+            shell.starts_with("[forge] credential is a string: name the command as a list")
+                && shell.contains("no shell"),
+            "{shell}"
+        );
+        assert_eq!(
+            refused("credential = []\n"),
+            "[forge] credential names no program"
+        );
+        assert_eq!(
+            refused("credential = [\"bin/token-helper\"]\n"),
+            "[forge] credential's program bin/token-helper is a relative path: name it \
+             absolutely, under ~/, or by a name the PATH finds"
+        );
+        assert_eq!(
+            refused("credential = [\"/opt/forge/bin/token-helper\", 1]\n"),
+            "[forge] credential is no list of strings"
+        );
+    }
+
+    /// The forge-identity spec's "A command in place of a key", for branch
+    /// protection: guarding reads a credential command as every other
+    /// command does, and refuses a table that names both a key and a
+    /// command as they do (124; records 0059, 0108).
+    #[test]
+    fn guarding_reads_a_forge_credential() {
+        let dir = std::env::temp_dir().join(format!("sluice-guarding-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        std::fs::write(
+            &path,
+            "[forge]\napp_id = 42\ncredential = [\"/opt/forge/bin/token-helper\", \"--app\", \"sluice\"]\n",
+        )
+        .unwrap();
+        let guarding = Instance::guarding_from(Some(&path)).unwrap().forge;
+        let full = Instance::from_host(Some(&path), 4, 4).unwrap().forge;
+        assert!(guarding.is_some());
+        assert_eq!(guarding, full);
+        std::fs::write(
+            &path,
+            "[forge]\napp_id = 42\nkey = \"/nowhere/app.pem\"\ncredential = [\"/opt/forge/bin/token-helper\"]\n",
+        )
+        .unwrap();
+        let by_guarding = format!("{:#}", Instance::guarding_from(Some(&path)).unwrap_err());
+        let by_host = format!("{:#}", Instance::from_host(Some(&path), 4, 4).unwrap_err());
+        let _ = std::fs::remove_dir_all(&dir);
+        for e in [by_guarding, by_host] {
+            assert!(e.contains("names both key and credential"), "{e}");
+        }
+    }
+
+    /// 51: an outcome is owed a week where the host sets no `[deliveries]
+    /// expire_after`, and the span it sets where it does (weir 104; design
+    /// D9).
+    #[test]
+    fn deliveries_expire_after_168h_where_unset() {
+        let none = Instance::from_file(None, 4).unwrap();
+        assert_eq!(none.expire_after, Duration::from_secs(168 * 3600));
+        let empty = with("[deliveries]\n", 4).unwrap();
+        assert_eq!(empty.expire_after, Duration::from_secs(168 * 3600));
+        let day = with("[deliveries]\nexpire_after = \"24h\"\n", 4).unwrap();
+        assert_eq!(day.expire_after, Duration::from_secs(24 * 3600));
+        let short = with("[deliveries]\nexpire_after = \"90m\"\n", 4).unwrap();
+        assert_eq!(short.expire_after, Duration::from_secs(90 * 60));
+    }
+
+    /// 51: a span that does not read, or under a second, is refused naming
+    /// `[deliveries] expire_after`, and so is a field `[deliveries]` does
+    /// not name (design D9).
+    #[test]
+    fn deliveries_expire_after_that_does_not_read_is_refused() {
+        for text in ["\"a week\"", "\"0s\"", "\"\"", "168"] {
+            let why = format!(
+                "{:#}",
+                with(&format!("[deliveries]\nexpire_after = {text}\n"), 4).unwrap_err()
+            );
+            assert!(why.contains("expire_after"), "{text}: {why}");
+            if text.starts_with('"') {
+                assert!(why.contains("[deliveries] expire_after"), "{text}: {why}");
+            }
+        }
+        assert!(with("[deliveries]\nexpires = \"24h\"\n", 4).is_err());
     }
 
     /// `[signing]`, `[peers]` and `[runs] systems` (74, 78, 87).
@@ -874,9 +1365,69 @@ dir = "/caches/moon"
         );
     }
 
-    /// 35, 71, 74, 78, 87, 136; record 0098: the file sluice's flake module
-    /// renders with every key it declares set, read by the reader that
-    /// refuses a field it does not know, as its settings name it.
+    /// The settings-take-up spec's "Which tables changed": the tables a
+    /// change moves are named in the reference's order, and none for two
+    /// equal readings (135; record 0107; design D5).
+    #[test]
+    fn the_tables_a_change_moves_are_named() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("sluice-tables-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let key = dir.join("app.pem");
+        std::fs::write(&key, "key").unwrap();
+        std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let forge = |discovery: &str| {
+            format!(
+                "[forge]\napp_id = 42\nkey = {:?}\ndiscovery = {discovery:?}\n",
+                key.display().to_string()
+            )
+        };
+        let read = |text: &str| with(text, 16).unwrap();
+        let before = read(&format!("[runs]\nmax = 2\n\n{}", forge("60s")));
+        let after = read(&format!("[runs]\nmax = 3\n\n{}", forge("90s")));
+        let cached = read(&format!(
+            "[runs]\nmax = 2\n\n{}\n[[caches]]\ndir = \"/caches/a\"\n",
+            forge("60s")
+        ));
+        let again = read(&format!("[runs]\nmax = 2\n\n{}", forge("60s")));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(before.changed_tables(&after), ["[runs]", "[forge]"]);
+        assert_eq!(before.changed_tables(&cached), ["[[caches]]"]);
+        assert_eq!(before.changed_tables(&again), Vec::<&str>::new());
+    }
+
+    /// The host-settings-module spec's "Reading the module's credential
+    /// command": the file the module renders with `forge.credential` set
+    /// reads as the app, the command and its arguments in their order, no
+    /// key, and the discovery (record 0108).
+    #[test]
+    fn the_modules_credential_file_is_read_as_written() {
+        let read = Instance::from_text(
+            include_str!("../../../nix/tests/files/credential.toml"),
+            None,
+            16,
+            16,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            read.forge,
+            Some(Forge {
+                app_id: 123456,
+                source: Source::Credential(Command {
+                    program: PathBuf::from("/opt/forge/bin/token-helper"),
+                    args: vec!["--app".into(), "sluice".into()],
+                }),
+                discovery: Duration::from_secs(60),
+            })
+        );
+    }
+
+    /// 35, 51, 71, 74, 78, 87, 136, 151; records 0098, 0102, 0106: the
+    /// file sluice's flake module renders with every key it declares set,
+    /// read by the reader that refuses a field it does not know, as its
+    /// settings name it, the span an outcome is owed and the telemetry
+    /// table among them.
     #[test]
     fn the_modules_file_is_read_as_written() {
         use std::os::unix::fs::PermissionsExt;
@@ -910,7 +1461,7 @@ dir = "/caches/moon"
                 processors: 12,
                 forge: Some(Forge {
                     app_id: 123456,
-                    key: folder.join("app.pem"),
+                    source: Source::Key(folder.join("app.pem")),
                     discovery: Duration::from_secs(60),
                 }),
                 signing: Some(Signing {
@@ -938,7 +1489,185 @@ dir = "/caches/moon"
                         env: variables(&[("MOON_CACHE_SHARED_WORKTREE_CACHE", "true")]),
                     },
                 ],
+                expire_after: Duration::from_secs(72 * 3600),
+                telemetry: Some(HostTelemetry {
+                    send: Some(true),
+                    collector: Some("http://localhost:4318".into()),
+                    service: Some("sluice".into()),
+                    traces: Some(false),
+                    metrics: Some(true),
+                    logs: Some(Logs::Tail),
+                    logs_tail_bytes: Some(4096),
+                    attributes: variables(&[("deployment.environment", "prod")]),
+                }),
             }
         );
+    }
+
+    /// 151: `[telemetry]` read as written, the collector's final `/` taken
+    /// off, and settings with no table giving none (record 0106; design
+    /// D1).
+    #[test]
+    fn the_telemetry_table_is_read_as_written() {
+        let read = with(
+            r#"
+[telemetry]
+send = true
+collector = "http://localhost:4318/"
+service = "sluice-a"
+traces = false
+metrics = true
+logs = "tail"
+logs_tail_bytes = 4096
+
+[telemetry.attributes]
+"deployment.environment" = "prod"
+"#,
+            4,
+        )
+        .unwrap();
+        assert_eq!(
+            read.telemetry,
+            Some(HostTelemetry {
+                send: Some(true),
+                collector: Some("http://localhost:4318".into()),
+                service: Some("sluice-a".into()),
+                traces: Some(false),
+                metrics: Some(true),
+                logs: Some(Logs::Tail),
+                logs_tail_bytes: Some(4096),
+                attributes: BTreeMap::from([(
+                    "deployment.environment".to_string(),
+                    "prod".to_string()
+                )]),
+            })
+        );
+        assert_eq!(
+            with("[telemetry]\n", 4).unwrap().telemetry,
+            Some(HostTelemetry::default())
+        );
+        assert_eq!(with("[runs]\nmax = 1\n", 4).unwrap().telemetry, None);
+        assert_eq!(Instance::from_file(None, 4).unwrap().telemetry, None);
+    }
+
+    /// 151: a `[telemetry]` key that does not read is refused, naming the
+    /// table and the key (record 0106; design D1).
+    #[test]
+    fn a_telemetry_setting_that_does_not_read_is_refused() {
+        let err = |table: &str| {
+            format!(
+                "{:#}",
+                with(&format!("[telemetry]\n{table}\n"), 4).unwrap_err()
+            )
+        };
+        for (table, key, words) in [
+            (
+                "collector = \"https://otel.example:4318\"",
+                "[telemetry] collector",
+                &["plain HTTP to a receiver on the host", "TLS"][..],
+            ),
+            (
+                "collector = \"localhost:4318\"",
+                "[telemetry] collector",
+                &[],
+            ),
+            (
+                "collector = \"http://:4318\"",
+                "[telemetry] collector",
+                &["no host"],
+            ),
+            (
+                "collector = \"http:///v1\"",
+                "[telemetry] collector",
+                &["no host"],
+            ),
+            (
+                "logs = \"all\"",
+                "[telemetry] logs",
+                &["off", "summary", "tail"],
+            ),
+            (
+                "logs_tail_bytes = 0",
+                "[telemetry] logs_tail_bytes",
+                &["1", "65536"],
+            ),
+            (
+                "logs_tail_bytes = 65537",
+                "[telemetry] logs_tail_bytes",
+                &["1", "65536"],
+            ),
+            ("service = \"\"", "[telemetry] service", &[]),
+            (
+                "attributes = { \"service.name\" = \"x\" }",
+                "[telemetry] attributes",
+                &["service.name", "[telemetry] service"],
+            ),
+            (
+                "attributes = { \"service.version\" = \"1\" }",
+                "[telemetry] attributes",
+                &["service.version", "[telemetry] service"],
+            ),
+            (
+                "attributes = { \"\" = \"x\" }",
+                "[telemetry] attributes",
+                &["no name"],
+            ),
+            (
+                "headers = \"x-api=1\"",
+                "[telemetry] headers",
+                &["unknown field"],
+            ),
+            ("send = \"yes\"", "[telemetry] send", &["boolean"]),
+        ] {
+            let why = err(table);
+            assert!(why.contains(key), "{table}: {why}");
+            for w in words {
+                assert!(why.contains(w), "{table}: no {w} in {why}");
+            }
+        }
+        let edge = |table: &str| {
+            with(&format!("[telemetry]\n{table}\n"), 4)
+                .unwrap()
+                .telemetry
+                .unwrap()
+        };
+        assert_eq!(edge("logs_tail_bytes = 1").logs_tail_bytes, Some(1));
+        assert_eq!(edge("logs_tail_bytes = 65536").logs_tail_bytes, Some(65536));
+        assert_eq!(
+            edge("collector = \"http://[::1]:4318/otlp/\"")
+                .collector
+                .as_deref(),
+            Some("http://[::1]:4318/otlp")
+        );
+    }
+
+    /// 151: a `[telemetry]` whose `send` is `true` names its collector, or
+    /// is refused naming `[telemetry] collector`, so the table never sends
+    /// where the caller's `OTEL_EXPORTER_OTLP_*` say; a table that does
+    /// not send needs none (record 0106 as amended; rule core.53).
+    #[test]
+    fn a_telemetry_table_that_sends_names_its_collector() {
+        for table in [
+            "send = true",
+            "send = true\nservice = \"sluice-a\"\nlogs = \"tail\"",
+        ] {
+            let why = format!(
+                "{:#}",
+                with(&format!("[telemetry]\n{table}\n"), 4).unwrap_err()
+            );
+            for w in ["[telemetry] collector", "send = true", "http://"] {
+                assert!(why.contains(w), "{table}: no {w} in {why}");
+            }
+        }
+        for (table, send) in [
+            ("send = false", Some(false)),
+            ("service = \"sluice-a\"", None),
+        ] {
+            let read = with(&format!("[telemetry]\n{table}\n"), 4)
+                .unwrap()
+                .telemetry
+                .unwrap();
+            assert_eq!((read.send, read.collector), (send, None), "{table}");
+        }
     }
 }

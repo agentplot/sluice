@@ -240,22 +240,28 @@ again to fold them. A check that runs a command has no tasks, and says so:
 1 agent` says where the host's runs go.
 
 When one of the session's submissions lands, fails or conflicts, a toast
-says so, and the board collects the session's pending outcomes with
-`sluice inbox`. An idle session then gets a turn in sluice's own words: the
-outcome, which tests were blamed and where their logs are, so the agent can
-fix its work without being asked. An outcome is delivered once: where sluice
-already typed its notice into the session's herdr pane, or a wait in the
-worktree reported it, `sluice inbox` prints nothing and no turn starts. The
-board collects when the session starts too, so a session that restarted
-gets what it missed. The `wake` option in `/config` turns the collecting
-and the turn off, and the outcome then stays pending until the session runs
-`sluice inbox` or a wait reports it.
+says so, and the board collects with `sluice inbox --new`, which hands over
+only what nothing has handed the session yet. An idle session then gets a
+turn in sluice's own words: the outcome, which tests were blamed and where
+their logs are, and the key to confirm it by, so the agent can fix its work
+without being asked. Where sluice already typed its notice into the
+session's herdr pane, or a wait in the worktree reported it, `sluice inbox
+--new` prints nothing and no turn starts. When the session starts, and after
+the board is reloaded, it collects with `sluice inbox`, which hands over
+again every outcome the agent has not confirmed, so a session that
+restarted before it acted gets it again. The agent confirms each outcome
+with `sluice confirm <key>` once it has acted on it, as the session note
+tells it to, and from then on nothing hands that outcome over. The board
+keeps no list of its own. The `wake` option in `/config` turns the
+collecting and the turn off, and the outcome then stays owed until the
+session runs `sluice inbox` or a wait reports it.
 
 The board runs with the sluice releases its plugin names, from the first
-with `sluice inbox` up to the first it does not know. Where the host's
+with `sluice inbox --new` and `sluice confirm` up to the first it does not
+know. Where the host's
 sluice is older or newer, the board says so once in the session, in a toast
 naming both releases and whether sluice or the board is to be upgraded, and
-then shows nothing and delivers nothing; `/sluice` answers with the same
+then shows nothing and hands nothing over; `/sluice` answers with the same
 words. Upgrade whichever it names and start the session again.
 
 Before it submits, the board forecasts the session's worktree whenever its

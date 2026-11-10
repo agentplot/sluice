@@ -111,6 +111,16 @@ nobody. After three runs in a row in which its tests could not run, its
 newest submission is blamed, and each test is named with why. A command
 given to `sluice exec` after `--` is not held to `not_run`.
 
+On a branch whose state is on its remote, a test that passed counts only
+where moon's manifest of it is in the store moon keeps it in. The same
+holds for the manifest of each task it depends on. A test that passed in
+a run that kept no such manifest has no result and blames nobody. Its
+combination is tested again, and the run counts as one whose tests could
+not run. While a combination is tested again for any of these reasons,
+`sluice status` and `sluice wait` say which host's run had no outcome
+and why. The branch's log names the host and the store once, as the
+[state page](/sluice/reference/state/#the-log) shows.
+
 On a host whose system Nix manages, NixOS or nix-darwin, sluice notes
 the system `/run/current-system` links to as a run begins. A test that
 did not pass in a run during which the host's system was switched has no
@@ -499,13 +509,23 @@ a tool submits only once the work is approved.
 
 How many runs a host tests at once, who sluice pushes as, what it signs
 its results as and which caches every run shares are the host's own
-settings, never a repository's. They live in one file on the host,
+settings, never a repository's. So is where its telemetry goes. They live in one file on the host,
 `$XDG_CONFIG_HOME/sluice/config.toml`, which is
 `~/.config/sluice/config.toml` where `XDG_CONFIG_HOME` is unset, and
-every repository on the host reads the same file. sluice reads it when a
-command starts and never writes it: a change counts from the next
-command, and a `sluice run` you keep running takes it once you start it
-again. Without the file, every setting has its default.
+every repository on the host reads the same file. sluice never writes
+it. A command reads it as it starts, so a change counts from the next
+command. Without the file, every setting has its default.
+
+A `sluice run` you keep running looks at the file between its passes.
+It takes a change up before its next pass, and says on stderr which
+tables it took up. A run already testing keeps what it started with:
+its cores, its caches and what its executor lets it touch. A new bound
+holds the runs that start after it. A file that is gone, doesn't read,
+or names a key that doesn't read leaves the `sluice run` on the
+settings it holds. It says so once, with the file and the reason, and
+reads the file again once it changes again. To go back to the
+defaults, write an empty file. A key changed in place, at the path the
+file names, counts once the file next changes or sluice next starts.
 
 ```toml
 [runs]
@@ -515,7 +535,8 @@ reserved = 1   # default: 0; runs of the bound agents' own runs never use
 
 [forge]
 app_id = 123456                  # the GitHub App sluice pushes as
-key = "~/.config/sluice/app.pem" # its private key on this host
+key = "~/.config/sluice/app.pem" # its private key on this host, or in its place
+# credential = ["/opt/forge/bin/token-helper", "--app", "sluice"]  # a command that gives its token
 discovery = "60s"                # default: 60s; how often it asks for pull requests
 
 [signing]
@@ -526,18 +547,30 @@ key = "~/.config/sluice/signing" # an SSH private key on this host
 lease = "5m"   # how long a quiet host keeps a branch
 alive = "2m"   # how often this host shows it is alive
 
+[deliveries]
+expire_after = "168h"  # default: 168h; how long an outcome is owed before it shows expired
+
 [[caches]]                       # a cache every run on the host shares
 dir = "~/.cache/sccache"
+
+[telemetry]
+send = true                          # default: false; whether sluice sends its telemetry
+collector = "http://localhost:4318"  # a receiver on the host; needed where send = true
+
+[telemetry.attributes]
+"deployment.environment" = "prod"
 ```
 
 | table | what it sets | a host needs it when |
 |---|---|---|
 | [`[runs]`](#runs) | How many runs share the host's cores at once, how many of its cores they use, and how many runs are kept for submissions. | Always; each key has a default. |
 | [`[runs] systems`](#runs-systems) | The systems the host runs. | It runs only some of the systems a policy names. |
-| [`[forge]`](#forge) | The GitHub App sluice pushes as, and how often it asks GitHub for a branch's pull requests. | It lands on a branch whose remote is on GitHub. |
+| [`[forge]`](#forge) | The GitHub App sluice pushes as, its key or a command that gives its token, and how often sluice asks GitHub for a branch's pull requests. | It lands on a branch whose remote is on GitHub. |
 | [`[signing]`](#signing) | The signer the host signs its results as, and its key. | It runs checks for a branch whose state is on its remote. |
 | [`[peers]`](#peers) | How long a quiet host keeps a branch, how often this host shows it is alive, and its name among the hosts. | It shares a branch's remote with other hosts. |
+| [`[deliveries]`](#deliveries) | How long an outcome is owed to its worktree before it shows as expired. | Its agents confirm their outcomes sooner or later than in a week. |
 | [`[[caches]]`](#caches) | The caches every run on the host shares. | Its builds share a cache, a compile server's or the task runner's. |
+| [`[telemetry]`](#telemetry) | Whether sluice sends its telemetry, where, as what, which signals and how much of a failure. | It sends sluice's telemetry. |
 
 ### Who writes it
 
@@ -553,14 +586,17 @@ $EDITOR ~/.config/sluice/config.toml
 ```
 
 Keep the keys it names, `[forge] key` and `[signing] key`, on the host
-with mode `0600`.
+with mode `0600`. A host that hands sluice the app's token by a command,
+`[forge] credential`, keeps no key of the app's on the host.
 
 **A host under configuration management.** When Nix, Ansible, an MDM or
 another tool manages the host's configuration, the file is that tool's.
 It is read-only, or a link into the tool's own store, or the tool writes
 it again each time it applies the configuration. Change it where the
 host's configuration is managed, and apply it from there: an edit on the
-host is refused, or lost at the next apply. A `->` in the listing marks
+host is refused, or lost at the next apply. Nothing need restart sluice
+when the managed file changes: a `sluice run` kept running takes the
+change up before its next pass. A `->` in the listing marks
 a link, and a mode with no `w` marks a read-only file:
 
 ```sh
@@ -598,13 +634,21 @@ wrote it, and sluice refuses it if sluice does not know it either. Name
 each key file by its path on the host, from `/` or under `~/`.
 Evaluation fails on a key under the Nix store, on a key's text, and on
 a Nix path such as `./app.pem`, which would copy the key into the store.
+`forge.credential` takes the command that gives the app's token, in
+place of `forge.key`, as a list of strings: its program, then each
+argument, such as
+`[ "/opt/forge/bin/token-helper" "--app" "sluice" ]`. A string in its
+place fails evaluation, and so does an argument that holds a GitHub
+token's text, since the file is in the store.
 The module links `~/.config/sluice/config.toml` to the file it writes,
 for nix-darwin's primary user, or on NixOS for `services.sluice.user`.
 A file already there that is no link moves once, to
 `config.toml.before-nix`. The module puts sluice in the system profile:
 set `services.sluice.package` to install your own build, or to `null`
 to install none. It writes nothing else and installs no service, since
-sluice needs none.
+sluice needs none. A configuration may import the module twice, itself
+and through another flake's module that imports it: it declares
+`services.sluice` once.
 
 **Several hosts as peers.** Hosts that submit to one branch on a remote,
 or run its checks, each have a file of their own, set up on each host in
@@ -683,6 +727,44 @@ identity](/sluice/guides/github-app/) sets it up, and
 [`sluice forge check`](/sluice/reference/commands/#sluice-forge-check)
 says whether it is set up right.
 
+`credential` names a command that gives the app's token, in place of
+`key`, for a host whose own tool keeps the app's key. A table names
+`key` or `credential`, never both, and sluice refuses one that names
+both or neither. Write the command as a list: its program, then each
+argument.
+
+```toml
+[forge]
+app_id = 123456
+credential = ["/opt/forge/bin/token-helper", "--app", "sluice"]
+```
+
+sluice runs the command with no shell, so a string in its place is
+refused. Name the program by its full path, under `~/`, or by a name
+the `PATH` finds. sluice asks the command as git asks a credential
+helper. It runs the command with `get` after its arguments, and writes
+`protocol=https`, `host=github.com` and `path=<owner>/<repository>` on
+its standard input. It reads `password`, the token, and
+`password_expiry_utc`, the token's end in seconds since 1970, from its
+standard output, and passes over every other line. sluice holds the
+token in memory for that repository alone, and asks again five minutes
+before its end. A token given with no end is held until GitHub refuses
+it.
+
+When GitHub refuses the command's token, sluice runs the command with
+`erase` and the refused token, then with `get` for a fresh one. It
+never tries the refused token again, and a `get` that gives it back is
+no fresh token. A command that exits non-zero, prints no `password`, or
+gives nothing in thirty seconds fails the call that needed the token.
+The failure names the command and gives what it wrote on its standard
+error, never a token. sluice asks GitHub once, with each token the
+command gives, which repositories it reaches. It refuses a token that
+doesn't reach the repository, and names what it reaches in a refusal's
+report. `sluice forge check` with a command checks that the command
+gives a token, that the token is the app's that `app_id` names, and that
+it may push. GitHub shows a token's other grants to nobody holding only
+the token, so check the app's other permissions where its key is kept.
+
 `discovery` is how often sluice asks GitHub for the open pull requests
 into a branch that takes them while nothing on the host changes, a
 duration such as `"60s"` or `"2m"`. The default is `"60s"` and the
@@ -723,6 +805,93 @@ sets either is refused.
 | `lease` | How long this host waits, having seen a branch's state stand unchanged, before it takes the branch from a host that has gone quiet. It counts by its own clock, never by the time another host wrote. The default is `"5m"`. |
 | `alive` | How often this host rewrites its sign of life. A claim on a run lapses once its host's sign of life has stood unchanged this long, and another host runs it. It must be shorter than `lease`. The default is `"2m"`. |
 | `name` | What this host is called among the hosts that share a remote: in a branch's state as its lead, and on the runs it claims. The default is the host's own name; give two instances on one machine a name each. |
+
+### `[deliveries]`
+
+How long an outcome the host's rounds decide is owed to the worktree or
+pull request that submitted it before it shows as expired. An outcome
+stays owed, and every `sluice inbox` in its worktree hands it over
+again, until its agent confirms it with `sluice confirm <key>`. Past
+`expire_after` it is still owed: `sluice inbox` says it has expired,
+and `sluice status <branch>` lists it under its worktree, for the
+operator to confirm with `sluice confirm <key> --as operator` where the
+worktree is gone. The span is fixed by the host whose round decides the
+outcome.
+
+| key | meaning |
+|---|---|
+| `expire_after` | A duration such as `"168h"`, `"72h"` or `"90m"`, at least a second. The default is `"168h"`, a week. A value that is no such duration is refused, naming `[deliveries] expire_after`. |
+
+### `[telemetry]`
+
+Whether sluice sends its telemetry, where, as what, which signals and
+how much of a failure. sluice sends OTLP over HTTP, protobuf, to a
+collector, as the [telemetry reference](/sluice/reference/telemetry/)
+describes. A host with no `[telemetry]` sends nothing unless a command
+asks.
+
+```toml
+[telemetry]
+send = true
+collector = "http://localhost:4318"
+logs = "tail"
+logs_tail_bytes = 4096
+
+[telemetry.attributes]
+"deployment.environment" = "prod"
+```
+
+| key | meaning |
+|---|---|
+| `send` | Whether sluice sends its telemetry, `true` or `false`. The default is `false`: sluice sends nothing. `true` needs a `collector`. |
+| `collector` | The collector sluice sends to, an `http://` address: a host, a port and at most a path, such as `"http://localhost:4318"`. sluice sends to its `/v1/traces`, `/v1/metrics` and `/v1/logs`. Name a receiver on the host, which forwards over TLS: sluice sends plain HTTP, and refuses an `https://` address. A table with `send = true` names one. Unset, the table sends nothing, and a command's own `--otel` sends where `OTEL_EXPORTER_OTLP_ENDPOINT` says, else to `http://localhost:4318`. |
+| `service` | The service sluice reports as, its `service.name`. The default is `"sluice"`. |
+| `traces` | Whether sluice sends traces, `true` or `false`. The default is `true`. |
+| `metrics` | Whether sluice sends metrics, `true` or `false`. The default is `true`. |
+| `logs` | How much of a failed check's output sluice sends as logs. `"off"` sends no logs at all. `"summary"` sends which task failed and where its output is kept, never the output. `"tail"` sends the output's end, scrubbed of what reads as a secret. The default is `"summary"`. |
+| `logs_tail_bytes` | At `logs = "tail"`, the most of a failed check's output sluice sends, in bytes, from 1 to 65536. The default is 8192. |
+| `attributes` | More resource attributes on everything sluice sends, each a string, such as `"deployment.environment" = "prod"`. The default is none. |
+
+Everything sluice sends carries `service.name`, `service.version`, the
+release, and `host.name`, the host's own name. An `attributes` entry
+`host.name` names the host in its place.
+
+sluice refuses to start on a `[telemetry]` it cannot read, naming the
+table and the key: a key it does not know, a `collector` that is no
+`http://` address or names no host, `send = true` with no `collector`,
+or an empty `service`. It refuses a
+`logs` other than `off`, `summary` or `tail`, and a `logs_tail_bytes`
+below 1 or above 65536. It refuses an attribute with no name, and one
+named `service.name` or `service.version`, which `service` and the
+release name. A sluice too old to know `[telemetry]` refuses the file, as it
+refuses any table it does not know.
+
+A command's own choice holds for that command alone, over the table.
+`--otel` or `SLUICE_OTEL=1` sends where `send` is unset or `false`, and
+`--otel=false` or `SLUICE_OTEL=0` sends nothing where `send = true`.
+`--otel-service-name`, `--otel-logs` and `--otel-logs-limit` choose
+`service`, `logs` and `logs_tail_bytes` the same way, as do
+`SLUICE_OTEL_SERVICE_NAME`, `SLUICE_OTEL_LOGS` and
+`SLUICE_OTEL_LOGS_LIMIT`. sluice holds a limit above 65536 to 65536.
+
+OpenTelemetry's variables only turn telemetry or a signal off, or name
+the collector where the table names none:
+
+- `OTEL_SDK_DISABLED=true` turns telemetry off, and
+  `OTEL_TRACES_EXPORTER`, `OTEL_METRICS_EXPORTER` or
+  `OTEL_LOGS_EXPORTER` at `none` turns that signal off. None of them
+  turns on a signal the table turns off.
+- Where the table names a `collector`, sluice reads none of the caller's
+  `OTEL_EXPORTER_OTLP_*`: a session's endpoint, headers and protocol
+  never take sluice's telemetry. A table names none only where it does
+  not send, and there, for a command's own `--otel`, they name the
+  collector, its headers and its protocol.
+- Where the host has a `[telemetry]`, sluice reads neither
+  `OTEL_RESOURCE_ATTRIBUTES` nor `OTEL_SERVICE_NAME`.
+
+A host with no `[telemetry]` reads the environment as a command is given
+it, `OTEL_EXPORTER_OTLP_*`, `OTEL_RESOURCE_ATTRIBUTES` and
+`OTEL_SERVICE_NAME` among it.
 
 ### `[[caches]]`
 
@@ -801,5 +970,5 @@ cache.
 | `SLUICE_REVISION` | sluice, for a preview | The full revision the preview holds. |
 | `SLUICE_JOBS` | sluice, for a run | The cores the run may use: the cores sluice may use, `[runs] cores` where set and else what the host gives it, divided by `[runs] max`, the bound every repository on the host shares, and never less than one. |
 | each `[[caches]]` `env` | the host's config, for every run | The variables a cache's clients read, exactly as the host's [`[[caches]]`](#caches) declares them: for a submission's run, an agent's `sluice exec` and a preview's command, under any executor. Nothing else of sluice's own environment reaches a run. |
-| `SLUICE_OTEL` | the host | `1` turns telemetry on; see [telemetry](/sluice/reference/telemetry/). |
+| `SLUICE_OTEL` | the caller, for one command | `1`, `true`, `yes` or `on` turns telemetry on for the command, and `0`, `false`, `no` or `off` turns it off, over the host's [`[telemetry] send`](#telemetry); see [telemetry](/sluice/reference/telemetry/). |
 | `SLUICE_FORGE_API` | tests | Where the `[forge]` app's API calls go instead of `https://api.github.com`: a fake one. |

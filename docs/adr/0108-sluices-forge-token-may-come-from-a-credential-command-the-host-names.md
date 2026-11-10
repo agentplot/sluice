@@ -1,0 +1,63 @@
+---
+number: 108
+title: sluice's forge token may come from a credential command the host names
+status: accepted
+date: 2026-11-09
+decision-makers:
+- Chuck Swanberg
+- the design agent
+---
+
+# sluice's forge token may come from a credential command the host names
+
+Status: accepted by the user on 2026-11-09, on agentplot-design's card: "One Boomdrive App; the runner holds its key and gives every tool its tokens". How sluice takes the token is agentplot-design's own choice, made on record 0019, the statement and agentplot/boomdrive's record 0007 as amended that day, and cheap to change.
+
+Deciders: the user, 2026-11-09, who asked in agentplot-design's pane as the family moved to the boomdrivedev org: "Do we want to mimic the control plane cloud concept here and have a Boomdrive GitHub app that passes the credentials through from the cloud down to Sluice?", and chose the option above on its card.
+Sources: record 0019; the statement's clause 134 and C.8's row of who holds the branch's credential; agentplot/boomdrive record 0007 as amended on 2026-11-09, and its rule core.33; agentplot/blueprints `design/principles.md` 6 and 14; git's credential-helper protocol (`gitcredentials(7)`, `git-credential(1)`).
+
+## Context and problem statement
+
+sluice lands as a GitHub App. The host's `[forge]` names the App's id and the path of its key, and sluice signs a JWT with the key and buys an installation token for each repository (record 0019). On a Boomdrive host, the user chose one App for the family, whose key the runner alone holds, or the cloud on a cloud host, and every tool asks the runner for its token by `boomdrive forge-token` (agentplot/boomdrive record 0007 as amended). sluice has no way to take a token it did not mint.
+
+## Considered options
+
+1. `[forge]` names a credential command, which sluice runs as git runs a credential helper, in place of a key.
+2. A token in sluice's environment, set by whoever starts it.
+3. sluice keeps its own App beside the family's.
+
+## Decision outcome
+
+Option 1.
+
+- **`[forge] credential` names a command,** its program and arguments as a list, run with no shell. A table names `key` or `credential`, never both, and `app_id` with either, so the ruleset check and a refusal still name the App.
+- **sluice speaks git's credential-helper protocol to it.** For a token it runs the command with `get`, writes `protocol`, `host` and `path`, the repository as `<owner>/<name>`, on its standard input, and reads `password` and `password_expiry_utc` from its standard output. sluice keeps the token in memory, as it keeps one it minted, and asks again five minutes before it expires.
+- **A credential refused is bought afresh from the command.** sluice runs it with `erase` for the token the forge refused, then with `get`, wherever it would mint a fresh token (134, rule core.29). It never tries again with the refused token.
+- **Nothing of the token is kept.** sluice writes no token to a file, a log or a git configuration, as with a token it minted (record 0019). A command that exits non-zero, or prints no `password`, fails the call as a key that cannot sign does, naming the command and its words.
+- **Which tools take the family's token.** On a Boomdrive host, sluice and the runner take it from `boomdrive forge-token`: sluice to land, read the forge and post its check, the runner for its clones and fetches. crew does not, because it acts for the person with the person's own credentials, on cards and state no drive serves. An agent in a place keeps the person's credentials too, so the ruleset still keeps agents off a guarded branch.
+- **sluice names no tool.** The command is the host's setting. sluice's code, site and skills give a placeholder command, never the runner's (rules core.1, core.26).
+
+Not taken:
+
+- **Option 2.** A token in the environment is read by every process it starts, an agent's command among them, and expires under a long run with no way to buy another.
+- **Option 3.** Two Apps on one host is two keys to keep, and two names on the forge for one family's work, which the user ruled out.
+
+### Consequences
+
+- Good: on a Boomdrive host, the App's key is in one process, and sluice's identity is the same whether crew or the cloud is the control plane.
+- Good: any host may hand sluice a token from its own secrets manager by the same setting, which record 0019 named as a later way to keep the key from agents.
+- Neutral: `sluice forge check` verifies a command as it verifies a key: a token comes, the installation may write contents, and the App is every ruleset's only bypass.
+- The statement's clause 134 and C.8's row of who holds the branch's credential say it, amended the same day. Rule core.29's and core.51's details read with it.
+
+## Amendment, 2026-11-09: what the build chose within the decision
+
+The change `sluice-takes-its-forge-token-from-a-command` builds the decision. These are the construct stage's own choices within it, each cheap to change, with the path not taken.
+
+- **The table's refusals and the program's path.** `[forge]` reads `credential` whole and refuses, naming the setting: both `key` and `credential`, neither, a string, an empty list or one with an element that is no string, and a program that holds a `/` and begins neither `/` nor `~/`. `~/` in the program is expanded as a key's path is, and a bare name is left for the `PATH` to find. The arguments are taken as written. Branch protection's reading takes `credential` through the same reader (124; record 0059). Not taken: reading the list straight into a list of strings, whose refusal of a string would be the parser's words, not sluice's.
+- **The client beside sluice's helper.** `identity::CredentialCommand` is git's protocol from the asking side, beside `sluice credential`, its answering side, and names no forge. It runs the command with no shell, in a process group of its own, under a limit of thirty seconds, an API call's, and kills the group at the limit, so a child holding its pipes open ends with it. Its standard output and error are read on threads of their own, 64 KiB of each kept. A failure names the command, says what went wrong and gives its standard error, never its standard output. `erase`'s exit and output are not read, as git reads none. A start the system refuses because the program is still open for writing is tried again for up to a second. Not taken: reading `password` alone, which would leave sluice asking for every call or holding a token past its life.
+- **A token with no end is held until refused,** git's reading of a credential with no expiry; a token with an end is held until five minutes before it, as a minted one is. Not taken: asking the command for every call, which would run it once per API call and per git call of a round, nor assuming an hour, which a command handing over an older token would outlive.
+- **The refused token erased, and a token given back no fresh token.** A renewal under a command drops the token held, runs the command with `erase` and it, then with `get`. A token equal to the one erased fails the renewal, its words saying the command gave again the token GitHub refused, and the call's words say no token could be got afresh where a key's say bought. A fresh token is handed over once five seconds old, as a bought one is.
+- **The reach read as what the forge says of the token.** Each token the command gives is asked once, with it, `GET /installation/repositories`. A listing that reaches the repository names what it reaches, or every repository of the account where the installation takes all. A whole listing that leaves the repository out refuses the token, naming the command and what it reaches. A listing cut short that does not show it, a refused read, a read with no answer, and a paused allowance hand the token over, the read's words in place of the reach, and a 401 there never renews the token. The read counts against the repository's allowance. Not taken: reading the reach only when a refusal stands, which would have the pushed refs profile ask about each refused credential afterwards, nor naming only the command.
+- **The pause kept under the owner for both ways.** A pause is kept as `pauses/<app>-<owner>-<resource>.json`, the owner naming the app's one installation on that account, whichever way the token came, so a process on a key and one on a command honour each other's. It is read before any token is got, so a paused call runs no command and buys no token. Not taken: the installation's id for a minted token and the owner for a command's, two names for one allowance, nor no pause for a command's token, which rule core.29 rules out. A pause kept under the installation's id before the change is not read after it; it lasts at most until GitHub's reset.
+- **The bot read from `viewer`.** `Forge::login` takes the repository. Under a command it reads GraphQL's `{ viewer { login } }` with the repository's token, under GraphQL's allowance; under a key, `GET /app` with the JWT, as before. Either is kept once read for the process. Not taken: `viewer` under a key too, which would spend a GraphQL point where the JWT spends none.
+- **`forge check`'s three findings, the receive-pack read and the grants it leaves.** Under a command, the check finds that the command gives a token, that the token is the app's `app_id` names, by `viewer`'s login with its `[bot]` taken off and `GET /apps/<slug>`, and that the token may write the repository, by GitHub's answer to `GET <owner>/<name>.git/info/refs?service=git-receive-pack` with the token as git sends it, read under the retry policy; then the rulesets. A 401, 403 or 404 says the app needs Contents read and write; any other status says it tells nothing either way. GitHub shows a token's workflows, checks and pull requests grants to no holder of the token alone, so the check leaves them to where the app's key is kept. Not taken: a dry run of git's own, which needs a revision of the branch on the host and a refspec chosen to send nothing, nor findings for the three grants that say nothing about the host.
+- **The module's guard on a token's text.** `forge.credential` is declared as a list of strings, so a string fails the option's type, naming it. An element that begins `ghs_`, `ghp_`, `gho_`, `ghu_`, `ghr_` or `github_pat_` fails evaluation, naming the option and the store. A program in the store passes. A file naming both `key` and `credential` passes the module, for sluice to refuse at its read (rule core.51). Not taken: the module refusing both, which would give one refusal two homes.

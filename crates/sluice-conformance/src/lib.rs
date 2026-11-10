@@ -314,6 +314,44 @@ pub trait Rig {
         parse_lines(&bytes).expect("the results log parses")
     }
 
+    /// 51: the branch's deliveries, weir's records, in the order added
+    /// (record 0102).
+    fn deliveries(&self) -> Vec<weir_delivery::Record> {
+        let s = self.sluice();
+        let snap = s.seams().state.read(BRANCH).expect("records read");
+        Line::load(BRANCH, snap)
+            .expect("the records parse")
+            .deliveries()
+            .to_vec()
+    }
+
+    /// 51: the hand-overs of the outcome under `key`, by their ways, in the
+    /// order recorded.
+    fn handed(&self, key: &str) -> Vec<String> {
+        self.deliveries()
+            .into_iter()
+            .filter_map(|r| match r {
+                weir_delivery::Record::Handover(h) if h.key.as_str() == key => {
+                    Some(h.by.to_string())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// 51: the readers that have confirmed the outcome under `key`.
+    fn confirmed(&self, key: &str) -> Vec<String> {
+        self.deliveries()
+            .into_iter()
+            .filter_map(|r| match r {
+                weir_delivery::Record::Confirmation(c) if c.key.as_str() == key => {
+                    Some(c.reader.to_string())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
     /// The branch's own document, `branch.json`.
     fn doc(&self) -> BranchDoc {
         let s = self.sluice();

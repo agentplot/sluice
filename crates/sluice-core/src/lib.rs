@@ -9,11 +9,14 @@
 pub mod branches;
 pub mod equip;
 pub mod line;
+pub mod notice;
 pub mod ops;
 pub mod order;
 pub mod overview;
+pub mod owed;
 pub mod policy;
 pub mod preview;
+pub mod proof;
 pub mod records;
 pub mod refused;
 pub mod refused_writes;
@@ -33,10 +36,15 @@ use crate::policy::{Policy, Rules, POLICY_PATH};
 use crate::records::{parse_lines, to_line, ResultLine, SetAside, SET_ASIDE_SCHEMA};
 use crate::refused::Refusal;
 
+pub use notice::notice;
 pub use ops::{
     Accepted, AmendRefusal, CopyDiffers, CopyHow, Forecast, Forecasted, GroupRequest, KeptOut,
-    Lookup, Pending, PendingOutcome, Refused, Requester, Status, SubmitHead, SubmitRefusal,
-    SubmitRequest, SubmittedHead, Unread, WithdrawRefusal, Withdrew,
+    Lookup, Refused, Requester, Status, SubmitHead, SubmitRefusal, SubmitRequest, SubmittedHead,
+    Unread, WithdrawRefusal, Withdrew,
+};
+pub use owed::{
+    Collect, ConfirmAs, Confirmation, Confirmations, DeliveryView, Owed, OwedOutcome, OwedView,
+    ReaderView,
 };
 pub use step::{Round, Started, Step};
 
@@ -169,7 +177,15 @@ pub struct Peer {
     /// 87: the systems this host runs, by the policy's names; `None` for
     /// the one system it is.
     pub systems: Option<Vec<String>>,
+    /// 51: the span an outcome this host's rounds record is owed before it
+    /// expires, the host's `[deliveries] expire_after` (weir 104; record
+    /// 0102; design D9).
+    pub expire_after: std::time::Duration,
 }
+
+/// 51: an outcome's span where the host sets no `[deliveries]
+/// expire_after`: a week (design D9).
+pub const EXPIRE_AFTER: std::time::Duration = std::time::Duration::from_secs(168 * 60 * 60);
 
 impl Default for Peer {
     fn default() -> Self {
@@ -179,6 +195,7 @@ impl Default for Peer {
             alive: std::time::Duration::from_secs(120),
             signer: None,
             systems: None,
+            expire_after: EXPIRE_AFTER,
         }
     }
 }

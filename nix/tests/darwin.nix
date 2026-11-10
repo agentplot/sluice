@@ -1,7 +1,8 @@
 # The host-settings-module spec on nix-darwin (record 0098): the module
 # evaluated in a system of aarch64-darwin whose primary user is alice, at
 # /Users/alice, its activation's link, and the system profile, against
-# the same system with the module not enabled.
+# the same system with the module not enabled; and the module imported
+# twice.
 t:
 let
   inherit (t) lib;
@@ -19,6 +20,9 @@ let
   none = t.darwinSystem { services.sluice.package = null; };
   off = t.darwinSystem { services.sluice.enable = lib.mkForce false; };
   noHome = t.darwinSystem { users.users.alice.home = lib.mkForce null; };
+  # Imported again under another module, as another flake's module that
+  # imports it does.
+  twice = t.darwinSystem { imports = [ { imports = [ t.outputs.darwinModules.sluice ]; } ]; };
 
   # Compared as text: a regular expression may not hold a store path.
   plain = builtins.unsafeDiscardStringContext;
@@ -112,4 +116,23 @@ in
     ++ t.expect (
       builtins.replaceStrings [ "${emptyLink}\n" ] [ "" ] (scriptOf none) == scriptOf off
     ) "nix-darwin's activation, the link's line taken out, is not the activation without the module";
+
+  "The module imported twice on nix-darwin" =
+    let
+      evaluates = (builtins.tryEval twice.system.drvPath).success;
+      declared = builtins.length twice.options.services.sluice.enable.declarations;
+      key = "github:agentplot/sluice#darwinModules.sluice";
+      keyOf = module: module.key or null;
+    in
+    t.expect (
+      keyOf t.outputs.darwinModules.sluice == key
+    ) "darwinModules.sluice's key is ${toString (keyOf t.outputs.darwinModules.sluice)}, not ${key}"
+    ++ t.expect (
+      keyOf t.outputs.darwinModules.default == key
+    ) "darwinModules.default's key is ${toString (keyOf t.outputs.darwinModules.default)}, not ${key}"
+    ++ t.expect evaluates "a system importing the module twice does not evaluate"
+    ++ lib.optionals evaluates (
+      t.expect (declared == 1) "services.sluice.enable is declared ${toString declared} times"
+      ++ links twice emptyLink
+    );
 }

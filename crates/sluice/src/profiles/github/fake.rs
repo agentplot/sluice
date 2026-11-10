@@ -215,7 +215,7 @@ impl FileForge {
 }
 
 impl Forge for FileForge {
-    fn login(&self) -> Result<String> {
+    fn login(&self, _: &Repo) -> Result<String> {
         Ok(LOGIN.into())
     }
 
@@ -572,7 +572,7 @@ mod tests {
         assert_eq!(f.comments(&repo, n).unwrap(), ["edited"]);
         let opened = f.open(&repo, "main", "unit/b", "B", "body", false).unwrap();
         assert!(!opened.draft);
-        assert_eq!(opened.author, f.login().unwrap());
+        assert_eq!(opened.author, f.login(&repo).unwrap());
         f.edit(&repo, opened.number, None, "new body").unwrap();
         let edited = f.by_ref("unit/b").unwrap().unwrap();
         assert_eq!(

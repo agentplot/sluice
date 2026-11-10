@@ -10,6 +10,7 @@ pub mod equip;
 pub mod exec;
 pub mod home;
 pub mod host_count;
+pub mod host_settings;
 pub mod identity;
 pub mod instance;
 pub mod overview;
@@ -36,11 +37,11 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use overview::Follows;
 use reader::{Driver, Drives, Reader};
-use sluice_core::overview::{in_queue, BranchView, Held};
+use sluice_core::overview::{in_queue, BranchView, CandidateView, Held};
 use sluice_core::records::{Beside, BranchHold, CopyBehind, Event, FailedTask, State, Submission};
 use sluice_core::{
-    Accepted, AmendRefusal, Clock, CopyDiffers, Forecast, Forecasted, GroupRequest, Lookup,
-    Pending, Requester, Seams, Serves, Sluice, Status, Step, SubmitHead, SubmitRefusal,
+    Accepted, AmendRefusal, Clock, Collect, CopyDiffers, Forecast, Forecasted, GroupRequest,
+    Lookup, Owed, Requester, Seams, Serves, Sluice, Status, Step, SubmitHead, SubmitRefusal,
     SubmitRequest, Unread, WithdrawRefusal, Withdrew,
 };
 use sluice_seams::{Decided, Outcome, Rev, SessionPlace, Submitter};
@@ -84,18 +85,27 @@ Examples:
   $ sluice overview         every branch's queue
 
 Telemetry, taken by every command:
-      --otel                       Export traces and metrics over OTLP/HTTP, to
-                                   where the OTEL_EXPORTER_OTLP_* variables say
-                                   [env: SLUICE_OTEL=1|true|yes|on]
+      --otel                       Export traces, metrics and logs over
+                                   OTLP/HTTP, where the host's [telemetry] in
+                                   ~/.config/sluice/config.toml says; this flag
+                                   and SLUICE_OTEL choose for this command alone,
+                                   --otel=false or SLUICE_OTEL=0 turning the
+                                   host's send = true off. OTEL_SDK_DISABLED=true
+                                   turns them all off, and OTEL_TRACES_EXPORTER,
+                                   OTEL_METRICS_EXPORTER or OTEL_LOGS_EXPORTER at
+                                   none turns one alone off
+                                   [env: SLUICE_OTEL=1|true|yes|on|0|false|no|off]
       --otel-service-name <NAME>   The service the telemetry is reported as
-                                   [env: SLUICE_OTEL_SERVICE_NAME] [default: sluice]
+                                   [env: SLUICE_OTEL_SERVICE_NAME]
+                                   [default: the host's [telemetry], else sluice]
       --otel-logs <LOGS>           How much of a failed check's output is sent as
                                    logs: off, summary (where it is kept, never
                                    what it says) or tail (its end, scrubbed of
-                                   what reads as a secret)
-                                   [env: SLUICE_OTEL_LOGS] [default: summary]
+                                   what reads as a secret) [env: SLUICE_OTEL_LOGS]
+                                   [default: the host's [telemetry], else summary]
       --otel-logs-limit <BYTES>    The most of a failed check's output sent at
-                                   tail [env: SLUICE_OTEL_LOGS_LIMIT] [default: 8192]";
+                                   tail [env: SLUICE_OTEL_LOGS_LIMIT]
+                                   [default: the host's [telemetry], else 8192]";
 
 /// `sluice submit --help`'s examples and exits; the exits are those of
 /// the reference's "Exit codes".
@@ -145,13 +155,33 @@ Exit codes:
 /// `sluice inbox --help`'s examples and exits (51, 135).
 const INBOX_AFTER_HELP: &str = "\
 Examples:
-  $ sluice inbox           once, when a session starts again
+  $ sluice inbox                    once, when a session starts again
   $ sluice inbox --json
+  $ sluice inbox --confirm --json   a caller that keeps what it is given
+  $ sluice inbox --new              only what nothing has handed over yet
+
+Each outcome is handed over again by every inbox until it is confirmed:
+sluice confirm <key> once it has been acted on.
 
 Exit codes:
-  0    delivered every outcome pending, or there was none
+  0    handed over every outcome owed, or there was none
   3    a branch's records could not be read, said on stderr after the rest
-       is delivered; or sluice itself failed
+       is handed over; or sluice itself failed
+  64   a command line sluice cannot read";
+
+/// `sluice confirm --help`'s examples and exits (51).
+const CONFIRM_AFTER_HELP: &str = "\
+Examples:
+  $ sluice confirm 12:landed
+  $ sluice confirm 12:landed 15:conflict
+  $ sluice confirm 13:failed --as operator   a removed worktree's
+
+Exit codes:
+  0    confirmed, or confirmed before
+  1    no outcome is owed under a key
+  2    a key's outcome is owed to another worktree: --as operator confirms it
+  3    a branch's records could not be read, so a key not found may be
+       there; or sluice itself failed
   64   a command line sluice cannot read";
 
 /// `--timeout`'s value, read as the policy reads a duration; one it cannot
@@ -184,47 +214,40 @@ pub struct Cli {
     pub worktree: String,
     // The telemetry flags are hidden, here and in every command, and
     // listed in ROOT_AFTER_HELP instead.
-    /// Export traces and metrics over OTLP/HTTP, to where the
-    /// OTEL_EXPORTER_OTLP_* variables say.
-    /// SLUICE_OTEL takes `1`, `true`, `yes` or `on`.
+    /// Export traces, metrics and logs over OTLP/HTTP, where the host's
+    /// `[telemetry]` in `~/.config/sluice/config.toml` says (151). This
+    /// flag, or SLUICE_OTEL, chooses for this command alone:
+    /// `--otel=false` or SLUICE_OTEL=0 turns the host's `send = true` off.
+    /// OTEL_SDK_DISABLED=true turns them all off, and OTEL_TRACES_EXPORTER,
+    /// OTEL_METRICS_EXPORTER or OTEL_LOGS_EXPORTER at `none` turns that one
+    /// alone off. SLUICE_OTEL takes `1`, `true`, `yes` or `on`, and `0`,
+    /// `false`, `no` or `off`.
     #[arg(
         long,
         global = true,
         hide = true,
         env = "SLUICE_OTEL",
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "true",
         value_parser = clap::builder::BoolishValueParser::new()
     )]
-    pub otel: bool,
-    /// The service the telemetry is reported as.
-    #[arg(
-        long,
-        global = true,
-        hide = true,
-        env = "SLUICE_OTEL_SERVICE_NAME",
-        default_value = "sluice"
-    )]
-    pub otel_service_name: String,
-    /// While --otel is on, how much of a failed check's output is sent as
-    /// logs: `off`, `summary` (where it is kept, never what it says) or
-    /// `tail` (its end, scrubbed of what reads as a secret).
-    #[arg(
-        long,
-        global = true,
-        hide = true,
-        env = "SLUICE_OTEL_LOGS",
-        value_enum,
-        default_value = "summary"
-    )]
-    pub otel_logs: telemetry::Logs,
-    /// The most of a failed check's output sent at `tail`, in bytes.
-    #[arg(
-        long,
-        global = true,
-        hide = true,
-        env = "SLUICE_OTEL_LOGS_LIMIT",
-        default_value_t = 8192
-    )]
-    pub otel_logs_limit: usize,
+    pub otel: Option<bool>,
+    /// The service the telemetry is reported as; where unset, the host's
+    /// `[telemetry] service`, else `sluice`.
+    #[arg(long, global = true, hide = true, env = "SLUICE_OTEL_SERVICE_NAME")]
+    pub otel_service_name: Option<String>,
+    /// While telemetry is on, how much of a failed check's output is sent
+    /// as logs: `off`, `summary` (where it is kept, never what it says) or
+    /// `tail` (its end, scrubbed of what reads as a secret); where unset,
+    /// the host's `[telemetry] logs`, else `summary`.
+    #[arg(long, global = true, hide = true, env = "SLUICE_OTEL_LOGS", value_enum)]
+    pub otel_logs: Option<telemetry::Logs>,
+    /// The most of a failed check's output sent at `tail`, in bytes, held
+    /// to 65536; where unset, the host's `[telemetry] logs_tail_bytes`,
+    /// else 8192.
+    #[arg(long, global = true, hide = true, env = "SLUICE_OTEL_LOGS_LIMIT")]
+    pub otel_logs_limit: Option<usize>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -268,6 +291,14 @@ pub enum Command {
         /// One JSON document on stdout.
         #[arg(long)]
         json: bool,
+        /// Waiting, confirm the outcome it reports on receipt, for a
+        /// caller that keeps what it is given (51).
+        #[arg(long, conflicts_with_all = ["no_wait", "check", "status"])]
+        confirm: bool,
+        /// Waiting, confirm on receipt a landing alone: `wt submit`'s, for
+        /// a landing whose worktree it removes.
+        #[arg(long, hide = true)]
+        confirm_landing: bool,
     },
     /// Wait for a submission's outcome, running sluice's rounds meanwhile
     /// unless `sluice run` drives the repository on this host, as a waiting
@@ -287,16 +318,51 @@ pub enum Command {
         /// One JSON document on stdout: the submission's record.
         #[arg(long)]
         json: bool,
+        /// Confirm the outcome it reports on receipt, for a caller that
+        /// keeps what it is given (51).
+        #[arg(long)]
+        confirm: bool,
+        /// Confirm on receipt a landing alone: `wt submit`'s, for a
+        /// landing whose worktree it removes.
+        #[arg(long, hide = true)]
+        confirm_landing: bool,
     },
-    /// Collect every outcome pending for this worktree's submissions, print
-    /// each, and mark each delivered.
+    /// Hand over every outcome still owed to this worktree's submissions,
+    /// printing each with the key to confirm it by; each is handed over
+    /// again until it is confirmed.
     #[command(after_help = INBOX_AFTER_HELP)]
     Inbox {
         /// The worktree whose outcomes are collected.
         #[arg(long, default_value = ".")]
         worktree: String,
         /// One JSON document on stdout: `{"outcomes":[...]}`, each the
-        /// submission's record.
+        /// submission's record with its `delivery`.
+        #[arg(long)]
+        json: bool,
+        /// Confirm each outcome on receipt, for a caller that keeps what it
+        /// is given for readers of its own.
+        #[arg(long)]
+        confirm: bool,
+        /// Only the outcomes no way has handed over yet: no notice pushed,
+        /// no inbox or wait that printed them.
+        #[arg(long)]
+        new: bool,
+    },
+    /// Confirm an outcome once it has been acted on, by the key its notice
+    /// and `sluice inbox` give it, so it is handed over no more.
+    #[command(after_help = CONFIRM_AFTER_HELP)]
+    Confirm {
+        /// Each outcome's key, as `12:landed`.
+        #[arg(required = true)]
+        keys: Vec<String>,
+        /// `operator`: confirm for the outcome's own reader, such as a
+        /// worktree removed before it confirmed.
+        #[arg(long = "as", value_parser = ["operator"])]
+        who: Option<String>,
+        /// The worktree whose outcomes are confirmed.
+        #[arg(long, default_value = ".")]
+        worktree: String,
+        /// One JSON document on stdout: `{"confirmed":[...]}`.
         #[arg(long)]
         json: bool,
     },
@@ -1166,6 +1232,18 @@ fn requester(by: &str) -> Requester {
 }
 
 impl Cli {
+    /// 151: what this command was given of telemetry, by its flags or
+    /// its `SLUICE_OTEL*` variables, which choose for it alone over the
+    /// host's `[telemetry]` (record 0106; design D2).
+    pub fn choices(&self) -> telemetry::Choices {
+        telemetry::Choices {
+            otel: self.otel,
+            service: self.otel_service_name.clone(),
+            logs: self.otel_logs,
+            logs_limit: self.otel_logs_limit,
+        }
+    }
+
     /// Whether the command was asked for JSON, so that even a failure
     /// before or outside it is said as JSON.
     pub fn json(&self) -> bool {
@@ -1175,6 +1253,7 @@ impl Cli {
                 Command::Submit { json, .. }
                 | Command::Wait { json, .. }
                 | Command::Inbox { json, .. }
+                | Command::Confirm { json, .. }
                 | Command::Status { json, .. }
                 | Command::Overview { json, .. }
                 | Command::Exec { json, .. }
@@ -1200,6 +1279,228 @@ impl Cli {
             Some(_) => false,
         }
     }
+}
+
+/// What `sluice run` carries from one pass to the next, whatever binding
+/// each pass runs under (135; design D3): the passes counted toward its
+/// `--rounds`, the repository's driver's lock and its reader (129),
+/// what its document last asked, whether it said that another run drives
+/// the repository, the holds and the refusals it said, the policies it
+/// read by revision (129; rule core.31), and whether the host's systems
+/// were checked (87).
+pub struct Driving {
+    rounds: Option<usize>,
+    /// The tick the reader's document names (64).
+    tick: Duration,
+    n: usize,
+    checked: bool,
+    /// Where the host's readers keep their files, and the repository as
+    /// they name it.
+    place: Option<(std::path::PathBuf, String)>,
+    driver: Option<Driver>,
+    reader: Option<Reader>,
+    /// 129: what its document last asked of whether the repository has
+    /// sluice.
+    asked: Option<overview::Asked>,
+    said_beside: bool,
+    /// 121: each branch's hold as last said, so it is said once.
+    said: BTreeMap<String, Option<(Rev, Rev)>>,
+    /// 26, 121: the words each branch passed by was last said with.
+    passed: BTreeMap<String, String>,
+    /// 129: each policy read, by revision, kept across passes and
+    /// bindings, since a policy at a revision is that revision's bytes.
+    policies: sluice_core::Policies,
+}
+
+impl Driving {
+    /// A `sluice run` that has driven no pass yet, ending after `rounds`
+    /// passes where it names a bound.
+    pub fn new(rounds: Option<usize>) -> Driving {
+        Driving {
+            rounds,
+            tick: tick(Some(&Command::Run { rounds })),
+            n: 0,
+            checked: false,
+            place: None,
+            driver: None,
+            reader: None,
+            asked: None,
+            said_beside: false,
+            said: BTreeMap::new(),
+            passed: BTreeMap::new(),
+            policies: sluice_core::Policies::default(),
+        }
+    }
+}
+
+/// What a pass of `sluice run` ended with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Driven {
+    /// It paused, and the next pass is due.
+    Next,
+    /// The run ends with this exit: its `--rounds` reached, or its pause
+    /// stopped.
+    Ended(i32),
+}
+
+/// One pass of `sluice run` over the repository the seams bind, and the
+/// pause after it (135; design D3): the host's systems checked before the
+/// first pass `driving` runs (87), then the repository's driver's lock
+/// taken or kept, every branch's round run and the reader's document
+/// written (129). Its caller may bind the repository afresh between two
+/// calls, and the next pass runs wholly under the new binding (rule
+/// core.54).
+pub fn drive(
+    driving: &mut Driving,
+    seams: Seams<'_>,
+    host: &dyn exec::Host,
+    pulls: &dyn PullRequests,
+    clock: &dyn Clock,
+    pause: &dyn Pause,
+    out: &mut dyn Write,
+) -> Result<Driven> {
+    let s = Sluice::new(seams, clock)
+        .as_peer(host.peer())
+        .serving(Serves::Every)
+        .keeping(&driving.policies);
+    if !driving.checked {
+        s.check_host_systems()?;
+        driving.checked = true;
+    }
+    // 135: the repository's one driver on the host, and so its reader
+    // (129): a run that finds another live drives nothing, and looks again
+    // at each pass.
+    let (readers, repository) = match &driving.place {
+        Some(place) => place.clone(),
+        None => {
+            let place = (host.readers()?, host.repository()?);
+            driving.place = Some(place.clone());
+            place
+        }
+    };
+    // 26: the branches this pass passed by, with their words; a
+    // bounded run whose last pass passed one by ends as a step
+    // of that branch would.
+    let mut failed: BTreeMap<String, String> = BTreeMap::new();
+    if driving.driver.is_none() {
+        driving.driver = Driver::take(&readers, &repository)?;
+    }
+    if driving.driver.is_some() {
+        // Its part in reading: it drives, so the place is its,
+        // whatever lease a newer watch holds, and it takes none. A
+        // lock it could not try leaves it following, as a watch.
+        match &mut driving.reader {
+            Some(r) => {
+                let _ = r.step(false, Drives::Itself);
+            }
+            None => {
+                driving.reader = Some(Reader::take_given(
+                    &readers,
+                    &repository,
+                    host.version(),
+                    Drives::Itself,
+                )?)
+            }
+        }
+        // 129: what the last pass read by revision and this one
+        // does not use is forgotten.
+        s.next_pass();
+        host.next_pass();
+        // A read whose start it could not mark leaves a forecast
+        // reading past this reader, which decides nothing (64).
+        if let Some(Reader::Lead(lead)) = &driving.reader {
+            let _ = lead.begin();
+        }
+        // 129: each remote that keeps branches' records asked
+        // once, first; a refusal is its branches' alone, read as
+        // last fetched.
+        if let Err(e) = seams.state.refresh() {
+            telemetry::warn(&format!("sluice: warning: {e:#}"));
+        }
+        // 97, previews-1 101: every pass, whether or not a branch
+        // has a queue.
+        exec::tell_abandoned(out, false, &s.release_abandoned()?)?;
+        preview::tell_dropped(out, false, &s.release_unusable_previews()?)?;
+        let mut branches = seams.state.branches()?;
+        match pulls.branches(seams) {
+            Ok(b) => branches.extend(b),
+            Err(e) => telemetry::warn(&format!("sluice: warning: {e:#}")),
+        }
+        branches.sort();
+        branches.dedup();
+        for branch in branches {
+            intake(pulls, seams, clock, &branch, Taker::Driver, false, out);
+            // 26, rule core.14: a branch whose records' read or
+            // round fails is that branch's alone; the pass goes
+            // on to every other branch. 129: one with nothing in
+            // play costs the pass its records' read alone.
+            let ran = s.in_play(&branch).and_then(|in_play| match in_play {
+                false => Ok(None),
+                true => s.round(&branch).map(Some),
+            });
+            let round = match ran {
+                Ok(round) => {
+                    driving.passed.remove(&branch);
+                    round
+                }
+                // Ctrl-C reaching the git a branch's read runs is no
+                // refusal of that branch's.
+                Err(_) if INTERRUPTED.load(Ordering::SeqCst) => None,
+                Err(e) => {
+                    let words = format!("{e:#}");
+                    tell_passed(out, &branch, &words, &mut driving.passed)?;
+                    failed.insert(branch.clone(), words);
+                    None
+                }
+            };
+            if let Some(round) = round {
+                exec::tell_abandoned(out, false, &round.released)?;
+                preview::tell_dropped(out, false, &round.previews)?;
+                exec::tell_releases(out, false, &round.releases)?;
+                if matches!(round.step, Step::Stepped | Step::Held) {
+                    let said = driving.said.entry(branch.clone()).or_default();
+                    tell_hold(out, &branch, round.held.as_ref(), said)?;
+                }
+            }
+        }
+        // 129: the reader's document every watch and wait on the
+        // host follows, each pass, queue or none, read as the
+        // pass's own ask left the records and naming its tick
+        // (64); a read it could not make is its document, in the
+        // words it was refused with (133), and the pass goes on.
+        // Ctrl-C reaching the git a read runs is no failure of the
+        // queues'.
+        if let Some(Reader::Lead(lead)) = &mut driving.reader {
+            let doc =
+                overview::read_held(&s, host, clock, Follows::Kept(pulls), &mut driving.asked)
+                    .unwrap_or_else(|e| told::document(Kind::Internal, &format!("{e:#}"), &[]));
+            let doc = overview::ticked(doc, driving.tick);
+            if !INTERRUPTED.load(Ordering::SeqCst) {
+                // The last document stands for a write that failed
+                // until one succeeds.
+                let _ = lead.write(&doc);
+            }
+        }
+    } else if !driving.said_beside {
+        telemetry::warn(
+            "sluice: another sluice run drives this repository on this host; \
+             this one runs nothing while it does",
+        );
+        driving.said_beside = true;
+    }
+    driving.n += 1;
+    if driving.rounds.is_some_and(|r| driving.n >= r) {
+        // 26: one line per branch, as `main` writes a failed step's, said
+        // whether or not stdout said it this pass.
+        for (branch, words) in &failed {
+            telemetry::error(&format!("sluice: {branch}: {words}"));
+        }
+        return Ok(Driven::Ended(if failed.is_empty() { 0 } else { INTERNAL }));
+    }
+    if !pause.pause() {
+        return Ok(Driven::Ended(STOPPED));
+    }
+    Ok(Driven::Next)
 }
 
 /// Run one command; returns its exit code.
@@ -1235,7 +1536,10 @@ pub fn run(
             status,
             worktree,
             json,
+            confirm,
+            confirm_landing,
         } => {
+            let confirms = Confirms::of(confirm, confirm_landing);
             // 124, D1: a submit by name reads no worktree, and has no last
             // submission of one to report.
             if head.is_some() && !check {
@@ -1337,7 +1641,8 @@ pub fn run(
                     };
                     let named = SubmitHead::Branch(named);
                     return submit_pull(
-                        &s, host, pulls, clock, &named, &branch, mode, json, pause, tick, out,
+                        &s, host, pulls, clock, &named, &branch, mode, json, confirms, pause, tick,
+                        out,
                     );
                 }
                 return submit(
@@ -1355,6 +1660,7 @@ pub fn run(
                     },
                     no_wait,
                     json,
+                    confirms,
                     pause,
                     tick,
                     out,
@@ -1371,7 +1677,8 @@ pub fn run(
                 };
                 let worktree = SubmitHead::Worktree(worktree);
                 return submit_pull(
-                    &s, host, pulls, clock, &worktree, &branch, mode, json, pause, tick, out,
+                    &s, host, pulls, clock, &worktree, &branch, mode, json, confirms, pause, tick,
+                    out,
                 );
             }
             if status {
@@ -1392,6 +1699,7 @@ pub fn run(
                 },
                 no_wait,
                 json,
+                confirms,
                 pause,
                 tick,
                 out,
@@ -1402,7 +1710,10 @@ pub fn run(
             timeout,
             worktree,
             json,
+            confirm,
+            confirm_landing,
         } => {
+            let confirms = Confirms::of(confirm, confirm_landing);
             let deadline = timeout.map(|t| {
                 clock.now() + chrono::Duration::from_std(t).unwrap_or(chrono::Duration::MAX)
             });
@@ -1421,7 +1732,8 @@ pub fn run(
                     let mode = PullMode::Wait { deadline };
                     let worktree = SubmitHead::Worktree(worktree);
                     return submit_pull(
-                        &s, host, pulls, clock, &worktree, &target, mode, json, pause, tick, out,
+                        &s, host, pulls, clock, &worktree, &target, mode, json, confirms, pause,
+                        tick, out,
                     );
                 }
                 Err(_) => match last_submitted(&s, &worktree, &target)? {
@@ -1446,10 +1758,22 @@ pub fn run(
                 tick,
                 copy: None,
                 worktree: Some(&worktree),
+                confirms,
             };
             await_submission(&s, &waiting, sub, None, out)
         }
-        Command::Inbox { worktree, json } => inbox(&s, &worktree, json, out),
+        Command::Inbox {
+            worktree,
+            json,
+            confirm,
+            new,
+        } => inbox(&s, &worktree, json, confirm, new, out),
+        Command::Confirm {
+            keys,
+            who,
+            worktree,
+            json,
+        } => confirm(&s, &keys, who.is_some(), &worktree, json, out),
         Command::Step { branch, json } => {
             intake(pulls, seams, clock, &branch, Taker::Step, json, out);
             let round = s.round(&branch)?;
@@ -1492,147 +1816,12 @@ pub fn run(
             Ok(0)
         }
         Command::Run { rounds } => {
-            let s = s.serving(Serves::Every);
-            s.check_host_systems()?;
-            // 135: the repository's one driver on the host, and so its
-            // reader (129): a run that finds another live drives nothing,
-            // and looks again at each pass.
-            let (readers, repository) = (host.readers()?, host.repository()?);
-            let mut driver: Option<Driver> = None;
-            let mut reader: Option<Reader> = None;
-            // 129: what its document last asked of whether the repository
-            // has sluice.
-            let mut asked = None;
-            let mut said_beside = false;
-            let mut n = 0;
-            // 121: each branch's hold as last said, so it is said once.
-            let mut said: BTreeMap<String, Option<(Rev, Rev)>> = BTreeMap::new();
-            // 26, 121: the words each branch passed by was last said with.
-            let mut passed: BTreeMap<String, String> = BTreeMap::new();
+            let mut driving = Driving::new(rounds);
             loop {
-                // 26: the branches this pass passed by, with their words; a
-                // bounded run whose last pass passed one by ends as a step
-                // of that branch would.
-                let mut failed: BTreeMap<String, String> = BTreeMap::new();
-                if driver.is_none() {
-                    driver = Driver::take(&readers, &repository)?;
-                }
-                if driver.is_some() {
-                    // Its part in reading: it drives, so the place is its,
-                    // whatever lease a newer watch holds, and it takes none. A
-                    // lock it could not try leaves it following, as a watch.
-                    match &mut reader {
-                        Some(r) => {
-                            let _ = r.step(false, Drives::Itself);
-                        }
-                        None => {
-                            reader = Some(Reader::take_given(
-                                &readers,
-                                &repository,
-                                host.version(),
-                                Drives::Itself,
-                            )?)
-                        }
-                    }
-                    // 129: what the last pass read by revision and this one
-                    // does not use is forgotten.
-                    s.next_pass();
-                    host.next_pass();
-                    // A read whose start it could not mark leaves a forecast
-                    // reading past this reader, which decides nothing (64).
-                    if let Some(Reader::Lead(lead)) = &reader {
-                        let _ = lead.begin();
-                    }
-                    // 129: each remote that keeps branches' records asked
-                    // once, first; a refusal is its branches' alone, read as
-                    // last fetched.
-                    if let Err(e) = seams.state.refresh() {
-                        telemetry::warn(&format!("sluice: warning: {e:#}"));
-                    }
-                    // 97, previews-1 101: every pass, whether or not a branch
-                    // has a queue.
-                    exec::tell_abandoned(out, false, &s.release_abandoned()?)?;
-                    preview::tell_dropped(out, false, &s.release_unusable_previews()?)?;
-                    let mut branches = seams.state.branches()?;
-                    match pulls.branches(seams) {
-                        Ok(b) => branches.extend(b),
-                        Err(e) => telemetry::warn(&format!("sluice: warning: {e:#}")),
-                    }
-                    branches.sort();
-                    branches.dedup();
-                    for branch in branches {
-                        intake(pulls, seams, clock, &branch, Taker::Driver, false, out);
-                        // 26, rule core.14: a branch whose records' read or
-                        // round fails is that branch's alone; the pass goes
-                        // on to every other branch. 129: one with nothing in
-                        // play costs the pass its records' read alone.
-                        let ran = s.in_play(&branch).and_then(|in_play| match in_play {
-                            false => Ok(None),
-                            true => s.round(&branch).map(Some),
-                        });
-                        let round = match ran {
-                            Ok(round) => {
-                                passed.remove(&branch);
-                                round
-                            }
-                            // Ctrl-C reaching the git a branch's read runs is no
-                            // refusal of that branch's.
-                            Err(_) if INTERRUPTED.load(Ordering::SeqCst) => None,
-                            Err(e) => {
-                                let words = format!("{e:#}");
-                                tell_passed(out, &branch, &words, &mut passed)?;
-                                failed.insert(branch.clone(), words);
-                                None
-                            }
-                        };
-                        if let Some(round) = round {
-                            exec::tell_abandoned(out, false, &round.released)?;
-                            preview::tell_dropped(out, false, &round.previews)?;
-                            exec::tell_releases(out, false, &round.releases)?;
-                            if matches!(round.step, Step::Stepped | Step::Held) {
-                                let said = said.entry(branch.clone()).or_default();
-                                tell_hold(out, &branch, round.held.as_ref(), said)?;
-                            }
-                        }
-                    }
-                    // 129: the reader's document every watch and wait on the
-                    // host follows, each pass, queue or none, read as the
-                    // pass's own ask left the records and naming its tick
-                    // (64); a read it could not make is its document, in the
-                    // words it was refused with (133), and the pass goes on.
-                    // Ctrl-C reaching the git a read runs is no failure of the
-                    // queues'.
-                    if let Some(Reader::Lead(lead)) = &mut reader {
-                        let doc =
-                            overview::read_held(&s, host, clock, Follows::Kept(pulls), &mut asked)
-                                .unwrap_or_else(|e| {
-                                    told::document(Kind::Internal, &format!("{e:#}"), &[])
-                                });
-                        let doc = overview::ticked(doc, tick);
-                        if !INTERRUPTED.load(Ordering::SeqCst) {
-                            // The last document stands for a write that failed
-                            // until one succeeds.
-                            let _ = lead.write(&doc);
-                        }
-                    }
-                } else if !said_beside {
-                    telemetry::warn(
-                        "sluice: another sluice run drives this repository on this host; \
-                         this one runs nothing while it does",
-                    );
-                    said_beside = true;
-                }
-                n += 1;
-                if rounds.is_some_and(|r| n >= r) {
-                    // 26: one line per branch, as `main` writes a failed
-                    // step's, said whether or not stdout said it this pass.
-                    for (branch, words) in &failed {
-                        telemetry::error(&format!("sluice: {branch}: {words}"));
-                    }
-                    return Ok(if failed.is_empty() { 0 } else { INTERNAL });
-                }
-                if !pause.pause() {
-                    return Ok(STOPPED);
+                if let Driven::Ended(code) =
+                    drive(&mut driving, seams, host, pulls, clock, pause, out)?
+                {
+                    return Ok(code);
                 }
             }
         }
@@ -1674,7 +1863,11 @@ pub fn run(
                 }
                 Lookup::Unfound(unread) => unfound(id, &unread, json, out),
                 Lookup::Found(sub) if json => {
-                    let doc = with_waiting(&s, &sub, decided_document(&sub, None)?);
+                    let mut doc = with_waiting(&s, &sub, decided_document(&sub, None)?);
+                    // 51, D13: a decided submission's delivery.
+                    if let Some(d) = s.delivery_of(&sub)? {
+                        doc["delivery"] = d.to_json();
+                    }
                     writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
                     Ok(0)
                 }
@@ -1749,10 +1942,14 @@ pub fn run(
                     telemetry::warn(&format!("sluice: warning: {e:#}"));
                     None
                 });
+                // 51, D13: what the branch's readers are owed, shown after
+                // its queue.
+                let owed = s.owed_on_branch(&target)?;
                 if json {
                     let mut doc = status_json(&status, &shown)?;
                     // 84, record 0074: what each combination waits for.
                     doc["waiting"] = progress::waiting_json(&s.branch_view_of(&target)?);
+                    doc["owed"] = owed_json(&owed);
                     if let Some(a) = &across {
                         doc["taken_in_by"] = serde_json::to_value(&a.taken_in_by)?;
                         doc["pull_requests"] = serde_json::to_value(&a.pull_requests)?;
@@ -1789,6 +1986,7 @@ pub fn run(
                             writeln!(out, "  {}", a.line(row))?;
                         }
                     }
+                    write_owed(&owed, out)?;
                 }
                 Ok(0)
             }
@@ -2448,6 +2646,7 @@ fn submit(
     req: SubmitRequest,
     no_wait: bool,
     json: bool,
+    confirms: Confirms,
     pause: &dyn Pause,
     tick: Duration,
     out: &mut dyn Write,
@@ -2509,6 +2708,7 @@ fn submit(
             SubmitHead::Worktree(w) => Some(w),
             SubmitHead::Branch(_) => None,
         },
+        confirms,
     };
     await_submission(s, &waiting, sub, Some(State::Queued), out)
 }
@@ -2598,6 +2798,7 @@ fn submit_group(
         tick,
         copy: None,
         worktree: None,
+        confirms: Confirms::No,
     };
     // Each in turn; once stopped, the rest as they stand.
     let mut subs = Vec::new();
@@ -2659,6 +2860,7 @@ fn submit_group(
                     branch,
                     &BTreeMap::new(),
                     by.as_ref(),
+                    None,
                     None,
                     false,
                     out,
@@ -2843,9 +3045,41 @@ struct Waiting<'a> {
     /// 124: how the host's copy differed from what the submit waited on
     /// submitted, carried by its `--json` document.
     copy: Option<&'a CopyDiffers>,
-    /// 51: the worktree that waits, whose own outcome the wait delivers
-    /// when it reports it; none for a wait that delivers nothing.
+    /// 51: the worktree that waits, whose own outcome the wait hands over
+    /// when it reports it; none for a wait that hands over nothing.
     worktree: Option<&'a str>,
+    /// 51: whether its hand-over confirms on receipt (design D5).
+    confirms: Confirms,
+}
+
+/// 51: whether a wait's hand-over of the outcome it reports confirms it on
+/// receipt: never, unless its caller says so, for any outcome or, for
+/// `wt submit`, for a landing whose worktree it removes (weir 103; design
+/// D5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Confirms {
+    No,
+    Every,
+    Landing,
+}
+
+impl Confirms {
+    fn of(confirm: bool, landing: bool) -> Confirms {
+        match (confirm, landing) {
+            (true, _) => Confirms::Every,
+            (false, true) => Confirms::Landing,
+            (false, false) => Confirms::No,
+        }
+    }
+
+    /// Whether the hand-over of `sub`'s outcome confirms it.
+    fn confirms(self, sub: &Submission) -> bool {
+        match self {
+            Confirms::No => false,
+            Confirms::Every => true,
+            Confirms::Landing => sub.state == State::Landed,
+        }
+    }
 }
 
 /// ADR 0041: wait on `sub` to its outcome, or as `waiting` bounds it, and
@@ -2863,7 +3097,7 @@ fn await_submission(
     said: Option<State>,
     out: &mut dyn Write,
 ) -> Result<i32> {
-    let (sub, by, code, waits) = match wait_on(s, waiting, sub, said, out)? {
+    let (sub, by, code, tested) = match wait_on(s, waiting, sub, said, out)? {
         Waited::Decided(sub, by, after) => {
             let branch = sub.branch.clone();
             let names = BTreeMap::new();
@@ -2876,6 +3110,7 @@ fn await_submission(
                 by.as_ref(),
                 waiting.copy,
                 waiting.json,
+                waiting.confirms,
                 out,
             )?;
             if let Some(e) = after {
@@ -2909,20 +3144,22 @@ fn await_submission(
                 &sub.branch,
                 mode,
                 waiting.json,
+                waiting.confirms,
                 waiting.pause,
                 waiting.tick,
                 out,
             );
         }
-        Waited::Undecided(sub, by, code, waits) => (sub, by, code, waits),
+        Waited::Undecided(sub, by, code, tested) => (sub, by, code, tested),
     };
     if waiting.json {
         let doc = with_copy(serde_json::to_value(&sub)?, waiting.copy)?;
         let mut doc = with_carried(doc, by.as_ref());
-        // 84, record 0074: what its combination waits for, as the view
-        // the wait followed has it (rule core.25).
-        if !waits.is_empty() {
-            doc["waiting"] = serde_json::json!(waits);
+        // 84, record 0074; 114, record 0105: what its combination waits
+        // for and why its last run had no outcome, as the view the wait
+        // followed has it (rule core.25).
+        if let Some(c) = &tested {
+            under_test(&mut doc, c);
         }
         writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
     } else {
@@ -2943,31 +3180,48 @@ fn decided_document(sub: &Submission, decided: Option<&Decided>) -> Result<serde
     let mut doc = serde_json::to_value(sub)?;
     let own = sub.decided();
     if let Some(d) = decided.or(own.as_ref()) {
-        doc["notice"] = words::notice(sub.id, &sub.branch, d).into();
+        doc["notice"] = sluice_core::notice(sub.id, &sub.branch, d).into();
     }
     Ok(doc)
 }
 
-/// 84, record 0074: `doc`, `sub`'s record, with what its combination under
-/// test waits for, the hosts that turned its run down each with why, where
-/// any did. It decides nothing, so a read that fails adds nothing.
+/// 84, record 0074; 114, record 0105: `doc`, `sub`'s record, with what its
+/// combination under test waits for and why its last run had no outcome,
+/// as [`under_test`] gives them. It decides nothing, so a read that fails
+/// adds nothing.
 fn with_waiting(s: &Sluice<'_>, sub: &Submission, mut doc: serde_json::Value) -> serde_json::Value {
     let view = s.branch_view_of(&sub.branch).ok();
     if let Some(c) = view.as_ref().and_then(|v| progress::own(v, sub.id)) {
-        if !c.waiting.is_empty() {
-            doc["waiting"] = serde_json::json!(c.waiting);
-        }
+        under_test(&mut doc, c);
     }
     doc
 }
 
-/// 51: report `sub`, decided, as [`report`] does; when it is the waiting
-/// `worktree`'s own and pending, the record reported carries the mark,
-/// and it is marked delivered once the report is written and flushed. A
-/// mark that fails is said and leaves the outcome pending for `sluice
-/// inbox`. Only `sub` is marked, the submission the wait reports as its
-/// own, never `by`, what carried its work, whose outcome stays pending
-/// for its own delivery (record 0100 D3).
+/// What `doc`, a submission's document, gives of `c`, its combination
+/// under test: under `waiting`, the hosts that turned its run down each
+/// with why, where any did (84, record 0074); under `lost`, each run whose
+/// last run had no outcome, its host, its system where the policy names
+/// one and each check it left not run with why, whatever the cause, until
+/// that run's next result (114; record 0105, design D7 of the change
+/// `a-pass-nothing-proves-blames-no-one`).
+fn under_test(doc: &mut serde_json::Value, c: &CandidateView) {
+    if !c.waiting.is_empty() {
+        doc["waiting"] = serde_json::json!(c.waiting);
+    }
+    if !c.lost.is_empty() {
+        doc["lost"] = serde_json::json!(c.lost);
+    }
+}
+
+/// 51: report `sub`, decided, as [`report`] does, its document giving its
+/// `delivery`; when it is owed to the waiting `worktree`'s reader, it is
+/// recorded handed over by `wait` once the report is written and flushed,
+/// confirmed with it where `confirms` says, and the document gives it as
+/// that leaves it. A hand-over that fails to be recorded is said and leaves
+/// the outcome owed for `sluice inbox`. Only `sub` is handed over, the
+/// submission the wait reports as its own, never `by`, what carried its
+/// work, whose outcome stays owed for its own carriers (record 0100 D3;
+/// design D5, D13).
 #[allow(clippy::too_many_arguments)]
 fn report_delivering(
     s: &Sluice<'_>,
@@ -2978,20 +3232,33 @@ fn report_delivering(
     by: Option<&CarriedBy>,
     copy: Option<&CopyDiffers>,
     json: bool,
+    confirms: Confirms,
     out: &mut dyn Write,
 ) -> Result<i32> {
     let delivering = worktree.and_then(|w| delivering(s, w, &sub));
-    let shown = delivering
-        .as_ref()
-        .and_then(|(pending, to)| pending.marked(to).pop())
-        .unwrap_or(sub);
-    let code = report(s, &shown, branch, names, by, copy, json, out)?;
+    let confirm = confirms.confirms(&sub);
+    let delivery = match &delivering {
+        Some((owed, _)) => owed
+            .outcomes
+            .first()
+            .map(|o| o.left("wait", &owed.at, confirm)),
+        None if json => s.delivery_of(&sub).unwrap_or_else(|e| {
+            telemetry::warn(&format!(
+                "sluice: warning: could not read #{}'s delivery: {e:#}",
+                sub.id
+            ));
+            None
+        }),
+        None => None,
+    };
+    let delivery = delivery.map(|d| d.to_json());
+    let code = report(s, &sub, branch, names, by, copy, delivery, json, out)?;
     out.flush()?;
-    if let Some((pending, to)) = delivering {
-        if let Err(e) = pending.mark(&to) {
+    if let Some((owed, to)) = delivering {
+        if let Err(e) = owed.hand("wait", &to, confirm) {
             telemetry::error(&format!(
-                "sluice: could not mark #{} delivered, so it stays pending for sluice inbox: {e:#}",
-                shown.id
+                "sluice: could not record #{}'s hand-over, so sluice inbox hands it over: {e:#}",
+                sub.id
             ));
         }
     }
@@ -3006,9 +3273,10 @@ enum Waited {
     /// that then failed, what failed after the landing (122).
     Decided(Submission, Option<CarriedBy>, Option<anyhow::Error>),
     /// As it stands when the wait's time ran out ([`WAITING`]) or it was
-    /// stopped ([`STOPPED`]), with what its combination, or that of what
-    /// it follows, waits for as last read (84, record 0074).
-    Undecided(Submission, Option<CarriedBy>, i32, BTreeMap<String, String>),
+    /// stopped ([`STOPPED`]), with its combination under test, or that of
+    /// what it follows, as last read: what it waits for (84, record 0074)
+    /// and why its last run had no outcome (114, record 0105).
+    Undecided(Submission, Option<CarriedBy>, i32, Option<CandidateView>),
     /// As last read, when a round failed as the forge could not answer
     /// for the retry policy's time.
     Unread(Submission, anyhow::Error),
@@ -3338,8 +3606,8 @@ fn wait_on(
         // As it stands, with what it follows as it stands.
         let undecided = |code: i32, reading: &Reading| {
             let by = following.clone().map(CarriedBy::Entry);
-            let waits = reading.waits(following.as_ref().unwrap_or(&own).id);
-            Waited::Undecided(own.clone(), by, code, waits)
+            let combination = reading.combination(following.as_ref().unwrap_or(&own).id);
+            Waited::Undecided(own.clone(), by, code, combination)
         };
         let id = sub.id;
         if !waiting.json {
@@ -3471,15 +3739,14 @@ struct Reading {
 }
 
 impl Reading {
-    /// 84, record 0074: what submission `id`'s combination under test
-    /// waits for, as last read: each host that turned its run down, with
-    /// why.
-    fn waits(&self, id: u64) -> BTreeMap<String, String> {
+    /// Submission `id`'s combination under test, as last read: what it
+    /// waits for (84, record 0074) and why its last run had no outcome
+    /// (114, record 0105).
+    fn combination(&self, id: u64) -> Option<CandidateView> {
         self.view
             .as_ref()
             .and_then(|v| progress::own(v, id))
-            .map(|c| c.waiting.clone())
-            .unwrap_or_default()
+            .cloned()
     }
 
     fn take(host: &dyn exec::Host) -> Result<Reading> {
@@ -3645,6 +3912,7 @@ fn report(
     names: &BTreeMap<u64, String>,
     by: Option<&CarriedBy>,
     copy: Option<&CopyDiffers>,
+    delivery: Option<serde_json::Value>,
     json: bool,
     out: &mut dyn Write,
 ) -> Result<i32> {
@@ -3658,7 +3926,11 @@ fn report(
         s
     };
     if json {
-        let doc = with_carried(with_copy(serde_json::to_value(sub)?, copy)?, by);
+        let mut doc = with_carried(with_copy(serde_json::to_value(sub)?, copy)?, by);
+        // 51, D13: a decided submission's delivery, where it has one.
+        if let Some(delivery) = delivery {
+            doc["delivery"] = delivery;
+        }
         writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
         return Ok(exit_for(sub));
     }
@@ -4082,39 +4354,52 @@ fn ways_on(s: &Sluice<'_>, sub: &Submission, branch: &str) -> Result<Vec<String>
     Ok(ways)
 }
 
-/// 51, 135: `sluice inbox`: collect every outcome pending for the
-/// submissions of `worktree`, print each in the notice the round pushes and
-/// what `sluice wait <id>` prints, then mark each delivered to it. What it
-/// prints is written before it marks, so a collect stopped between them is
-/// delivered again; each branch it collects from is locked meanwhile, so
-/// no round pushes the same outcome.
-fn inbox(s: &Sluice<'_>, worktree: &str, json: bool, out: &mut dyn Write) -> Result<i32> {
+/// 51, 135: `sluice inbox`: hand over every outcome still owed to the
+/// readers of `worktree`, or with `new` only those no way has handed over
+/// yet: print each in the notice the round pushes and what `sluice wait
+/// <id>` prints, then, unless `confirms`, the line naming the key to
+/// confirm it by, and record each handed over by `inbox` to it, confirmed
+/// with it where `confirms`. What it prints is written before it records,
+/// so a collect stopped between them hands it over again; each branch it
+/// collects from is locked meanwhile, so no round pushes the same outcome
+/// (record 0102; design D8).
+fn inbox(
+    s: &Sluice<'_>,
+    worktree: &str,
+    json: bool,
+    confirms: bool,
+    new: bool,
+    out: &mut dyn Write,
+) -> Result<i32> {
     let Some((me, to)) = recipient(s, worktree)? else {
         if json {
             writeln!(out, "{}", serde_json::json!({ "outcomes": [] }))?;
         }
         return Ok(0);
     };
-    let pending = s.pending(&me)?;
-    let marked = pending.marked(&to);
-    for u in &pending.unread {
+    let collect = if new { Collect::New } else { Collect::All };
+    let owed = s.owed(&me, collect)?;
+    for u in &owed.unread {
         telemetry::error(&format!(
             "sluice: could not read {}'s records: {}",
             u.branch, u.error
         ));
     }
     if json {
-        // Each element is the record as this run marks it, with the notice
-        // the round pushes for it (D8).
-        let outcomes = pending
+        // Each element is the record with the notice the round pushes for
+        // it, and its delivery as this run leaves it (D8, D13).
+        let outcomes = owed
             .outcomes
             .iter()
-            .zip(&marked)
-            .map(|(o, sub)| decided_document(sub, Some(&o.decided)))
+            .map(|o| {
+                let mut doc = decided_document(&o.submission, Some(&o.decided))?;
+                doc["delivery"] = o.left("inbox", &owed.at, confirms).to_json();
+                Ok(doc)
+            })
             .collect::<Result<Vec<_>>>()?;
         let mut doc = serde_json::json!({ "outcomes": outcomes });
-        if !pending.unread.is_empty() {
-            let unread: Vec<_> = pending
+        if !owed.unread.is_empty() {
+            let unread: Vec<_> = owed
                 .unread
                 .iter()
                 .map(|u| serde_json::json!({ "branch": u.branch, "error": u.error }))
@@ -4124,18 +4409,152 @@ fn inbox(s: &Sluice<'_>, worktree: &str, json: bool, out: &mut dyn Write) -> Res
         writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
     } else {
         let names = BTreeMap::new();
-        for (i, (o, sub)) in pending.outcomes.iter().zip(&marked).enumerate() {
+        for (i, o) in owed.outcomes.iter().enumerate() {
+            let sub = &o.submission;
             if i > 0 {
                 writeln!(out)?;
             }
-            writeln!(out, "{}", words::notice(sub.id, &o.branch, &o.decided))?;
-            report(s, sub, &o.branch, &names, None, None, false, out)?;
+            writeln!(
+                out,
+                "{}",
+                sluice_core::notice(sub.id, &o.branch, &o.decided)
+            )?;
+            report(s, sub, &o.branch, &names, None, None, None, false, out)?;
+            if !confirms {
+                writeln!(out, "{}", words::confirm_line(o))?;
+            }
         }
     }
     out.flush()?;
-    let unread = !pending.unread.is_empty();
-    pending.mark(&to)?;
+    let unread = !owed.unread.is_empty();
+    owed.hand("inbox", &to, confirms)?;
     Ok(if unread { INTERNAL } else { 0 })
+}
+
+/// 51: `sluice confirm <key>...`: confirm each key for the readers
+/// `worktree` reads as, or, `as_operator`, for each outcome's own reader,
+/// and say each: confirmed, confirmed before and when, not found, or owed
+/// to another reader, in the order given. The exit is the worst of the
+/// keys', 3 over 2 over 1: a branch it could not read where a key was not
+/// found is 3 (rule core.11). Under `--json`, one document of the keys
+/// confirmed, or the error document of the worst refusal (design D7).
+fn confirm(
+    s: &Sluice<'_>,
+    keys: &[String],
+    as_operator: bool,
+    worktree: &str,
+    json: bool,
+    out: &mut dyn Write,
+) -> Result<i32> {
+    let who = if as_operator {
+        sluice_core::ConfirmAs::Operator
+    } else {
+        match recipient(s, worktree)? {
+            Some((me, _)) => sluice_core::ConfirmAs::Folder(me),
+            None => {
+                let text = "this folder is on no branch, so it is owed nothing to confirm";
+                let next = [
+                    "sluice inbox".to_string(),
+                    "sluice confirm <key> --as operator".to_string(),
+                ];
+                told::tell(out, json, Kind::Refused, text, &next)?;
+                return Ok(CONFLICT);
+            }
+        }
+    };
+    let got = s.confirm(keys, &who)?;
+    let unread = !got.unread.is_empty();
+    for u in &got.unread {
+        telemetry::error(&format!(
+            "sluice: could not read {}'s records: {}",
+            u.branch, u.error
+        ));
+    }
+    let mut code = 0;
+    let mut worst: Option<(Kind, String, Vec<String>)> = None;
+    let mut confirmed = Vec::new();
+    for answer in &got.answers {
+        use sluice_core::Confirmation as C;
+        match answer {
+            C::Confirmed {
+                key,
+                branch,
+                id,
+                reader,
+                at,
+            }
+            | C::Before {
+                key,
+                branch,
+                id,
+                reader,
+                at,
+            } => {
+                let first = matches!(answer, C::Confirmed { .. });
+                confirmed.push(serde_json::json!({
+                    "key": key, "branch": branch, "reader": reader, "at": at, "first": first,
+                }));
+                if !json {
+                    match first {
+                        true => writeln!(out, "{}", words::confirmed(key, *id, branch))?,
+                        false => writeln!(out, "{key} was confirmed at {at}")?,
+                    }
+                }
+            }
+            C::NotFound { key } if unread => {
+                code = code.max(INTERNAL);
+                let text = format!(
+                    "no branch read holds an outcome under {key}, and a branch could not be read"
+                );
+                worst = Some((Kind::Internal, text, vec![format!("sluice confirm {key}")]));
+            }
+            C::NotFound { key } => {
+                let text = format!("no outcome is owed under {key}: sluice inbox gives the keys");
+                if code < FAILED {
+                    worst = Some((Kind::NotFound, text.clone(), vec!["sluice inbox".into()]));
+                }
+                code = code.max(FAILED);
+                if !json {
+                    writeln!(out, "{text}")?;
+                }
+            }
+            C::Another {
+                key,
+                branch,
+                readers,
+            } => {
+                let text = format!(
+                    "refused: {key} on {branch} is owed to {}, not this worktree: sluice \
+                     confirm {key} --as operator confirms it for them",
+                    readers.join(", ")
+                );
+                if code < CONFLICT {
+                    worst = Some((
+                        Kind::Refused,
+                        text.clone(),
+                        vec![format!("sluice confirm {key} --as operator")],
+                    ));
+                }
+                code = code.max(CONFLICT);
+                if !json {
+                    writeln!(out, "{text}")?;
+                }
+            }
+        }
+    }
+    if json {
+        match &worst {
+            Some((kind, text, next)) => told::tell(out, true, *kind, text, next)?,
+            None => writeln!(
+                out,
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({ "confirmed": confirmed }))?
+            )?,
+        }
+    } else if let Some((Kind::Internal, text, _)) = &worst {
+        writeln!(out, "{text}")?;
+    }
+    Ok(code)
 }
 
 /// 51: who works in `worktree`, and the name an outcome is delivered to
@@ -4166,17 +4585,19 @@ fn delivering<'s, 'a>(
     s: &'s Sluice<'a>,
     worktree: &str,
     sub: &Submission,
-) -> Option<(Pending<'s, 'a>, String)> {
-    let found = recipient(s, worktree).and_then(|r| {
-        r.map(|(me, to)| Ok((s.pending_one(&sub.branch, sub.id, &me)?, to)))
-            .transpose()
-    });
+) -> Option<(Owed<'s, 'a>, String)> {
+    let one = || Collect::One {
+        branch: sub.branch.clone(),
+        id: sub.id,
+    };
+    let found = recipient(s, worktree)
+        .and_then(|r| r.map(|(me, to)| Ok((s.owed(&me, one())?, to))).transpose());
     match found {
         Ok(Some((pending, to))) if !pending.outcomes.is_empty() => Some((pending, to)),
         Ok(_) => None,
         Err(e) => {
             telemetry::error(&format!(
-                "sluice: could not read whether #{} is delivered, so it stays pending for sluice inbox: {e:#}",
+                "sluice: could not read whether #{} is owed here, so sluice inbox hands it over: {e:#}",
                 sub.id
             ));
             None
@@ -4387,6 +4808,7 @@ fn submit_pull(
     branch: &str,
     mode: PullMode<'_>,
     json: bool,
+    confirms: Confirms,
     pause: &dyn Pause,
     tick: Duration,
     out: &mut dyn Write,
@@ -4430,6 +4852,7 @@ fn submit_pull(
             tick,
             copy,
             worktree: delivered_to,
+            confirms,
         };
         await_submission(s, &waiting, own, None, out)
     };
@@ -4583,6 +5006,7 @@ fn submit_pull(
                         by,
                         copy.as_ref(),
                         json,
+                        confirms,
                         out,
                     );
                 }
@@ -4604,6 +5028,7 @@ fn submit_pull(
                     None,
                     copy.as_ref(),
                     json,
+                    confirms,
                     out,
                 );
             }
@@ -4637,6 +5062,7 @@ fn submit_pull(
                     Some(&by),
                     copy.as_ref(),
                     json,
+                    confirms,
                     out,
                 );
             }
@@ -4861,6 +5287,7 @@ fn submit_pull(
                         by.as_ref(),
                         copy.as_ref(),
                         json,
+                        confirms,
                         out,
                     )?;
                     after_landing(&e);
@@ -5122,7 +5549,7 @@ fn submit_pull_group(
         let this = match &decided[i] {
             Some(Followed::Done(sub, _)) if json => exit_for(sub),
             Some(Followed::Done(sub, names)) => {
-                report(s, sub, branch, names, None, None, false, out)?
+                report(s, sub, branch, names, None, None, None, false, out)?
             }
             Some(f @ (Followed::Landed { .. } | Followed::SentBack { .. })) if json => {
                 across_exit(f)
@@ -5547,6 +5974,78 @@ fn write_status(
     Ok(())
 }
 
+/// 51, D13: a branch's `owed`: each reader owed something, whether any
+/// reader has confirmed under its name, and its deliveries.
+fn owed_json(owed: &[sluice_core::ReaderView]) -> serde_json::Value {
+    owed.iter()
+        .map(|r| {
+            let deliveries: Vec<_> = r
+                .deliveries
+                .iter()
+                .map(|d| {
+                    serde_json::json!({
+                        "key": d.key,
+                        "id": d.id,
+                        "state": if d.expired { "expired" } else { "owed" },
+                        "expires_at": d.expires_at,
+                        "handed": d
+                            .handed
+                            .iter()
+                            .map(|(by, at)| serde_json::json!({ "by": by, "at": at }))
+                            .collect::<Vec<_>>(),
+                    })
+                })
+                .collect();
+            serde_json::json!({
+                "reader": r.reader,
+                "known": r.known,
+                "deliveries": deliveries,
+            })
+        })
+        .collect()
+}
+
+/// 51, D13 (weir 104 to 106; S77): the branch's `OWED` section, after its
+/// queue: each reader owed something, marked `never confirmed` where no
+/// reader has confirmed under its name, and under it each delivery by key
+/// and submission, owed until or expired at its expiry, with each
+/// hand-over's way and time; nothing where nothing is owed.
+fn write_owed(owed: &[sluice_core::ReaderView], out: &mut dyn Write) -> Result<()> {
+    if owed.is_empty() {
+        return Ok(());
+    }
+    writeln!(out, "OWED")?;
+    for r in owed {
+        match r.known {
+            true => writeln!(out, "  {}", r.reader)?,
+            false => writeln!(out, "  {} · never confirmed", r.reader)?,
+        }
+        for d in &r.deliveries {
+            let id = d.id.map_or(String::new(), |id| format!(" #{id}"));
+            let when = match d.expired {
+                true => format!("expired at {}", d.expires_at),
+                false => format!("owed until {}", d.expires_at),
+            };
+            let handed = match d.handed.as_slice() {
+                [] => "handed over by nothing".to_string(),
+                handed => {
+                    let each: Vec<String> = handed
+                        .iter()
+                        .map(|(by, at)| format!("{by} at {at}"))
+                        .collect();
+                    format!("handed over by {}", each.join(", "))
+                }
+            };
+            writeln!(out, "    {}{id}  {when} · {handed}", d.key)?;
+        }
+    }
+    writeln!(
+        out,
+        "confirm one with: sluice confirm <key>, in its worktree, or sluice confirm <key> --as operator"
+    )?;
+    Ok(())
+}
+
 /// 123: the branch's checkouts whose release failed, each with how many
 /// tries and what failed, and how to release one or give up on it.
 fn write_failed_releases(
@@ -5934,6 +6433,36 @@ fn worktree_json(p: &SessionPlace) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 151: `--otel` takes no value, on, or a boolean, `--otel=false` off
+    /// for the command, and never the word after it for its value; with
+    /// neither it nor `SLUICE_OTEL` it chooses nothing. A command's flags
+    /// follow its name, and `--otel` alone is the home view's (design D2).
+    #[test]
+    fn otel_takes_no_value_or_a_boolean() {
+        std::env::remove_var("SLUICE_OTEL");
+        for (line, otel) in [
+            (&["sluice", "status", "--otel", "main"][..], Some(true)),
+            (
+                &["sluice", "status", "--otel=false", "main"][..],
+                Some(false),
+            ),
+            (&["sluice", "status", "main"][..], None),
+        ] {
+            let cli = Cli::try_parse_from(line).unwrap();
+            assert_eq!(cli.choices().otel, otel, "{line:?}");
+            assert!(
+                matches!(&cli.command, Some(Command::Status { target: Some(t), .. }) if t == "main"),
+                "{line:?}: {:?}",
+                cli.command
+            );
+        }
+        let home = Cli::try_parse_from(["sluice", "--otel"]).unwrap();
+        assert_eq!(
+            (home.choices().otel, home.command.is_none()),
+            (Some(true), true)
+        );
+    }
 
     fn names() -> Names {
         let mut names = Names::default();

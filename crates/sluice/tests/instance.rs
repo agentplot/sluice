@@ -88,7 +88,7 @@ fn guarding_reads_only_the_forge() {
         i.forge,
         Some(sluice::instance::Forge {
             app_id: 42,
-            key: key.clone(),
+            source: sluice::instance::Source::Key(key.clone()),
             discovery: sluice::instance::DISCOVERY,
         })
     );
@@ -172,14 +172,36 @@ mod bound {
 
     /// `check`, holding until `alive` runs are alive or 6 s have passed.
     fn check_until(seen: &Path, alive: usize) -> String {
+        check_holding(seen, alive, 30)
+    }
+
+    /// `check`, holding until `alive` runs are alive or `tries` fifths of
+    /// a second have passed.
+    fn check_holding(seen: &Path, alive: usize, tries: usize) -> String {
         let seen = seen.display();
         format!(
             "mkdir -p {seen}/alive\n\
              touch {seen}/alive/$$\n\
              echo \"$(ls {seen}/alive | wc -l | tr -d ' ') $SLUICE_JOBS\" >> {seen}/starts\n\
-             i=0; while [ \"$(ls {seen}/alive | wc -l | tr -d ' ')\" -lt {alive} ] && [ $i -lt 30 ]; do sleep 0.2; i=$((i+1)); done\n\
+             i=0; while [ \"$(ls {seen}/alive | wc -l | tr -d ' ')\" -lt {alive} ] && [ $i -lt {tries} ]; do sleep 0.2; i=$((i+1)); done\n\
              sleep 1\n\
              rm {seen}/alive/$$\n"
+        )
+    }
+
+    /// A check whose first run writes `lines` over the host's settings at
+    /// `config` once, behind a marker in `seen`, by a rename as an editor
+    /// writes a file; every run is then `check_holding`'s, until two runs
+    /// are alive or `tries` fifths of a second have passed.
+    fn check_writing(seen: &Path, config: &Path, lines: &[&str], tries: usize) -> String {
+        let quoted: Vec<String> = lines.iter().map(|l| format!("'{l}'")).collect();
+        format!(
+            "if mkdir {seen}/wrote 2>/dev/null; then \
+             printf '%s\\n' {lines} > {config}.next && mv {config}.next {config}; fi\n{check}",
+            seen = seen.display(),
+            config = config.display(),
+            lines = quoted.join(" "),
+            check = check_holding(seen, 2, tries),
         )
     }
 
@@ -405,6 +427,123 @@ mod bound {
         assert_eq!(states(&setups[0], "bolt/a"), ["landed", "landed"]);
         assert_eq!(states(&setups[1], "bolt/a"), ["landed"]);
         assert_eq!(states(&setups[2], "bolt/a"), ["landed"]);
+    }
+
+    /// One branch, `bolt/a`, testing four at once, under a host bound of
+    /// one, its check `check`, with two submissions queued: the setup and
+    /// the host's settings file.
+    fn two_queued(name: &str, check: impl FnOnce(&Path) -> String) -> (Setup, PathBuf) {
+        let repo = Repo::new(&format!("instance-{name}"));
+        let config = Rc::new(host_config(1));
+        let file = config.path().join("sluice/config.toml");
+        repo.write(".config/sluice.toml", POLICY);
+        repo.write("check.sh", &check(&file));
+        repo.git(&["add", "-A"]);
+        repo.git(&["commit", "-q", "-m", "sluice's policy"]);
+        repo.git(&["branch", "bolt/a", "main"]);
+        let s = Setup {
+            repo,
+            sessions: Scratch::new(&format!("instance-{name}-sessions")),
+            config,
+            state: Rc::new(Scratch::new(&format!("instance-{name}-state"))),
+        };
+        s.submit("bolt/a", "ta");
+        s.submit("bolt/a", "tb");
+        (s, file)
+    }
+
+    /// The settings-take-up spec's "The bound grows while a run is kept
+    /// running", "The first run keeps its cores" and "The run says what it
+    /// took up" (135; record 0107; rule core.54): the bound written from
+    /// one to two while the first combination's run goes is taken up before
+    /// the next pass, whose run starts beside the first with half the
+    /// cores, while the first keeps all of them; both land, and the take-up
+    /// is said once. Each run holds for up to four passes, so the second
+    /// starts beside the first even on a loaded host.
+    #[test]
+    fn a_run_takes_up_a_changed_bound_at_its_next_pass() {
+        let seen = Scratch::new("instance-take-up-seen");
+        let (s, file) = two_queued("take-up", |file| {
+            check_writing(seen.path(), file, &["[runs]", "max = 2"], 60)
+        });
+
+        let out = s
+            .command(s.repo.dir())
+            .args(["run", "--rounds", "12"])
+            .output()
+            .unwrap();
+        let said = text(&out);
+        assert!(out.status.success(), "{said}");
+
+        let processors = std::thread::available_parallelism().map_or(1, |n| n.get());
+        assert_eq!(
+            starts(seen.path()),
+            [(1, processors), (2, (processors / 2).max(1))],
+            "{said}"
+        );
+        assert_eq!(states(&s, "bolt/a"), ["landed", "landed"], "{said}");
+        let took = format!(
+            "sluice: took up the host's settings in {}: [runs] changed",
+            file.display()
+        );
+        assert_eq!(said.matches(&took).count(), 1, "{said}");
+        assert_eq!(
+            said.matches("took up the host's settings in").count(),
+            1,
+            "{said}"
+        );
+    }
+
+    /// The settings-take-up spec's "A key that holds no private key" (135;
+    /// record 0107; rule core.54): settings that read but do not bind leave
+    /// the run on the bound of one it holds, so the second combination's
+    /// run starts only once the first has ended, with the cores the first
+    /// had; both land, and the refusal is said once, naming the file and
+    /// the key, with nothing taken up.
+    #[test]
+    fn a_run_keeps_its_settings_when_the_new_ones_do_not_bind() {
+        use std::os::unix::fs::PermissionsExt;
+        let seen = Scratch::new("instance-unbound-seen");
+        let keys = Scratch::new("instance-unbound-key");
+        let key = keys.path().join("app.pem");
+        std::fs::write(&key, "no private key\n").unwrap();
+        std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let key_line = format!("key = {:?}", key.display().to_string());
+        let (s, file) = two_queued("unbound", |file| {
+            check_writing(
+                seen.path(),
+                file,
+                &["[runs]", "max = 2", "", "[forge]", "app_id = 1", &key_line],
+                30,
+            )
+        });
+
+        let out = s
+            .command(s.repo.dir())
+            .args(["run", "--rounds", "12"])
+            .output()
+            .unwrap();
+        let said = text(&out);
+        assert!(out.status.success(), "{said}");
+
+        let processors = std::thread::available_parallelism().map_or(1, |n| n.get());
+        assert_eq!(
+            starts(seen.path()),
+            [(1, processors), (1, processors)],
+            "{said}"
+        );
+        // A command reads the file as it starts, and refuses a key that
+        // does not read: the status is read under the settings the run held.
+        std::fs::write(&file, "[runs]\nmax = 1\n").unwrap();
+        assert_eq!(states(&s, "bolt/a"), ["landed", "landed"], "{said}");
+        let refused: Vec<&str> = said
+            .lines()
+            .filter(|l| l.contains("is refused, so this sluice run keeps the settings it holds"))
+            .collect();
+        assert_eq!(refused.len(), 1, "{said}");
+        assert!(refused[0].contains(&file.display().to_string()), "{said}");
+        assert!(refused[0].contains(&key.display().to_string()), "{said}");
+        assert!(!said.contains("took up"), "{said}");
     }
 
     /// 71: on a host that gives sluice all its cores, `[runs] cores = 2`

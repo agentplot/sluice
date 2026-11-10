@@ -207,6 +207,7 @@ fn on<'a>(h: &'a Harness, name: &str) -> Sluice<'a> {
         alive: Duration::from_secs(120),
         signer: Some("box".into()),
         systems: None,
+        expire_after: sluice_core::EXPIRE_AFTER,
     })
 }
 

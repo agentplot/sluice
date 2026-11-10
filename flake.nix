@@ -69,7 +69,12 @@
             inherit version;
             env.SLUICE_VERSION = version;
             src = self;
-            cargoLock.lockFile = ./Cargo.lock;
+            cargoLock = {
+              lockFile = ./Cargo.lock;
+              # agentplot/weir at the revision Cargo.toml names, which
+              # moves with it (record 0102).
+              outputHashes."weir-delivery-0.0.0" = "sha256-29h7paqrZ2AONJ/Xs2KBTF+9qYJWJMoJBZDE+OIxqoc=";
+            };
             cargoBuildFlags = [
               "-p"
               "sluice"
@@ -86,6 +91,15 @@
           };
         }
       );
+
+      # A module of a platform, keyed as Flume's flake keys its own, so a
+      # configuration that imports it twice, directly and through
+      # Boomdrive's flake, declares services.sluice once (record 0098).
+      moduleOf = platform: file: {
+        _file = file;
+        key = "github:agentplot/sluice#${platform}Modules.sluice";
+        imports = [ (import file { inherit packages; }) ];
+      };
     in
     {
       inherit packages;
@@ -93,11 +107,11 @@
       # services.sluice, the host's own settings and the package (record
       # 0098, core.51).
       darwinModules = rec {
-        sluice = import ./nix/modules/darwin.nix { inherit packages; };
+        sluice = moduleOf "darwin" ./nix/modules/darwin.nix;
         default = sluice;
       };
       nixosModules = rec {
-        sluice = import ./nix/modules/nixos.nix { inherit packages; };
+        sluice = moduleOf "nixos" ./nix/modules/nixos.nix;
         default = sluice;
       };
     };

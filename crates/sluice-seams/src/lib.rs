@@ -665,6 +665,18 @@ pub struct NotRun {
     pub reason: String,
 }
 
+/// Design D1 and D3 of the change `a-pass-nothing-proves-blames-no-one`
+/// (114, C.6; record 0105): what a finished run's place proves of it.
+/// `proven` holds the tasks whose keys the candidate's tree bears out, its
+/// checks and the tasks a check was failed by alike (149). `unkept` holds
+/// each ran check that passed whose proof the run kept none of, with why:
+/// it has no outcome, never a fail. A task in neither list is no pass.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Proof {
+    pub proven: Vec<String>,
+    pub unkept: Vec<NotRun>,
+}
+
 /// 149: a required check the runner skipped because the tasks `by` it
 /// depends on ran and failed; its outcome is theirs.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -860,12 +872,17 @@ pub trait Tests {
     /// counts it beside the bound and the records never hold the count.
     fn running(&self) -> Result<Running>;
 
-    /// Design D9 (C.6): the tasks of a finished run whose keys the
-    /// candidate's tree bears out, its checks and the tasks a check was
-    /// failed by alike (149), read while its place still exists, running
-    /// nothing. A signer signs only these, so no check signs a pass under
-    /// a key it does not hold.
-    fn proven(&self, run: &RunHandle, report: &RunReport) -> Result<Vec<String>>;
+    /// Design D9 (C.6): what a finished run's place proves of it, read
+    /// while its place still exists, running nothing, in one walk of what
+    /// the run kept. `proven` names the tasks whose keys the candidate's
+    /// tree bears out, its checks and the tasks a check was failed by alike
+    /// (149); a signer signs only these, so no check signs a pass under a
+    /// key it does not hold. `unkept` names each ran check that passed
+    /// whose proof the run kept none of, with why read from that fact, in
+    /// the profile's words: it has no outcome (114; record 0105). A fail,
+    /// a task a check was failed by and a replay are never unkept, and a
+    /// task in neither list is no pass.
+    fn proven(&self, run: &RunHandle, report: &RunReport) -> Result<Proof>;
 
     /// ADR 0035: the session runs running on this host, as `running`
     /// counts them, each with what its `sluice exec` kept of it: for a
@@ -1461,13 +1478,18 @@ pub struct Notification {
     pub report: Option<VerdictView>,
 }
 
-/// 51: whether a notify delivered its outcome, which alone marks it
-/// delivered.
+/// 51: whether a notify handed its outcome to its reader, which alone is
+/// recorded as a hand-over (weir 103; record 0102; design D5).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Delivery {
-    /// Delivered to this session, as the driver names it.
-    Delivered { to: String },
-    /// Not delivered, and why, in the carrier's words.
+    /// Handed to the reader by `way`, reaching `to`, as the carrier names
+    /// it; `confirms` where its reader confirms on receipt (weir 103).
+    Handed {
+        way: String,
+        to: String,
+        confirms: bool,
+    },
+    /// Not handed over, and why, in the carrier's words.
     Undelivered { why: String },
 }
 
@@ -1495,9 +1517,10 @@ pub trait Driver {
     /// core.50).
     fn named(&self, branch: &str) -> Result<Submitter>;
 
-    /// 50, 51: deliver an outcome to that entry's session and no other,
-    /// and say whether it was. A carrier asked that answered no is
-    /// `Undelivered`, which no round tries again; `Err` is sluice's own
+    /// 50, 51: hand an outcome to that entry's session and no other, and
+    /// say whether it was, by what way and whether its reader confirms on
+    /// receipt. A carrier asked that answered no is `Undelivered`, which no
+    /// round tries again; `Err` is sluice's own
     /// failure, such as a forge write the retry policy gave up on, and
     /// leaves the outcome for the next round.
     fn notify(&self, notification: &Notification) -> Result<Delivery>;

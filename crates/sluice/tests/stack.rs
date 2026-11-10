@@ -392,6 +392,8 @@ fn a_sessions_stack_stays_between_runs_and_goes_on_release() {
             peers: Default::default(),
             systems: None,
             caches: Vec::new(),
+            expire_after: sluice_core::EXPIRE_AFTER,
+            telemetry: None,
         },
     )
     .with_running(running.path().to_path_buf());

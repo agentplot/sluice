@@ -1060,13 +1060,34 @@ fn timestamp(ms: i64) -> String {
         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
+/// Design D2 of the change `a-pass-nothing-proves-blames-no-one` (C.6;
+/// record 0105): a manifest a key needs is missing from the store, the
+/// key's own or a dependency's at any depth, so the run kept no proof of
+/// the key. `task` is the task whose manifest is missing, `key` its key.
+/// Every other failure of [`check_key`] is a key the tree does not bear
+/// out.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NoManifest {
+    pub task: String,
+    pub key: String,
+}
+
+impl std::fmt::Display for NoManifest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: no manifest for {}", self.task, self.key)
+    }
+}
+
+impl std::error::Error for NoManifest {}
+
 /// Design D9 (C.6): whether `key` is moon's key for `task` on the
 /// combination's tree, checked without running anything. moon keeps each
 /// task's hash manifest in its blob store under its key, the key the
 /// sha256 of the manifest; the manifest names the task, every input with
 /// the sha256 of its content, and each dependency's key, or `ignored`
 /// for one with no outputs. `blob` reads the store, `tree` a path of the
-/// combination's tree. A signer signs only keys this passes.
+/// combination's tree. A signer signs only keys this passes. Where a
+/// manifest the walk needs is missing, it fails with [`NoManifest`].
 pub fn check_key(
     key: &str,
     task: &str,
@@ -1086,7 +1107,10 @@ pub fn check_key(
         if key.len() != 64 || !key.bytes().all(|b| b.is_ascii_hexdigit()) {
             bail!("{task}: {key:?} is no key");
         }
-        let bytes = blob(key).ok_or_else(|| anyhow!("{task}: no manifest for {key}"))?;
+        let bytes = blob(key).ok_or_else(|| NoManifest {
+            task: task.to_string(),
+            key: key.to_string(),
+        })?;
         if sha256_hex(&bytes) != key {
             bail!("{task}: the manifest under {key} does not hash to it");
         }
@@ -1441,6 +1465,61 @@ mod tests {
             let e =
                 check_key(&b, "b:test", &blob, &tree(&[("a/x", "1"), ("b/y", "2")])).unwrap_err();
             assert!(e.to_string().starts_with("a:test:"), "{e}");
+        }
+
+        /// Design D2: a missing manifest, the key's own or a dependency's,
+        /// is a proof the run did not keep, told apart by its type and
+        /// naming the task whose manifest is missing; a manifest that does
+        /// not hash to its key, or an input the tree does not hold, is a
+        /// key the tree does not bear out.
+        #[test]
+        fn a_missing_manifest_is_told_from_one_the_tree_does_not_bear_out() {
+            let missing = |e: &anyhow::Error| e.downcast_ref::<NoManifest>().cloned();
+            let mut s = Store(BTreeMap::new());
+            let a = s.manifest("a:test", &[("a/x", "1")], &[]);
+            let b = s.manifest("b:test", &[("b/y", "2")], &[("a:test", &a)]);
+            let c = s.manifest("c:test", &[("c/z", "3")], &[("b:test", &b)]);
+            let t = tree(&[("a/x", "1"), ("b/y", "2"), ("c/z", "3")]);
+
+            // The key's own manifest gone.
+            let gone = "0".repeat(64);
+            let blob = |k: &str| s.0.get(k).cloned();
+            let e = check_key(&gone, "a:test", &blob, &t).unwrap_err();
+            assert_eq!(
+                missing(&e),
+                Some(NoManifest {
+                    task: "a:test".into(),
+                    key: gone.clone()
+                })
+            );
+            assert_eq!(e.to_string(), format!("a:test: no manifest for {gone}"));
+
+            // A dependency's, two deep.
+            let mut held = s.0.clone();
+            held.remove(&a);
+            let blob = |k: &str| held.get(k).cloned();
+            let e = check_key(&c, "c:test", &blob, &t).unwrap_err();
+            assert_eq!(
+                missing(&e),
+                Some(NoManifest {
+                    task: "a:test".into(),
+                    key: a.clone()
+                }),
+                "{e}"
+            );
+
+            // An altered manifest.
+            let mut forged = s.0.clone();
+            forged.get_mut(&a).unwrap().extend(b" ");
+            let blob = |k: &str| forged.get(k).cloned();
+            let e = check_key(&b, "b:test", &blob, &t).unwrap_err();
+            assert_eq!(missing(&e), None, "{e}");
+
+            // An input the tree does not hold.
+            let blob = |k: &str| s.0.get(k).cloned();
+            let e = check_key(&b, "b:test", &blob, &tree(&[("b/y", "2")])).unwrap_err();
+            assert!(e.to_string().contains("a/x is not in the tree"), "{e}");
+            assert_eq!(missing(&e), None, "{e}");
         }
     }
 

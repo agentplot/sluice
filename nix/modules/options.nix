@@ -10,7 +10,11 @@
 # sluice's to refuse at its read, naming the setting. A key is named by
 # its path outside the store, since the file is in the store, which every
 # user reads: a key in the store, or one that is no path, fails
-# evaluation (78, 136).
+# evaluation (78, 136). `forge.credential`, a command that gives the
+# app's token in place of its key, is a list of its program and then each
+# argument, and an argument that holds a GitHub token's text fails
+# evaluation for the same reason; a program in the store is no secret
+# (record 0108, core.51).
 { packages }:
 {
   config,
@@ -77,6 +81,24 @@ let
         message = "${option} is in the Nix store, which every user reads: ${put}";
       }
     ];
+
+  # A token's text in the forge's credential command: GitHub's tokens
+  # begin with one of these.
+  prefixes = [
+    "ghs_"
+    "ghp_"
+    "gho_"
+    "ghu_"
+    "ghr_"
+    "github_pat_"
+  ];
+  credential = if cfg.settings.forge == null then null else cfg.settings.forge.credential;
+  noToken = lib.optionals (credential != null) [
+    {
+      assertion = !lib.any (word: lib.any (p: lib.hasPrefix p word) prefixes) credential;
+      message = "services.sluice.settings.forge.credential holds a GitHub token's text, and the file that names it is in the Nix store, which every user reads: name a command that prints the token";
+    }
+  ];
 in
 {
   options.services.sluice = {
@@ -106,9 +128,10 @@ in
             (table {
               app_id = unset types.int "The GitHub App sluice pushes as.";
               key = unset types.str "The path of the app's private key on this host, absolute or under `~/`, outside the Nix store. sluice refuses a key file anyone but its owner may read.";
+              credential = unset (types.listOf types.str) "In place of `key`, a command that gives the app's token: its program, then each argument, which sluice runs with no shell as git runs a credential helper. The program is a path, absolute or under `~/`, or a name the PATH finds. Never a token's text, since the file is in the Nix store, which every user reads (record 0108).";
               discovery = unset types.str "How often sluice asks GitHub for a branch's open pull requests while nothing on the host changes, a duration such as `\"60s\"` or `\"2m\"`. Where unset, `\"60s\"`; the least is `\"10s\"` (136).";
             })
-            "`[forge]`: the GitHub App sluice pushes as, for every branch whose `remote` is on GitHub. Where unset, sluice pushes with the host's own git credentials (136).";
+            "`[forge]`: the GitHub App sluice pushes as, for every branch whose `remote` is on GitHub, and its private key or a command that gives its token. Where unset, sluice pushes with the host's own git credentials (136; record 0108).";
         signing =
           unset
             (table {
@@ -125,6 +148,13 @@ in
           default = { };
           description = "`[peers]`: how long a quiet host keeps a branch, how often this host shows it is alive, and its name among the hosts (74).";
         };
+        deliveries = mkOption {
+          type = table {
+            expire_after = unset types.str "How long an outcome this host's rounds record is owed to its submitter's work before it shows as expired, still owed, a duration such as `\"168h\"` or `\"90m\"`, at least a second. Where unset, `\"168h\"` (51).";
+          };
+          default = { };
+          description = "`[deliveries]`: how long an outcome is owed before it shows as expired (51).";
+        };
         caches =
           unset
             (types.listOf (table {
@@ -133,6 +163,19 @@ in
               env = unset (types.attrsOf types.str) "The variables the cache's clients read, each a string, which every run gets exactly as written.";
             }))
             "`[[caches]]`: the caches every run on the host is given, a compile server's or the task runner's shared cache. Where unset, none (35).";
+        telemetry =
+          unset
+            (table {
+              send = unset types.bool "Whether sluice sends its telemetry, OTLP over HTTP, protobuf, to `collector`: `true` needs a `collector`, and sluice refuses a table that sends and names none, so it never sends where the caller's `OTEL_EXPORTER_OTLP_*` say. Where unset, `false`: nothing is sent unless a command's own `--otel` or `SLUICE_OTEL` asks, which chooses for that command alone, `SLUICE_OTEL=0` turning a `true` here off for it (151).";
+              collector = unset types.str "The collector sluice sends to, an `http://` address: a host, a port and at most a path, such as `\"http://localhost:4318\"`, a receiver on the host that forwards over TLS. sluice sends to its `/v1/traces`, `/v1/metrics` and `/v1/logs`, and none of the caller's `OTEL_EXPORTER_OTLP_*` variables reach it. Needed wherever `send = true`, which sluice refuses without it. Where unset, the table sends nothing, and a command's own `--otel` sends where `OTEL_EXPORTER_OTLP_ENDPOINT` says, else to `\"http://localhost:4318\"`.";
+              service = unset types.str "The service sluice reports as, its `service.name`. Where unset, `\"sluice\"`.";
+              traces = unset types.bool "Whether traces are sent: `false` sends none, whatever OpenTelemetry's variables say. Where unset, `true`.";
+              metrics = unset types.bool "Whether metrics are sent: `false` sends none, whatever OpenTelemetry's variables say. Where unset, `true`.";
+              logs = unset types.str "How much of a failed check's output is sent as logs: `\"off\"`, no logs at all; `\"summary\"`, which task failed and where its output is kept, never the output; or `\"tail\"`, the output's end, scrubbed of what reads as a secret. Where unset, `\"summary\"`.";
+              logs_tail_bytes = unset types.int "At `logs = \"tail\"`, the most of a failed check's output sent, in bytes, from 1 to 65536. Where unset, 8192.";
+              attributes = unset (types.attrsOf types.str) "More resource attributes on everything sluice sends, each a string, such as `\"deployment.environment\" = \"prod\"`. sluice names `service.name`, `service.version` and `host.name`, the host's own name, itself; a `host.name` here names the host in its place. Where unset, none.";
+            })
+            "`[telemetry]`: whether sluice sends its telemetry, where, as what, which signals and how much of a failure. A command's own flag or `SLUICE_OTEL*` variable chooses over it for that command alone. Where unset, OpenTelemetry's variables say where telemetry goes, and nothing is sent unless a command asks (151).";
       };
       default = { };
       description = "The host's own settings, `~/.config/sluice/config.toml`, each key named as the file names it, rendered at evaluation. A key left unset is left out of the file, so sluice's own default holds; a key the module does not declare is written as given, for sluice to judge. The file is in the Nix store, which every user reads: a key is named by its path on the host, never held here.";
@@ -148,6 +191,6 @@ in
 
   config = lib.mkMerge [
     { services.sluice.text = render (prune cfg.settings); }
-    (lib.mkIf cfg.enable { assertions = outside "forge" ++ outside "signing"; })
+    (lib.mkIf cfg.enable { assertions = outside "forge" ++ outside "signing" ++ noToken; })
   ];
 }

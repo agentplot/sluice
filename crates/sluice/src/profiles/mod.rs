@@ -144,6 +144,7 @@ impl Bound {
             alive: instance.peers.alive,
             signer: instance.signing.as_ref().map(|s| s.signer.clone()),
             systems: instance.systems.clone(),
+            expire_after: instance.expire_after,
         };
         let pulls = Rc::new(github::pulls::Pulls::new(
             branch.git_dir(),
@@ -316,7 +317,11 @@ fn forge_findings(
             return Ok(found);
         }
     };
-    said(true, format!("[forge] key {} reads", forge.key.display()));
+    // Under a credential command, the check's first finding, that the
+    // command gives a token, does this work (record 0108).
+    if let crate::instance::Source::Key(key) = &forge.source {
+        said(true, format!("[forge] key {} reads", key.display()));
+    }
     let operator = operator_token();
     found.extend(github::check::check(
         &app,
@@ -431,6 +436,7 @@ impl crate::exec::Host for Bound {
             alive: i.peers.alive,
             signer: i.signing.as_ref().map(|s| s.signer.clone()),
             systems: i.systems.clone(),
+            expire_after: i.expire_after,
         }
     }
 
