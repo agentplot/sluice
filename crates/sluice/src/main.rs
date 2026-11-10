@@ -256,7 +256,7 @@ fn keep_running(
         match kept.settings.look() {
             Look::Same => {}
             Look::Refused(why) => refused(&why),
-            Look::Changed(instance) => {
+            Look::Changed(instance, _) => {
                 let rebound = Bound::open_with(
                     &kept.dir,
                     kept.program.clone(),

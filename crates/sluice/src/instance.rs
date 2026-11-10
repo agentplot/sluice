@@ -702,7 +702,7 @@ fn caches(forms: Vec<toml::Value>, home: Option<&Path>) -> Result<Vec<HostCache>
 }
 
 /// The settings file's text; none where there is no file.
-fn settings_text(path: Option<&Path>) -> Result<String> {
+pub(crate) fn settings_text(path: Option<&Path>) -> Result<String> {
     match path.map(std::fs::read_to_string) {
         Some(Ok(t)) => Ok(t),
         Some(Err(e)) if e.kind() != std::io::ErrorKind::NotFound => {
@@ -790,7 +790,8 @@ pub fn host_cores() -> (usize, usize) {
     (given, all)
 }
 
-fn home() -> Option<PathBuf> {
+/// The home `~/` is expanded in, where the host has one.
+pub(crate) fn home() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .filter(|h| !h.is_empty())
         .map(PathBuf::from)

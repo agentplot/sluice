@@ -24,13 +24,19 @@
 //! half read. A file that is gone, does not read or is refused leaves the
 //! settings held, and is said once for that change: the sign it was read
 //! at is kept, so it is read again only once it changes again (core.54).
+//!
+//! Settings handed over by a `sluice run` that started afresh
+//! ([`HostSettings::handed`]) are held from the text it bound, under no
+//! sign, so the first look reads the file once: the settings handed over
+//! read as nothing to take up, and a change made meanwhile as a change
+//! (design D4 of `a-kept-run-hands-over-what-it-cannot-take-up`).
 
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use anyhow::Result;
 
-use crate::instance::{config_path, host_cores, Instance};
+use crate::instance::{config_path, home, host_cores, settings_text, Instance};
 
 /// The settings a process holds, and the sign of the file it read them
 /// from (135; record 0107).
@@ -51,8 +57,10 @@ pub enum Look {
     /// or it holds the settings held.
     Same,
     /// The file holds other settings, which bind the process once its
-    /// caller has bound them and [`HostSettings::accept`]s them.
-    Changed(Instance),
+    /// caller has bound them and [`HostSettings::accept`]s them, and the
+    /// text they were read from, which a hand-over carries so the process
+    /// started afresh holds exactly what was bound (design D5).
+    Changed(Instance, String),
     /// The changed file is gone or does not read, in these words; the
     /// settings held stand.
     Refused(String),
@@ -127,6 +135,29 @@ impl HostSettings {
         })
     }
 
+    /// The settings a `sluice run` started afresh was handed, read from
+    /// the `text` the run bound, on a host of `all` cores that gives sluice
+    /// `given` of them, held under no sign: its first look reads the file
+    /// at `path` once, so settings equal to these are nothing to take up, a
+    /// change made meanwhile is taken up, and a file that does not read
+    /// leaves these held, said once (135; record 0107; rule core.54;
+    /// design D4).
+    pub fn handed(
+        text: &str,
+        path: Option<&Path>,
+        given: usize,
+        all: usize,
+    ) -> Result<HostSettings> {
+        let held = Instance::from_text(text, path, given, all, home().as_deref())?;
+        Ok(HostSettings {
+            path: path.map(Path::to_path_buf),
+            given,
+            all,
+            held,
+            sign: Sign::default(),
+        })
+    }
+
     /// The settings the process works under.
     pub fn held(&self) -> &Instance {
         &self.held
@@ -149,7 +180,13 @@ impl HostSettings {
         }
         let read = match path.map(std::fs::metadata) {
             Some(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => Err(GONE.to_string()),
-            _ => Instance::from_host(path, self.given, self.all).map_err(|e| format!("{e:#}")),
+            _ => settings_text(path)
+                .and_then(|text| {
+                    let read =
+                        Instance::from_text(&text, path, self.given, self.all, home().as_deref())?;
+                    Ok((read, text))
+                })
+                .map_err(|e| format!("{e:#}")),
         };
         if Sign::of(path) != before {
             return Look::Same;
@@ -157,8 +194,8 @@ impl HostSettings {
         self.sign = before;
         match read {
             Err(why) => Look::Refused(why),
-            Ok(read) if read == self.held => Look::Same,
-            Ok(read) => Look::Changed(read),
+            Ok((read, _)) if read == self.held => Look::Same,
+            Ok((read, text)) => Look::Changed(read, text),
         }
     }
 
@@ -199,7 +236,7 @@ mod tests {
 
     fn changed(look: Look) -> Instance {
         match look {
-            Look::Changed(i) => i,
+            Look::Changed(i, _) => i,
             other => panic!("not changed: {other:?}"),
         }
     }
@@ -312,5 +349,39 @@ mod tests {
         assert_eq!(refused(settings.look()), GONE);
         assert_eq!(settings.held().bound, 3);
         assert!(matches!(settings.look(), Look::Same));
+    }
+
+    /// The spec's "The first look after a hand-over": settings handed over
+    /// are held under no sign, so the first look reads the file once and
+    /// finds them, a change made after is taken up, and a file that does
+    /// not read leaves what is held (135; record 0107; core.54; design D4).
+    #[test]
+    fn a_run_handed_over_holds_what_it_was_handed_and_reads_the_file_once() {
+        let scratch = Scratch::new("handed");
+        let path = scratch.0.join("config.toml");
+        let text = "[runs]\nmax = 3\n";
+        std::fs::write(&path, text).unwrap();
+        let mut settings = HostSettings::handed(text, Some(&path), 16, 16).unwrap();
+        assert_eq!(settings.held().bound, 3);
+
+        let look = settings.look();
+        assert!(matches!(look, Look::Same), "{look:?}");
+        assert_eq!(settings.held().bound, 3);
+
+        std::fs::write(&path, "[runs]\nmax = 4\n").unwrap();
+        let four = match settings.look() {
+            Look::Changed(i, read) => {
+                assert_eq!(read, "[runs]\nmax = 4\n");
+                i
+            }
+            other => panic!("not changed: {other:?}"),
+        };
+        assert_eq!(four.bound, 4);
+        settings.accept(four);
+
+        std::fs::write(&path, "[runs]\nmax = \"two\"\n").unwrap();
+        let why = refused(settings.look());
+        assert!(why.contains("max"), "{why}");
+        assert_eq!(settings.held().bound, 4);
     }
 }
