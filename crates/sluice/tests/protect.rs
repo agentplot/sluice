@@ -9,9 +9,11 @@ mod support;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant};
 
 use sluice::profiles::local_refs::LocalRefs;
 use sluice_seams::{Branch, Moved, Rev};
+use ssh_key::{Algorithm, PrivateKey};
 use support::{Repo, Scratch};
 
 const POLICY: &str = "[tests]\nrunner = \"command\"\ncommand = \"true\"\n\n\
@@ -699,6 +701,137 @@ fn a_copy_apart_from_its_remote_is_judged_by_its_own_value() {
             .contains("update-ref refs/heads/bolt/x"),
         "{events:?}"
     );
+}
+
+/// A protected repository whose `bolt/x` and its records are kept on
+/// `origin`, its policy naming a signer, so a read of the records fetches
+/// them (C.6); and the bare origin.
+fn kept_on_origin(name: &str) -> (Repo, Scratch) {
+    let key = PrivateKey::random(&mut rand_core::OsRng, Algorithm::Ed25519).unwrap();
+    let repo = Repo::new(name);
+    repo.write(
+        ".config/sluice.toml",
+        &format!(
+            "[tests]\nrunner = \"command\"\ncommand = \"true\"\n\n\
+             [signers.box]\nssh = \"box {}\"\n\n\
+             [branches.\"bolt/*\"]\nremote = \"origin\"\ntrust = [\"box\"]\n",
+            key.public_key().to_openssh().unwrap()
+        ),
+    );
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "policy"]);
+    repo.git(&["branch", "bolt/x", "main"]);
+    let bare = repo.bare_origin();
+    let out = sl(&repo, &["protect"]);
+    assert!(out.status.success(), "{}", text(&out));
+    (repo, bare)
+}
+
+/// [`sl_with_state`], ended and failed when it has not ended within a
+/// minute: a sluice that waits on a lock its own ancestor holds never ends,
+/// and ending the command lets its lock go.
+fn sl_ended(repo: &Repo, args: &[&str]) -> Output {
+    let mut child = support::isolated(&mut Command::new(sluice()))
+        .current_dir(repo.dir())
+        .args(args)
+        .env("XDG_CONFIG_HOME", repo.dir().join(".git/no-config"))
+        .env("XDG_STATE_HOME", state_of(repo))
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let until = Instant::now() + Duration::from_secs(60);
+    while child.try_wait().unwrap().is_none() {
+        if Instant::now() > until {
+            child.kill().unwrap();
+            let out = child.wait_with_output().unwrap();
+            panic!(
+                "sluice {args:?} had not ended after a minute: {}",
+                text(&out)
+            );
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    child.wait_with_output().unwrap()
+}
+
+/// S64, record 0110: a round's fetch of a branch kept on its remote, with
+/// enough refs in loose files that git's maintenance after the fetch packs
+/// them, runs the hook on the pruning of `bolt/x`'s loose file while
+/// sluice's fetch holds the repository's fetch lock. The packing passes
+/// with no record read, and the round ends (deneb, 2026-11-10: a submit's
+/// fetch of #235 and the hook it ran waited on each other for forty
+/// minutes).
+#[test]
+fn a_fetch_whose_packing_runs_the_hook_ends() {
+    let (repo, _bare) = kept_on_origin("protect-fetch-packs");
+    let tip = repo.rev("bolt/x");
+    for i in 0..20 {
+        repo.git(&["branch", &format!("loose/{i}"), "main"]);
+    }
+    assert!(repo.dir().join(".git/refs/heads/bolt/x").exists());
+
+    let out = sl_ended(&repo, &["step", "bolt/x"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(
+        !repo.dir().join(".git/refs/heads/bolt/x").exists(),
+        "the fetch's maintenance packed nothing, so ran no hook on bolt/x"
+    );
+    assert_eq!(repo.rev("bolt/x"), tip);
+}
+
+/// Record 0110: a hook run under a fetch of sluice's own takes no fetch
+/// lock and fetches nothing, though it records a refusal in records kept
+/// on the remote. Here a hook sluice's chains hands the hook a move of
+/// `bolt/y`, whose lock the round on `bolt/x` does not hold, in each
+/// transaction the round's git makes. The hook refuses it under the
+/// round's fetch, told the lock its ancestor holds, and ends; so does the
+/// round.
+#[test]
+fn a_hook_under_sluices_own_fetch_fetches_nothing() {
+    let (repo, _bare) = kept_on_origin("protect-fetch-hook");
+    repo.git(&["branch", "bolt/y", "main"]);
+    repo.git(&["push", "-q", "origin", "bolt/y"]);
+    let tip = repo.rev("bolt/y");
+    let other = repo.branch("unit/a", "main", &[("a.txt", Some("a\n"))]);
+    let judged = repo.dir().join(".git/judged");
+    let chained = repo
+        .dir()
+        .join(".git/hooks/reference-transaction.pre-sluice");
+    // Run once per transaction of the round's, never again for the
+    // transactions the hook's own recording makes.
+    std::fs::write(
+        &chained,
+        format!(
+            "#!/bin/sh\n[ \"$1\" = prepared ] && [ -z \"$PROTECT_TEST_HOOK\" ] || exit 0\n\
+             export PROTECT_TEST_HOOK=1\ncat >/dev/null\n\
+             printf '%s %s refs/heads/bolt/y\\n' {tip} {other} | '{sluice}' hook \
+             reference-transaction prepared 2>/dev/null\n\
+             echo \"judged $? under ${{SLUICE_FETCH_HELD:-no fetch}}\" >> '{judged}'\nexit 0\n",
+            sluice = sluice(),
+            judged = judged.display(),
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(
+        &chained,
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .unwrap();
+
+    let out = sl_ended(&repo, &["step", "bolt/x"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let lock = std::fs::canonicalize(repo.dir().join(".git"))
+        .unwrap()
+        .join("sluice-fetch.lock");
+    let said = std::fs::read_to_string(&judged).unwrap_or_default();
+    assert!(
+        said.lines()
+            .any(|l| l == format!("judged 1 under {}", lock.display())),
+        "{said}"
+    );
+    assert_eq!(repo.rev("bolt/y"), tip);
 }
 
 /// 1, 124: a refusal tells whoever ran it, before git's own error, that

@@ -164,7 +164,7 @@ share as [`[[caches]]`](#caches). The caches an earlier sluice saved in
 | key | values | meaning |
 |---|---|---|
 | `kind` | `"open"` | The tests run as a process group, with nothing held back. |
-| | `"sandbox"` | The tests may write only their checkout, their scratch directory and the host's declared [cache directories](#caches), and may reach the host's declared cache sockets whatever `network` says (macOS: Seatbelt; Linux: not built yet). |
+| | `"sandbox"` | The tests may write only their checkout, their scratch directory, the host's declared [cache directories](#caches) and where the task runner keeps what it shares for the run. They may reach the host's declared cache sockets whatever `network` says (macOS: Seatbelt; Linux: not built yet). |
 | | `"container"` | The tests run in a container from the image the policy names. Planned, for a box that runs no agents ([executors and systems](/sluice/guides/executors-and-systems/)); not built. |
 | `network` | `false`, `"localhost"`, `true` | No network; only 127.0.0.1 and ::1, for tests that start a server and talk to it; or any. |
 | `memory` | e.g. `"8G"` | Refused where the executor cannot hold it, never run without it. |
@@ -543,7 +543,8 @@ reserved = 1   # default: 0; runs of the bound agents' own runs never use
 
 [forge]
 app_id = 123456                  # the GitHub App sluice pushes as
-key = "~/.config/sluice/app.pem" # its private key on this host
+key = "~/.config/sluice/app.pem" # its private key on this host, or in its place
+# credential = ["/opt/forge/bin/token-helper", "--app", "sluice"]  # a command that gives its token
 discovery = "60s"                # default: 60s; how often it asks for pull requests
 
 [signing]
@@ -572,7 +573,7 @@ collector = "http://localhost:4318"  # a receiver on the host; needed where send
 |---|---|---|
 | [`[runs]`](#runs) | How many runs share the host's cores at once, how many of its cores they use, and how many runs are kept for submissions. | Always; each key has a default. |
 | [`[runs] systems`](#runs-systems) | The systems the host runs. | It runs only some of the systems a policy names. |
-| [`[forge]`](#forge) | The GitHub App sluice pushes as, and how often it asks GitHub for a branch's pull requests. | It lands on a branch whose remote is on GitHub. |
+| [`[forge]`](#forge) | The GitHub App sluice pushes as, its key or a command that gives its token, and how often sluice asks GitHub for a branch's pull requests. | It lands on a branch whose remote is on GitHub. |
 | [`[signing]`](#signing) | The signer the host signs its results as, and its key. | It runs checks for a branch whose state is on its remote. |
 | [`[peers]`](#peers) | How long a quiet host keeps a branch, how often this host shows it is alive, and its name among the hosts. | It shares a branch's remote with other hosts. |
 | [`[deliveries]`](#deliveries) | How long an outcome is owed to its worktree before it shows as expired. | Its agents confirm their outcomes sooner or later than in a week. |
@@ -593,7 +594,8 @@ $EDITOR ~/.config/sluice/config.toml
 ```
 
 Keep the keys it names, `[forge] key` and `[signing] key`, on the host
-with mode `0600`.
+with mode `0600`. A host that hands sluice the app's token by a command,
+`[forge] credential`, keeps no key of the app's on the host.
 
 **A host under configuration management.** When Nix, Ansible, an MDM or
 another tool manages the host's configuration, the file is that tool's.
@@ -640,6 +642,12 @@ wrote it, and sluice refuses it if sluice does not know it either. Name
 each key file by its path on the host, from `/` or under `~/`.
 Evaluation fails on a key under the Nix store, on a key's text, and on
 a Nix path such as `./app.pem`, which would copy the key into the store.
+`forge.credential` takes the command that gives the app's token, in
+place of `forge.key`, as a list of strings: its program, then each
+argument, such as
+`[ "/opt/forge/bin/token-helper" "--app" "sluice" ]`. A string in its
+place fails evaluation, and so does an argument that holds a GitHub
+token's text, since the file is in the store.
 The module links `~/.config/sluice/config.toml` to the file it writes,
 for nix-darwin's primary user, or on NixOS for `services.sluice.user`.
 A file already there that is no link moves once, to
@@ -726,6 +734,46 @@ own. The guide [Give sluice its own GitHub
 identity](/sluice/guides/github-app/) sets it up, and
 [`sluice forge check`](/sluice/reference/commands/#sluice-forge-check)
 says whether it is set up right.
+
+`credential` names a command that gives the app's token, in place of
+`key`, for a host whose own tool keeps the app's key. A table names
+`key` or `credential`, never both, and sluice refuses one that names
+both or neither. Write the command as a list: its program, then each
+argument.
+
+```toml
+[forge]
+app_id = 123456
+credential = ["/opt/forge/bin/token-helper", "--app", "sluice"]
+```
+
+sluice runs the command with no shell, so a string in its place is
+refused. Name the program by its full path, under `~/`, or by a name
+the `PATH` finds. sluice asks the command as git asks a credential
+helper. It runs the command with `get` after its arguments, and writes
+`protocol=https`, `host=github.com` and `path=<owner>/<repository>` on
+its standard input. It reads `password`, the token, and
+`password_expiry_utc`, the token's end in seconds since 1970, from its
+standard output, and passes over every other line. sluice holds the
+token in memory for that repository alone, and asks again five minutes
+before its end. A token given with no end is held until GitHub refuses
+it.
+
+When GitHub refuses the command's token, sluice runs the command with
+`erase` and the refused token, then with `get` for a fresh one. It
+never tries the refused token again, and a `get` that gives it back is
+no fresh token. A command that exits non-zero, prints no `password`, or
+gives nothing in thirty seconds fails the call that needed the token.
+The failure names the command and gives what it wrote on its standard
+error, with anything shaped as a GitHub token replaced by `[redacted]`.
+Where the command wrote more than 64 KiB there, the failure gives its
+whole lines within the first 64 KiB. sluice asks GitHub once, with each
+token the command gives, which repositories it reaches. It refuses a
+token that doesn't reach the repository, and names what it reaches in a
+refusal's report. `sluice forge check` with a command checks that the command
+gives a token, that the token is the app's that `app_id` names, and that
+it may push. GitHub shows a token's other grants to nobody holding only
+the token, so check the app's other permissions where its key is kept.
 
 `discovery` is how often sluice asks GitHub for the open pull requests
 into a branch that takes them while nothing on the host changes, a
@@ -912,9 +960,10 @@ say: in the base checkout's `.moon/cache` when the repository has a
 base checkout holding `.moon`, otherwise in `cache/shared` under moon's
 home, `MOON_HOME` or `~/.moon`. moon's home is the one moon's command
 sees in a run, with `[tests] toolchain` sourced: a toolchain that sets
-`MOON_HOME` moves it. Declare that directory as the cache's `dir`, so a
-sandboxed run may write it. sluice reads the manifest by which a host
-proves a task's key where moon keeps it, whatever `dir` says.
+`MOON_HOME` moves it. A sandboxed run may write where moon keeps it,
+wherever the repository moves moon's home and whatever `dir` says, and
+sluice reads there the manifest by which a host proves a task's key.
+The cache's `dir` need not name it.
 
 `MOON_CACHE_DIR` moves nothing of moon's. moon 2.6.1 reads no such
 variable: it sets it for the tasks it runs, naming the workspace's own

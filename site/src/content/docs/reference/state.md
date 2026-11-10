@@ -104,9 +104,12 @@ every repository on the host and never pushed:
                        GitHub's last answer at one address, with the ETag
                        and time it came with, so the next read asks GitHub
                        only whether it changed
-  forge/pauses/<app>-<installation>-<allowance>.json
+  forge/pauses/<app>-<owner>-<allowance>.json
                        until when GitHub said the app's allowance of calls
-                       on that installation is spent, in GitHub's words
+                       is spent, in GitHub's words; the owner, the account
+                       the repository is on, names the app's one
+                       installation there, whether its token was minted
+                       from the app's key or given by a credential command
   forge/requests/<owner>/<repository>/<branch>.json
                        when sluice last asked GitHub for the open pull
                        requests into the branch, and what it read and

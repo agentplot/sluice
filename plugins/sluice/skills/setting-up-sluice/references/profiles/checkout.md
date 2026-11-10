@@ -39,9 +39,10 @@ env = { MOON_CACHE_SHARED_WORKTREE_CACHE = "true", MOON_EXPERIMENT_CAS_OUTPUTS_C
 ```
 
 Every run on the host gets each `env`, written as the agents' shells have
-it, and the sandbox opens each `dir` and `socket`. sluice starts no cache's
-server. A cache table an older policy's `[checkout]` still holds is read as
-nothing.
+it, and the sandbox opens each `dir` and `socket`. The sandbox also opens
+where moon keeps what it shares for a run, whatever `dir` says, wherever
+the repository moves moon's home. sluice starts no cache's server. A cache
+table an older policy's `[checkout]` still holds is read as nothing.
 
 ## Services and the release command
 

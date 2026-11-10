@@ -4418,7 +4418,9 @@ const SPENT: &str = "API rate limit exceeded for installation ID 7.";
 impl OnGitHub {
     /// The host's state says GitHub's REST allowance for the app's
     /// installation is spent for `minutes` more, as another process on the
-    /// host found: until when.
+    /// host found: until when. The pause is kept under the account the
+    /// repository is on, which names the app's one installation there
+    /// (134; record 0108).
     fn spent_for(&self, minutes: i64) -> chrono::DateTime<chrono::Utc> {
         let until = chrono::Utc::now() + chrono::TimeDelta::minutes(minutes);
         let dir = self.state.path().join("sluice/forge/pauses");
@@ -4427,7 +4429,7 @@ impl OnGitHub {
             dir.join(format!(
                 "{}-{}-core.json",
                 github::APP,
-                github::INSTALLATION
+                github::repo().owner
             )),
             serde_json::json!({ "until": until, "words": SPENT, "streak": 1 }).to_string(),
         )
@@ -5541,7 +5543,9 @@ fn handed_over() {
 /// request carries the submission's work on B, so the wait follows the
 /// request and is never told it was withdrawn (122, 137). Out of time, it
 /// prints its own submission's record, naming the request it follows as it
-/// stands (record 0100 D2, D3).
+/// stands (record 0100 D2, D3). Its time is up as it starts, as on a host
+/// so busy that its start takes its whole limit: its first pass is the one
+/// that withdraws (1).
 #[test]
 fn handed_over_by_a_wait() {
     let g = OnGitHub::new("intake-handed-wait", "");
@@ -5552,7 +5556,7 @@ fn handed_over_by_a_wait() {
     g.repo
         .git(&["push", "-q", "origin", &format!("{moved}:refs/heads/main")]);
     let posts = g.posts();
-    let out = g.sluice(&["wait", &id.to_string(), "--timeout", "2s", "--json"]);
+    let out = g.sluice(&["wait", &id.to_string(), "--timeout", "0s", "--json"]);
     assert_eq!(out.status.code(), Some(sluice::WAITING), "{}", text(&out));
     let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(doc["id"], id, "{doc}");

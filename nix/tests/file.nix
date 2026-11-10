@@ -3,8 +3,9 @@
 # file under nix/tests/files, byte for byte; a key the module does not
 # declare is written as given; a value the file cannot hold fails,
 # naming its option; a key in the store, a key's text or a key given as a
-# Nix path fails evaluation; and each telemetry option says its unit and
-# values (principle 13; record 0106).
+# Nix path fails evaluation; so does a forge credential given as a string
+# or holding a token's text (record 0108); and each telemetry option says
+# its unit and values (principle 13; record 0106).
 t:
 let
   inherit (t) lib;
@@ -91,6 +92,22 @@ let
     builtins.seq (evaluated { forge.key = ./settings.nix; }).services.sluice.settings.forge.key true
   );
 
+  # A credential command written as a shell line, which the option's type
+  # refuses, naming the option; and one holding a token's text.
+  shellLine = builtins.tryEval (
+    builtins.seq
+      (evaluated {
+        forge.credential = "token-helper --app sluice";
+      }).services.sluice.settings.forge.credential
+      true
+  );
+  tokenText = {
+    forge.credential = [
+      "/opt/forge/bin/token-helper"
+      "ghs_notarealtoken"
+    ];
+  };
+
   refused =
     given: option: words:
     t.expect (failures given != [ ]) "${option} evaluates"
@@ -161,4 +178,14 @@ in
   "A key given as a Nix path" = t.expect (
     !nixPath.success
   ) "services.sluice.settings.forge.key evaluates as the Nix path ./settings.nix";
+
+  "A forge credential command" = rendersAs "credential";
+
+  "A token's text in the credential" = refused tokenText "services.sluice.settings.forge.credential" [
+    "Nix store, which every user reads"
+  ];
+
+  "A credential given as a string" = t.expect (
+    !shellLine.success
+  ) "services.sluice.settings.forge.credential evaluates as the string \"token-helper --app sluice\"";
 }
