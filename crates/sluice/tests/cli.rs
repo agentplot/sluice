@@ -4265,6 +4265,62 @@ fn a_run_keeps_driving_across_a_new_binding() {
     assert!(soon(|| !driver_live()));
 }
 
+/// The settings-take-up spec's "A run handed over counts its passes"
+/// (135; record 0107; core.31; design D4, D6): a `sluice run --rounds 3`
+/// that drives one pass and hands over what it carries drives on from it
+/// for the two passes left, the repository's driver held between every
+/// two passes, the old run dropped among them, and never says another
+/// run drives it.
+#[test]
+fn a_run_handed_over_keeps_driving_and_counts_its_passes() {
+    if let Some(err) = stderr_of("a_run_handed_over_keeps_driving_and_counts_its_passes") {
+        assert!(!err.contains(BESIDE), "{err}");
+        return;
+    }
+    let f = one_queued();
+    let pause = Rounds(Cell::new(0));
+    let mut out = Vec::new();
+    let held = |when: &str| {
+        assert!(
+            sluice::reader::Driver::take(&support::readers(), REPOSITORY)
+                .unwrap()
+                .is_none(),
+            "the driver's lock let go {when}"
+        );
+    };
+    let mut pass = |driving: &mut sluice::Driving| {
+        let bound = sluice_fakes::Fakes::of(f.world.clone());
+        let host = support::FakeHost {
+            world: f.world.clone(),
+            reserved: 0,
+        };
+        sluice::drive(
+            driving,
+            bound.seams(),
+            &host,
+            &(),
+            &f.clock,
+            &pause,
+            &mut out,
+        )
+        .unwrap()
+    };
+    let mut driving = sluice::Driving::new(Some(3));
+    assert_eq!(pass(&mut driving), sluice::Driven::Next);
+    held("after the first pass");
+    let carried = driving.hand_over().unwrap();
+    assert_eq!(carried.passes, 1);
+    drop(driving);
+    held("as the run handed over");
+    let mut driving = sluice::Driving::handed(Some(3), carried);
+    assert_eq!(pass(&mut driving), sluice::Driven::Next);
+    held("after the second pass");
+    assert_eq!(pass(&mut driving), sluice::Driven::Ended(0));
+    held("after the third pass");
+    drop(driving);
+    assert!(soon(|| !driver_live()));
+}
+
 /// 129, 135: the driver is the reader: with nothing queued, its pass
 /// writes the whole overview as the reader's document, as a one-shot
 /// overview reads it but for its time, naming its tick (64).

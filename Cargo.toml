@@ -41,6 +41,7 @@ nix = { version = "0.31", default-features = false, features = [
   "process",
   "hostname",
   "user",
+  "fs",
 ] }
 # Telemetry (ADRs 0014, 0022): the core emits tracing spans and events;
 # the binary exports them over OTLP/HTTP when asked to.

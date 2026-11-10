@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -5,15 +6,34 @@ use std::time::{Duration, Instant};
 
 use clap::Parser;
 use sluice::exec::Host;
+use sluice::hand_over::HandOver;
 use sluice::host_settings::{HostSettings, Look};
-use sluice::instance::Instance;
+use sluice::instance::{Instance, AFRESH};
 use sluice::profiles::Bound;
 use sluice::retry::Policy;
 use sluice::telemetry::{Settings, Telemetry};
-use sluice::{drive, run, Cli, Command, Driven, Driving, Pause, Skipped, Sleep};
+use sluice::{drive, run, Carried, Cli, Command, Driven, Driving, Pause, Skipped, Sleep};
 use sluice_core::{Clock, Serves, Sluice, SystemClock};
 
 fn main() {
+    // 135: what a `sluice run` this process started afresh from handed it,
+    // read first, before any thread or child starts, and taken out of the
+    // environment so no child inherits it (record 0107; design D4).
+    let handed = HandOver::take().unwrap_or_else(|e| {
+        eprintln!("sluice: {e:#}");
+        std::process::exit(3);
+    });
+    // The run as it started, which a `sluice run` starts afresh as: its
+    // environment before telemetry takes anything out of it, its
+    // executable through every link, and its command line (151; rule
+    // core.53; design D3).
+    let started = Started {
+        env: std::env::vars_os().collect(),
+        program: std::env::current_exe()
+            .and_then(std::fs::canonicalize)
+            .map_err(|e| format!("the executable this sluice run started as: {e}")),
+        args: std::env::args_os().skip(1).collect(),
+    };
     let cli = Cli::try_parse().unwrap_or_else(|e| {
         // Help and the version exit 0; anything sluice cannot read exits
         // USAGE, not clap's 2, which is a conflict's.
@@ -101,12 +121,20 @@ fn main() {
     // no thread of sluice's runs while telemetry takes the caller's OTLP
     // variables out (151; record 0106; design D2, D4). A `sluice run`
     // holds them with the sign of their file, to take a change up between
-    // its passes (135; record 0107).
-    let read = match &cli.command {
-        Some(Command::Run { .. }) => {
-            HostSettings::read().map(|settings| (settings.held().clone(), Some(settings)))
-        }
-        _ => Instance::read().map(|instance| (instance, None)),
+    // its passes; one started afresh holds the settings it was handed,
+    // under no sign, so its first look reads the file once (135; record
+    // 0107; design D4 of `a-kept-run-hands-over-what-it-cannot-take-up`).
+    let (read, handed) = match (&cli.command, handed) {
+        (Some(Command::Run { .. }), Some((doc, carried))) => (
+            HostSettings::read_handed(&doc.settings)
+                .map(|settings| (settings.held().clone(), Some(settings))),
+            Some(Handed { doc, carried }),
+        ),
+        (Some(Command::Run { .. }), None) => (
+            HostSettings::read().map(|settings| (settings.held().clone(), Some(settings))),
+            None,
+        ),
+        _ => (Instance::read().map(|instance| (instance, None)), None),
     };
     let (instance, held) = match read {
         Ok(read) => read,
@@ -142,6 +170,8 @@ fn main() {
             program,
             settings,
             retry: retry.clone(),
+            started,
+            handed,
         });
         Ok((bound, kept))
     });
@@ -169,9 +199,15 @@ fn main() {
         _ => (&SystemClock, &Sleep(every)),
     };
     let ran = match (kept, &cli.command) {
-        (Some(kept), Some(Command::Run { rounds })) => {
-            keep_running(kept, bound, *rounds, clock, pause, &mut out)
-        }
+        (Some(kept), Some(Command::Run { rounds })) => keep_running(
+            kept,
+            bound,
+            *rounds,
+            telemetry.as_ref(),
+            clock,
+            pause,
+            &mut out,
+        ),
         _ => run(
             cli,
             bound.seams(),
@@ -205,12 +241,34 @@ fn finish(telemetry: Option<Telemetry>) {
 /// What a `sluice run` keeps to bind its repository afresh: the folder it
 /// opened it from, the executable that supervises its check runs, the
 /// host's settings it holds with their file's sign, and the retry policy
-/// its calls to a remote run under (134, 135).
+/// its calls to a remote run under (134, 135); and, to start itself
+/// afresh, the run as it started and what it was handed where it started
+/// afresh itself (135; record 0107; design D3, D4).
 struct Kept {
     dir: PathBuf,
     program: PathBuf,
     settings: HostSettings,
     retry: Rc<Policy>,
+    started: Started,
+    handed: Option<Handed>,
+}
+
+/// The run as it started, which it starts afresh as (design D3): its
+/// environment before telemetry took the caller's OTLP variables out of
+/// it, the executable it started as resolved through every link, or why
+/// that could not be read, and its arguments.
+struct Started {
+    env: Vec<(OsString, OsString)>,
+    program: Result<PathBuf, String>,
+    args: Vec<OsString>,
+}
+
+/// What the `sluice run` this one started afresh from handed it (design
+/// D4): the document, its settings, tables and supervisors, and what its
+/// `Driving` carries.
+struct Handed {
+    doc: HandOver,
+    carried: Carried,
 }
 
 /// `sluice run`, one pass at a time, taking up the host's settings between
@@ -220,15 +278,43 @@ struct Kept {
 /// old binding is let go; settings that do not read or bind leave it on
 /// what it holds, said once for that change. A run already going keeps
 /// what it was started with: its request and its record hold it.
+///
+/// A change that moves a table no binding takes up in place, one of
+/// [`AFRESH`], is bound and checked the same way and the new binding let
+/// go; what `telemetry` holds is sent; and the run starts itself afresh in
+/// its own process, as it started, handing over the settings it bound, its
+/// driver's lock, its passes, its supervisors and what it said. A start
+/// that fails leaves it on everything it holds, said once for that
+/// change. A run started afresh says what it took up once it is bound,
+/// reaps the supervisors it was handed and drives on from what it was
+/// handed (135; record 0107; rule core.54; design D1 to D7 of
+/// `a-kept-run-hands-over-what-it-cannot-take-up`).
 fn keep_running(
     mut kept: Kept,
     mut bound: Bound,
     rounds: Option<usize>,
+    telemetry: Option<&Telemetry>,
     clock: &dyn Clock,
     pause: &dyn Pause,
     out: &mut dyn Write,
 ) -> anyhow::Result<i32> {
-    let mut driving = Driving::new(rounds);
+    let file = kept
+        .settings
+        .path()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
+    let mut driving = match kept.handed.take() {
+        Some(Handed { doc, carried }) => {
+            sluice::runs::reap_handed(&doc.supervisors);
+            eprintln!(
+                "sluice: took up the host's settings in {file}: {} changed, in this sluice run \
+                 started afresh",
+                doc.tables.join(", ")
+            );
+            Driving::handed(rounds, carried)
+        }
+        None => Driving::new(rounds),
+    };
     loop {
         let driven = drive(
             &mut driving,
@@ -242,21 +328,29 @@ fn keep_running(
         if let Driven::Ended(code) = driven {
             return Ok(code);
         }
-        let file = kept
-            .settings
-            .path()
-            .map(|p| p.display().to_string())
-            .unwrap_or_default();
         let refused = |why: &str| {
             sluice::telemetry::warn(&format!(
                 "sluice: warning: {file} is refused, so this sluice run keeps the settings it \
                  holds until the file changes: {why}"
             ))
         };
+        // A change it takes up only by starting afresh that it could not
+        // start afresh for, because its settings do not bind or the start
+        // failed, said once with the tables (rule core.54; design D5).
+        let not_afresh = |tables: &[&str], cause: &str, why: &str| {
+            sluice::telemetry::warn(&format!(
+                "sluice: warning: {file} changed {}, which this sluice run takes up only by \
+                 starting afresh, and {cause}, so it keeps the settings it holds until the file \
+                 changes: {why}",
+                tables.join(", ")
+            ))
+        };
         match kept.settings.look() {
             Look::Same => {}
             Look::Refused(why) => refused(&why),
-            Look::Changed(instance) => {
+            Look::Changed(instance, text) => {
+                let tables = kept.settings.held().changed_tables(&instance);
+                let afresh = tables.iter().any(|t| AFRESH.contains(t));
                 let rebound = Bound::open_with(
                     &kept.dir,
                     kept.program.clone(),
@@ -271,19 +365,63 @@ fn keep_running(
                     Ok(b)
                 });
                 match rebound {
+                    Ok(b) if afresh => {
+                        drop(b);
+                        if let Some(t) = telemetry {
+                            t.flush();
+                        }
+                        let _ = out.flush();
+                        let why = start_afresh(&kept.started, &driving, &tables, text);
+                        not_afresh(&tables, "it could not start afresh", &format!("{why:#}"));
+                    }
                     Ok(b) => {
-                        let tables = kept.settings.held().changed_tables(&instance).join(", ");
+                        let tables = tables.join(", ");
                         bound = b;
                         kept.settings.accept(instance);
                         eprintln!(
                             "sluice: took up the host's settings in {file}: {tables} changed"
                         );
                     }
+                    Err(e) if afresh => {
+                        not_afresh(&tables, "its settings do not bind", &format!("{e:#}"))
+                    }
                     Err(e) => refused(&format!("{e:#}")),
                 }
             }
         }
     }
+}
+
+/// Start this `sluice run` afresh in its own process, as it `started`,
+/// handing it `text`, the settings it read and bound, the `tables` that
+/// changed, what `driving` carries and the supervisors it has not reaped
+/// (135; record 0107; design D2 to D5). It returns only where the start
+/// failed, with why; the run then keeps its driver and all it holds.
+fn start_afresh(
+    started: &Started,
+    driving: &Driving,
+    tables: &[&str],
+    text: String,
+) -> anyhow::Error {
+    let program = match &started.program {
+        Ok(program) => program,
+        Err(why) => return anyhow::anyhow!("{why}"),
+    };
+    let carried = match driving.hand_over() {
+        Ok(carried) => carried,
+        Err(e) => return e,
+    };
+    let doc = HandOver {
+        settings: text,
+        tables: tables.iter().map(|t| t.to_string()).collect(),
+        passes: carried.passes,
+        driver: None,
+        supervisors: sluice::runs::unreaped(),
+        said: carried.said,
+        passed: carried.passed,
+        said_beside: carried.said_beside,
+    };
+    doc.start(program, &started.args, &started.env, carried.driver)
 }
 
 /// The folder the repository is opened from: the one the command runs
