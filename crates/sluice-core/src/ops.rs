@@ -1335,10 +1335,11 @@ impl Sluice<'_> {
     }
 
     /// The submissions that still need `branch`: in a chain, or landing.
-    /// Its deletion is refused while there are any.
+    /// Its deletion is refused while there are any. 124: read from the
+    /// records as the host holds them, with no fetch, since the protection
+    /// that asks fetches nothing to judge a write (record 0110).
     pub fn needing(&self, branch: &str) -> Result<Vec<u64>> {
-        Ok(self
-            .read_line(branch)?
+        Ok(Line::load(branch, self.seams.state.read_held(branch)?)?
             .subs
             .values()
             .filter(|s| !s.state.is_out())
