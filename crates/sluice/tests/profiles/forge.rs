@@ -208,6 +208,15 @@ fn runs(scratch: &support::Scratch) -> usize {
     std::fs::read_to_string(scratch.path().join("runs")).map_or(0, |n| n.trim().parse().unwrap())
 }
 
+/// A counting script's log: each operation, an erase with its password.
+fn script_log(scratch: &support::Scratch) -> Vec<String> {
+    std::fs::read_to_string(scratch.path().join("log"))
+        .unwrap_or_default()
+        .lines()
+        .map(String::from)
+        .collect()
+}
+
 /// The app whose tokens `command` gives, on the fake API, its clock `now`.
 fn commanded(
     fake_url: &str,
@@ -1249,6 +1258,104 @@ fn a_call_refused_its_token_is_made_on_a_fresh_one() {
     assert_eq!(asked, ["Bearer token-1", "Bearer token-2"]);
     assert_eq!(app.token(&repo()).unwrap(), "token-2");
     assert_eq!(minted(&fake), 2);
+}
+
+/// The fake API answering `/repos/o/r/pulls/7` with 401 to `refused` and
+/// with the pull request to any other token; every other call as `forge`
+/// answers it.
+fn refusing(forge: Forge, refused: &'static str) -> Fake {
+    let sold = Mutex::new(0);
+    Fake::start(move |r: &Request| {
+        if r.path != "/repos/o/r/pulls/7" {
+            return forge.answer(r, &sold);
+        }
+        if r.header("Authorization") == Some(refused) {
+            return json(401, json!({ "message": "Bad credentials" }));
+        }
+        json(
+            200,
+            json!({ "number": 7, "state": "open", "head": { "ref": "unit/a" }, "base": { "ref": "main" } }),
+        )
+    })
+}
+
+/// The `Authorization` each read of `/repos/o/r/pulls/7` carried.
+fn pull_reads(fake: &Fake) -> Vec<String> {
+    fake.requests()
+        .into_iter()
+        .filter(|r| r.path == "/repos/o/r/pulls/7")
+        .map(|r| r.header("Authorization").unwrap().to_string())
+        .collect()
+}
+
+/// The forge-identity spec's "Refused, erased and got afresh": a read
+/// GitHub refuses on the command's token is made again on one the command
+/// gives afresh, after it was told to erase the refused one, and sluice
+/// holds the fresh one after (134; rule core.29; record 0108).
+#[test]
+fn a_call_refused_a_commands_token_is_made_on_one_got_afresh() {
+    use sluice::profiles::github::forge::Forge as _;
+    let clock = Clock::new();
+    let fake = refusing(Forge::new(&clock), "Bearer token-1");
+    let scratch = support::Scratch::new("command-renew");
+    let command = credential_script(&scratch, &counting(""));
+    // A clock that moves on at each reading, so the fresh token is
+    // settled at once.
+    let app = commanded(fake.url(), command, ticking(&clock));
+    assert_eq!(app.pull(&repo(), 7).unwrap().unwrap().number, 7);
+    assert_eq!(pull_reads(&fake), ["Bearer token-1", "Bearer token-2"]);
+    assert_eq!(script_log(&scratch), ["get", "erase token-1", "get"]);
+    assert_eq!(app.token(&repo()).unwrap(), "token-2");
+}
+
+/// The forge-identity spec's "The command gives the refused token back":
+/// a command that gives again the token GitHub refused gives none afresh,
+/// and the read is not made again (record 0108).
+#[test]
+fn a_command_that_gives_the_refused_token_back_gives_none_afresh() {
+    use sluice::profiles::github::forge::Forge as _;
+    let clock = Clock::new();
+    let fake = refusing(Forge::new(&clock), "Bearer token-1");
+    let scratch = support::Scratch::new("command-same");
+    let command = credential_script(
+        &scratch,
+        "cat > /dev/null\n[ \"$1\" = get ] && echo password=token-1\nexit 0\n",
+    );
+    let app = commanded(fake.url(), command, ticking(&clock));
+    let err = format!("{:#}", app.pull(&repo(), 7).unwrap_err());
+    assert!(err.contains("401 Bad credentials"), "{err}");
+    assert!(err.contains("no token could be got afresh"), "{err}");
+    assert!(
+        err.contains("gave again the token GitHub refused for o/r"),
+        "{err}"
+    );
+    assert_eq!(pull_reads(&fake), ["Bearer token-1"]);
+}
+
+/// The forge-identity spec's "The command refuses", at the call: a command
+/// that gives no token fails the call that needed it, in the command's own
+/// words, and no call is made (record 0108).
+#[test]
+fn a_command_that_gives_no_token_fails_the_call() {
+    use sluice::profiles::github::forge::Forge as _;
+    let clock = Clock::new();
+    let fake = Forge::new(&clock).start();
+    let scratch = support::Scratch::new("command-refuses");
+    let command = credential_script(
+        &scratch,
+        "cat > /dev/null\necho run >> \"$here/log\"\n\
+         echo 'no drive on this host serves o/r' >&2\nexit 1\n",
+    );
+    let program = command.program().display().to_string();
+    let app = commanded(fake.url(), command, ticking(&clock));
+    let err = format!("{:#}", app.pull(&repo(), 7).unwrap_err());
+    assert!(
+        err.contains(&format!("[forge] credential {program}")),
+        "{err}"
+    );
+    assert!(err.contains("no drive on this host serves o/r"), "{err}");
+    assert_eq!(script_log(&scratch), ["run"]);
+    assert!(fake.requests().is_empty(), "{:?}", fake.requests());
 }
 
 /// The remote-retry spec's "A draft mark answered 502" and "A check run's
