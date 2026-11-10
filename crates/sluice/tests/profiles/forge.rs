@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, TimeDelta, Utc};
 use serde_json::json;
-use sluice::identity::Identity;
+use sluice::identity::{CredentialCommand, Identity};
 use sluice::profiles::github::check::{check, Finding};
 use sluice::profiles::github::{App, Bearer, Repo};
 use sluice::retry::Policy;
@@ -149,6 +149,63 @@ fn app(fake: &Fake, clock: &Clock) -> App {
     .unwrap()
 }
 
+/// A credential command of the test's own (record 0108): a script, mode
+/// `0755`, written into the test's scratch directory, `here` naming that
+/// directory, where the script writes what it was asked; `body` runs with
+/// the operation as `$1`.
+fn credential_script(scratch: &support::Scratch, body: &str) -> CredentialCommand {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let path = scratch.path().join("token-helper");
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o755)
+        .open(&path)
+        .unwrap();
+    write!(f, "#!/bin/sh\nhere={}\n{body}", scratch.path().display()).unwrap();
+    f.sync_all().unwrap();
+    drop(f);
+    CredentialCommand::new(path, vec![])
+}
+
+/// A script's body that answers `get` with `token-<n>`, `n` counting its
+/// runs in `runs`, logging each operation in `log`, and an erase's
+/// password beside it; `end` is the shell that prints the token's end
+/// line, or nothing.
+fn counting(end: &str) -> String {
+    format!(
+        "input=$(cat)\n\
+         case \"$1\" in\n\
+         get)\n\
+           n=$(( $(cat \"$here/runs\" 2>/dev/null || echo 0) + 1 ))\n\
+           echo $n > \"$here/runs\"\n\
+           echo get >> \"$here/log\"\n\
+           echo username=x-access-token\n\
+           echo \"password=token-$n\"\n\
+           {end}\n\
+           ;;\n\
+         erase)\n\
+           echo \"erase $(echo \"$input\" | sed -n 's/^password=//p')\" >> \"$here/log\"\n\
+           ;;\n\
+         esac\n"
+    )
+}
+
+/// How many times a counting script gave a token.
+fn runs(scratch: &support::Scratch) -> usize {
+    std::fs::read_to_string(scratch.path().join("runs")).map_or(0, |n| n.trim().parse().unwrap())
+}
+
+/// The app whose tokens `command` gives, on the fake API, its clock `now`.
+fn commanded(
+    fake_url: &str,
+    command: CredentialCommand,
+    now: sluice::profiles::github::app::Now,
+) -> App {
+    App::commanded(APP, command, fake_url, now, policy())
+}
+
 fn minted(fake: &Fake) -> usize {
     fake.requests()
         .iter()
@@ -203,6 +260,60 @@ fn a_token_is_bought_once_an_hour() {
         .unwrap()
         .to_string();
     assert!(bearer.starts_with("Bearer ey"), "{bearer}");
+}
+
+/// The forge-identity spec's "A token got once an hour": a command's token
+/// is held until five minutes before the end the command gave, and got
+/// again then; over two hours, at 0, 55 and 115 minutes, and nothing of
+/// the app's key is asked (record 0108).
+#[test]
+fn a_commands_token_is_got_once_before_each_end() {
+    let clock = Clock::new();
+    let fake = Forge::new(&clock).start();
+    let scratch = support::Scratch::new("command-hourly");
+    let start = clock.now();
+    std::fs::write(scratch.path().join("base"), start.timestamp().to_string()).unwrap();
+    let command = credential_script(
+        &scratch,
+        &counting("echo \"password_expiry_utc=$(( $(cat \"$here/base\") + n * 3600 ))\""),
+    );
+    let at = clock.clone();
+    let app = commanded(fake.url(), command, Box::new(move || at.now()));
+    let mut seen = Vec::new();
+    for minute in 0..=120 {
+        clock.set(start + TimeDelta::minutes(minute));
+        let t = app.token(&repo()).unwrap();
+        if seen.last() != Some(&t) {
+            seen.push(t);
+        }
+    }
+    assert_eq!(seen, ["token-1", "token-2", "token-3"]);
+    assert_eq!(runs(&scratch), 3);
+    let asked: Vec<String> = fake.requests().into_iter().map(|r| r.path).collect();
+    assert!(
+        asked.iter().all(|p| !p.ends_with("/access_tokens")
+            && p != "/app"
+            && p != "/repos/o/r/installation"),
+        "{asked:?}"
+    );
+}
+
+/// The forge-identity spec's "A token with no end": a token the command
+/// gives with no end is held until GitHub refuses it (record 0108).
+#[test]
+fn a_commands_token_with_no_end_is_held_until_refused() {
+    let clock = Clock::new();
+    let fake = Forge::new(&clock).start();
+    let scratch = support::Scratch::new("command-no-end");
+    let command = credential_script(&scratch, &counting(""));
+    let at = clock.clone();
+    let app = commanded(fake.url(), command, Box::new(move || at.now()));
+    let start = clock.now();
+    for minute in 0..=120 {
+        clock.set(start + TimeDelta::minutes(minute));
+        assert_eq!(app.token(&repo()).unwrap(), "token-1");
+    }
+    assert_eq!(runs(&scratch), 1);
 }
 
 /// A failure GitHub reports is an error that names it.
