@@ -18,7 +18,7 @@ tool of ours on a page (core.26).
 
 ## 1. The table, read with the host's settings
 
-- [ ] 1.1 Add the `[telemetry]` table to `crates/sluice/src/instance.rs`, as D1 says:
+- [x] 1.1 Add the `[telemetry]` table to `crates/sluice/src/instance.rs`, as D1 says:
   - `TelemetryForm`, refusing a field it does not know, as `ConfigForm`'s `telemetry: Option<TelemetryForm>`.
   - `HostTelemetry`, with pub fields as `Instance`'s, and `Instance`'s `telemetry: Option<HostTelemetry>`, `None` where the file holds no table.
   - `send`, `traces` and `metrics` as `Option<bool>`, `collector` as `Option<String>` with any final `/` taken off, `service` as `Option<String>`, `logs` as `Option<Logs>`, `logs_tail_bytes` as `Option<usize>`, and `attributes` as `BTreeMap<String, String>`.
@@ -27,7 +27,7 @@ tool of ours on a page (core.26).
   - The module comment's example gaining a `[telemetry]` table.
 
   Add the unit test `the_telemetry_table_is_read_as_written`, with the cases of the scenario "The table read as written". True when `cargo test -p sluice --lib instance::tests::the_telemetry_table_is_read_as_written` passes.
-- [ ] 1.2 Refuse what D1's table refuses, each naming `[telemetry] <key>`:
+- [x] 1.2 Refuse what D1's table refuses, each naming `[telemetry] <key>`:
   - a `collector` whose scheme is not `http://`, saying sluice sends plain HTTP to a receiver on the host, which forwards over TLS;
   - a `collector` with no host;
   - an empty `service`;
@@ -37,7 +37,7 @@ tool of ours on a page (core.26).
   - an attribute `service.name` or `service.version`, naming `[telemetry] service`.
 
   Add the unit test `a_telemetry_setting_that_does_not_read_is_refused`, with each case of the scenario "A telemetry setting that does not read". True when `cargo test -p sluice --lib instance::tests::a_telemetry_setting_that_does_not_read_is_refused` passes.
-- [ ] 1.3 Have every `Instance { .. }` literal in the test targets of `crates/sluice` and `crates/sluice-conformance` name `telemetry: None`. That is `tests/checks.rs`, `tests/profiles/conformance.rs`, `tests/profiles/moon.rs`, `tests/sessions.rs`, `tests/stack.rs`, `tests/telemetry.rs` and `tests/telemetry_logs.rs`, and the conformance crate's `tests/copies.rs`, `could_not_start.rs`, `engine.rs`, `failed_dependency.rs`, `peers.rs`, `places.rs` and `unkept_proof.rs`. True when `cargo clippy -p sluice -p sluice-conformance --all-targets -- -D warnings` passes.
+- [x] 1.3 Have every `Instance { .. }` literal in the test targets of `crates/sluice` and `crates/sluice-conformance` name `telemetry: None`. That is `tests/checks.rs`, `tests/profiles/conformance.rs`, `tests/profiles/moon.rs`, `tests/sessions.rs`, `tests/stack.rs`, `tests/telemetry.rs` and `tests/telemetry_logs.rs`, and the conformance crate's `tests/copies.rs`, `could_not_start.rs`, `engine.rs`, `failed_dependency.rs`, `peers.rs`, `places.rs` and `unkept_proof.rs`. True when `cargo clippy -p sluice -p sluice-conformance --all-targets -- -D warnings` passes.
 
 ## 2. The module declares the table
 

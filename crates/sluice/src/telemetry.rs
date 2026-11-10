@@ -48,8 +48,10 @@ use tracing_subscriber::Layer;
 
 static ON: AtomicBool = AtomicBool::new(false);
 
-/// How much of a failed check's output is sent (ADR 0022).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+/// How much of a failed check's output is sent (ADR 0022): the flag and
+/// the host's `[telemetry] logs` read one set of words (design D1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Logs {
     /// No logs at all.
     Off,

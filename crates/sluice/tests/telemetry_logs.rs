@@ -489,6 +489,7 @@ fn a_run_s_environment() -> (String, String) {
             systems: None,
             caches: Vec::new(),
             expire_after: sluice_core::EXPIRE_AFTER,
+            telemetry: None,
         },
     )
     .with_running(repo.dir().join(".git/host-running"));
