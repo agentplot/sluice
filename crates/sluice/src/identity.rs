@@ -10,7 +10,11 @@
 //! a host may name in `[forge] credential` a command that gives the app's
 //! token, which sluice asks as git asks a helper, [`CredentialCommand`]
 //! (134, C.8; record 0108). The client names no forge and no tool, so any
-//! host's secrets manager can stand behind it (rules core.1, core.26).
+//! host's secrets manager can stand behind it (rules core.1, core.26). The
+//! words a command's failure gives, its standard error, go through the
+//! scrub first, every shape it knows of a secret and no variable's value,
+//! so no reader of the failure finds a token in them (record 0108 as
+//! amended 2026-11-10; rule core.28).
 
 use std::io::{BufRead, Read, Write};
 use std::os::unix::process::CommandExt;
@@ -175,7 +179,11 @@ impl CredentialCommand {
     /// limit fails, its failure naming the command and giving its standard
     /// error, never its standard output, which may hold a token; at the
     /// limit its process group is killed, so a child holding its pipes
-    /// open ends with it.
+    /// open ends with it. The standard error is given as the scrub leaves
+    /// it, every string shaped as a secret it knows replaced by
+    /// `[redacted]` before any failure is made, so the failure, and every
+    /// report, log line, kept state and status made from it, holds no token
+    /// (record 0108 as amended 2026-11-10).
     pub fn get(&self, asked: &Asked) -> Result<Given> {
         let input = format!(
             "protocol={}\nhost={}\npath={}\n\n",
@@ -192,7 +200,7 @@ impl CredentialCommand {
         let status = self.wait(&mut child, group, &[&out, &err])?;
         let out = out.join().unwrap_or_default();
         let err = err.join().unwrap_or_default();
-        let words = String::from_utf8_lossy(&err).trim().to_string();
+        let words = crate::scrub::Scrub::shapes().scrub(String::from_utf8_lossy(&err).trim());
         let failed = |what: String| {
             let mut e = format!("[forge] credential {self} {what}");
             if !words.is_empty() {
@@ -483,6 +491,58 @@ mod tests {
         assert!(e.starts_with("[forge] credential "), "{e}");
         assert!(e.contains("gave nothing in 300ms and was stopped"), "{e}");
         for dir in [refuses, no_password, hangs] {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    /// The forge-identity spec's "The command's words hold a token" and "A
+    /// command that prints no password names a token" (record 0108 as
+    /// amended 2026-11-10).
+    #[test]
+    fn a_credential_commands_words_carry_no_token() {
+        let refuses = scratch("words-refuses");
+        let program = script(
+            &refuses,
+            "cat > /dev/null
+\
+             echo 'the cached ghs_0123456789abcdefghijABCDEFGHIJ012345 was refused' >&2
+exit 1
+",
+        );
+        let e = format!(
+            "{:#}",
+            CredentialCommand::new(&program, vec![])
+                .get(&asked())
+                .err()
+                .unwrap()
+        );
+        assert!(e.starts_with("[forge] credential "), "{e}");
+        assert!(e.contains(&program.display().to_string()), "{e}");
+        assert!(e.contains("exited 1"), "{e}");
+        assert!(e.contains("the cached [redacted] was refused"), "{e}");
+        assert!(!e.contains("0123456789abcdefghij"), "{e}");
+
+        let no_password = scratch("words-no-password");
+        let program = script(
+            &no_password,
+            "cat > /dev/null
+echo username=x-access-token
+\
+             echo github_pat_0123456789abcdefghij_ABCDEFGHIJ >&2
+",
+        );
+        let e = format!(
+            "{:#}",
+            CredentialCommand::new(&program, vec![])
+                .get(&asked())
+                .err()
+                .unwrap()
+        );
+        assert!(e.starts_with("[forge] credential "), "{e}");
+        assert!(e.contains("gave no password"), "{e}");
+        assert!(e.contains("[redacted]"), "{e}");
+        assert!(!e.contains("0123456789abcdefghij"), "{e}");
+        for dir in [refuses, no_password] {
             let _ = std::fs::remove_dir_all(dir);
         }
     }
