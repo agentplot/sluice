@@ -844,6 +844,15 @@ impl OnGitHub {
     /// credential command of the test's own: a script in the config
     /// directory that gives `token-1` (record 0108).
     fn give_forge_command(&self) {
+        self.give_forge_command_running(
+            "cat > /dev/null\n[ \"$1\" = get ] && echo password=token-1\nexit 0\n",
+        );
+    }
+
+    /// The host's `[forge]` names the app and, in place of its key, a
+    /// credential command of the test's own: a script in the config
+    /// directory, mode `0755`, that runs `body` (record 0108).
+    fn give_forge_command_running(&self, body: &str) {
         use std::io::Write;
         use std::os::unix::fs::OpenOptionsExt;
         let dir = self.config.path().join("sluice");
@@ -855,10 +864,8 @@ impl OnGitHub {
             .mode(0o755)
             .open(&script)
             .unwrap();
-        f.write_all(
-            b"#!/bin/sh\ncat > /dev/null\n[ \"$1\" = get ] && echo password=token-1\nexit 0\n",
-        )
-        .unwrap();
+        f.write_all(format!("#!/bin/sh\n{body}").as_bytes())
+            .unwrap();
         f.sync_all().unwrap();
         drop(f);
         std::fs::write(
@@ -1005,6 +1012,28 @@ fn forge_check_runs_the_hosts_command() {
         "{said}"
     );
     assert!(!said.contains("[forge] key"), "{said}");
+}
+
+/// The forge-identity spec's "forge check tells the command's words
+/// without its token": `sluice forge check` on a host whose credential
+/// command refuses, naming a token on its standard error, says the
+/// command's words with the token redacted, and nothing it says, as text
+/// or as JSON, holds the token (record 0108 as amended 2026-11-10).
+#[cfg(feature = "tools")]
+#[test]
+fn forge_check_tells_a_commands_words_without_its_token() {
+    let s = OnGitHub::new("forge-check-command-words", Forge::new(&Clock::new()));
+    s.give_forge_command_running(
+        "cat > /dev/null\n\
+         echo 'the cached ghs_0123456789abcdefghijABCDEFGHIJ012345 was refused' >&2\nexit 1\n",
+    );
+    let (code, said) = s.sluice(&["forge", "check", "main"]);
+    assert_eq!(code, 1, "{said}");
+    assert!(said.contains("the cached [redacted] was refused"), "{said}");
+    assert!(!said.contains("0123456789abcdefghij"), "{said}");
+    let (code, said) = s.sluice(&["forge", "check", "main", "--json"]);
+    assert_eq!(code, 1, "{said}");
+    assert!(!said.contains("0123456789abcdefghij"), "{said}");
 }
 
 /// The app's pull request calls against the fake API, answered from the
