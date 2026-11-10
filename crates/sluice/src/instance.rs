@@ -139,7 +139,9 @@ pub struct Instance {
 pub struct HostTelemetry {
     /// Whether telemetry is sent; nothing is while unset or `false`.
     pub send: Option<bool>,
-    /// The `http://` address sluice sends OTLP to, its final `/` taken off.
+    /// The `http://` address sluice sends OTLP to, its final `/` taken off;
+    /// set wherever `send` is `true`, since a table that sends and names
+    /// none is refused.
     pub collector: Option<String>,
     /// The service sluice reports as; `sluice` where unset.
     pub service: Option<String>,
@@ -525,9 +527,19 @@ fn expire_after(text: Option<String>) -> Result<Duration> {
 
 /// 151: the host's `[telemetry]`, each key as written, the collector's
 /// final `/` taken off; refused, naming `[telemetry]` and the key, where a
-/// key does not read as D1's table says (record 0106; design D1).
+/// key does not read as D1's table says, or where `send = true` names no
+/// `collector`, so the table never sends where the caller's
+/// `OTEL_EXPORTER_OTLP_*` say, a session's collector and its headers
+/// among them (record 0106 as amended; rule core.53; design D1).
 fn telemetry(form: TelemetryForm) -> Result<HostTelemetry> {
     let collector = form.collector.as_deref().map(collector).transpose()?;
+    if form.send == Some(true) && collector.is_none() {
+        bail!(
+            "[telemetry] collector is unset while send = true: name the http:// address \
+             sluice sends to, such as \"http://localhost:4318\", since sluice never sends \
+             the table's telemetry where the caller's OTEL_EXPORTER_OTLP_* say"
+        );
+    }
     if form.service.as_deref() == Some("") {
         bail!("[telemetry] service is empty: name the service sluice reports as, or leave it out for sluice");
     }
@@ -1318,5 +1330,35 @@ logs_tail_bytes = 4096
                 .as_deref(),
             Some("http://[::1]:4318/otlp")
         );
+    }
+
+    /// 151: a `[telemetry]` whose `send` is `true` names its collector, or
+    /// is refused naming `[telemetry] collector`, so the table never sends
+    /// where the caller's `OTEL_EXPORTER_OTLP_*` say; a table that does
+    /// not send needs none (record 0106 as amended; rule core.53).
+    #[test]
+    fn a_telemetry_table_that_sends_names_its_collector() {
+        for table in [
+            "send = true",
+            "send = true\nservice = \"sluice-a\"\nlogs = \"tail\"",
+        ] {
+            let why = format!(
+                "{:#}",
+                with(&format!("[telemetry]\n{table}\n"), 4).unwrap_err()
+            );
+            for w in ["[telemetry] collector", "send = true", "http://"] {
+                assert!(why.contains(w), "{table}: no {w} in {why}");
+            }
+        }
+        for (table, send) in [
+            ("send = false", Some(false)),
+            ("service = \"sluice-a\"", None),
+        ] {
+            let read = with(&format!("[telemetry]\n{table}\n"), 4)
+                .unwrap()
+                .telemetry
+                .unwrap();
+            assert_eq!((read.send, read.collector), (send, None), "{table}");
+        }
     }
 }

@@ -837,6 +837,7 @@ mod tests {
         };
         let sends = HostTelemetry {
             send: Some(true),
+            collector: Some("http://localhost:4318".into()),
             ..HostTelemetry::default()
         };
         let quiet = HostTelemetry {
@@ -893,6 +894,7 @@ mod tests {
     fn the_table_turns_a_signal_off_and_the_environment_never_turns_it_on() {
         let table = |traces, metrics, logs| HostTelemetry {
             send: Some(true),
+            collector: Some("http://localhost:4318".into()),
             traces,
             metrics,
             logs,

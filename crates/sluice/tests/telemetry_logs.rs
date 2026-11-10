@@ -789,9 +789,11 @@ fn the_tables_collector_takes_sluices_telemetry_and_none_of_the_callers() {
     assert!(elsewhere.is_empty(), "{elsewhere:?}");
 }
 
-/// 151: a table that sends and names no collector sends where
+/// 151: a table names no collector only where it does not send by
+/// itself, since one whose `send` is `true` and names none is refused;
+/// a command's own `--otel` beside it sends where
 /// `OTEL_EXPORTER_OTLP_ENDPOINT` says, as a host with no table does
-/// (record 0106; design D4).
+/// (record 0106 as amended; design D4).
 #[test]
 fn with_no_collector_in_the_table_the_environment_names_it() {
     if !alone("with_no_collector_in_the_table_the_environment_names_it") {
@@ -800,10 +802,15 @@ fn with_no_collector_in_the_table_the_environment_names_it() {
     let collector = support::http::Fake::start(|_| (200, Vec::new(), String::new()));
     std::env::set_var("OTEL_EXPORTER_OTLP_ENDPOINT", collector.url());
     let table = HostTelemetry {
-        send: Some(true),
+        service: Some("sluice-a".into()),
         ..HostTelemetry::default()
     };
-    let settings = Chosen::choose(Choices::default(), Some(&table), "host-a", std::env::vars());
+    let otel = Choices {
+        otel: Some(true),
+        ..Choices::default()
+    };
+    let settings = Chosen::choose(otel, Some(&table), "host-a", std::env::vars());
+    assert!(settings.send);
     let telemetry = Telemetry::start(&settings).unwrap();
     let f = setup();
     assert_eq!(
