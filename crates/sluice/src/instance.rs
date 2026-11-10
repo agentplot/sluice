@@ -76,8 +76,12 @@
 //! `socket`, written the same way; and the variables the cache's clients
 //! read, `env`, each taken exactly as written. Every run sluice starts on
 //! the host is given them, and a sandboxed run may write each `dir` and
-//! reach each `socket`. sluice names no cache's tool and runs no cache's
-//! server: the keeper does, as it runs the container engine.
+//! reach each `socket`. A sandboxed moon run may also write where moon
+//! keeps what it shares for the run, as sluice finds it to read the run's
+//! manifests, whatever `dir` says: an `env` that turns moon's sharing on
+//! need not name that store as a `dir` (C.2 sandbox row; record 0105).
+//! sluice names no cache's tool and runs no cache's server: the keeper
+//! does, as it runs the container engine.
 //!
 //! `[forge]` names the app and one way to its token on this host: `key`,
 //! the path of its private key, or `credential`, a command that gives the

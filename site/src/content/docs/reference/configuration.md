@@ -164,7 +164,7 @@ share as [`[[caches]]`](#caches). The caches an earlier sluice saved in
 | key | values | meaning |
 |---|---|---|
 | `kind` | `"open"` | The tests run as a process group, with nothing held back. |
-| | `"sandbox"` | The tests may write only their checkout, their scratch directory and the host's declared [cache directories](#caches), and may reach the host's declared cache sockets whatever `network` says (macOS: Seatbelt; Linux: not built yet). |
+| | `"sandbox"` | The tests may write only their checkout, their scratch directory, the host's declared [cache directories](#caches) and where the task runner keeps what it shares for the run. They may reach the host's declared cache sockets whatever `network` says (macOS: Seatbelt; Linux: not built yet). |
 | | `"container"` | The tests run in a container from the image the policy names. Planned, for a box that runs no agents ([executors and systems](/sluice/guides/executors-and-systems/)); not built. |
 | `network` | `false`, `"localhost"`, `true` | No network; only 127.0.0.1 and ::1, for tests that start a server and talk to it; or any. |
 | `memory` | e.g. `"8G"` | Refused where the executor cannot hold it, never run without it. |
@@ -950,9 +950,10 @@ say: in the base checkout's `.moon/cache` when the repository has a
 base checkout holding `.moon`, otherwise in `cache/shared` under moon's
 home, `MOON_HOME` or `~/.moon`. moon's home is the one moon's command
 sees in a run, with `[tests] toolchain` sourced: a toolchain that sets
-`MOON_HOME` moves it. Declare that directory as the cache's `dir`, so a
-sandboxed run may write it. sluice reads the manifest by which a host
-proves a task's key where moon keeps it, whatever `dir` says.
+`MOON_HOME` moves it. A sandboxed run may write where moon keeps it,
+wherever the repository moves moon's home and whatever `dir` says, and
+sluice reads there the manifest by which a host proves a task's key.
+The cache's `dir` need not name it.
 
 `MOON_CACHE_DIR` moves nothing of moon's. moon 2.6.1 reads no such
 variable: it sets it for the tasks it runs, naming the workspace's own
