@@ -32,7 +32,9 @@ back: the queue never depends on it
   at its `/v1/traces`, `/v1/metrics` and `/v1/logs`. A table that names
   one takes none of the caller's `OTEL_EXPORTER_OTLP_*`: an agent's
   session that sets them for its own tools never sends sluice's
-  telemetry elsewhere, or with its headers. With no `collector`,
+  telemetry elsewhere, or with its headers. sluice refuses a table with
+  `send = true` and no `collector`. With no table, or where a command's
+  own `--otel` sends beside a table that names no `collector`,
   `OTEL_EXPORTER_OTLP_ENDPOINT` names it, by default
   `http://localhost:4318`. No TLS: something on the host receives it and
   forwards it.
