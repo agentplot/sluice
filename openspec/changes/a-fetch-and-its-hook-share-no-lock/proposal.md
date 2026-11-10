@@ -45,9 +45,10 @@ None.
 
 ### Modified Capabilities
 
-- `branch-protection`: a write is judged with nothing fetched on any
-  branch, git's packing passing before the state is read.
-- `remote-retry`: one fetch at a time, and a sluice run under sluice's
+- `branch-protection`: a requirement added, that judging a write
+  fetches nothing on any branch, git's packing passing before the state
+  is read.
+- `remote-retry`: a requirement added, that a sluice run under sluice's
   own fetch takes no fetch lock and fetches nothing.
 
 ## Impact
