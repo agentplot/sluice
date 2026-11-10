@@ -59,8 +59,8 @@ of ours on a page, in the skill or in output (core.26).
 
   True when `sluice exec bolt/a-kept-run-hands-over-what-it-cannot-take-up -- moon run site:prose` passes with no warning on the three pages.
 - [x] 5.2 In `docs/telemetry.md`, where it says every command reads the table, say that a `sluice run` kept running takes a change of the table up at its next pass by starting itself afresh, so a host keeps no restart of sluice for it. No gate task reads `*.md` outside the site (core.21), so this one is checked by hand: true when `grep -n 'starting itself afresh' docs/telemetry.md` names the sentence.
-- [ ] 5.3 In `plugins/sluice/skills/setting-up-sluice/SKILL.md`, under "The host's file", after "a `sluice run` kept running takes a change up before its next pass, so nothing restarts it", add that a change of `[telemetry]` starts it afresh in the same process. True when `sluice exec bolt/a-kept-run-hands-over-what-it-cannot-take-up -- moon run plugin-sluice:validate` passes.
-- [ ] 5.4 In `docs/adr/0107-a-sluice-process-that-keeps-running-takes-up-changed-host-settings-at-its-next-round.md`, add an amendment dated the day it is written, recording what the hand-over of `sluice run` chose within the decision, design D1 to D7, each with the path not taken:
+- [x] 5.3 In `plugins/sluice/skills/setting-up-sluice/SKILL.md`, under "The host's file", after "a `sluice run` kept running takes a change up before its next pass, so nothing restarts it", add that a change of `[telemetry]` starts it afresh in the same process. True when `sluice exec bolt/a-kept-run-hands-over-what-it-cannot-take-up -- moon run plugin-sluice:validate` passes.
+- [x] 5.4 In `docs/adr/0107-a-sluice-process-that-keeps-running-takes-up-changed-host-settings-at-its-next-round.md`, add an amendment dated the day it is written, recording what the hand-over of `sluice run` chose within the decision, design D1 to D7, each with the path not taken:
   - `[telemetry]` the one table no binding takes up in place, compared whole;
   - the same process's image replaced;
   - the executable, command line and environment the run started with;
