@@ -1549,5 +1549,5 @@ fn a_key_run_in_the_sandbox_is_proven_under_the_home_the_toolchain_gives_moon() 
         !manifest(&worktree.join(".moon/cache")).exists(),
         "no manifest in the worktree"
     );
-    assert_eq!(c.proven(&run, &report).unwrap(), ["alpha:test"]);
+    assert_eq!(c.proven(&run, &report).unwrap().proven, ["alpha:test"]);
 }
