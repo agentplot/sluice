@@ -12,9 +12,15 @@
 //!
 //! It judges a write by the value the branch's ref holds on this host,
 //! never by a fetch of its remote: for a branch kept on a remote that ref
-//! is sluice's copy, which only sluice's rounds level (124). It judges the
-//! repository git names, wherever the command ran, and lets through, said
-//! once, a transaction it cannot read for a reason of its own.
+//! is sluice's copy, which only sluice's rounds level (124). Judging
+//! fetches nothing: git's own packing passes before any record is read,
+//! and what still needs a branch is read from its records as last fetched
+//! (S64). Only recording a refusal reaches the remote, and a hook run under
+//! a fetch of sluice's own, as that fetch's packing runs it, fetches
+//! nothing even then, and waits on no lock the fetch holds (record 0110).
+//! It judges the repository git names, wherever the command ran, and lets
+//! through, said once, a transaction it cannot read for a reason of its
+//! own.
 //!
 //! It reads of the host's settings and the policy only what guarding
 //! needs, and passes over every other field, known to it or not; it runs
@@ -474,8 +480,13 @@ fn judge(s: &Sluice<'_>, host: &dyn Host, text: &str) -> Result<Vec<Refused>> {
             continue;
         }
         let needing = if deleting {
+            // git's own packing, which a fetch's maintenance runs, is let
+            // through before the records are read (S64; record 0110).
+            if pruned(Path::new(&host.repository()?), branch, &cur)? {
+                continue;
+            }
             let needing = s.needing(branch)?;
-            if needing.is_empty() || pruned(Path::new(&host.repository()?), branch, &cur)? {
+            if needing.is_empty() {
                 continue;
             }
             needing

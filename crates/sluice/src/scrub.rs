@@ -1,15 +1,35 @@
 //! What reads as a secret, replaced before text leaves the host: in a
-//! telemetry body (ADR 0022) and in a failed check's output posted on a
-//! pull request (ADR 0044). It lowers the chance a secret leaves and does
-//! not rule it out.
+//! telemetry body (ADR 0022), in a failed check's output posted on a pull
+//! request (ADR 0044), and in a credential command's words, which its
+//! failure carries to a report, the branch's log, the host's kept state
+//! and a status (record 0108). It lowers the chance a secret leaves and
+//! does not rule it out.
 
 use regex::Regex;
 
-/// What reads as a secret whatever variable it came from.
+/// What begins a GitHub token: the flake module's `prefixes`, in
+/// `nix/modules/options.nix`, which it refuses in `forge.credential` (rule
+/// core.51), in its order; a test holds the two lists to each other
+/// (record 0108).
+pub const GITHUB_TOKEN_PREFIXES: [&str; 6] =
+    ["ghs_", "ghp_", "gho_", "ghu_", "ghr_", "github_pat_"];
+
+/// A GitHub token: one of [`GITHUB_TOKEN_PREFIXES`] followed by sixteen or
+/// more of a token's characters, as flume's design 7 counts a prefixed
+/// token, with no word boundary before it, since a false match here costs
+/// only a word (record 0108).
+fn github_token() -> String {
+    let prefixes: Vec<String> = GITHUB_TOKEN_PREFIXES
+        .iter()
+        .map(|p| regex::escape(p))
+        .collect();
+    format!("(?:{})[A-Za-z0-9_-]{{16,}}", prefixes.join("|"))
+}
+
+/// What reads as a secret whatever variable it came from, beside a GitHub
+/// token.
 const SHAPES: &str = concat!(
-    r"gh[pousr]_[A-Za-z0-9]{20,}",
-    r"|github_pat_[A-Za-z0-9_]{20,}",
-    r"|A[KS]IA[0-9A-Z]{16}",
+    r"A[KS]IA[0-9A-Z]{16}",
     r"|xox[abprs]-[A-Za-z0-9-]{10,}",
     r"|sk-ant-[A-Za-z0-9_-]{10,}",
     r"|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+",
@@ -41,6 +61,12 @@ pub struct Scrub {
 }
 
 impl Scrub {
+    /// Scrubbing every secret shape and no variable's value: a credential
+    /// command's words (record 0108).
+    pub fn shapes() -> Scrub {
+        Scrub::new(std::iter::empty())
+    }
+
     /// Scrubbing the values of `env`'s secret variables and every secret
     /// shape.
     pub fn new(env: impl Iterator<Item = (String, String)>) -> Scrub {
@@ -52,7 +78,7 @@ impl Scrub {
         secrets.sort_by_key(|v| std::cmp::Reverse(v.len()));
         Scrub {
             secrets,
-            shapes: Regex::new(SHAPES).expect("the secret shapes"),
+            shapes: Regex::new(&format!("{}|{SHAPES}", github_token())).expect("the secret shapes"),
         }
     }
 
@@ -108,6 +134,46 @@ mod tests {
             "{out}"
         );
         assert_eq!(out.matches("[redacted]").count(), 2);
+    }
+
+    /// The forge-identity spec's "Each prefix's token redacted" and "A
+    /// prefix with no token after it" (record 0108).
+    #[test]
+    fn each_github_token_prefix_is_redacted() {
+        let s = Scrub::shapes();
+        for prefix in GITHUB_TOKEN_PREFIXES {
+            assert_eq!(
+                s.scrub(&format!("before {prefix}0123456789abcdef after")),
+                "before [redacted] after",
+                "{prefix}"
+            );
+            let short = format!("{prefix}0123456789abcde");
+            assert_eq!(s.scrub(&short), short, "{prefix}");
+        }
+        assert_eq!(s.scrub("expected a ghs_ token"), "expected a ghs_ token");
+        assert_eq!(s.scrub("ghp_0123456789abcdef_ghij-klm"), "[redacted]");
+    }
+
+    /// The forge-identity spec's "The module's list and sluice's differ":
+    /// the module's `prefixes`, the quoted strings between `prefixes = [`
+    /// and the next `];`, are [`GITHUB_TOKEN_PREFIXES`] (record 0108).
+    #[test]
+    fn the_github_token_prefixes_are_the_modules() {
+        use std::collections::BTreeSet;
+        let module = include_str!("../../../nix/modules/options.nix");
+        let start = module
+            .find("prefixes = [")
+            .expect("the module's prefixes = [")
+            + "prefixes = [".len();
+        let list = &module[start..];
+        let list = &list[..list.find("];").expect("the module's prefixes' ];")];
+        let modules: BTreeSet<&str> = list.split('"').skip(1).step_by(2).collect();
+        let sluices: BTreeSet<&str> = GITHUB_TOKEN_PREFIXES.into_iter().collect();
+        assert_eq!(
+            modules, sluices,
+            "the module's prefixes in nix/modules/options.nix, {modules:?}, \
+             and sluice's GITHUB_TOKEN_PREFIXES, {sluices:?}, differ"
+        );
     }
 
     #[test]
