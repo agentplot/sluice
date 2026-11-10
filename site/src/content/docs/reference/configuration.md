@@ -512,10 +512,20 @@ its results as and which caches every run shares are the host's own
 settings, never a repository's. They live in one file on the host,
 `$XDG_CONFIG_HOME/sluice/config.toml`, which is
 `~/.config/sluice/config.toml` where `XDG_CONFIG_HOME` is unset, and
-every repository on the host reads the same file. sluice reads it when a
-command starts and never writes it: a change counts from the next
-command, and a `sluice run` you keep running takes it once you start it
-again. Without the file, every setting has its default.
+every repository on the host reads the same file. sluice never writes
+it. A command reads it as it starts, so a change counts from the next
+command. Without the file, every setting has its default.
+
+A `sluice run` you keep running looks at the file between its passes.
+It takes a change up before its next pass, and says on stderr which
+tables it took up. A run already testing keeps what it started with:
+its cores, its caches and what its executor lets it touch. A new bound
+holds the runs that start after it. A file that is gone, doesn't read,
+or names a key that doesn't read leaves the `sluice run` on the
+settings it holds. It says so once, with the file and the reason, and
+reads the file again once it changes again. To go back to the
+defaults, write an empty file. A key changed in place, at the path the
+file names, counts once the file next changes or sluice next starts.
 
 ```toml
 [runs]
@@ -574,7 +584,9 @@ another tool manages the host's configuration, the file is that tool's.
 It is read-only, or a link into the tool's own store, or the tool writes
 it again each time it applies the configuration. Change it where the
 host's configuration is managed, and apply it from there: an edit on the
-host is refused, or lost at the next apply. A `->` in the listing marks
+host is refused, or lost at the next apply. Nothing need restart sluice
+when the managed file changes: a `sluice run` kept running takes the
+change up before its next pass. A `->` in the listing marks
 a link, and a mode with no `w` marks a read-only file:
 
 ```sh
