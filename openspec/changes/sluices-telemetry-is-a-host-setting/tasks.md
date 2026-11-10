@@ -88,7 +88,7 @@ tool of ours on a page (core.26).
 
 ## 4. Telemetry sent as the settings say
 
-- [ ] 4.1 Make `Telemetry::start` take `&Settings`, and `Telemetry::start_with` take `&Settings`, the spans and the log exporter, as D3 and D5 say:
+- [x] 4.1 Make `Telemetry::start` take `&Settings`, and `Telemetry::start_with` take `&Settings`, the spans and the log exporter, as D3 and D5 say:
   - build each signal only while `Settings` leaves it on;
   - make the resource from 3.3's attributes, `Resource::builder_empty()` with a table and `Resource::builder()` without;
   - give `Scrub` the snapshot in place of `std::env::vars()`.
@@ -98,15 +98,15 @@ tool of ours on a page (core.26).
   - in `telemetry_logs.rs`, the `start` helper, `sent` and each `Telemetry::start` choose their settings with no table, the host `host-a` and `std::env::vars()`.
 
   True when `cargo test -p sluice --test telemetry_logs -- --exact telemetry_goes_to_the_endpoint_as_otlp_over_http` passes.
-- [ ] 4.2 In `crates/sluice/tests/profiles/moon_telemetry.rs`, have `moon_runs_with_otel_while_telemetry_is_on` start through `Telemetry::start_with`. It uses settings chosen with no table and logs `off`. True when `cargo test -p sluice --test moon_telemetry moon_runs_with_otel_while_telemetry_is_on` passes.
-- [ ] 4.3 Where the table names a `collector`, have `Telemetry::start` do what D4 says:
+- [x] 4.2 In `crates/sluice/tests/profiles/moon_telemetry.rs`, have `moon_runs_with_otel_while_telemetry_is_on` start through `Telemetry::start_with`. It uses settings chosen with no table and logs `off`. True when `cargo test -p sluice --test moon_telemetry moon_runs_with_otel_while_telemetry_is_on` passes.
+- [x] 4.3 Where the table names a `collector`, have `Telemetry::start` do what D4 says:
   - take every variable whose name begins `OTEL_EXPORTER_OTLP_` out of sluice's own process environment before it builds an exporter;
   - give each exporter `<collector>/v1/traces`, `/v1/metrics` or `/v1/logs` with `with_endpoint`;
   - give each exporter `Protocol::HttpBinary` with `with_protocol`.
 
   Add `the_tables_collector_takes_sluices_telemetry_and_none_of_the_callers` to `telemetry_logs.rs`, as the scenario "A session's collector and headers never take sluice's telemetry" says. It uses two `support::http::Fake`s, the caller's set with `std::env::set_var`, and a failed submission. True when `cargo test -p sluice --test telemetry_logs -- --exact the_tables_collector_takes_sluices_telemetry_and_none_of_the_callers` passes.
-- [ ] 4.4 Add `with_no_collector_in_the_table_the_environment_names_it` to `telemetry_logs.rs`, as the scenario "A table with no collector sends where the environment says" says. True when `cargo test -p sluice --test telemetry_logs -- --exact with_no_collector_in_the_table_the_environment_names_it` passes.
-- [ ] 4.5 Add `the_table_turns_traces_off_whatever_the_environment_says` to `telemetry_logs.rs`, as the scenario of that name says, through `sent_to`. True when `cargo test -p sluice --test telemetry_logs -- --exact the_table_turns_traces_off_whatever_the_environment_says` passes.
+- [x] 4.4 Add `with_no_collector_in_the_table_the_environment_names_it` to `telemetry_logs.rs`, as the scenario "A table with no collector sends where the environment says" says. True when `cargo test -p sluice --test telemetry_logs -- --exact with_no_collector_in_the_table_the_environment_names_it` passes.
+- [x] 4.5 Add `the_table_turns_traces_off_whatever_the_environment_says` to `telemetry_logs.rs`, as the scenario of that name says, through `sent_to`. True when `cargo test -p sluice --test telemetry_logs -- --exact the_table_turns_traces_off_whatever_the_environment_says` passes.
 
 ## 5. A run gets what sluice sends
 

@@ -113,7 +113,7 @@ fn main() {
     );
     // ADR 0014: telemetry that cannot start is reported and left off.
     let telemetry = if settings.send {
-        match Telemetry::start(&settings.service, settings.logs, settings.limit) {
+        match Telemetry::start(&settings) {
             Ok(t) => Some(t),
             Err(e) => {
                 eprintln!("sluice: warning: telemetry off: {e:#}");

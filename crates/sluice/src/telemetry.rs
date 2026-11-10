@@ -33,7 +33,7 @@ use opentelemetry::logs::{AnyValue, LogRecord as _};
 use opentelemetry::trace::{TraceContextExt, TracerProvider as _};
 use opentelemetry::InstrumentationScope;
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
-use opentelemetry_otlp::{LogExporter, MetricExporter, SpanExporter};
+use opentelemetry_otlp::{LogExporter, MetricExporter, Protocol, SpanExporter, WithExportConfig};
 use opentelemetry_sdk::error::OTelSdkResult;
 use opentelemetry_sdk::logs::{self, LogProcessor, SdkLogRecord, SdkLoggerProvider};
 use opentelemetry_sdk::metrics::SdkMeterProvider;
@@ -259,6 +259,18 @@ impl Settings {
         pairs
     }
 
+    /// `builder`, an exporter's of `signal`, sending to the table's
+    /// collector, at its `/v1/<signal>`, protobuf, where it names one; as
+    /// it is, reading the environment, where it names none (design D4).
+    fn to<B: WithExportConfig>(&self, builder: B, signal: &str) -> B {
+        match &self.collector {
+            Some(collector) => builder
+                .with_endpoint(format!("{collector}/v1/{signal}"))
+                .with_protocol(Protocol::HttpBinary),
+            None => builder,
+        }
+    }
+
     /// The table's collector, where it names one: sluice's alone (design
     /// D4).
     pub fn collector(&self) -> Option<&str> {
@@ -284,93 +296,128 @@ pub struct Telemetry {
 }
 
 impl Telemetry {
-    /// Export from here on, as `service`, with `logs` of a failure's
-    /// output and at most `limit` bytes of it, each signal only as
-    /// OpenTelemetry's own settings leave it on ([`Signals`]).
-    pub fn start(service: &str, logs: Logs, limit: usize) -> Result<Telemetry> {
-        let on = Signals::read(std::env::vars());
-        let spans = match on.traces {
-            true => Some(SpanExporter::builder().with_http().build()?),
+    /// Export from here on as `settings` say: each signal only while they
+    /// leave it on, as the service they name, with the resource they give
+    /// and as much of a failure's output as they ask (design D3, D5).
+    /// Where the host's table names a collector, every exporter sends
+    /// there, protobuf, and to nowhere else: the caller's
+    /// `OTEL_EXPORTER_OTLP_*` are first taken out of this process's
+    /// environment, which the exporters would otherwise read for their
+    /// headers, timeout and compression. `main` starts telemetry before
+    /// any thread of sluice's runs; what sluice itself reads of the
+    /// environment is read from the settings' snapshot (design D4).
+    pub fn start(settings: &Settings) -> Result<Telemetry> {
+        if settings.collector.is_some() {
+            for (name, _) in std::env::vars_os() {
+                if name.to_string_lossy().starts_with("OTEL_EXPORTER_OTLP_") {
+                    std::env::remove_var(name);
+                }
+            }
+        }
+        let spans = match settings.signals.traces {
+            true => Some(
+                settings
+                    .to(SpanExporter::builder().with_http(), "traces")
+                    .build()?,
+            ),
             false => None,
         };
-        let exporter = match logs {
-            _ if !on.logs => None,
-            Logs::Off => None,
-            _ => Some(LogExporter::builder().with_http().build()?),
+        let exporter = match settings.signals.logs {
+            true => Some(
+                settings
+                    .to(LogExporter::builder().with_http(), "logs")
+                    .build()?,
+            ),
+            false => None,
         };
-        Telemetry::begin(service, logs, limit, on, spans, exporter)
+        let metrics = match settings.signals.metrics {
+            true => Some(
+                settings
+                    .to(MetricExporter::builder().with_http(), "metrics")
+                    .build()?,
+            ),
+            false => None,
+        };
+        Telemetry::begin(settings, spans, metrics, exporter)
     }
 
     /// [`Telemetry::start`], with the spans sent to `spans` and the logs
     /// to `exporter`, each dropped where its signal is off.
-    pub fn start_with<S, E>(
-        service: &str,
-        logs: Logs,
-        limit: usize,
-        spans: S,
-        exporter: Option<E>,
-    ) -> Result<Telemetry>
+    pub fn start_with<S, E>(settings: &Settings, spans: S, exporter: Option<E>) -> Result<Telemetry>
     where
         S: opentelemetry_sdk::trace::SpanExporter + 'static,
         E: logs::LogExporter + 'static,
     {
-        let on = Signals::read(std::env::vars());
-        Telemetry::begin(service, logs, limit, on, Some(spans), exporter)
+        let metrics = match settings.signals.metrics {
+            true => Some(
+                settings
+                    .to(MetricExporter::builder().with_http(), "metrics")
+                    .build()?,
+            ),
+            false => None,
+        };
+        Telemetry::begin(settings, Some(spans), metrics, exporter)
     }
 
-    /// The providers of the signals `on` leaves on, and a subscriber that
-    /// layers only theirs: a signal turned off is never built, so nothing
-    /// of it is made or sent. With traces off no span has a trace, so a
-    /// run gets no `TRACEPARENT` and a failure's record names no span.
-    /// With none left on, telemetry is off as if never asked for: no
-    /// subscriber, [`on`] false and nothing said, since the host turned
-    /// it off itself.
+    /// The providers of the signals `settings` leave on, and a subscriber
+    /// that layers only theirs: a signal turned off is never built, so
+    /// nothing of it is made or sent. With traces off no span has a
+    /// trace, so a run gets no `TRACEPARENT` and a failure's record names
+    /// no span. With none left on, telemetry is off as if never asked
+    /// for: no subscriber, [`on`] false and nothing said, since the host
+    /// turned it off itself.
     fn begin<S, E>(
-        service: &str,
-        logs: Logs,
-        limit: usize,
-        on: Signals,
+        settings: &Settings,
         spans: Option<S>,
+        metrics: Option<MetricExporter>,
         exporter: Option<E>,
     ) -> Result<Telemetry>
     where
         S: opentelemetry_sdk::trace::SpanExporter + 'static,
         E: logs::LogExporter + 'static,
     {
+        let on = settings.signals;
         let spans = spans.filter(|_| on.traces);
-        let exporter = exporter.filter(|_| on.logs && logs != Logs::Off);
-        if spans.is_none() && !on.metrics && exporter.is_none() {
+        let metrics = metrics.filter(|_| on.metrics);
+        let exporter = exporter.filter(|_| on.logs);
+        if spans.is_none() && metrics.is_none() && exporter.is_none() {
             return Ok(Telemetry {
                 traces: None,
                 metrics: None,
                 logs: None,
             });
         }
-        let resource = Resource::builder()
-            .with_service_name(service.to_string())
-            .with_attribute(opentelemetry::KeyValue::new(
-                "service.version",
-                crate::VERSION,
-            ))
-            .build();
+        let named = settings.resource();
+        let resource = match named.reads_environment {
+            true => Resource::builder(),
+            false => Resource::builder_empty(),
+        }
+        .with_attributes(
+            named
+                .pairs
+                .into_iter()
+                .map(|(k, v)| opentelemetry::KeyValue::new(k, v)),
+        )
+        .build();
         let traces = spans.map(|spans| {
             SdkTracerProvider::builder()
                 .with_batch_exporter(spans)
                 .with_resource(resource.clone())
                 .build()
         });
-        let metrics = match on.metrics {
-            true => Some(
-                SdkMeterProvider::builder()
-                    .with_periodic_exporter(MetricExporter::builder().with_http().build()?)
-                    .with_resource(resource.clone())
-                    .build(),
-            ),
-            false => None,
-        };
+        let metrics = metrics.map(|metrics| {
+            SdkMeterProvider::builder()
+                .with_periodic_exporter(metrics)
+                .with_resource(resource.clone())
+                .build()
+        });
         let logs = exporter.map(|e| {
             SdkLoggerProvider::builder()
-                .with_log_processor(Scrub::new(logs, limit, std::env::vars()))
+                .with_log_processor(Scrub::new(
+                    settings.logs,
+                    settings.limit,
+                    settings.env.iter().cloned(),
+                ))
                 .with_batch_exporter(e)
                 .with_resource(resource)
                 .build()
