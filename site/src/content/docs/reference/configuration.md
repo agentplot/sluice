@@ -757,10 +757,12 @@ never tries the refused token again, and a `get` that gives it back is
 no fresh token. A command that exits non-zero, prints no `password`, or
 gives nothing in thirty seconds fails the call that needed the token.
 The failure names the command and gives what it wrote on its standard
-error, never a token. sluice asks GitHub once, with each token the
-command gives, which repositories it reaches. It refuses a token that
-doesn't reach the repository, and names what it reaches in a refusal's
-report. `sluice forge check` with a command checks that the command
+error, with anything shaped as a GitHub token replaced by `[redacted]`.
+Where the command wrote more than 64 KiB there, the failure gives its
+whole lines within the first 64 KiB. sluice asks GitHub once, with each
+token the command gives, which repositories it reaches. It refuses a
+token that doesn't reach the repository, and names what it reaches in a
+refusal's report. `sluice forge check` with a command checks that the command
 gives a token, that the token is the app's that `app_id` names, and that
 it may push. GitHub shows a token's other grants to nobody holding only
 the token, so check the app's other permissions where its key is kept.

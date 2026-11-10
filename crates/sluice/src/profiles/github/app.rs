@@ -41,7 +41,6 @@
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::rc::Rc;
-use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, TimeDelta, Utc};
@@ -1110,13 +1109,14 @@ impl App {
 
 /// How every call is made: a status GitHub answers is read, not an error,
 /// a redirect among them, which is never followed, since a call followed
-/// to another address goes without its token; and no call takes longer
-/// than thirty seconds.
+/// to another address goes without its token; and no try of a call takes
+/// longer than any try of a call to a remote may,
+/// [`crate::retry::TRY_FOR`].
 fn http_config() -> ureq::config::Config {
     ureq::Agent::config_builder()
         .http_status_as_error(false)
         .max_redirects(0)
-        .timeout_global(Some(Duration::from_secs(30)))
+        .timeout_global(Some(crate::retry::TRY_FOR))
         .user_agent("sluice")
         .build()
 }

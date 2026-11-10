@@ -10,7 +10,7 @@ use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use sluice::identity::{Credentials, Identity, Withheld};
 use sluice::profiles::branches::Branches;
@@ -20,7 +20,7 @@ use sluice_core::policy::Policy;
 use sluice_seams::{read_refused, Branch, HostCopy, LandingCommit, Moved, ReadRefused, Rev};
 use support::http::{
     commands, empty_repository, is_push, listing, lists_for_push, report, takes, unavailable,
-    Answer, Count, Fake, Request, CUT,
+    Answer, Count, Fake, Request, Silent, CUT,
 };
 use support::{Repo, Scratch};
 
@@ -240,6 +240,123 @@ fn a_fetch_waits_for_another_fetch_of_its_repository() {
     assert!(!reader.is_finished(), "the fetch ran beside another");
     drop(lock);
     assert_eq!(reader.join().unwrap(), Ok(Some(rev(pushed))));
+}
+
+/// 134, rule core.29, record 0109: a fetch the remote never answers is
+/// stopped at the limit of a try, with the remote's helper, and tried
+/// again; once the policy's time is spent it is a refused read in
+/// sluice's words, and the repository's fetch lock is free. Before the
+/// limit, the first such fetch held the lock for as long as the remote
+/// kept the connection, and every other read of the repository queued
+/// behind it (deneb, 2026-11-10: sluice 0.73.1's `status <branch> --all
+/// --json` and `overview --json` hanging 10 to 17 minutes).
+#[test]
+fn a_fetch_the_remote_never_answers_is_stopped_and_lets_its_lock_go() {
+    let repo = Repo::new("fetch-silent");
+    let _bare = repo.bare_origin();
+    let silent = Silent::start();
+    repo.git(&[
+        "remote",
+        "set-url",
+        "origin",
+        &format!("{}/o/r.git", silent.url()),
+    ]);
+    let p = PushedRefs::open_as(
+        repo.dir(),
+        "origin",
+        None,
+        trying(Duration::from_millis(300)),
+    )
+    .unwrap();
+    let started = Instant::now();
+    let err = p.read("main").unwrap_err();
+    assert!(started.elapsed() < Duration::from_secs(20), "{err:#}");
+    let refused = read_refused(&err).expect("a refused read");
+    assert!(
+        refused
+            .said
+            .ends_with("git fetch with origin was still going after 300ms, the most a try may take, and was stopped"),
+        "{}",
+        refused.said
+    );
+    assert!(silent.requests().len() > 1, "tried again");
+    assert!(silent.all_let_go(), "a helper outlived its try");
+    let lock = std::fs::File::open(repo.dir().join(".git/sluice-fetch.lock")).unwrap();
+    assert!(lock.try_lock().is_ok(), "the fetch lock outlived the fetch");
+}
+
+/// Rules core.28, core.29, record 0109: a fetch waits for the repository's
+/// fetch lock no longer than a try may take, and fails, as no read the
+/// remote refused, when another fetch held it every time it tried; once
+/// the lock is let go it reads.
+#[test]
+fn a_fetch_waits_for_the_lock_no_longer_than_a_try() {
+    let repo = Repo::new("fetch-lock-held");
+    let bare = repo.bare_origin();
+    let other = Repo::clone_of(bare.path(), "fetch-lock-held-other");
+    let pushed = other.push_change("b", "2\n");
+    let lock = std::fs::File::create(repo.dir().join(".git/sluice-fetch.lock")).unwrap();
+    lock.lock().unwrap();
+    let p = PushedRefs::open_as(
+        repo.dir(),
+        "origin",
+        None,
+        trying(Duration::from_millis(300)),
+    )
+    .unwrap();
+    let started = Instant::now();
+    let err = p.read("main").unwrap_err();
+    assert!(started.elapsed() < Duration::from_secs(20), "{err:#}");
+    assert!(read_refused(&err).is_none(), "{err:#}");
+    assert!(
+        format!("{err:#}").ends_with("sluice-fetch.lock past 300ms, the most a try waits for it"),
+        "{err:#}"
+    );
+    drop(lock);
+    assert_eq!(p.read("main").unwrap(), Some(rev(pushed)));
+}
+
+/// 122, 134, rule core.29, record 0109: a push the remote never answers is
+/// stopped at the limit of a try and never pushed again, since whether the
+/// remote took it is not known; what the remote holds is read, and a
+/// remote that answers that read no more fails the move, saying so.
+#[test]
+fn a_push_the_remote_never_answers_is_stopped_and_not_pushed_again() {
+    let repo = Repo::new("push-silent");
+    let _bare = repo.bare_origin();
+    let base = repo.rev("main");
+    let head = rev(repo.branch("unit/u", "main", &[("a", Some("1"))]));
+    let p = open(&repo);
+    let to = landing(&p, &rev(base.clone()), &head);
+    let silent = Silent::start();
+    repo.git(&[
+        "remote",
+        "set-url",
+        "origin",
+        &format!("{}/o/r.git", silent.url()),
+    ]);
+    let p = PushedRefs::open_as(
+        repo.dir(),
+        "origin",
+        None,
+        trying(Duration::from_millis(300)),
+    )
+    .unwrap();
+    let started = Instant::now();
+    let err = format!("{:#}", p.move_to("main", &rev(base), &to).unwrap_err());
+    assert!(started.elapsed() < Duration::from_secs(20), "{err}");
+    assert!(
+        err.contains("git push with origin was still going after 300ms"),
+        "{err}"
+    );
+    assert!(err.contains("the push went unanswered"), "{err}");
+    let pushes = silent
+        .requests()
+        .iter()
+        .filter(|r| r.path.contains("git-receive-pack"))
+        .count();
+    assert_eq!(pushes, 1, "pushed again");
+    assert!(silent.all_let_go(), "a helper outlived its try");
 }
 
 /// Rules core.28, core.29: a fetch that loses a race for a ref of this
@@ -1039,6 +1156,11 @@ fn refused_note(identity: &FakeIdentity) -> String {
 /// A command's retry policy whose pauses are skipped, as if taken.
 fn recorded() -> Rc<retry::Policy> {
     Rc::new(retry::Policy::command().recording())
+}
+
+/// [`recorded`], each try given `limit`.
+fn trying(limit: Duration) -> Rc<retry::Policy> {
+    Rc::new(retry::Policy::command().recording().trying_for(limit))
 }
 
 fn base64(bytes: &[u8]) -> String {

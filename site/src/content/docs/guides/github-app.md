@@ -105,9 +105,12 @@ repository as not found or the push as denied, and takes the same token
 a moment later. sluice then tries the fetch or push again on a token it
 makes afresh and waits five seconds to use. It pauses longer before each
 try, for up to thirty seconds, or five minutes while a submit or
-`sluice wait` waits. A push goes again only when GitHub refused it
-before looking at any branch, and expects the branch where the first
-push did, so it never moves a branch that moved in between. When GitHub
+`sluice wait` waits. No single try runs past thirty seconds: sluice
+stops a fetch or push GitHub has not answered by then, tries a fetch
+again, and reads the branch after a push. A push goes again only when
+GitHub refused it before looking at any branch, and expects the branch
+where the first push did, so it never moves a branch that moved in
+between. When GitHub
 still refuses once that time is spent, sluice reports GitHub's own
 words, then what each refused token was, in the order it tried them:
 its app, repository, installation, scope and age. For a token the

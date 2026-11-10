@@ -10,14 +10,19 @@
 //! a host may name in `[forge] credential` a command that gives the app's
 //! token, which sluice asks as git asks a helper, [`CredentialCommand`]
 //! (134, C.8; record 0108). The client names no forge and no tool, so any
-//! host's secrets manager can stand behind it (rules core.1, core.26).
+//! host's secrets manager can stand behind it (rules core.1, core.26). The
+//! words a command's failure gives, its standard error, go through the
+//! scrub first, every shape it knows of a secret and no variable's value,
+//! so no reader of the failure finds a token in them (record 0108 as
+//! amended 2026-11-10; rule core.28).
 
-use std::io::{BufRead, Read, Write};
+use std::io::{BufRead, Write};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use crate::bounded::{self, span, Ended};
 
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
@@ -103,11 +108,14 @@ pub fn helper(operation: &str, input: &mut dyn BufRead, out: &mut dyn Write) -> 
 }
 
 /// How long a credential command has to answer before it is stopped: as
-/// long as an API call has (record 0108).
-pub const COMMAND_LIMIT: Duration = Duration::from_secs(30);
+/// long as a try of any call to a remote has (record 0108).
+pub const COMMAND_LIMIT: Duration = crate::retry::TRY_FOR;
 
 /// The most of a command's standard output, and of its standard error,
-/// that is read; what it writes past it is passed over.
+/// that is read; what it writes past it is passed over. Standard error cut
+/// there is given to its last whole line, so a token cut at the limit,
+/// too short for its shape, leaves none of itself (record 0108 as amended
+/// 2026-11-10).
 const OUTPUT_LIMIT: u64 = 64 * 1024;
 
 /// What a credential command is asked for, in git's words: the protocol,
@@ -174,25 +182,38 @@ impl CredentialCommand {
     /// exits non-zero, prints no `password` or gives nothing within its
     /// limit fails, its failure naming the command and giving its standard
     /// error, never its standard output, which may hold a token; at the
-    /// limit its process group is killed, so a child holding its pipes
-    /// open ends with it.
+    /// limit its process group is asked to end and then killed
+    /// ([`bounded::finish`]), so a child holding its pipes open ends with
+    /// it. The standard error is given as the scrub leaves
+    /// it, every string shaped as a secret it knows replaced by
+    /// `[redacted]` before any failure is made, so the failure, and every
+    /// report, log line, kept state and status made from it, holds no token
+    /// (record 0108 as amended 2026-11-10).
     pub fn get(&self, asked: &Asked) -> Result<Given> {
         let input = format!(
             "protocol={}\nhost={}\npath={}\n\n",
             asked.protocol, asked.host, asked.path
         );
         let mut child = self.spawn("get", true)?;
-        let group = child.id() as i32;
         if let Some(mut stdin) = child.stdin.take() {
             // A command that reads nothing may have ended already.
             let _ = stdin.write_all(input.as_bytes());
         }
-        let out = drain(child.stdout.take());
-        let err = drain(child.stderr.take());
-        let status = self.wait(&mut child, group, &[&out, &err])?;
-        let out = out.join().unwrap_or_default();
-        let err = err.join().unwrap_or_default();
-        let words = String::from_utf8_lossy(&err).trim().to_string();
+        let Ended {
+            status,
+            stopped,
+            stdout: out,
+            stderr: err,
+            stderr_cut,
+            ..
+        } = bounded::finish(&mut child, self.limit, OUTPUT_LIMIT)?;
+        let text = String::from_utf8_lossy(&err);
+        let text = if stderr_cut {
+            text.rfind('\n').map_or("", |end| &text[..end])
+        } else {
+            &text
+        };
+        let words = crate::scrub::Scrub::shapes().scrub(text.trim());
         let failed = |what: String| {
             let mut e = format!("[forge] credential {self} {what}");
             if !words.is_empty() {
@@ -200,15 +221,12 @@ impl CredentialCommand {
             }
             anyhow!(e)
         };
-        let status = match status {
-            None => {
-                return Err(failed(format!(
-                    "gave nothing in {} and was stopped",
-                    span(self.limit)
-                )))
-            }
-            Some(s) => s,
-        };
+        if stopped {
+            return Err(failed(format!(
+                "gave nothing in {} and was stopped",
+                span(self.limit)
+            )));
+        }
         if !status.success() {
             use std::os::unix::process::ExitStatusExt;
             let how = match (status.code(), status.signal()) {
@@ -268,11 +286,10 @@ impl CredentialCommand {
                 return;
             }
         };
-        let group = child.id() as i32;
         if let Some(mut stdin) = child.stdin.take() {
             let _ = stdin.write_all(input.as_bytes());
         }
-        let _ = self.wait(&mut child, group, &[]);
+        let _ = bounded::finish(&mut child, self.limit, 0);
     }
 
     /// The command started for `operation`, its standard input piped, and
@@ -305,67 +322,12 @@ impl CredentialCommand {
             }
         }
     }
-
-    /// The command's exit once it and its readers are done, or `None` when
-    /// its limit came first: its group is then killed, so a child holding
-    /// its pipes open ends with it.
-    fn wait(
-        &self,
-        child: &mut Child,
-        group: i32,
-        readers: &[&JoinHandle<Vec<u8>>],
-    ) -> Result<Option<std::process::ExitStatus>> {
-        use nix::sys::signal::{killpg, Signal};
-        use nix::unistd::Pid;
-        let until = Instant::now() + self.limit;
-        let mut status = None;
-        let done = loop {
-            if status.is_none() {
-                status = child.try_wait()?;
-            }
-            if status.is_some() && readers.iter().all(|r| r.is_finished()) {
-                break true;
-            }
-            if Instant::now() >= until {
-                break false;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        };
-        if !done {
-            let _ = killpg(Pid::from_raw(group), Signal::SIGKILL);
-        }
-        let status = match status {
-            Some(s) => s,
-            None => child.wait()?,
-        };
-        Ok(done.then_some(status))
-    }
-}
-
-/// A thread reading `pipe` to its end, keeping the first [`OUTPUT_LIMIT`]
-/// bytes of it.
-fn drain(pipe: Option<impl Read + Send + 'static>) -> JoinHandle<Vec<u8>> {
-    std::thread::spawn(move || {
-        let mut kept = Vec::new();
-        if let Some(mut pipe) = pipe {
-            let _ = (&mut pipe).take(OUTPUT_LIMIT).read_to_end(&mut kept);
-            let _ = std::io::copy(&mut pipe, &mut std::io::sink());
-        }
-        kept
-    })
-}
-
-/// A limit in the words a person reads: `30s`, or `300ms` under a second.
-fn span(d: Duration) -> String {
-    if d >= Duration::from_secs(1) && d.subsec_millis() == 0 {
-        format!("{}s", d.as_secs())
-    } else {
-        format!("{}ms", d.as_millis())
-    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::time::Instant;
+
     use super::*;
 
     /// A directory of the test's own, made afresh.
@@ -485,6 +447,83 @@ mod tests {
         for dir in [refuses, no_password, hangs] {
             let _ = std::fs::remove_dir_all(dir);
         }
+    }
+
+    /// The forge-identity spec's "The command's words hold a token" and "A
+    /// command that prints no password names a token" (record 0108 as
+    /// amended 2026-11-10).
+    #[test]
+    fn a_credential_commands_words_carry_no_token() {
+        let refuses = scratch("words-refuses");
+        let program = script(
+            &refuses,
+            "cat > /dev/null
+\
+             echo 'the cached ghs_0123456789abcdefghijABCDEFGHIJ012345 was refused' >&2
+exit 1
+",
+        );
+        let e = format!(
+            "{:#}",
+            CredentialCommand::new(&program, vec![])
+                .get(&asked())
+                .err()
+                .unwrap()
+        );
+        assert!(e.starts_with("[forge] credential "), "{e}");
+        assert!(e.contains(&program.display().to_string()), "{e}");
+        assert!(e.contains("exited 1"), "{e}");
+        assert!(e.contains("the cached [redacted] was refused"), "{e}");
+        assert!(!e.contains("0123456789abcdefghij"), "{e}");
+
+        let no_password = scratch("words-no-password");
+        let program = script(
+            &no_password,
+            "cat > /dev/null
+echo username=x-access-token
+\
+             echo github_pat_0123456789abcdefghij_ABCDEFGHIJ >&2
+",
+        );
+        let e = format!(
+            "{:#}",
+            CredentialCommand::new(&program, vec![])
+                .get(&asked())
+                .err()
+                .unwrap()
+        );
+        assert!(e.starts_with("[forge] credential "), "{e}");
+        assert!(e.contains("gave no password"), "{e}");
+        assert!(e.contains("[redacted]"), "{e}");
+        assert!(!e.contains("0123456789abcdefghij"), "{e}");
+        for dir in [refuses, no_password] {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    /// The forge-identity spec's "A token across the limit" (record 0108 as
+    /// amended 2026-11-10).
+    #[test]
+    fn a_credential_commands_words_cut_at_their_limit_end_at_a_whole_line() {
+        let dir = scratch("words-cut");
+        let program = script(
+            &dir,
+            "cat > /dev/null\nhead -c 65520 /dev/zero | tr '\\0' x >&2\n\
+             printf '\\nghs_0123456789abcdefghijABCDEFGHIJ012345\\n' >&2\nexit 1\n",
+        );
+        let e = format!(
+            "{:#}",
+            CredentialCommand::new(&program, vec![])
+                .get(&asked())
+                .err()
+                .unwrap()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        let tail = crate::scrub::end(&e, 200);
+        assert!(e.contains("exited 1"), "{tail}");
+        assert!(e.contains(&"x".repeat(65520)), "{tail}");
+        assert!(!e.contains("ghs_"), "{tail}");
+        assert!(!e.contains("0123456789a"), "{tail}");
     }
 
     /// `erase` tells the command the refused token as git tells a helper,
