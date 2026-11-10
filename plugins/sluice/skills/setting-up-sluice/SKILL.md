@@ -447,7 +447,12 @@ The host is one of three setups:
    `nixosModules.sluice`), the tables go in `services.sluice.settings`,
    each key named as in the file (`runs.max = 3;`,
    `forge.key = "~/.config/sluice/app.pem";`), and a key file by its path
-   as a string, never a Nix path, which evaluation refuses.
+   as a string, never a Nix path, which evaluation refuses. Where the
+   host's own tool gives the app's token, `forge.credential` names that
+   command in place of `forge.key`, a list of its program and then each
+   argument, `forge.credential = [ "<program>" "<argument>" ];` with both
+   placeholders for the tool's own; evaluation refuses a string there and
+   a token's text.
 3. **Several hosts as peers.** Each host has its own file, checked and
    written on that host as 1 or 2 says. Each holds what is that host's
    alone: its signer and key, the systems it runs, its bound, its name
