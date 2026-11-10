@@ -27,6 +27,8 @@
 //! [forge]
 //! app_id = 123456
 //! key = "~/.config/sluice/app.pem"
+//! # or, in place of key, a command that gives the app's token:
+//! # credential = ["/opt/forge/bin/token-helper", "--app", "sluice"]
 //! discovery = "60s"
 //!
 //! [signing]
@@ -67,6 +69,12 @@
 //! the host is given them, and a sandboxed run may write each `dir` and
 //! reach each `socket`. sluice names no cache's tool and runs no cache's
 //! server: the keeper does, as it runs the container engine.
+//!
+//! `[forge]` names the app and one way to its token on this host: `key`,
+//! the path of its private key, or `credential`, a command that gives the
+//! token, written as a list of its program and then each argument, which
+//! sluice runs with no shell as git runs a credential helper (record
+//! 0108; [`crate::identity::CredentialCommand`]).
 //!
 //! Branch protection's hook reads only `[forge]`, how sluice reaches a
 //! branch's remote, and passes over every other table and field, known
@@ -156,15 +164,43 @@ pub fn this_system() -> (&'static str, &'static str) {
     (std::env::consts::OS, std::env::consts::ARCH)
 }
 
-/// The host's `[forge]` table: the app sluice is on the forge, the path
-/// of its private key on this host, which no repository holds, and how
-/// often a branch's open pull requests are asked for while nothing on the
-/// host moves (136).
+/// The host's `[forge]` table: the app sluice is on the forge, how this
+/// host gives sluice its token, which no repository holds, and how often a
+/// branch's open pull requests are asked for while nothing on the host
+/// moves (136).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Forge {
     pub app_id: u64,
-    pub key: PathBuf,
+    pub source: Source,
     pub discovery: Duration,
+}
+
+/// How the host gives sluice the app's token: the path of the app's
+/// private key, which sluice mints tokens with, or a command that gives
+/// one (record 0108).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Source {
+    Key(PathBuf),
+    Credential(Command),
+}
+
+/// A command the host names: its program, then each argument, run with no
+/// shell (record 0108; rule core.51).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Command {
+    pub program: PathBuf,
+    pub args: Vec<String>,
+}
+
+impl std::fmt::Display for Command {
+    /// The program and its arguments, space-separated.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.program.display())?;
+        for a in &self.args {
+            write!(f, " {a}")?;
+        }
+        Ok(())
+    }
 }
 
 /// How often a branch's open pull requests are asked for where the host
@@ -225,7 +261,9 @@ struct DeliveriesForm {
 #[serde(deny_unknown_fields)]
 struct ForgeForm {
     app_id: u64,
-    key: String,
+    key: Option<String>,
+    /// Read whole, so a string is refused in sluice's words, not serde's.
+    credential: Option<toml::Value>,
     discovery: Option<String>,
 }
 
@@ -239,7 +277,8 @@ struct GuardingForm {
 #[derive(Deserialize)]
 struct GuardingForgeForm {
     app_id: u64,
-    key: String,
+    key: Option<String>,
+    credential: Option<toml::Value>,
 }
 
 #[derive(Deserialize, Default)]
@@ -388,6 +427,7 @@ impl Instance {
                 let f = ForgeForm {
                     app_id: f.app_id,
                     key: f.key,
+                    credential: f.credential,
                     discovery: None,
                 };
                 forge(f, home().as_deref())
@@ -550,10 +590,24 @@ fn ordinal(n: usize) -> String {
     }
 }
 
-/// The `[forge]` table, its key's path with `~` expanded. A key anyone
-/// but its owner may read is refused, and so is a `discovery` shorter
-/// than [`LEAST_DISCOVERY`] (136).
+/// The `[forge]` table, its key's path, or its credential command's
+/// program, with `~` expanded. A table that names both or neither is
+/// refused, naming both; so is a key anyone but its owner may read, a
+/// credential that is no list of its program and arguments, and a
+/// `discovery` shorter than [`LEAST_DISCOVERY`] (136; record 0108).
 fn forge(form: ForgeForm, home: Option<&Path>) -> Result<Forge> {
+    let source = match (form.key, form.credential) {
+        (Some(_), Some(_)) => bail!(
+            "[forge] names both key and credential: name one, the app's private key or the \
+             command that gives its token"
+        ),
+        (None, None) => bail!(
+            "[forge] names neither key, the app's private key, nor credential, a command that \
+             gives its token: name one"
+        ),
+        (Some(key), None) => Source::Key(private_key("[forge] key", &key, home)?),
+        (None, Some(c)) => Source::Credential(credential(c, home)?),
+    };
     let discovery = match form.discovery {
         None => DISCOVERY,
         Some(t) => {
@@ -570,8 +624,51 @@ fn forge(form: ForgeForm, home: Option<&Path>) -> Result<Forge> {
     };
     Ok(Forge {
         app_id: form.app_id,
-        key: private_key("[forge] key", &form.key, home)?,
+        source,
         discovery,
+    })
+}
+
+/// `[forge] credential`: a list of the command's program and then each
+/// argument, the program absolute, under `~/`, which is expanded, or a
+/// name the PATH finds; the arguments as written (record 0108). Whether
+/// an argument is a token's text is the module's to guard, where the file
+/// lands in the store (rule core.51).
+fn credential(value: toml::Value, home: Option<&Path>) -> Result<Command> {
+    let words = match value {
+        toml::Value::String(_) => bail!(
+            "[forge] credential is a string: name the command as a list of its program and then \
+             each argument, which sluice runs with no shell, \
+             credential = [\"<program>\", \"<argument>\"]"
+        ),
+        toml::Value::Array(words) => words,
+        _ => bail!("[forge] credential is no list of strings"),
+    };
+    let mut words = words
+        .into_iter()
+        .map(|w| match w {
+            toml::Value::String(s) => Ok(s),
+            _ => Err(anyhow!("[forge] credential is no list of strings")),
+        })
+        .collect::<Result<Vec<_>>>()?
+        .into_iter();
+    let Some(program) = words.next().filter(|p| !p.is_empty()) else {
+        bail!("[forge] credential names no program");
+    };
+    let program = match (program.strip_prefix("~/"), home) {
+        (Some(rest), Some(home)) => home.join(rest),
+        (Some(_), None) => {
+            bail!("[forge] credential's program {program}: no home directory to expand ~ in")
+        }
+        (None, _) if program.starts_with('/') || !program.contains('/') => PathBuf::from(program),
+        (None, _) => bail!(
+            "[forge] credential's program {program} is a relative path: name it absolutely, \
+             under ~/, or by a name the PATH finds"
+        ),
+    };
+    Ok(Command {
+        program,
+        args: words.collect(),
     })
 }
 
@@ -755,7 +852,7 @@ mod tests {
             with(&table, 4).unwrap().forge,
             Some(Forge {
                 app_id: 42,
-                key: key.clone(),
+                source: Source::Key(key.clone()),
                 discovery: DISCOVERY,
             })
         );
@@ -772,15 +869,107 @@ mod tests {
         let home = forge(
             ForgeForm {
                 app_id: 1,
-                key: "~/app.pem".into(),
+                key: Some("~/app.pem".into()),
+                credential: None,
                 discovery: None,
             },
             Some(&dir),
         )
         .unwrap();
-        assert_eq!(home.key, key);
+        assert_eq!(home.source, Source::Key(key.clone()));
         assert!(with("[forge]\napp_id = 1\n", 4).is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The forge-identity spec's "A command in place of a key", "Both a key
+    /// and a command" and "A command written as a shell line": `[forge]`
+    /// names a key or a command, never both or neither, and a command is a
+    /// list of its program, absolute, under `~/` or a name, and arguments
+    /// (record 0108).
+    #[test]
+    fn the_forge_table_names_a_key_or_a_command() {
+        let home = std::env::temp_dir().join(format!("sluice-credential-{}", std::process::id()));
+        let read = |table: &str| {
+            Instance::from_text(
+                &format!("[forge]\napp_id = 42\n{table}"),
+                None,
+                4,
+                4,
+                Some(&home),
+            )
+        };
+        let forge = read("credential = [\"/opt/forge/bin/token-helper\", \"--app\", \"sluice\"]\n")
+            .unwrap()
+            .forge
+            .unwrap();
+        assert_eq!(
+            forge,
+            Forge {
+                app_id: 42,
+                source: Source::Credential(Command {
+                    program: PathBuf::from("/opt/forge/bin/token-helper"),
+                    args: vec!["--app".into(), "sluice".into()],
+                }),
+                discovery: DISCOVERY,
+            }
+        );
+        let Source::Credential(c) = &forge.source else {
+            panic!("no command");
+        };
+        assert_eq!(c.to_string(), "/opt/forge/bin/token-helper --app sluice");
+        let homed = read("credential = [\"~/bin/token-helper\"]\n")
+            .unwrap()
+            .forge
+            .unwrap();
+        assert_eq!(
+            homed.source,
+            Source::Credential(Command {
+                program: home.join("bin/token-helper"),
+                args: vec![],
+            })
+        );
+        let named = read("credential = [\"token-helper\"]\n")
+            .unwrap()
+            .forge
+            .unwrap();
+        assert_eq!(
+            named.source,
+            Source::Credential(Command {
+                program: PathBuf::from("token-helper"),
+                args: vec![],
+            })
+        );
+
+        let refused = |table: &str| format!("{:#}", read(table).unwrap_err());
+        assert_eq!(
+            refused("key = \"~/app.pem\"\ncredential = [\"/opt/forge/bin/token-helper\"]\n"),
+            "[forge] names both key and credential: name one, the app's private key or the \
+             command that gives its token"
+        );
+        assert_eq!(
+            refused(""),
+            "[forge] names neither key, the app's private key, nor credential, a command that \
+             gives its token: name one"
+        );
+        let shell = refused("credential = \"token-helper --app sluice\"\n");
+        assert!(
+            shell.starts_with("[forge] credential is a string: name the command as a list")
+                && shell.contains("no shell"),
+            "{shell}"
+        );
+        assert_eq!(
+            refused("credential = []\n"),
+            "[forge] credential names no program"
+        );
+        assert_eq!(
+            refused("credential = [\"bin/token-helper\"]\n"),
+            "[forge] credential's program bin/token-helper is a relative path: name it \
+             absolutely, under ~/, or by a name the PATH finds"
+        );
+        assert_eq!(
+            refused("credential = [\"/opt/forge/bin/token-helper\", 1]\n"),
+            "[forge] credential is no list of strings"
+        );
     }
 
     /// 51: an outcome is owed a week where the host sets no `[deliveries]
@@ -1042,7 +1231,7 @@ dir = "/caches/moon"
                 processors: 12,
                 forge: Some(Forge {
                     app_id: 123456,
-                    key: folder.join("app.pem"),
+                    source: Source::Key(folder.join("app.pem")),
                     discovery: Duration::from_secs(60),
                 }),
                 signing: Some(Signing {

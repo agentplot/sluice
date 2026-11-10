@@ -52,7 +52,7 @@ use sluice_seams::Unanswered;
 
 use super::kept::{self, Allowance, Kept, Pause};
 use crate::identity::{Asked, CredentialCommand};
-use crate::instance::Forge;
+use crate::instance::{Forge, Source};
 use crate::retry::{Failed, Judged, Kind, Limited, Policy};
 
 /// GitHub's API.
@@ -292,13 +292,26 @@ impl App {
     }
 
     /// The host's `[forge]` app, each call under the command's `policy`,
-    /// keeping its answers and pauses in the host's state.
+    /// keeping its answers and pauses in the host's state: its tokens
+    /// minted with its key, or given by its credential command, which is
+    /// run only once a token is needed (record 0108).
     pub fn open(forge: &Forge, policy: Rc<Policy>) -> Result<App> {
-        let pem = std::fs::read(&forge.key)
-            .with_context(|| format!("reading the app's key {}", forge.key.display()))?;
         let api = std::env::var(API_VAR).unwrap_or_else(|_| API.into());
-        let app = App::new(forge.app_id, &pem, &api, Box::new(Utc::now), policy)
-            .with_context(|| format!("[forge] key {}", forge.key.display()))?;
+        let app = match &forge.source {
+            Source::Key(key) => {
+                let pem = std::fs::read(key)
+                    .with_context(|| format!("reading the app's key {}", key.display()))?;
+                App::new(forge.app_id, &pem, &api, Box::new(Utc::now), policy)
+                    .with_context(|| format!("[forge] key {}", key.display()))?
+            }
+            Source::Credential(c) => App::commanded(
+                forge.app_id,
+                CredentialCommand::new(&c.program, c.args.clone()),
+                &api,
+                Box::new(Utc::now),
+                policy,
+            ),
+        };
         Ok(app.keeping(Kept::new(&crate::instance::state_dir()?)))
     }
 
