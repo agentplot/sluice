@@ -10,6 +10,7 @@ pub mod equip;
 pub mod exec;
 pub mod home;
 pub mod host_count;
+pub mod host_settings;
 pub mod identity;
 pub mod instance;
 pub mod overview;
@@ -1280,6 +1281,228 @@ impl Cli {
     }
 }
 
+/// What `sluice run` carries from one pass to the next, whatever binding
+/// each pass runs under (135; design D3): the passes counted toward its
+/// `--rounds`, the repository's driver's lock and its reader (129),
+/// what its document last asked, whether it said that another run drives
+/// the repository, the holds and the refusals it said, the policies it
+/// read by revision (129; rule core.31), and whether the host's systems
+/// were checked (87).
+pub struct Driving {
+    rounds: Option<usize>,
+    /// The tick the reader's document names (64).
+    tick: Duration,
+    n: usize,
+    checked: bool,
+    /// Where the host's readers keep their files, and the repository as
+    /// they name it.
+    place: Option<(std::path::PathBuf, String)>,
+    driver: Option<Driver>,
+    reader: Option<Reader>,
+    /// 129: what its document last asked of whether the repository has
+    /// sluice.
+    asked: Option<overview::Asked>,
+    said_beside: bool,
+    /// 121: each branch's hold as last said, so it is said once.
+    said: BTreeMap<String, Option<(Rev, Rev)>>,
+    /// 26, 121: the words each branch passed by was last said with.
+    passed: BTreeMap<String, String>,
+    /// 129: each policy read, by revision, kept across passes and
+    /// bindings, since a policy at a revision is that revision's bytes.
+    policies: sluice_core::Policies,
+}
+
+impl Driving {
+    /// A `sluice run` that has driven no pass yet, ending after `rounds`
+    /// passes where it names a bound.
+    pub fn new(rounds: Option<usize>) -> Driving {
+        Driving {
+            rounds,
+            tick: tick(Some(&Command::Run { rounds })),
+            n: 0,
+            checked: false,
+            place: None,
+            driver: None,
+            reader: None,
+            asked: None,
+            said_beside: false,
+            said: BTreeMap::new(),
+            passed: BTreeMap::new(),
+            policies: sluice_core::Policies::default(),
+        }
+    }
+}
+
+/// What a pass of `sluice run` ended with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Driven {
+    /// It paused, and the next pass is due.
+    Next,
+    /// The run ends with this exit: its `--rounds` reached, or its pause
+    /// stopped.
+    Ended(i32),
+}
+
+/// One pass of `sluice run` over the repository the seams bind, and the
+/// pause after it (135; design D3): the host's systems checked before the
+/// first pass `driving` runs (87), then the repository's driver's lock
+/// taken or kept, every branch's round run and the reader's document
+/// written (129). Its caller may bind the repository afresh between two
+/// calls, and the next pass runs wholly under the new binding (rule
+/// core.54).
+pub fn drive(
+    driving: &mut Driving,
+    seams: Seams<'_>,
+    host: &dyn exec::Host,
+    pulls: &dyn PullRequests,
+    clock: &dyn Clock,
+    pause: &dyn Pause,
+    out: &mut dyn Write,
+) -> Result<Driven> {
+    let s = Sluice::new(seams, clock)
+        .as_peer(host.peer())
+        .serving(Serves::Every)
+        .keeping(&driving.policies);
+    if !driving.checked {
+        s.check_host_systems()?;
+        driving.checked = true;
+    }
+    // 135: the repository's one driver on the host, and so its reader
+    // (129): a run that finds another live drives nothing, and looks again
+    // at each pass.
+    let (readers, repository) = match &driving.place {
+        Some(place) => place.clone(),
+        None => {
+            let place = (host.readers()?, host.repository()?);
+            driving.place = Some(place.clone());
+            place
+        }
+    };
+    // 26: the branches this pass passed by, with their words; a
+    // bounded run whose last pass passed one by ends as a step
+    // of that branch would.
+    let mut failed: BTreeMap<String, String> = BTreeMap::new();
+    if driving.driver.is_none() {
+        driving.driver = Driver::take(&readers, &repository)?;
+    }
+    if driving.driver.is_some() {
+        // Its part in reading: it drives, so the place is its,
+        // whatever lease a newer watch holds, and it takes none. A
+        // lock it could not try leaves it following, as a watch.
+        match &mut driving.reader {
+            Some(r) => {
+                let _ = r.step(false, Drives::Itself);
+            }
+            None => {
+                driving.reader = Some(Reader::take_given(
+                    &readers,
+                    &repository,
+                    host.version(),
+                    Drives::Itself,
+                )?)
+            }
+        }
+        // 129: what the last pass read by revision and this one
+        // does not use is forgotten.
+        s.next_pass();
+        host.next_pass();
+        // A read whose start it could not mark leaves a forecast
+        // reading past this reader, which decides nothing (64).
+        if let Some(Reader::Lead(lead)) = &driving.reader {
+            let _ = lead.begin();
+        }
+        // 129: each remote that keeps branches' records asked
+        // once, first; a refusal is its branches' alone, read as
+        // last fetched.
+        if let Err(e) = seams.state.refresh() {
+            telemetry::warn(&format!("sluice: warning: {e:#}"));
+        }
+        // 97, previews-1 101: every pass, whether or not a branch
+        // has a queue.
+        exec::tell_abandoned(out, false, &s.release_abandoned()?)?;
+        preview::tell_dropped(out, false, &s.release_unusable_previews()?)?;
+        let mut branches = seams.state.branches()?;
+        match pulls.branches(seams) {
+            Ok(b) => branches.extend(b),
+            Err(e) => telemetry::warn(&format!("sluice: warning: {e:#}")),
+        }
+        branches.sort();
+        branches.dedup();
+        for branch in branches {
+            intake(pulls, seams, clock, &branch, Taker::Driver, false, out);
+            // 26, rule core.14: a branch whose records' read or
+            // round fails is that branch's alone; the pass goes
+            // on to every other branch. 129: one with nothing in
+            // play costs the pass its records' read alone.
+            let ran = s.in_play(&branch).and_then(|in_play| match in_play {
+                false => Ok(None),
+                true => s.round(&branch).map(Some),
+            });
+            let round = match ran {
+                Ok(round) => {
+                    driving.passed.remove(&branch);
+                    round
+                }
+                // Ctrl-C reaching the git a branch's read runs is no
+                // refusal of that branch's.
+                Err(_) if INTERRUPTED.load(Ordering::SeqCst) => None,
+                Err(e) => {
+                    let words = format!("{e:#}");
+                    tell_passed(out, &branch, &words, &mut driving.passed)?;
+                    failed.insert(branch.clone(), words);
+                    None
+                }
+            };
+            if let Some(round) = round {
+                exec::tell_abandoned(out, false, &round.released)?;
+                preview::tell_dropped(out, false, &round.previews)?;
+                exec::tell_releases(out, false, &round.releases)?;
+                if matches!(round.step, Step::Stepped | Step::Held) {
+                    let said = driving.said.entry(branch.clone()).or_default();
+                    tell_hold(out, &branch, round.held.as_ref(), said)?;
+                }
+            }
+        }
+        // 129: the reader's document every watch and wait on the
+        // host follows, each pass, queue or none, read as the
+        // pass's own ask left the records and naming its tick
+        // (64); a read it could not make is its document, in the
+        // words it was refused with (133), and the pass goes on.
+        // Ctrl-C reaching the git a read runs is no failure of the
+        // queues'.
+        if let Some(Reader::Lead(lead)) = &mut driving.reader {
+            let doc =
+                overview::read_held(&s, host, clock, Follows::Kept(pulls), &mut driving.asked)
+                    .unwrap_or_else(|e| told::document(Kind::Internal, &format!("{e:#}"), &[]));
+            let doc = overview::ticked(doc, driving.tick);
+            if !INTERRUPTED.load(Ordering::SeqCst) {
+                // The last document stands for a write that failed
+                // until one succeeds.
+                let _ = lead.write(&doc);
+            }
+        }
+    } else if !driving.said_beside {
+        telemetry::warn(
+            "sluice: another sluice run drives this repository on this host; \
+             this one runs nothing while it does",
+        );
+        driving.said_beside = true;
+    }
+    driving.n += 1;
+    if driving.rounds.is_some_and(|r| driving.n >= r) {
+        // 26: one line per branch, as `main` writes a failed step's, said
+        // whether or not stdout said it this pass.
+        for (branch, words) in &failed {
+            telemetry::error(&format!("sluice: {branch}: {words}"));
+        }
+        return Ok(Driven::Ended(if failed.is_empty() { 0 } else { INTERNAL }));
+    }
+    if !pause.pause() {
+        return Ok(Driven::Ended(STOPPED));
+    }
+    Ok(Driven::Next)
+}
+
 /// Run one command; returns its exit code.
 pub fn run(
     cli: Cli,
@@ -1593,147 +1816,12 @@ pub fn run(
             Ok(0)
         }
         Command::Run { rounds } => {
-            let s = s.serving(Serves::Every);
-            s.check_host_systems()?;
-            // 135: the repository's one driver on the host, and so its
-            // reader (129): a run that finds another live drives nothing,
-            // and looks again at each pass.
-            let (readers, repository) = (host.readers()?, host.repository()?);
-            let mut driver: Option<Driver> = None;
-            let mut reader: Option<Reader> = None;
-            // 129: what its document last asked of whether the repository
-            // has sluice.
-            let mut asked = None;
-            let mut said_beside = false;
-            let mut n = 0;
-            // 121: each branch's hold as last said, so it is said once.
-            let mut said: BTreeMap<String, Option<(Rev, Rev)>> = BTreeMap::new();
-            // 26, 121: the words each branch passed by was last said with.
-            let mut passed: BTreeMap<String, String> = BTreeMap::new();
+            let mut driving = Driving::new(rounds);
             loop {
-                // 26: the branches this pass passed by, with their words; a
-                // bounded run whose last pass passed one by ends as a step
-                // of that branch would.
-                let mut failed: BTreeMap<String, String> = BTreeMap::new();
-                if driver.is_none() {
-                    driver = Driver::take(&readers, &repository)?;
-                }
-                if driver.is_some() {
-                    // Its part in reading: it drives, so the place is its,
-                    // whatever lease a newer watch holds, and it takes none. A
-                    // lock it could not try leaves it following, as a watch.
-                    match &mut reader {
-                        Some(r) => {
-                            let _ = r.step(false, Drives::Itself);
-                        }
-                        None => {
-                            reader = Some(Reader::take_given(
-                                &readers,
-                                &repository,
-                                host.version(),
-                                Drives::Itself,
-                            )?)
-                        }
-                    }
-                    // 129: what the last pass read by revision and this one
-                    // does not use is forgotten.
-                    s.next_pass();
-                    host.next_pass();
-                    // A read whose start it could not mark leaves a forecast
-                    // reading past this reader, which decides nothing (64).
-                    if let Some(Reader::Lead(lead)) = &reader {
-                        let _ = lead.begin();
-                    }
-                    // 129: each remote that keeps branches' records asked
-                    // once, first; a refusal is its branches' alone, read as
-                    // last fetched.
-                    if let Err(e) = seams.state.refresh() {
-                        telemetry::warn(&format!("sluice: warning: {e:#}"));
-                    }
-                    // 97, previews-1 101: every pass, whether or not a branch
-                    // has a queue.
-                    exec::tell_abandoned(out, false, &s.release_abandoned()?)?;
-                    preview::tell_dropped(out, false, &s.release_unusable_previews()?)?;
-                    let mut branches = seams.state.branches()?;
-                    match pulls.branches(seams) {
-                        Ok(b) => branches.extend(b),
-                        Err(e) => telemetry::warn(&format!("sluice: warning: {e:#}")),
-                    }
-                    branches.sort();
-                    branches.dedup();
-                    for branch in branches {
-                        intake(pulls, seams, clock, &branch, Taker::Driver, false, out);
-                        // 26, rule core.14: a branch whose records' read or
-                        // round fails is that branch's alone; the pass goes
-                        // on to every other branch. 129: one with nothing in
-                        // play costs the pass its records' read alone.
-                        let ran = s.in_play(&branch).and_then(|in_play| match in_play {
-                            false => Ok(None),
-                            true => s.round(&branch).map(Some),
-                        });
-                        let round = match ran {
-                            Ok(round) => {
-                                passed.remove(&branch);
-                                round
-                            }
-                            // Ctrl-C reaching the git a branch's read runs is no
-                            // refusal of that branch's.
-                            Err(_) if INTERRUPTED.load(Ordering::SeqCst) => None,
-                            Err(e) => {
-                                let words = format!("{e:#}");
-                                tell_passed(out, &branch, &words, &mut passed)?;
-                                failed.insert(branch.clone(), words);
-                                None
-                            }
-                        };
-                        if let Some(round) = round {
-                            exec::tell_abandoned(out, false, &round.released)?;
-                            preview::tell_dropped(out, false, &round.previews)?;
-                            exec::tell_releases(out, false, &round.releases)?;
-                            if matches!(round.step, Step::Stepped | Step::Held) {
-                                let said = said.entry(branch.clone()).or_default();
-                                tell_hold(out, &branch, round.held.as_ref(), said)?;
-                            }
-                        }
-                    }
-                    // 129: the reader's document every watch and wait on the
-                    // host follows, each pass, queue or none, read as the
-                    // pass's own ask left the records and naming its tick
-                    // (64); a read it could not make is its document, in the
-                    // words it was refused with (133), and the pass goes on.
-                    // Ctrl-C reaching the git a read runs is no failure of the
-                    // queues'.
-                    if let Some(Reader::Lead(lead)) = &mut reader {
-                        let doc =
-                            overview::read_held(&s, host, clock, Follows::Kept(pulls), &mut asked)
-                                .unwrap_or_else(|e| {
-                                    told::document(Kind::Internal, &format!("{e:#}"), &[])
-                                });
-                        let doc = overview::ticked(doc, tick);
-                        if !INTERRUPTED.load(Ordering::SeqCst) {
-                            // The last document stands for a write that failed
-                            // until one succeeds.
-                            let _ = lead.write(&doc);
-                        }
-                    }
-                } else if !said_beside {
-                    telemetry::warn(
-                        "sluice: another sluice run drives this repository on this host; \
-                         this one runs nothing while it does",
-                    );
-                    said_beside = true;
-                }
-                n += 1;
-                if rounds.is_some_and(|r| n >= r) {
-                    // 26: one line per branch, as `main` writes a failed
-                    // step's, said whether or not stdout said it this pass.
-                    for (branch, words) in &failed {
-                        telemetry::error(&format!("sluice: {branch}: {words}"));
-                    }
-                    return Ok(if failed.is_empty() { 0 } else { INTERNAL });
-                }
-                if !pause.pause() {
-                    return Ok(STOPPED);
+                if let Driven::Ended(code) =
+                    drive(&mut driving, seams, host, pulls, clock, pause, out)?
+                {
+                    return Ok(code);
                 }
             }
         }
