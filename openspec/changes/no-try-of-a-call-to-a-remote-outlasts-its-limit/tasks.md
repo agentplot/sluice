@@ -37,7 +37,7 @@ core.28 and core.29.
 
 ## 4. A process run to a limit
 
-- [ ] 4.1 Add `crates/sluice/src/bounded.rs` from 27ffa26e, as design D2 gives it: `output`, `finish`, `Ended`, `GRACE`, `DRAINED` and `span`, ending a group through `runs::end_group`, with its three tests. Add `pub mod bounded;` to `crates/sluice/src/lib.rs`. True when `cargo test -p sluice --lib bounded::` passes.
+- [x] 4.1 Add `crates/sluice/src/bounded.rs` from 27ffa26e, as design D2 gives it: `output`, `finish`, `Ended`, `GRACE`, `DRAINED` and `span`, ending a group through `runs::end_group`, with its three tests. Add `pub mod bounded;` to `crates/sluice/src/lib.rs`. True when `cargo test -p sluice --lib bounded::` passes.
 - [ ] 4.2 In `crates/sluice/src/identity.rs`, run `CredentialCommand::get` and `erase` on `bounded::finish`, taking `span` and `Ended` from `bounded`. Make `COMMAND_LIMIT` `crate::retry::TRY_FOR`, its doc saying it is as long as a try of any call to a remote has. Remove the module's own `wait`, `drain` and `span`. A command that gives nothing within its limit still fails, saying it gave nothing and was stopped, as forge-identity's "The command hangs" has it. True when `cargo test -p sluice --lib identity::` passes.
 
 ## 5. A git try ends at its limit, and the lock with it
