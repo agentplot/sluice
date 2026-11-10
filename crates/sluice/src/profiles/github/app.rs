@@ -216,8 +216,8 @@ pub struct App {
     now: Now,
     http: ureq::Agent,
     tokens: RefCell<BTreeMap<Repo, Token>>,
-    /// The app's slug, once read.
-    slug: RefCell<Option<String>>,
+    /// The app's bot, once read.
+    login: RefCell<Option<String>>,
     policy: Rc<Policy>,
     /// The host's answers and pauses; none, nothing is kept.
     kept: Option<Kept>,
@@ -275,7 +275,7 @@ impl App {
             now,
             http: http_config().into(),
             tokens: RefCell::default(),
-            slug: RefCell::default(),
+            login: RefCell::default(),
             policy,
             kept: None,
             told: Cell::new(None),
@@ -343,21 +343,47 @@ impl App {
         )?)
     }
 
-    /// The app's slug, which GitHub names its bot user after: read with
-    /// its JWT once in this process, and kept.
+    /// The app's slug, which GitHub names its bot user after, read with
+    /// its JWT.
     pub fn slug(&self) -> Result<String> {
-        if let Some(slug) = self.slug.borrow().as_ref() {
-            return Ok(slug.clone());
-        }
         let v = self
             .get("/app", Bearer::App)
             .with_context(|| format!("reading app {}", self.id))?;
-        let slug = v["slug"]
+        Ok(v["slug"]
             .as_str()
             .ok_or_else(|| anyhow!("GitHub gave app {} no slug", self.id))?
-            .to_string();
-        *self.slug.borrow_mut() = Some(slug.clone());
-        Ok(slug)
+            .to_string())
+    }
+
+    /// The app's bot, which GitHub names as the author of every pull
+    /// request the app opens: under a key, named after its slug, read
+    /// with its JWT; under a credential command, GraphQL's `viewer` read
+    /// with `repo`'s token, since GitHub answers the app's own record to
+    /// its key alone (C.5 pull request, 120; record 0108). Read once in
+    /// this process, and kept.
+    pub fn bot(&self, repo: &Repo) -> Result<String> {
+        if let Some(login) = self.login.borrow().as_ref() {
+            return Ok(login.clone());
+        }
+        let login = match self.mint {
+            Mint::Key(_) => format!("{}[bot]", self.slug()?),
+            Mint::Command(_) => self.viewer(repo)?,
+        };
+        *self.login.borrow_mut() = Some(login.clone());
+        Ok(login)
+    }
+
+    /// Who GitHub says `repo`'s token is, GraphQL's `viewer`: the bot of
+    /// the app whose token it is.
+    fn viewer(&self, repo: &Repo) -> Result<String> {
+        let query = serde_json::json!({ "query": "query { viewer { login } }" }).to_string();
+        let v = self
+            .post_api(Call::Read, "/graphql", Bearer::Repo(repo), &query)
+            .with_context(|| format!("asking GitHub whose {repo}'s token is"))?;
+        Ok(v["data"]["viewer"]["login"]
+            .as_str()
+            .ok_or_else(|| anyhow!("GitHub named no viewer for {repo}'s token: {}", v["errors"]))?
+            .to_string())
     }
 
     /// The app's installation on `repo`. GitHub finds none on a repository

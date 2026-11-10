@@ -110,6 +110,13 @@ impl Forge {
         if path == "/app" && r.method == "GET" {
             return json(200, json!({ "id": APP, "slug": "sluice-test" }));
         }
+        // Who a token is, as GitHub answers its holder.
+        if path == "/graphql" && r.method == "POST" && r.body.contains("viewer") {
+            return json(
+                200,
+                json!({ "data": { "viewer": { "login": "sluice-test[bot]" } } }),
+            );
+        }
         // What a token reaches, as GitHub answers its holder.
         if path.starts_with("/installation/repositories") && r.method == "GET" {
             let total = self.reaches.as_array().map_or(0, Vec::len);
@@ -241,8 +248,8 @@ fn the_apps_login_is_read_once() {
     let clock = Clock::new();
     let fake = Forge::new(&clock).start();
     let app = app(&fake, &clock);
-    assert_eq!(app.login().unwrap(), "sluice-test[bot]");
-    assert_eq!(app.login().unwrap(), "sluice-test[bot]");
+    assert_eq!(app.login(&repo()).unwrap(), "sluice-test[bot]");
+    assert_eq!(app.login(&repo()).unwrap(), "sluice-test[bot]");
     let reads: Vec<_> = fake
         .requests()
         .into_iter()
@@ -255,6 +262,34 @@ fn the_apps_login_is_read_once() {
         "{auth}"
     );
     assert_eq!(minted(&fake), 0);
+}
+
+/// The forge-identity spec's "The bot under a command": under a credential
+/// command the app's bot is GraphQL's `viewer`, read once with the
+/// command's token, and the app's own record, which takes its key, is
+/// never asked (C.5 pull request, 120; record 0108).
+#[test]
+fn the_bot_under_a_command_is_the_viewers() {
+    use sluice::profiles::github::forge::Forge as _;
+    let clock = Clock::new();
+    let fake = Forge::new(&clock).start();
+    let scratch = support::Scratch::new("command-bot");
+    let command = credential_script(&scratch, &counting(""));
+    let app = commanded(fake.url(), command, ticking(&clock));
+    assert_eq!(app.login(&repo()).unwrap(), "sluice-test[bot]");
+    assert_eq!(app.login(&repo()).unwrap(), "sluice-test[bot]");
+    let asked: Vec<String> = fake
+        .requests()
+        .into_iter()
+        .filter(|r| r.path == "/graphql")
+        .map(|r| r.header("Authorization").unwrap_or_default().to_string())
+        .collect();
+    assert_eq!(asked, ["Bearer token-1"]);
+    assert!(
+        fake.requests().iter().all(|r| r.path != "/app"),
+        "{:?}",
+        fake.requests()
+    );
 }
 
 /// A token is bought once and kept until five minutes before its hour
