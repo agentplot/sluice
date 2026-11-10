@@ -544,7 +544,7 @@ dir = "~/.cache/sccache"
 
 [telemetry]
 send = true                          # default: false; whether sluice sends its telemetry
-collector = "http://localhost:4318"  # a receiver on the host
+collector = "http://localhost:4318"  # a receiver on the host; needed where send = true
 
 [telemetry.attributes]
 "deployment.environment" = "prod"
@@ -785,8 +785,8 @@ logs_tail_bytes = 4096
 
 | key | meaning |
 |---|---|
-| `send` | Whether sluice sends its telemetry, `true` or `false`. The default is `false`: sluice sends nothing. |
-| `collector` | The collector sluice sends to, an `http://` address: a host, a port and at most a path, such as `"http://localhost:4318"`. sluice sends to its `/v1/traces`, `/v1/metrics` and `/v1/logs`. Name a receiver on the host, which forwards over TLS: sluice sends plain HTTP, and refuses an `https://` address. Unset, `OTEL_EXPORTER_OTLP_ENDPOINT` names the collector, else sluice sends to `http://localhost:4318`. |
+| `send` | Whether sluice sends its telemetry, `true` or `false`. The default is `false`: sluice sends nothing. `true` needs a `collector`. |
+| `collector` | The collector sluice sends to, an `http://` address: a host, a port and at most a path, such as `"http://localhost:4318"`. sluice sends to its `/v1/traces`, `/v1/metrics` and `/v1/logs`. Name a receiver on the host, which forwards over TLS: sluice sends plain HTTP, and refuses an `https://` address. A table with `send = true` names one. Unset, the table sends nothing, and a command's own `--otel` sends where `OTEL_EXPORTER_OTLP_ENDPOINT` says, else to `http://localhost:4318`. |
 | `service` | The service sluice reports as, its `service.name`. The default is `"sluice"`. |
 | `traces` | Whether sluice sends traces, `true` or `false`. The default is `true`. |
 | `metrics` | Whether sluice sends metrics, `true` or `false`. The default is `true`. |
@@ -800,7 +800,8 @@ release, and `host.name`, the host's own name. An `attributes` entry
 
 sluice refuses to start on a `[telemetry]` it cannot read, naming the
 table and the key: a key it does not know, a `collector` that is no
-`http://` address or names no host, or an empty `service`. It refuses a
+`http://` address or names no host, `send = true` with no `collector`,
+or an empty `service`. It refuses a
 `logs` other than `off`, `summary` or `tail`, and a `logs_tail_bytes`
 below 1 or above 65536. It refuses an attribute with no name, and one
 named `service.name` or `service.version`, which `service` and the
@@ -824,7 +825,8 @@ the collector where the table names none:
   turns on a signal the table turns off.
 - Where the table names a `collector`, sluice reads none of the caller's
   `OTEL_EXPORTER_OTLP_*`: a session's endpoint, headers and protocol
-  never take sluice's telemetry. Where it names none, they name the
+  never take sluice's telemetry. A table names none only where it does
+  not send, and there, for a command's own `--otel`, they name the
   collector, its headers and its protocol.
 - Where the host has a `[telemetry]`, sluice reads neither
   `OTEL_RESOURCE_ATTRIBUTES` nor `OTEL_SERVICE_NAME`.

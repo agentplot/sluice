@@ -425,12 +425,12 @@ command, whatever the table says.
 ### Requirement: The table's collector is sluice's alone
 
 Where the host's table names a `collector`, sluice SHALL send there and
-nowhere else. It SHALL use none of the caller's `OTEL_EXPORTER_OTLP_*`
-endpoints, headers, protocol, timeout or compression. Where the table
-names none, or the host has no table, the environment's
-`OTEL_EXPORTER_OTLP_*` SHALL name the collector, its headers and its
-protocol as before. A log body SHALL still be scrubbed of the values of
-the caller's secret-named variables, the headers among them.
+nowhere else, with none of the caller's `OTEL_EXPORTER_OTLP_*`
+endpoints, headers, protocol, timeout or compression. With no table, or
+for a command's own `--otel` beside a table that names none, the
+environment's `OTEL_EXPORTER_OTLP_*` SHALL name the collector, its
+headers and its protocol. A log body SHALL still be scrubbed of the
+values of the caller's secret-named variables.
 
 #### Scenario: A session's collector and headers never take sluice's telemetry
 
@@ -447,10 +447,12 @@ the caller's secret-named variables, the headers among them.
 
 #### Scenario: A table with no collector sends where the environment says
 
-- **WHEN** the table holds `send = true` and no `collector`, the
-  caller's `OTEL_EXPORTER_OTLP_ENDPOINT` names a collector, and a
-  submission's combination fails its gate
-- **THEN** that collector is sent its traces, metrics and logs
+- **WHEN** the table names a `service` and neither `send` nor
+  `collector`, the command is given `--otel`, the caller's
+  `OTEL_EXPORTER_OTLP_ENDPOINT` names a collector, and a submission's
+  combination fails its gate
+- **THEN** telemetry is sent, and that collector is sent its traces,
+  metrics and logs
   (`with_no_collector_in_the_table_the_environment_names_it` in
   `crates/sluice/tests/telemetry_logs.rs`)
 
@@ -580,3 +582,22 @@ host itself.
   `deployment.environment=test,host.name=host-a`
   (`a_run_s_checks_join_the_round` in
   `crates/sluice/tests/telemetry_logs.rs`)
+
+### Requirement: A table that sends names its collector
+
+sluice SHALL refuse the host's settings where `[telemetry]` holds
+`send = true` and no `collector`, naming `[telemetry] collector` and
+`send = true`, and saying to name the `http://` address sluice sends to
+(151; record 0106 as amended; rule core.53). A table with `send` unset
+or `false` SHALL need no `collector`.
+
+#### Scenario: A table that sends with no collector
+
+- **WHEN** the table holds `send = true` alone, or `send = true` with
+  `service` and `logs` and no `collector`; or `send = false` alone, or
+  `service` alone
+- **THEN** each of the first two is refused, naming
+  `[telemetry] collector`, `send = true` and `http://`; and each of the
+  last two is read, its `send` as written and no collector
+  (`a_telemetry_table_that_sends_names_its_collector` in
+  `crates/sluice/src/instance.rs`)
