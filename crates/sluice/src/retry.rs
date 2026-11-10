@@ -3,7 +3,10 @@
 //! forge's API. Its backoff is `backon`'s, exponential with jitter, a
 //! second first and thirty at most between tries, bounded by what called
 //! it: five minutes for a waiting submit or `sluice wait`, ending at the
-//! wait's deadline or Ctrl-C, and thirty seconds for anything else.
+//! wait's deadline or Ctrl-C, and thirty seconds for anything else. Each
+//! try is bounded too, by [`TRY_FOR`] whatever called it, so a remote that
+//! never answers holds a try, and whatever the try holds, no longer than
+//! that (record 0109).
 //!
 //! The call site classes each failure, since only it knows the protocol;
 //! the policy decides from the class alone what is tried again: what the
@@ -33,6 +36,13 @@ use chrono::{DateTime, Local, Utc};
 /// seconds (134), room for two tokens bought afresh and settled, and four
 /// or five pauses.
 pub const COMMAND_FOR: Duration = Duration::from_secs(30);
+
+/// How long one try of a call to a remote may take before it is ended,
+/// whatever called it: a forge call's, a credential command's and each try
+/// of a git call's, git ended with every process it started and the
+/// repository's fetch lock let go (134; rule core.29; record 0109). A
+/// fetch waits for that lock no longer either.
+pub const TRY_FOR: Duration = Duration::from_secs(30);
 
 /// The first pause, and the longest the backoff grows to before jitter.
 const FIRST: Duration = Duration::from_secs(1);
@@ -190,6 +200,8 @@ pub fn unspent(e: &anyhow::Error) -> String {
 /// leaves, and how it pauses and reads the time.
 pub struct Policy {
     bound: Duration,
+    /// How long one try may take: [`TRY_FOR`], or a test's.
+    try_for: Duration,
     until: Option<Instant>,
     /// Whether it waits out a spent allowance: to `until`, or without end.
     waits: bool,
@@ -206,6 +218,7 @@ impl Policy {
     pub fn new(bound: Duration) -> Policy {
         Policy {
             bound,
+            try_for: TRY_FOR,
             until: None,
             waits: true,
             sleep: Rc::new(interruptible),
@@ -287,6 +300,17 @@ impl Policy {
         )
     }
 
+    /// How long one try of a call may take before it is ended.
+    pub fn try_for(&self) -> Duration {
+        self.try_for
+    }
+
+    /// `self`, each try given `limit` in place of [`TRY_FOR`]: for tests.
+    pub fn trying_for(mut self, limit: Duration) -> Policy {
+        self.try_for = limit;
+        self
+    }
+
     /// `self`, its jitter drawn from `seed`: for tests.
     pub fn seeded(mut self, seed: u64) -> Policy {
         self.seed = Some(seed);
@@ -305,7 +329,10 @@ impl Policy {
 
     /// Make the call `op` until a try succeeds, or a try fails in a way
     /// [`Policy::again`] does not try again, or the pauses would pass the
-    /// bound, or the end instant has come, or the sleeper says stop.
+    /// bound, or the bound has passed since the first try, or the end
+    /// instant has come, or the sleeper says stop: no try starts once the
+    /// call's time is spent, however long its tries took (134; record
+    /// 0109).
     /// `op` is told each try's number and how the one before failed. A
     /// try that met a spent allowance is never backed off: the policy
     /// sleeps until its time and tries again when it waits a pause and
@@ -346,6 +373,9 @@ impl Policy {
             Err(judged)
         };
         let result = loop {
+            // The call's time runs from its first try, or from the end of
+            // a spent allowance's pause.
+            let begun = (self.now)();
             let mut backoff = ExponentialBuilder::new()
                 .with_jitter()
                 .with_min_delay(FIRST)
@@ -381,7 +411,9 @@ impl Policy {
                     if !Policy::again(kind, *j) {
                         return false;
                     }
-                    if self.until.is_some_and(|u| (self.now)() >= u) {
+                    if self.until.is_some_and(|u| (self.now)() >= u)
+                        || (self.now)().saturating_duration_since(begun) >= self.bound
+                    {
                         ran_out.set(true);
                         return false;
                     }
@@ -584,6 +616,23 @@ mod tests {
             assert!(total <= bound, "{total:?} past {bound:?}");
             assert!(e.spent.is_some());
         }
+    }
+
+    /// 134, record 0109: no try starts once the call's time is spent,
+    /// however long its tries took, so a remote that never answers holds a
+    /// command's call for its first slow tries, not for one try per pause
+    /// the bound has room for.
+    #[test]
+    fn no_try_starts_once_the_calls_time_is_spent() {
+        let (policy, pauses, clock) = recorded(COMMAND_FOR);
+        let r: Result<(), _> = policy.run(Kind::Read, |t| {
+            clock.set(clock.get() + Duration::from_secs(20));
+            Err(Failed::new(Judged::Unknown, t.number))
+        });
+        let e = r.expect_err("never answered");
+        assert_eq!(e.error, 2, "a second try, begun 21s in, and no third");
+        assert_eq!(pauses.borrow().len(), 1);
+        assert_eq!(e.spent.map(|s| s.tries), Some(2));
     }
 
     #[test]

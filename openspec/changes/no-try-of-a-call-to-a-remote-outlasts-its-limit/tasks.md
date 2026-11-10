@@ -32,7 +32,7 @@ core.28 and core.29.
 
 ## 3. A try's limit, held by the policy
 
-- [ ] 3.1 In `crates/sluice/src/retry.rs`, add `TRY_FOR`, thirty seconds, and a `try_for` field that `Policy::new` sets to it. Add `Policy::try_for()`, and a test's `Policy::trying_for(limit)`. Make the module doc say each try is bounded by `TRY_FOR`. In `Policy::run`, read `begun` at each start of the backoff loop, and stop as run out once the time since `begun` reaches the bound, as design D5 gives it. Add `no_try_starts_once_the_calls_time_is_spent` from 27ffa26e, the remote-retry spec's "Slow tries". True when `cargo test -p sluice --lib retry::` passes.
+- [x] 3.1 In `crates/sluice/src/retry.rs`, add `TRY_FOR`, thirty seconds, and a `try_for` field that `Policy::new` sets to it. Add `Policy::try_for()`, and a test's `Policy::trying_for(limit)`. Make the module doc say each try is bounded by `TRY_FOR`. In `Policy::run`, read `begun` at each start of the backoff loop, and stop as run out once the time since `begun` reaches the bound, as design D5 gives it. Add `no_try_starts_once_the_calls_time_is_spent` from 27ffa26e, the remote-retry spec's "Slow tries". True when `cargo test -p sluice --lib retry::` passes.
 - [ ] 3.2 In `crates/sluice/src/profiles/github/app.rs`, make `http_config` end each call at `crate::retry::TRY_FOR`, its doc saying no try of a call takes longer than a try of any call to a remote may. Drop the `Duration` import it leaves unused. True when `cargo clippy -p sluice --all-targets -- -D warnings` is clean.
 
 ## 4. A process run to a limit
