@@ -33,7 +33,7 @@ of ours on a page, in the skill or in output (core.26).
 
 ## 4. The hand-over
 
-- [ ] 4.1 Add `crates/sluice/src/hand_over.rs`, declared `pub mod hand_over;` in `crates/sluice/src/lib.rs`, as design D2 to D5 give it. Its module doc cites 135, record 0107 and rule core.54. It holds:
+- [x] 4.1 Add `crates/sluice/src/hand_over.rs`, declared `pub mod hand_over;` in `crates/sluice/src/lib.rs`, as design D2 to D5 give it. Its module doc cites 135, record 0107 and rule core.54. It holds:
   - `HandOver`, serde to and from JSON: `settings: String`, `tables: Vec<String>`, `passes: usize`, `driver: Option<i32>`, `supervisors: Vec<u32>`, `said`, `passed` and `said_beside` as `Carried` holds them;
   - `VAR`, `SLUICE_HANDED_OVER`;
   - `HandOver::take() -> Result<Option<(HandOver, Carried)>>`. It reads `VAR`, removes it from the process's environment, and makes the descriptor `driver` names one closed on exec at once (a duplicate closed on exec, then the inherited one closed) as `Carried`'s `driver`;

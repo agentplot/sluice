@@ -8,6 +8,7 @@
 pub mod branch;
 pub mod equip;
 pub mod exec;
+pub mod hand_over;
 pub mod home;
 pub mod host_count;
 pub mod host_settings;
