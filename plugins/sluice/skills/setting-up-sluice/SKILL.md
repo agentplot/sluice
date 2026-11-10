@@ -417,7 +417,8 @@ Host settings live in one file on the host, never in the repository:
 `$XDG_CONFIG_HOME/sluice/config.toml`, `~/.config/sluice/config.toml` when
 `XDG_CONFIG_HOME` is unset. Every repository on the host shares it. sluice
 reads it as each command starts and never writes it; a `sluice run` kept
-running takes a change up before its next pass, so nothing restarts it.
+running takes a change up before its next pass, so nothing restarts it. A
+change of `[telemetry]` starts it afresh, in the same process.
 Before writing it, find out who writes it:
 
 ```sh
