@@ -16,7 +16,7 @@ keeps.
 
 ## 1. The decision recorded
 
-- [ ] 1.1 Write `docs/adr/0112-sluice-and-its-plugins-are-installed-from-a-release-the-marketplace-at-a-release-branch.md`, and add record 0111's amendment naming it, as design D7 and Task notes 1.1 give them. Take the next free number where 0112 is taken on main or this bolt. True when `sluice exec bolt/sluices-plugins-install-from-its-release -- moon run root:adrs` passes.
+- [x] 1.1 Write `docs/adr/0112-sluice-and-its-plugins-are-installed-from-a-release-the-marketplace-at-a-release-branch.md`, and add record 0111's amendment naming it, as design D7 and Task notes 1.1 give them. Take the next free number where 0112 is taken on main or this bolt. True when `sluice exec bolt/sluices-plugins-install-from-its-release -- moon run root:adrs` passes.
 - [ ] 1.2 In `docs/architecture/core.md`, amend core.55's details and add rule core.56 after core.55 under `### Releases`, with its details after core.55's, as design D7 gives them. Rewrite `site/src/content/docs/architecture/rules.md` with `node site/scripts/rules.mjs`. True when `sluice exec bolt/sluices-plugins-install-from-its-release -- moon run site:rules` passes.
 
 ## 2. The release moves `release`
