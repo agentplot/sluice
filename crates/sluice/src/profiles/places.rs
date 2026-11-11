@@ -61,6 +61,18 @@
 //! command failed keeps its record, holding nothing, with what the command
 //! printed, until it is released again.
 //!
+//! However a preview is let go, released or freed, the containers the
+//! host's engine holds for it end between its release command, where one
+//! runs, and its checkout's removal, while it still holds its ports and
+//! names (34; previews-1 clause 101; record 0112; rule core.10): those
+//! that mount its checkout or scratch, publish one of its ports, or carry
+//! its `SLUICE_PLACE` as their `sluice.place` label. The end is the check
+//! seam's, a [`ContainerEnd`] the binding hands this profile. A container
+//! it cannot remove keeps the preview whole: a release keeps the failure
+//! as a failing release command's, and a free fails before it lets
+//! anything go, so a gone preview is freed only once its containers end,
+//! its stored release never run again.
+//!
 //! What made each place is recorded before the place is made, at
 //! `<common>/sluice/.places/<name>.json`, so `release` needs no policy and
 //! touches only what that record names: every path and branch it touches
@@ -108,6 +120,10 @@ use crate::runs::{dir_name, flat_name, ReleaseWith, Request, Runs, SESSION};
 /// toolchain and the executor need in the directory given: the check
 /// seam's, handed to this profile by the binding (rule core.2).
 pub type ReleaseBuilder = Box<dyn Fn(&Place, &Settings, &Limits, &Path) -> Result<Option<Request>>>;
+
+/// Ends what the engine holds for a place: the check seam's, handed to
+/// this profile by the binding (rule core.2; record 0112).
+pub type ContainerEnd = Box<dyn Fn(&Place) -> Result<()>>;
 
 /// Whose a place is.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -625,6 +641,9 @@ pub struct Places {
     scratch_root: Option<PathBuf>,
     /// How a session's place's release command is built from its policy.
     release: Option<ReleaseBuilder>,
+    /// How a preview's containers are ended (record 0112); none ended when
+    /// `None`.
+    containers: Option<ContainerEnd>,
     /// The repository at its common directory, as gix reads it, once
     /// opened: its worktrees, read with no process (129).
     repo: std::cell::OnceCell<gix::Repository>,
@@ -640,6 +659,7 @@ impl Places {
             blocks: None,
             scratch_root: None,
             release: None,
+            containers: None,
             repo: std::cell::OnceCell::new(),
             key: std::cell::OnceCell::new(),
         }
@@ -660,6 +680,24 @@ impl Places {
     pub fn with_release(mut self, builder: ReleaseBuilder) -> Self {
         self.release = Some(builder);
         self
+    }
+
+    /// End a preview's containers with `end` whenever it is let go
+    /// (record 0112).
+    pub fn with_containers(mut self, end: ContainerEnd) -> Self {
+        self.containers = Some(end);
+        self
+    }
+
+    /// 34, previews-1 clause 101, record 0112: end the containers the
+    /// preview `name`, as its record `made` holds it, left, by the place
+    /// its command was given; nothing where no end was handed this
+    /// profile.
+    fn end_containers(&self, name: &str, made: &Made) -> Result<()> {
+        match &self.containers {
+            Some(end) => end(&self.preview_run_place(name, made)?),
+            None => Ok(()),
+        }
     }
 
     /// The session's place of `worktree`: its canonical path and its name.
@@ -1501,6 +1539,11 @@ impl Checkout for Places {
         // 123: everything started in it ends, and nothing runs in its
         // name: no release command.
         self.runs.discard(name)?;
+        // Record 0112: a preview's containers end while it holds its ports;
+        // one left keeps the preview whole.
+        if let Some(made) = made.as_ref().filter(|m| m.kind == Kind::Preview) {
+            self.end_containers(name, made)?;
+        }
         if let Some(made) = made.as_ref().filter(|m| m.kind != Kind::Session) {
             match made.method.as_str() {
                 METHOD => self.remove_worktree(&self.worktree_path(name))?,
@@ -1868,9 +1911,14 @@ impl Checkout for Places {
             bail!("place {name} is not a preview");
         }
         // 34: everything started in it ends, its release command included
-        // (ADR 0016), before its checkout goes; 123: a release command that
-        // fails keeps the preview, held once its tries are spent.
-        if let Err(e) = self.runs.remove(name) {
+        // (ADR 0016), then the containers it left (record 0112), before its
+        // checkout and ports go; 123: a release command that fails, or a
+        // container left, keeps the preview, held once its tries are spent.
+        if let Err(e) = self
+            .runs
+            .remove(name)
+            .and_then(|()| self.end_containers(name, &made))
+        {
             self.keep_failure(name, &e, |tries| tries > retries);
             return Err(e);
         }
