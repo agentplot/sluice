@@ -3,6 +3,32 @@
 Read on `change/sluices-plugins-install-from-its-release` at `ed506875`,
 cut from `bolt/sluices-plugins-install-from-its-release` at `49fcf7d3`.
 
+## Outcome: not archived
+
+The gate passed, every task holds, and every scenario is met. But the
+change cannot be archived as it stands: `openspec archive` writes specs
+that fail `root:specs` (`openspec validate --specs --strict`), which runs
+in `#check-fast`. That is the same failure as main's #89 (`175eae01`).
+Two specs fail:
+
+- **`install-from-release`** (new): its delta has no `## Purpose`, so the
+  archive writes `TBD - created by archiving change
+  sluices-plugins-install-from-its-release. Update Purpose after
+  archive.` strict refuses this: `Purpose section is still a placeholder
+  rather than a Purpose anyone wrote`. The delta's own `## Purpose` is
+  read when the capability is created, so the change's
+  `specs/install-from-release/spec.md` needs one.
+- **`plugin-setup`**: the MODIFIED requirement `The binary is installed
+  when missing, asking first` has about 990 characters of text. strict
+  refuses it: `Requirement text is very long (>500 characters)`. It needs
+  splitting into requirements of one behavior each, or its cases moved
+  into its scenarios, under 500 characters each.
+
+`root:changes` (`openspec validate --changes --strict`) passes the change
+and catches neither. The archive was run on the worktree, then backed
+out. Nothing of it is committed. The code stage fixes the two deltas. The
+change is then verified and archived again.
+
 ## The whole checks
 
 `sluice exec bolt/sluices-plugins-install-from-its-release`, with sluice
