@@ -1491,6 +1491,7 @@ impl Sluice<'_> {
                                 system: r.system.clone(),
                                 not_run: waited.clone(),
                                 failed_by: Vec::new(),
+                                unsigned: None,
                             }));
                         }
                     }
@@ -1725,6 +1726,7 @@ impl Sluice<'_> {
                 Event::Unproven {
                     combination: c.revision.clone(),
                     tasks: v.unproven.clone(),
+                    keys: Vec::new(),
                 },
             );
             return Ok(());
@@ -3606,6 +3608,7 @@ fn read_not_run(
                 system: system.map(str::to_string),
                 not_run: Some(n.reason.clone()),
                 failed_by: Vec::new(),
+                unsigned: None,
             })
             .collect(),
     )

@@ -176,6 +176,24 @@ pub struct FailedTask {
     /// on its own.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub failed_by: Vec<String>,
+    /// C.6, 20: the check profile's words for why the combination's tree
+    /// does not bear this check's key out, for a cause other than a
+    /// missing record, on a branch that reads a key only where the tree
+    /// bears it out; `None` for a check that failed on its result, and in
+    /// records written before it (design D5 of
+    /// `a-signed-run-without-a-sandbox-proves-its-passes`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unsigned: Option<String>,
+}
+
+/// 108: a replay no counted pass proves, with its key and why none does,
+/// the first of design D4's five that holds (19, 78, 79, 83; design D4 of
+/// `a-signed-run-without-a-sandbox-proves-its-passes`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnprovenKey {
+    pub task: String,
+    pub key: String,
+    pub why: String,
 }
 
 /// A task read as failed for its key holding a pass and a fail (19): what
@@ -1067,10 +1085,15 @@ pub enum Event {
         not_run: Vec<NotRun>,
     },
     /// 108: replays no trusted pass proved, so the checks run again with
-    /// no replay.
+    /// no replay. `keys` names each replay's task, key and why no counted
+    /// pass proves it (design D4 of
+    /// `a-signed-run-without-a-sandbox-proves-its-passes`); a line written
+    /// before it reads with none (rule core.41).
     Unproven {
         combination: Rev,
         tasks: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        keys: Vec<UnprovenKey>,
     },
     /// 87, S18: checks a host ran whose results its gate does not count,
     /// signed with a key the branch's policy does not list: missing, never
@@ -2300,6 +2323,7 @@ mod tests {
                     system: None,
                     not_run: None,
                     failed_by: Vec::new(),
+                    unsigned: None,
                 },
                 FailedTask {
                     task: "core:test".into(),
@@ -2309,6 +2333,7 @@ mod tests {
                     system: None,
                     not_run: None,
                     failed_by: Vec::new(),
+                    unsigned: None,
                 },
             ],
             ..submission(None)
@@ -2434,6 +2459,75 @@ mod tests {
         assert_eq!(serde_json::to_string(&f).unwrap(), old);
     }
 
+    /// 108, C.6 (design D4 and D5 of
+    /// `a-signed-run-without-a-sandbox-proves-its-passes`): an `unproven`
+    /// line with its keys, and a failed check with why its key was not
+    /// borne out, each read back as written; a line and a submission
+    /// written before these fields read with none and are written without
+    /// them.
+    #[test]
+    fn an_unproven_line_and_an_unsigned_check_read_back() {
+        let line = LogLine {
+            schema: LOG_SCHEMA.into(),
+            at: "2026-11-11T09:00:00Z".into(),
+            event: Event::Unproven {
+                combination: Rev::new("c1"),
+                tasks: vec!["a:test".into()],
+                keys: vec![UnprovenKey {
+                    task: "a:test".into(),
+                    key: "k1".into(),
+                    why: "no result of its key is signed by a signer the branch counts".into(),
+                }],
+            },
+        };
+        let json = serde_json::to_string(&line).unwrap();
+        assert!(
+            json.contains(r#""keys":[{"task":"a:test","key":"k1","why":"#),
+            "{json}"
+        );
+        assert_eq!(serde_json::from_str::<LogLine>(&json).unwrap(), line);
+
+        let old = r#"{"schema":"sluice/log@1","at":"2026-11-11T09:00:00Z","event":"unproven","combination":"c1","tasks":["a:test"]}"#;
+        let read: LogLine = serde_json::from_str(old).unwrap();
+        assert!(
+            matches!(&read.event, Event::Unproven { keys, .. } if keys.is_empty()),
+            "{read:?}"
+        );
+        assert_eq!(serde_json::to_string(&read).unwrap(), old);
+
+        let unsigned = FailedTask {
+            task: "a:test".into(),
+            hash: "k1".into(),
+            log: None,
+            flaky: None,
+            system: None,
+            not_run: None,
+            failed_by: Vec::new(),
+            unsigned: Some("a:test: a/x is not in the tree".into()),
+        };
+        let json = serde_json::to_string(&unsigned).unwrap();
+        assert_eq!(
+            json,
+            r#"{"task":"a:test","hash":"k1","unsigned":"a:test: a/x is not in the tree"}"#
+        );
+        assert_eq!(serde_json::from_str::<FailedTask>(&json).unwrap(), unsigned);
+
+        let failed = Submission {
+            state: State::Failed,
+            result: Some("failed".into()),
+            failed: vec![FailedTask {
+                unsigned: None,
+                ..unsigned.clone()
+            }],
+            ..submission(None)
+        };
+        let before = serde_json::to_string(&failed).unwrap();
+        assert!(!before.contains("unsigned"), "{before}");
+        let read: Submission = serde_json::from_str(&before).unwrap();
+        assert_eq!(read.failed[0].unsigned, None);
+        assert_eq!(serde_json::to_string(&read).unwrap(), before);
+    }
+
     /// 149: a failed check recorded before `failed_by` reads with none,
     /// and is written back as it was; one failed by a task it depends on
     /// names it, with no key of its own.
@@ -2456,6 +2550,7 @@ mod tests {
             system: None,
             not_run: None,
             failed_by: vec!["api:integration".into()],
+            unsigned: None,
         };
         let json = serde_json::to_string(&by).unwrap();
         assert_eq!(

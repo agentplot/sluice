@@ -98,6 +98,7 @@ pub fn read(
         system: system.map(str::to_string),
         not_run: None,
         failed_by: Vec::new(),
+        unsigned: None,
     };
     let mut failed = Vec::new();
     let mut unproven = Vec::new();
