@@ -212,6 +212,9 @@ struct Inner {
     /// Every ask whether a host's system was switched during a run, by the
     /// host that asked, in order.
     system_looks: Vec<String>,
+    /// The grant each host's executor records with its runs, by host; a
+    /// host with none records none (138; design D9).
+    grants: BTreeMap<String, String>,
     /// Each start's place, with the places live as it started, in order.
     live_at_start: Vec<(String, Vec<String>)>,
     /// Why each host's executor cannot hold a run's memory limit, by host,
@@ -843,6 +846,18 @@ impl World {
         };
     }
 
+    /// From now, this world's host's executor records `grant` with every
+    /// run it reports; with `None`, none, as every host does until this is
+    /// asked (138; design D9).
+    pub fn grant(&self, grant: Option<&str>) {
+        let mut inner = self.0.borrow_mut();
+        let host = inner.host.clone();
+        match grant {
+            Some(g) => inner.grants.insert(host, g.into()),
+            None => inner.grants.remove(&host),
+        };
+    }
+
     /// Each ask whether the host's system was switched during a run, by
     /// the host that asked, in order.
     pub fn system_looks(&self) -> Vec<String> {
@@ -1232,6 +1247,8 @@ impl World {
     }
 
     fn evaluate(inner: &mut Inner, request: &RunRequest) -> RunReport {
+        // Design D9: the grant of the host the run reports as its own.
+        let grant = inner.grants.get(&inner.host).cloned();
         if request.place.name.starts_with("preview/") {
             // A preview's command: one exit, never a check (103).
             return RunReport {
@@ -1258,7 +1275,7 @@ impl World {
                     memory: None,
                     network: None,
                     docker: false,
-                    grant: None,
+                    grant: grant.clone(),
                 },
                 missing: Vec::new(),
                 not_run: Vec::new(),
@@ -1300,7 +1317,7 @@ impl World {
                     memory: None,
                     network: None,
                     docker: request.limits.docker,
-                    grant: None,
+                    grant: grant.clone(),
                 },
                 missing: Vec::new(),
                 not_run: Vec::new(),
@@ -1337,7 +1354,7 @@ impl World {
                 memory: None,
                 network: None,
                 docker: request.limits.docker,
-                grant: None,
+                grant,
             },
             missing: Vec::new(),
             not_run: Vec::new(),
@@ -3422,6 +3439,57 @@ mod tests {
         ));
         assert_eq!(f.world.delivered().len(), 2);
         assert_eq!(f.world.undelivered(), [to("unit/b")]);
+    }
+
+    /// 138, design D9: a host's grant is on the executor of every report
+    /// its runs make, a check's run, a command's and a preview's; another
+    /// host's, and a host's once it records none, carry none.
+    #[test]
+    fn a_hosts_grant_is_on_its_reports() {
+        let f = Fakes::new();
+        let rev = f.world.init("main", &[("a/x", "1")]);
+        f.world.task("a:test", "a/");
+        let n = std::cell::Cell::new(0);
+        let grant = |place: &str, command: Option<&str>| -> Option<String> {
+            n.set(n.get() + 1);
+            let request = RunRequest {
+                place: f
+                    .checkout
+                    .materialize(&format!("{place}/{}", n.get()), &rev, &Settings::new())
+                    .unwrap(),
+                revision: rev.clone(),
+                required: vec!["a:test".into()],
+                since: None,
+                limit: None,
+                limits: Default::default(),
+                tests: Settings::new(),
+                command: command.map(str::to_string),
+                replay: false,
+                system: None,
+            };
+            let h = f.tests.start(&request).unwrap();
+            match f.tests.progress(&h).unwrap() {
+                Progress::Finished(r) => r.executor.grant,
+                other => panic!("{other:?}"),
+            }
+        };
+        assert_eq!(grant("sluice/try/main", None), None);
+        f.world.grant(Some("sb1:g1"));
+        for (place, command) in [
+            ("sluice/try/main", None),
+            ("session/w", Some("make check")),
+            ("preview/main", None),
+        ] {
+            assert_eq!(grant(place, command).as_deref(), Some("sb1:g1"), "{place}");
+        }
+        f.world.be_host("b");
+        assert_eq!(grant("sluice/try/main", None), None);
+        f.world.grant(Some("open:1"));
+        assert_eq!(grant("sluice/try/main", None).as_deref(), Some("open:1"));
+        f.world.be_host("fake-host");
+        assert_eq!(grant("sluice/try/main", None).as_deref(), Some("sb1:g1"));
+        f.world.grant(None);
+        assert_eq!(grant("sluice/try/main", None), None);
     }
 
     /// The check fake counts the host's session runs while they run, and
