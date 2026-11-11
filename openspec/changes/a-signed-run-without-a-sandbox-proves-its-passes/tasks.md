@@ -41,7 +41,7 @@ rules core.9 and core.35 are already written on this branch.
 
 ## 6. The failure says why
 
-- [ ] 6.1 In `crates/sluice/src/words.rs`, add `not_borne_out(task: &str, why: &str) -> String`, giving `<task>: the combination's tree does not bear its key out: <why>`. In `crates/sluice/src/lib.rs`'s `report`, under the `failed:` line, write it indented for each failed task with an `unsigned`, as `could_not_run` is written for a test that could not run. In `words.rs`'s tests add `a_key_not_borne_out_is_said_with_why`, giving the pass-proof spec's "The words". True when `cargo test -p sluice --lib a_key_not_borne_out_is_said_with_why` passes.
+- [x] 6.1 In `crates/sluice/src/words.rs`, add `not_borne_out(task: &str, why: &str) -> String`, giving `<task>: the combination's tree does not bear its key out: <why>`. In `crates/sluice/src/lib.rs`'s `report`, under the `failed:` line, write it indented for each failed task with an `unsigned`, as `could_not_run` is written for a test that could not run. In `words.rs`'s tests add `a_key_not_borne_out_is_said_with_why`, giving the pass-proof spec's "The words". True when `cargo test -p sluice --lib a_key_not_borne_out_is_said_with_why` passes.
 
 ## 7. The reference says so
 
