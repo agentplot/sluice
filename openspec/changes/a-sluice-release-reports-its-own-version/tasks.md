@@ -16,7 +16,7 @@ part of the tree touched, citing record 0111 and rule core.55.
 ## 1. The decision recorded
 
 - [x] 1.1 Write `docs/adr/0111-a-sluice-releases-tag-names-a-release-commit-that-writes-its-version-into-the-tree.md`, as design D6 and Task notes 1.1 give it. Take the next free number where 0111 is taken on main or this bolt. True when `sluice exec bolt/a-sluice-release-reports-its-own-version -- moon run root:adrs` passes.
-- [ ] 1.2 In `docs/architecture/core.md`, add the section `### Releases` with rule core.55 after `### The gate`, and core.55's details after core.54's, as design D6 gives them. Rewrite `site/src/content/docs/architecture/rules.md` with `node site/scripts/rules.mjs`. True when `sluice exec bolt/a-sluice-release-reports-its-own-version -- moon run site:rules` passes.
+- [x] 1.2 In `docs/architecture/core.md`, add the section `### Releases` with rule core.55 after `### The gate`, and core.55's details after core.54's, as design D6 gives them. Rewrite `site/src/content/docs/architecture/rules.md` with `node site/scripts/rules.mjs`. True when `sluice exec bolt/a-sluice-release-reports-its-own-version -- moon run site:rules` passes.
 
 ## 2. The tree's version and its writer
 
