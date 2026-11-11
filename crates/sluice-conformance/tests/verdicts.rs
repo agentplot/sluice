@@ -660,20 +660,50 @@ fn a_replay_no_trusted_pass_proves_runs_again_with_no_replay() {
         .into_iter()
         .map(|l| l.event)
         .collect();
-    assert!(events
+    let (tasks, keys) = events
         .iter()
-        .any(|e| matches!(e, Event::Unproven { tasks, .. } if tasks.len() == 3)));
+        .find_map(|e| match e {
+            Event::Unproven { tasks, keys, .. } => Some((tasks.clone(), keys.clone())),
+            _ => None,
+        })
+        .expect("an unproven line");
+    assert_eq!(tasks.len(), 3);
     // The first attempt's replays are recorded as replays (core.9), and
     // the runs as runs.
     let r = results(&h);
     let mine: Vec<&ResultLine> = r.iter().filter(|l| l.branch == other).collect();
-    assert_eq!(
-        mine.iter()
-            .filter(|l| l.kind == ResultKind::Replayed)
-            .count(),
-        3
-    );
+    let replayed: Vec<&&ResultLine> = mine
+        .iter()
+        .filter(|l| l.kind == ResultKind::Replayed)
+        .collect();
+    assert_eq!(replayed.len(), 3);
     assert_eq!(mine.iter().filter(|l| l.kind == ResultKind::Ran).count(), 3);
+    // Design D4 of `a-signed-run-without-a-sandbox-proves-its-passes`, the
+    // run-signing spec's "The unproven line": each replay is named under
+    // `keys` with the key the run gave it, and why.
+    let mut named: Vec<(String, String, String)> = keys
+        .iter()
+        .map(|k| (k.task.clone(), k.key.clone(), k.why.clone()))
+        .collect();
+    named.sort();
+    let mut given: Vec<(String, String, String)> = replayed
+        .iter()
+        .map(|l| {
+            (
+                l.task.clone(),
+                l.hash.clone(),
+                "no result of its key was held to this run's limits".to_string(),
+            )
+        })
+        .collect();
+    given.sort();
+    assert_eq!(named, given);
+    let mut named_tasks = tasks.clone();
+    named_tasks.sort();
+    assert_eq!(
+        named_tasks,
+        given.iter().map(|(t, _, _)| t.clone()).collect::<Vec<_>>()
+    );
 }
 
 /// A policy naming two systems, its bolts' rules ending in `extra`.
