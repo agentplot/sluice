@@ -78,7 +78,7 @@ and rule core.10.
 
 ## 5. What a reader is told
 
-- [ ] 5.1 In `site/src/content/docs/guides/previews.md`, where it gives `[tests] release` and `sluice release`, add three points:
+- [x] 5.1 In `site/src/content/docs/guides/previews.md`, where it gives `[tests] release` and `sluice release`, add three points:
   - However a preview is released or freed, sluice then removes every container that mounts the checkout or `SLUICE_TMP`, publishes one of its ports, or carries the label `sluice.place=$SLUICE_PLACE`.
   - The label is how to mark a container with neither a mount nor a port.
   - A container sluice cannot remove keeps the preview, and `sluice release` says which.
