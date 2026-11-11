@@ -2553,6 +2553,69 @@ mod tests {
         assert_eq!(profile.grant.len(), "sb1:".len() + 32);
     }
 
+    /// 138, design D1 (the check-grant spec's "Two places, two hosts, one
+    /// profile"): two checkouts, two scratch directories, two and three
+    /// caches, each given and resolved, the runner's store under two homes
+    /// outside the checkout, and two temporary directories give one grant;
+    /// a store in the checkout gives the grant of a run given none.
+    #[test]
+    fn one_profile_gives_one_grant_wherever_it_runs() {
+        let (one, two) = (Host::new("grant-one"), Host::new("grant-two"));
+        let limits = sandbox(Some(Network::Localhost), false);
+        let grant = |host: &Host, at: &str, caches: usize, store: Option<&Path>| {
+            sandbox_reach(
+                &host.place(at),
+                &limits,
+                &[".last-used"],
+                &host.caches(caches),
+                store,
+                Vec::new(),
+                Some(std::fs::canonicalize(host.dir(&format!("{at}/user-tmp"))).unwrap()),
+            )
+            .profile()
+        };
+        let a = grant(&one, "a", 2, Some(&one.dir("home-a/.moon/cache/shared")));
+        let b = grant(&two, "b", 3, Some(&two.dir("b-home/cache/shared")));
+        assert_ne!(a.text, b.text);
+        assert_eq!(a.grant, b.grant);
+        assert!(a.grant.starts_with("sb1:"), "{}", a.grant);
+
+        let none = grant(&one, "c", 0, None);
+        let inside = grant(&two, "d", 0, Some(&two.dir("d/checkout/.moon/cache")));
+        assert_eq!(inside.grant, none.grant);
+        assert_ne!(none.grant, a.grant);
+    }
+
+    /// 138, design D1 (the check-grant spec's "A profile that reaches
+    /// more"): a run's network, whether it may reach the container engine,
+    /// and whether it is given any cache each give another grant.
+    #[test]
+    fn a_profile_that_reaches_more_gives_another_grant() {
+        let host = Host::new("grant-more");
+        let place = host.place("a");
+        let caches = host.caches(1);
+        let engines = vec![Endpoint::Unix(host.dir("engine").join("docker.sock"))];
+        let grant = |limits: Limits, caches: &[HostCache]| {
+            sandbox_reach(&place, &limits, &[], caches, None, engines.clone(), None)
+                .profile()
+                .grant
+        };
+        let networks: std::collections::BTreeSet<String> =
+            [Network::Denied, Network::Localhost, Network::Allowed]
+                .into_iter()
+                .map(|n| grant(sandbox(Some(n), false), &caches))
+                .collect();
+        assert_eq!(networks.len(), 3, "{networks:?}");
+        assert_ne!(
+            grant(sandbox(None, true), &caches),
+            grant(sandbox(None, false), &caches)
+        );
+        assert_ne!(
+            grant(sandbox(None, false), &caches),
+            grant(sandbox(None, false), &[])
+        );
+    }
+
     /// The host-caches spec's "Only the store is opened", "A store moon has
     /// not made yet" and "A store in the checkout" (C.2 sandbox row as
     /// amended at agentplot/blueprints 0c38f24; record 0105; rules core.9,
