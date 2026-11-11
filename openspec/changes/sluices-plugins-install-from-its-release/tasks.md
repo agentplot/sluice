@@ -25,7 +25,7 @@ keeps.
 
 ## 3. The install commands held to a release
 
-- [ ] 3.1 Write `check-installs.sh` and the root project's `installs` task in `moon.yml`, tagged `check-fast`, as design D5 gives them. It holds every install command in the README, `docs/examples/README.md`, the plugins' READMEs and skills, and the site's pages to a release (Task notes 3.1; spec "Every install command names a release" and "root:installs holds the install commands"). The docs still name main at this task. True when `sh check-installs.sh 2>&1 | cut -d ' ' -f 2 | sort -u` prints the ten files Task notes 3.1 lists, each followed by `:`, and no other line.
+- [x] 3.1 Write `check-installs.sh` and the root project's `installs` task in `moon.yml`, tagged `check-fast`, as design D5 gives them. It holds every install command in the README, `docs/examples/README.md`, the plugins' READMEs and skills, and the site's pages to a release (Task notes 3.1; spec "Every install command names a release" and "root:installs holds the install commands"). The docs still name main at this task. True when `sh check-installs.sh 2>&1 | cut -d ' ' -f 2 | sort -u` prints the ten files Task notes 3.1 lists, each followed by `:`, and no other line.
 
 ## 4. The docs name a release
 
