@@ -1363,6 +1363,7 @@ impl World {
                 report.not_run.push(NotRun {
                     task: t.name.clone(),
                     reason: reason.clone(),
+                    key: None,
                 });
                 continue;
             }
@@ -1401,6 +1402,7 @@ impl World {
                 report.not_run.push(NotRun {
                     task: t.name.clone(),
                     reason: format!("its dependency {d} could not run: {why}"),
+                    key: None,
                 });
                 continue;
             }
@@ -1409,6 +1411,7 @@ impl World {
                 Seen::NotRun(reason) => report.not_run.push(NotRun {
                     task: t.name.clone(),
                     reason,
+                    key: None,
                 }),
                 Seen::Skipped => report.missing.push(t.name.clone()),
             }
@@ -2356,6 +2359,7 @@ impl Tests for FakeTests {
                         "it passed, but nothing the run kept proves it ran: \
                          its record is not in {store}"
                     ),
+                    key: None,
                 }),
                 None => proof.proven.push(t.task.clone()),
             }
@@ -3506,6 +3510,7 @@ mod tests {
             [NotRun {
                 task: "root:integration".into(),
                 reason: "its dependency api:integration could not run: exited 77".into(),
+                key: None,
             }]
         );
 
@@ -3591,6 +3596,7 @@ mod tests {
                 reason: "it passed, but nothing the run kept proves it ran: \
                          its record is not in /the/store"
                     .into(),
+                key: None,
             }]
         );
         f.world.keeps_no_proof(None);

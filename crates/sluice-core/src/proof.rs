@@ -93,6 +93,7 @@ mod tests {
             .map(|t| NotRun {
                 task: t.to_string(),
                 reason: why.into(),
+                key: None,
             })
             .collect()
     }

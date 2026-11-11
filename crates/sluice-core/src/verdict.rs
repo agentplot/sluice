@@ -208,6 +208,7 @@ pub fn read(
                     "its dependency {first} failed, and its key reads passed, \
                      as flaky = \"pass\" reads a key with a pass and a fail"
                 ),
+                key: None,
             });
         } else {
             // 15: a task the check was failed by that the run gave no
@@ -689,6 +690,7 @@ mod tests {
                 reason: "its dependency api:integration failed, and its key reads passed, \
                          as flaky = \"pass\" reads a key with a pass and a fail"
                     .into(),
+                key: None,
             }]
         );
     }

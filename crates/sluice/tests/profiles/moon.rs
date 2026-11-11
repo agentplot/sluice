@@ -1180,6 +1180,7 @@ fn a_pass_whose_manifest_is_gone_is_unkept_naming_the_store() {
                  moon's manifest of it is not in {}",
                 store.display()
             ),
+            key: None,
         }]
     );
 }

@@ -1564,6 +1564,7 @@ impl Sluice<'_> {
                 .map(|task| NotRun {
                     task,
                     reason: reason.clone(),
+                    key: None,
                 }),
         );
         Ok(report)
@@ -3665,6 +3666,7 @@ fn unstarted(checks: &[String], kind: &str, reason: String) -> RunReport {
             .map(|task| NotRun {
                 task: task.clone(),
                 reason: reason.clone(),
+                key: None,
             })
             .collect(),
         dependencies: Vec::new(),

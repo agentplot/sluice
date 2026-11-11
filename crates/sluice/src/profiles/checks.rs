@@ -1775,6 +1775,7 @@ impl Tests for Checks {
                     .map(|t| NotRun {
                         task: t.clone(),
                         reason: e.clone(),
+                        key: None,
                     })
                     .collect(),
             ),
@@ -1909,7 +1910,7 @@ impl Tests for Checks {
         if meta.runner != "moon" {
             return Ok(Proof {
                 proven: tasks.map(|t| t.task.clone()).collect(),
-                unkept: Vec::new(),
+                ..Proof::default()
             });
         }
         let store = meta
@@ -1940,6 +1941,7 @@ impl Tests for Checks {
                          moon's manifest of it is not in {}",
                         store.display()
                     ),
+                    key: None,
                 });
                 continue;
             }
@@ -2138,6 +2140,7 @@ fn command_result(meta: &Meta, ended: &Ended) -> (Vec<TaskResult>, Vec<NotRun>) 
             .map(|t| NotRun {
                 task: t.clone(),
                 reason: not_run_reason(code),
+                key: None,
             })
             .collect();
         return (Vec::new(), not_run);

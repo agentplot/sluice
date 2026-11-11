@@ -155,6 +155,7 @@ fn a_pass_nothing_proves_has_no_outcome_and_runs_again() {
                 .map(|t| NotRun {
                     task: t.to_string(),
                     reason: WHY.into(),
+                    key: None,
                 })
                 .collect(),
         }]

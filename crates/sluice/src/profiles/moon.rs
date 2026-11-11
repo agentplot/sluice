@@ -828,6 +828,7 @@ fn read_report(
                     read.not_run.push(NotRun {
                         task: a.target.to_string(),
                         reason: not_run_reason(code),
+                        key: None,
                     });
                     continue;
                 }
@@ -883,6 +884,7 @@ fn read_report(
                     a.target,
                     not_run_reason(code)
                 ),
+                key: None,
             });
         }
     }
@@ -2114,6 +2116,7 @@ mod tests {
                 reason: "its dependency api:integration could not run: exited 77, \
                          which [tests] not_run names: it could not run here"
                     .into(),
+                key: None,
             }]
         );
     }

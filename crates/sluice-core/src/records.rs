@@ -1798,6 +1798,7 @@ mod tests {
             not_run: vec![NotRun {
                 task: "a:test".into(),
                 reason: why.into(),
+                key: None,
             }],
         });
         let v = serde_json::to_value(&lost).unwrap();
