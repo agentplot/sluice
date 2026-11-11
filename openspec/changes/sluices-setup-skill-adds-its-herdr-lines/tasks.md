@@ -20,7 +20,7 @@ part of the tree touched, citing record 0113 and rule core.57.
 
 ## 2. The setup skill adds the herdr plugin's lines
 
-- [ ] 2.1 Write `plugins/sluice/skills/setting-up-sluice/references/herdr.md`, the procedure, as design D2 to D7 and Task notes 2.1 give it:
+- [x] 2.1 Write `plugins/sluice/skills/setting-up-sluice/references/herdr.md`, the procedure, as design D2 to D7 and Task notes 2.1 give it:
   - herdr and the plugin;
   - reading the lines from the plugin's setup;
   - the file `herdr --help` names, and who writes it;
