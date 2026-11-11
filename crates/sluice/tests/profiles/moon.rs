@@ -1463,6 +1463,78 @@ fn a_key_is_read_under_the_home_the_toolchain_gives_moon() {
     assert_eq!(c.proven(&run, &report).unwrap().proven, ["alpha:test"]);
 }
 
+/// Design D1 of the change `a-signed-run-without-a-sandbox-proves-its-
+/// passes` (C.2 moon row; rule core.9), the pass-proof spec's "moon kept
+/// the manifest in the checkout" and "Neither store holds it": on the
+/// layout of `a_key_is_read_under_the_home_the_toolchain_gives_moon`, a
+/// manifest moon kept in the checkout's own `.moon/cache` and not in the
+/// shared store the run's record names proves its key; one in neither is
+/// a pass the run kept no proof of, naming the shared store.
+#[test]
+fn a_manifest_moon_kept_in_the_checkout_proves_its_key() {
+    let src = workspace("moon-checkout-store-src");
+    let scratch = support::Scratch::new("moon-checkout-store");
+    let bare = scratch.path().join("repo.git");
+    let worktree = scratch.path().join("main");
+    let home = scratch.path().join("moon-home");
+    src.git(&["clone", "-q", "--bare", ".", bare.to_str().unwrap()]);
+    src.git(&[
+        "--git-dir",
+        bare.to_str().unwrap(),
+        "worktree",
+        "add",
+        "-q",
+        worktree.to_str().unwrap(),
+        "main",
+    ]);
+    let mut req = request(&src, "p1", &["alpha:test"], None);
+    req.place.path = worktree.clone();
+    req.tests.insert(
+        "toolchain".into(),
+        Setting::List(vec![
+            "echo".into(),
+            format!(
+                "export MOON_HOME='{}' MOON_CACHE_SHARED_WORKTREE_CACHE=true \
+                 MOON_EXPERIMENT_CAS_OUTPUTS_CACHE=true",
+                home.display()
+            ),
+        ]),
+    );
+    let c = checks_in(&bare, Vec::new());
+    let (run, report) = finish_run(&c, &req);
+    assert_eq!(
+        tasks(&report),
+        [("alpha:test".into(), Outcome::Pass, false)]
+    );
+
+    let key = &report.tasks[0].hash;
+    let shared = home.join("cache/shared");
+    let manifest = |root: &Path| root.join("blobs").join(&key[..2]).join(&key[2..]);
+    let own = manifest(&worktree.join(".moon/cache"));
+    std::fs::create_dir_all(own.parent().unwrap()).unwrap();
+    std::fs::rename(manifest(&shared), &own).unwrap();
+    assert!(
+        !manifest(&shared).exists(),
+        "no manifest in the shared store"
+    );
+    let proof = c.proven(&run, &report).unwrap();
+    assert_eq!(proof.proven, ["alpha:test"]);
+    assert_eq!(proof.unkept, []);
+
+    std::fs::remove_file(&own).unwrap();
+    let proof = c.proven(&run, &report).unwrap();
+    assert_eq!(proof.proven, Vec::<String>::new());
+    assert_eq!(proof.unkept.len(), 1, "{proof:?}");
+    assert_eq!(proof.unkept[0].task, "alpha:test");
+    assert!(
+        proof.unkept[0].reason.contains(&format!(
+            "moon's manifest of it is not in {}",
+            shared.display()
+        )),
+        "{proof:?}"
+    );
+}
+
 /// Record 0105 point 1 (C.2 moon and sandbox rows as amended at
 /// agentplot/blueprints 0c38f24; 108; rules core.9, core.35), the
 /// host-caches spec's "moon's home moved by the toolchain, on a host that

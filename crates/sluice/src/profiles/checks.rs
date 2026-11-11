@@ -1894,8 +1894,15 @@ impl Tests for Checks {
 
     /// A command runner's one key is sluice's own, so every task is
     /// proven. A moon task's key is checked against the candidate's tree
-    /// by its manifest, read in the store the run's moon kept it in
-    /// (design D9; C.2 moon row). A ran check that passed whose manifest,
+    /// by its manifest, read where the run's moon kept it, in the checkout
+    /// or in the shared store moon's own settings place it (C.2 moon row;
+    /// rule core.9): each manifest the walk needs, the key's own and each
+    /// dependency's, is read in the store the run's record names and,
+    /// where that store is not the checkout's own `.moon/cache` and lacks
+    /// it, in the checkout's own, which this run's moon alone writes
+    /// (design D9; design D1 of the change
+    /// `a-signed-run-without-a-sandbox-proves-its-passes`). Either is held
+    /// to the same proof by its content. A ran check that passed whose manifest,
     /// or a dependency's, is missing there is unkept: the run kept no
     /// proof of it, which says nothing of the work, so it is not warned of
     /// and has no outcome (114; record 0105; the change
@@ -1913,11 +1920,15 @@ impl Tests for Checks {
                 ..Proof::default()
             });
         }
-        let store = meta
-            .store
-            .clone()
-            .unwrap_or_else(|| meta.place.join(".moon/cache"));
-        let blob = |k: &str| super::moon::blob_in(&store, k);
+        let own = meta.place.join(".moon/cache");
+        let store = meta.store.clone().unwrap_or_else(|| own.clone());
+        let blob = |k: &str| {
+            super::moon::blob_in(&store, k).or_else(|| {
+                (store != own)
+                    .then(|| super::moon::blob_in(&own, k))
+                    .flatten()
+            })
+        };
         let tree = |p: &str| super::moon::file_at(&meta.place, &meta.revision, p);
         // A task a check was failed by is no check of the run (149).
         let checks = report.tasks.iter().map(|t| (t, true));
