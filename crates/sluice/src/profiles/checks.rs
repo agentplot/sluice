@@ -411,50 +411,132 @@ fn choose(limits: &Limits) -> Result<Kind> {
     Ok(kind)
 }
 
-/// A Seatbelt profile: everything a user may do, but writes only to
-/// `writable`, files named in `stamps`, and the terminal and null devices,
-/// a new pseudo-terminal's included;
-/// the network as `network` says: `Denied`, none, local sockets included;
-/// `Localhost`, listening and connecting on localhost only, by address or
-/// by name, and no other connection (name lookups included); and, whatever
-/// the network, each of `sockets` and the container engine's TCP
-/// addresses `tcp`, by host and port (ADR 0016; design D5).
-fn seatbelt(
-    writable: &[PathBuf],
-    stamps: &[&str],
+/// Design D1: what a path is to a sandboxed run's profile. The grant
+/// digests the profile with each path named by its role, so places and
+/// hosts given one profile give one grant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Role {
+    /// The place's checkout.
+    Place,
+    /// The place's scratch directory.
+    Scratch,
+    /// A directory every place's runs share: a host cache's, or the
+    /// runner's store outside the place (record 0105).
+    Cache,
+    /// A host cache's socket.
+    CacheSocket,
+    /// The container engine's unix socket (ADR 0016).
+    EngineSocket,
+    /// The container engine's TCP address (design D5 of its change).
+    EngineTcp,
+    /// The user's own temporary directory.
+    UserTmp,
+}
+
+impl Role {
+    fn token(self) -> &'static str {
+        match self {
+            Role::Place => "<place>",
+            Role::Scratch => "<scratch>",
+            Role::Cache => "<cache>",
+            Role::CacheSocket => "<cache-socket>",
+            Role::EngineSocket => "<engine-socket>",
+            Role::EngineTcp => "<engine-tcp>",
+            Role::UserTmp => "<user-tmp>",
+        }
+    }
+}
+
+/// Design D1: what a sandboxed run may reach, each path with its role, as
+/// [`seatbelt`] writes its profile from.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct Reach {
+    /// What it may write: the place's checkout and scratch, then the
+    /// shared directories, each by its role.
+    writable: Vec<(Role, PathBuf)>,
+    /// Names of files the runner's tools stamp wherever they are installed.
+    stamps: Vec<String>,
     network: Option<Network>,
-    sockets: &[PathBuf],
-    tcp: &[(String, u16)],
-    user_tmp: Option<&Path>,
-) -> String {
+    /// The unix sockets it may reach whatever the network: the engine's,
+    /// then the caches'.
+    sockets: Vec<(Role, PathBuf)>,
+    /// The container engine's TCP addresses, by host and port.
+    tcp: Vec<(String, u16)>,
+    /// The user's own temporary directory, resolved.
+    user_tmp: Option<PathBuf>,
+}
+
+/// A sandboxed run's profile, and the grant it gives (83, 138; design D1).
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Profile {
+    /// The Seatbelt profile the run is held to.
+    text: String,
+    /// `sb1:` and the first 16 bytes of the SHA-256 of the profile with
+    /// every path named by its role, in hex.
+    grant: String,
+}
+
+impl Reach {
+    /// The profile written for the run, and its grant.
+    fn profile(&self) -> Profile {
+        use sha2::{Digest, Sha256};
+        let digest = Sha256::digest(seatbelt(self, true).as_bytes());
+        let hex: String = digest[..16].iter().map(|b| format!("{b:02x}")).collect();
+        Profile {
+            text: seatbelt(self, false),
+            grant: format!("sb1:{hex}"),
+        }
+    }
+}
+
+/// A Seatbelt profile: everything a user may do, but writes only to
+/// `reach.writable`, files named in its stamps, and the terminal and null
+/// devices, a new pseudo-terminal's included;
+/// the network as `reach.network` says: `Denied`, none, local sockets
+/// included; `Localhost`, listening and connecting on localhost only, by
+/// address or by name, and no other connection (name lookups included);
+/// and, whatever the network, each of its sockets and the container
+/// engine's TCP addresses, by host and port (ADR 0016; design D5).
+///
+/// Design D1: with `roles`, each path is named by its role and each line
+/// is kept once, in order, so two hosts with two and three caches, or a
+/// path given and resolved, render the same; this is the text the grant
+/// digests. Stamps, literal device paths and the resolver's socket are
+/// written as they are either way, so the profile written and its grant
+/// cannot drift.
+fn seatbelt(reach: &Reach, roles: bool) -> String {
     let quote = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
+    let path = |role: Role, p: &Path| match roles {
+        true => role.token().to_string(),
+        false => quote(&p.to_string_lossy()),
+    };
     // Where Chromium keeps the socket that makes it one instance per
     // profile: the user's own temporary directory, whatever `TMPDIR` says,
     // so a browser test can start one.
-    let browser = user_tmp.map(|t| {
+    let browser = reach.user_tmp.as_ref().map(|t| {
+        let t = match roles {
+            true => Role::UserTmp.token().to_string(),
+            false => regex_quote(&t.to_string_lossy()),
+        };
         format!(
-            "(regex #\"^{}/\\.?(com\\.google\\.[Cc]hrome|org\\.chromium\\.[Cc]hromium)[.a-zA-Z]*\\.[A-Za-z0-9]+(/|$)\")",
-            regex_quote(&t.to_string_lossy())
+            "(regex #\"^{t}/\\.?(com\\.google\\.[Cc]hrome|org\\.chromium\\.[Cc]hromium)[.a-zA-Z]*\\.[A-Za-z0-9]+(/|$)\")"
         )
     });
     let mut p =
         String::from("(version 1)\n(allow default)\n(deny file-write*)\n(allow file-write*\n");
-    for w in writable {
-        p.push_str(&format!(
-            "  (subpath \"{}\")\n",
-            quote(&w.to_string_lossy())
-        ));
+    for (role, w) in &reach.writable {
+        p.push_str(&format!("  (subpath \"{}\")\n", path(*role, w)));
     }
     if let Some(b) = &browser {
         p.push_str(&format!("  {b}\n"));
     }
-    for s in stamps {
+    for s in &reach.stamps {
         p.push_str(&format!("  (regex #\"/{}$\")\n", regex_escape(s)));
     }
     // C.3: the null and terminal devices, and `/dev/ptmx`, from which a
     // command opens a pseudo-terminal of its own, whose end is a `ttys`.
     p.push_str("  (literal \"/dev/null\") (literal \"/dev/tty\") (literal \"/dev/ptmx\") (regex #\"^/dev/fd/\") (regex #\"^/dev/ttys\"))\n");
-    match network {
+    match reach.network {
         Some(Network::Denied) => p.push_str("(deny network*)\n"),
         Some(Network::Localhost) => p.push_str(
             "(deny network*)\n\
@@ -465,10 +547,11 @@ fn seatbelt(
     }
     // A local socket of the run's own, its browser's included, unless the
     // run may have no connection at all.
-    if network != Some(Network::Denied) {
-        let mut own: Vec<String> = writable
+    if reach.network != Some(Network::Denied) {
+        let mut own: Vec<String> = reach
+            .writable
             .iter()
-            .map(|w| format!("(subpath \"{}\")", quote(&w.to_string_lossy())))
+            .map(|(role, w)| format!("(subpath \"{}\")", path(*role, w)))
             .collect();
         own.extend(browser);
         // One rule a path: a socket filter takes one path, not a list.
@@ -479,21 +562,26 @@ fn seatbelt(
             ));
         }
     }
-    // ADR 0016: the container engine's socket, whatever the network.
-    for s in sockets {
+    // ADR 0016: the container engine's socket, whatever the network; and
+    // 35, design D4: each cache's.
+    for (role, s) in &reach.sockets {
         p.push_str(&format!(
             "(allow network-outbound (remote unix-socket (path-literal \"{}\")))\n",
-            quote(&s.to_string_lossy())
+            path(*role, s)
         ));
     }
     // Design D5: the engine's TCP address, whatever the network. Seatbelt
     // names a remote host only as `localhost` or `*`; a name is resolved
     // through mDNSResponder's socket.
-    for (host, port) in tcp {
+    for (host, port) in &reach.tcp {
         let local = matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1");
         let at = if local { "localhost" } else { "*" };
+        let address = match roles {
+            true => Role::EngineTcp.token().to_string(),
+            false => format!("{at}:{port}"),
+        };
         p.push_str(&format!(
-            "(allow network-outbound (remote tcp \"{at}:{port}\"))\n"
+            "(allow network-outbound (remote tcp \"{address}\"))\n"
         ));
         if host.parse::<std::net::IpAddr>().is_err() && !local {
             p.push_str(
@@ -501,7 +589,14 @@ fn seatbelt(
             );
         }
     }
-    p
+    if !roles {
+        return p;
+    }
+    let mut seen = std::collections::HashSet::new();
+    p.lines()
+        .filter(|l| seen.insert(*l))
+        .map(|l| format!("{l}\n"))
+        .collect()
 }
 
 /// A path as a Seatbelt regular expression matching it literally.
@@ -1267,14 +1362,15 @@ fn given_and_resolved(path: &Path) -> Vec<PathBuf> {
     paths
 }
 
-/// The Seatbelt profile of a run in `place`: its checkout and scratch
-/// directory writable, each `dir` of the host's `caches`, and the
-/// runner's `store`, where moon keeps what it shares for the run, where
-/// it lies outside them (C.2 sandbox row as amended at
+/// The Seatbelt profile of a run in `place`, and its grant: its checkout
+/// and scratch directory writable, each `dir` of the host's `caches`, and
+/// the runner's `store`, where moon keeps what it shares for the run,
+/// where it lies outside them (C.2 sandbox row as amended at
 /// agentplot/blueprints 0c38f24; record 0105; rule core.9); the container
 /// engine's `engines`, its sockets and its TCP addresses, reachable when
 /// `limits` allow it (ADR 0016; design D5), and each `socket` of the
-/// caches, whatever the network (35; design D4).
+/// caches, whatever the network (35; design D4). The grant names the
+/// store a `<cache>`, as a declared cache is (design D1).
 fn sandbox_profile(
     place: &Place,
     limits: &Limits,
@@ -1282,42 +1378,76 @@ fn sandbox_profile(
     caches: &[HostCache],
     store: Option<&Path>,
     engines: Vec<Endpoint>,
-) -> String {
-    let mut writable = vec![resolved(&place.path), resolved(&place.tmp)];
+) -> Profile {
+    sandbox_reach(place, limits, stamps, caches, store, engines, user_tmp()).profile()
+}
+
+/// What [`sandbox_profile`] writes its profile from, with `user_tmp` the
+/// user's own temporary directory.
+fn sandbox_reach(
+    place: &Place,
+    limits: &Limits,
+    stamps: &[&str],
+    caches: &[HostCache],
+    store: Option<&Path>,
+    engines: Vec<Endpoint>,
+    user_tmp: Option<PathBuf>,
+) -> Reach {
+    let mut writable = vec![
+        (Role::Place, resolved(&place.path)),
+        (Role::Scratch, resolved(&place.tmp)),
+    ];
     // Record 0105: the store the run records, the one its proof is read
     // from; a store in the checkout or its scratch adds nothing, so such
     // a run's profile is the one it is given with none (rule core.34).
     if let Some(store) = store {
         let real = resolved(store);
-        if !writable.iter().any(|w| real.starts_with(w)) {
-            writable.extend(given_and_resolved(store));
+        if !writable.iter().any(|(_, w)| real.starts_with(w)) {
+            writable.extend(
+                given_and_resolved(store)
+                    .into_iter()
+                    .map(|p| (Role::Cache, p)),
+            );
         }
     }
     let engines = if limits.docker { engines } else { Vec::new() };
-    let mut sockets = Vec::new();
+    let mut engine_sockets = Vec::new();
     let mut tcp = Vec::new();
     for e in engines {
         match e {
-            Endpoint::Unix(p) => sockets.push(p),
+            Endpoint::Unix(p) => engine_sockets.push(p),
             Endpoint::Tcp { host, port, .. } => tcp.push((host, port)),
         }
     }
+    let mut cache_sockets = Vec::new();
     for cache in caches {
-        writable.extend(given_and_resolved(&cache.dir));
+        writable.extend(
+            given_and_resolved(&cache.dir)
+                .into_iter()
+                .map(|p| (Role::Cache, p)),
+        );
         if let Some(s) = &cache.socket {
-            sockets.extend(given_and_resolved(s));
+            cache_sockets.extend(given_and_resolved(s));
         }
     }
-    sockets.sort();
-    sockets.dedup();
-    seatbelt(
-        &writable,
-        stamps,
-        limits.network,
-        &sockets,
-        &tcp,
-        user_tmp().as_deref(),
-    )
+    engine_sockets.sort();
+    engine_sockets.dedup();
+    cache_sockets.sort();
+    cache_sockets.dedup();
+    cache_sockets.retain(|s| !engine_sockets.contains(s));
+    let sockets = engine_sockets
+        .into_iter()
+        .map(|p| (Role::EngineSocket, p))
+        .chain(cache_sockets.into_iter().map(|p| (Role::CacheSocket, p)))
+        .collect();
+    Reach {
+        writable,
+        stamps: stamps.iter().map(|s| s.to_string()).collect(),
+        network: limits.network,
+        sockets,
+        tcp,
+        user_tmp,
+    }
 }
 
 /// `[tests] release`: the command, or `None`.
@@ -1411,7 +1541,7 @@ pub fn release_request(
         std::fs::write(
             &profile,
             // A release runs no check whose proof sluice reads.
-            sandbox_profile(place, limits, &[], caches, None, engines),
+            sandbox_profile(place, limits, &[], caches, None, engines).text,
         )?;
         argv.splice(
             0..0,
@@ -1670,7 +1800,8 @@ impl Tests for Checks {
                             true => self.engines(),
                             false => Vec::new(),
                         },
-                    ),
+                    )
+                    .text,
                 )?;
                 let sandbox = [
                     "/usr/bin/sandbox-exec".to_string(),
@@ -2257,6 +2388,171 @@ mod tests {
         }
     }
 
+    /// A host's paths for a sandboxed run, made under a directory of the
+    /// test's own and reached through a link, so each given path differs
+    /// from where it resolves, as `/tmp` is `/private/tmp`.
+    struct Host {
+        root: PathBuf,
+        link: PathBuf,
+    }
+
+    impl Host {
+        fn new(name: &str) -> Host {
+            let root = std::env::temp_dir().join(format!("sluice-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(root.join("real")).unwrap();
+            let link = root.join("link");
+            std::os::unix::fs::symlink(root.join("real"), &link).unwrap();
+            Host { root, link }
+        }
+
+        /// `rel` made under the host's real directory, named through the
+        /// link.
+        fn dir(&self, rel: &str) -> PathBuf {
+            std::fs::create_dir_all(self.root.join("real").join(rel)).unwrap();
+            self.link.join(rel)
+        }
+
+        fn place(&self, at: &str) -> Place {
+            Place {
+                name: "p".into(),
+                path: self.dir(&format!("{at}/checkout")),
+                tmp: self.dir(&format!("{at}/tmp")),
+                env: BTreeMap::new(),
+            }
+        }
+
+        /// `n` caches, each with a socket.
+        fn caches(&self, n: usize) -> Vec<HostCache> {
+            (0..n)
+                .map(|i| {
+                    let dir = self.dir(&format!("caches/{i}"));
+                    HostCache {
+                        socket: Some(dir.join("server.sock")),
+                        dir,
+                        env: BTreeMap::new(),
+                    }
+                })
+                .collect()
+        }
+    }
+
+    impl Drop for Host {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn sandbox(network: Option<Network>, docker: bool) -> Limits {
+        Limits {
+            executor: Some("sandbox".into()),
+            memory: None,
+            network,
+            docker,
+        }
+    }
+
+    /// 83, 138, design D1 (the check-grant spec's "The grant is the
+    /// profile the run writes"): the text a run's grant digests is the
+    /// profile it writes with each path named by its role, so each role
+    /// put back for its paths gives the written profile's rules.
+    #[test]
+    fn the_grant_renders_the_profile_the_run_writes() {
+        let host = Host::new("grant-renders");
+        let place = host.place("a");
+        let caches = host.caches(2);
+        let store = host.dir("home/.moon/cache/shared");
+        let engines = vec![
+            Endpoint::Unix(host.dir("engine").join("docker.sock")),
+            Endpoint::Tcp {
+                host: "localhost".into(),
+                port: 2375,
+                tls: None,
+            },
+            Endpoint::Tcp {
+                host: "engine.example".into(),
+                port: 2376,
+                tls: None,
+            },
+        ];
+        let reach = sandbox_reach(
+            &place,
+            &sandbox(Some(Network::Localhost), true),
+            &[".last-used"],
+            &caches,
+            Some(&store),
+            engines,
+            Some(std::fs::canonicalize(host.dir("user-tmp")).unwrap()),
+        );
+        let written = seatbelt(&reach, false);
+        let roles = seatbelt(&reach, true);
+        for path in [&place.path, &place.tmp, &caches[0].dir, &store] {
+            let real = std::fs::canonicalize(path).unwrap();
+            assert!(written.contains(&*real.to_string_lossy()), "{written}");
+            assert!(!roles.contains(&*real.to_string_lossy()), "{roles}");
+        }
+
+        let back = |role: Role| -> Vec<String> {
+            match role {
+                Role::UserTmp => reach
+                    .user_tmp
+                    .iter()
+                    .map(|t| regex_quote(&t.to_string_lossy()))
+                    .collect(),
+                Role::EngineTcp => vec!["localhost:2375".into(), "*:2376".into()],
+                _ => reach
+                    .writable
+                    .iter()
+                    .chain(&reach.sockets)
+                    .filter(|(r, _)| *r == role)
+                    .map(|(_, p)| p.to_string_lossy().into_owned())
+                    .collect(),
+            }
+        };
+        let all = [
+            Role::Place,
+            Role::Scratch,
+            Role::Cache,
+            Role::CacheSocket,
+            Role::EngineSocket,
+            Role::EngineTcp,
+            Role::UserTmp,
+        ];
+        let mut put_back = std::collections::BTreeSet::new();
+        for line in roles.lines() {
+            let named: Vec<Role> = all
+                .into_iter()
+                .filter(|r| line.contains(r.token()))
+                .collect();
+            match named.as_slice() {
+                [] => {
+                    put_back.insert(line.to_string());
+                }
+                [role] => {
+                    let paths = back(*role);
+                    assert!(!paths.is_empty(), "{role:?} names no path");
+                    for p in paths {
+                        put_back.insert(line.replace(role.token(), &p));
+                    }
+                }
+                more => panic!("{line} names {more:?}"),
+            }
+        }
+        let rules: std::collections::BTreeSet<String> =
+            written.lines().map(str::to_string).collect();
+        assert_eq!(put_back, rules);
+
+        let profile = reach.profile();
+        assert_eq!(profile.text, written);
+        use sha2::{Digest, Sha256};
+        let hex: String = Sha256::digest(roles.as_bytes())[..16]
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        assert_eq!(profile.grant, format!("sb1:{hex}"));
+        assert_eq!(profile.grant.len(), "sb1:".len() + 32);
+    }
+
     /// The host-caches spec's "Only the store is opened", "A store moon has
     /// not made yet" and "A store in the checkout" (C.2 sandbox row as
     /// amended at agentplot/blueprints 0c38f24; record 0105; rules core.9,
@@ -2290,7 +2586,7 @@ mod tests {
             env: BTreeMap::new(),
         };
         let profile = |store: Option<&Path>| {
-            sandbox_profile(&place, &Limits::default(), &[], &[], store, Vec::new())
+            sandbox_profile(&place, &Limits::default(), &[], &[], store, Vec::new()).text
         };
         let opened = |p: &str| -> std::collections::BTreeSet<PathBuf> {
             p.split("(subpath \"")
