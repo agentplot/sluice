@@ -708,6 +708,7 @@ fn a_sessions_place_is_released_under_the_policy_read_now() {
         place
     };
     let policy = |cmd: &str| ReleasePolicy {
+        branch: "bolt/x".into(),
         tests: Settings::from([("release".into(), Setting::Text(cmd.into()))]),
         limits: Limits::default(),
     };
