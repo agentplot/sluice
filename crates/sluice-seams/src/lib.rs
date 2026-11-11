@@ -329,17 +329,24 @@ pub trait Checkout {
     fn release(&self, name: &str) -> Result<()>;
 
     /// 123: whether the working copy of the place `name` is gone: its
-    /// record names one, and that path is no directory. A place with no
-    /// record, or one recorded before its checkout was made, is not gone:
-    /// `release` handles it. A read: nothing is written or released.
+    /// record names one, and that path is no directory, or, for a place
+    /// sluice made, a combination's checkout or a preview, a folder git no
+    /// longer lists as a worktree of the repository, whatever is left in
+    /// it (record 0115). A session's worktree is gone only once it is no
+    /// directory (rule core.16). A place with no record, or one recorded
+    /// before its checkout was made, is not gone: `release` handles it. A
+    /// reading that fails is an error, never gone. A read: nothing is
+    /// written or released.
     fn gone(&self, name: &str) -> Result<bool>;
 
     /// 123: free what sluice itself holds for the place `name`, running
     /// nothing in its name: its runs' groups ended and their directories
-    /// removed, the checkout sluice made removed, its scratch directory,
-    /// its ports and its record let go, and a preview's names. No release
-    /// command runs; a session's worktree is left as it is (25, rule
-    /// core.16). Nothing when there is no such place.
+    /// removed, the checkout sluice made removed, by git where git lists
+    /// it, and otherwise what is left of its folder by sluice, a directory
+    /// its owner cannot write made writable first (record 0115); its
+    /// scratch directory, its ports and its record let go, and a preview's
+    /// names. No release command runs; a session's worktree is left as it
+    /// is (25, rule core.16). Nothing when there is no such place.
     fn free(&self, name: &str) -> Result<()>;
 
     /// 123: release the place `name`, whose working copy is gone, from
