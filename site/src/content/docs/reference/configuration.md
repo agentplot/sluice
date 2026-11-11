@@ -112,11 +112,22 @@ newest submission is blamed, and each test is named with why. A command
 given to `sluice exec` after `--` is not held to `not_run`.
 
 On a branch whose state is on its remote, a test that passed counts only
-where moon's manifest of it is in the store moon keeps it in. The same
-holds for the manifest of each task it depends on. A test that passed in
-a run that kept no such manifest has no result and blames nobody. Its
-combination is tested again, and the run counts as one whose tests could
-not run. While a combination is tested again for any of these reasons,
+where moon's manifest of it is in the store moon keeps it in. sluice
+reads the manifest in the store moon's settings give the run and, where
+that store lacks it, in the checkout's own `.moon/cache`, which only that
+run writes. The same holds for the manifest of each task it depends on.
+A test that passed in a run that kept no such manifest in either store
+has no result and blames nobody. Its combination is tested again, and
+the run counts as one whose tests could not run. Each such test is named
+with the key of the manifest that's missing, its own or one it depends
+on. sluice also says what the store shows of itself. Either the store
+doesn't exist, or the user sluice runs as can't write it or a directory
+of it. Otherwise sluice says whether moon kept others of the run's
+manifests there. A test whose key
+the combination's tree doesn't bear out fails under that key, and its
+submission is blamed with why: its manifest names a file the tree
+doesn't hold, for one. While a combination is tested again for any of
+these reasons,
 `sluice status` and `sluice wait` say which host's run had no outcome
 and why. The branch's log names the host and the store once, as the
 [state page](/sluice/reference/state/#the-log) shows.
