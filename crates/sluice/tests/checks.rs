@@ -543,6 +543,35 @@ fn the_sandbox_holds_writes_and_the_network() {
     drop(listener);
 }
 
+/// 83, 138, design D1 (the check-grant spec's "A sandboxed run"): a
+/// sandboxed run's report carries the grant of the profile it ran under,
+/// the same as the same request's run in another place, and another than
+/// the same run held to no network.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_sandbox_run_records_the_grant_of_its_profile() {
+    let (one, two) = (
+        Repo::new("checks-sandbox-grant-one"),
+        Repo::new("checks-sandbox-grant-two"),
+    );
+    let run = |repo: &Repo, name: &str, network: Option<Network>| {
+        let mut req = request(repo, name, command("true"));
+        req.limits = Limits {
+            executor: Some("sandbox".into()),
+            network,
+            memory: None,
+            docker: false,
+        };
+        let report = finish(&checks(repo), &req);
+        assert_eq!(report.tasks[0].outcome, Outcome::Pass);
+        report.executor.grant.expect("a sandboxed run's grant")
+    };
+    let here = run(&one, "p1", Some(Network::Localhost));
+    assert!(here.starts_with("sb1:"), "{here}");
+    assert_eq!(run(&two, "p2", Some(Network::Localhost)), here);
+    assert_ne!(run(&one, "p3", Some(Network::Denied)), here);
+}
+
 /// Design D5, ADR 0016; the host-requirements spec's "An engine at a TCP
 /// address": a sandboxed run with `network = "denied"` that may reach the
 /// container engine reaches it at its TCP address, as
