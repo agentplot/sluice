@@ -358,8 +358,8 @@ is sluice's own. The field is left out when it is empty.
 reason a host's runs kept no proof of a test that passed, while it
 stands, one for each host and reason: `[{"host": "build-1", "why": "it
 passed, but nothing the run kept proves it ran: moon's manifest of it
-is not in /home/me/app/.moon/cache", "since": "2026-11-09T09:16:40Z",
-"runs": 3}]`. `since` is when the first such run was read, and `runs`
+is not in /home/me/app/.moon/cache, where moon kept none of the run's
+manifests", "since": "2026-11-09T09:16:40Z", "runs": 3}]`. `since` is when the first such run was read, and `runs`
 counts that host's runs it touched. A reason leaves the list with its
 `proof-kept` event. No round, gate or landing reads it. The field is
 left out when it is empty, and an older sluice passes over it.
@@ -416,6 +416,18 @@ Or it could not run, and then its `not_run` says why. A test read as
 failed because its key both passed and failed has `flaky`, as
 [`sluice overview --json`](/sluice/reference/commands/#sluice-overview)
 gives it. A record written by an older sluice has no `failed_by`.
+
+On a branch whose state is on its remote, a test is failed under a key
+the combination's tree doesn't bear out. Its `unsigned` gives why, in
+the words of the profile that read the task runner's record of it. A
+record written by an older sluice has no `unsigned`:
+
+```json
+"failed": [
+  { "task": "tests:t-batch-cards", "hash": "5c0e97aa21",
+    "unsigned": "tests:t-batch-cards: tests/batch.txt is not in the tree" }
+]
+```
 
 `after` lists submissions this one must land after. `attempt` counts how
 many times this worktree has submitted to this branch. `from.worktree`
@@ -631,10 +643,46 @@ that host's rounds it refused:
 {"schema":"sluice/log@1","event":"read-again","host":"build-1","remote":"origin","since":"2026-10-26T09:16:40Z","stood":1800,"rounds":12}
 ```
 
+`lost` is logged when a run has no outcome: its executor stopped before
+it reported, or it left tests not run and failed none on its own
+result. Its combination is tested again. `not_run` lists each test the
+run left not run, with its `reason`. A test that passed in a run that
+kept no proof of it also has `key`, the key of the manifest that's
+missing. That's the test's own key, or, as its reason names, the key of
+a task it depends on. A line written by an older sluice has no `key`:
+
+```json
+{"schema":"sluice/log@1","event":"lost","combination":"e20a6f9b48","not_run":[{"task":"tests:t-after","reason":"it passed, but nothing the run kept proves it ran: moon's manifest of it is not in /home/me/app/.moon/cache, where moon kept none of the run's manifests","key":"4d1e22b0c9"}]}
+```
+
+`unproven` is logged when a run replayed tests whose keys no result the
+branch counts proves, so they run again with no replay. `tasks` names
+them. `keys` names each with its `task`, its `key` and `why`, the first
+of these that holds:
+
+- `no run of its key is recorded`;
+- `its key ran only on another system`;
+- `no result of its key is signed by a signer the branch counts`, on a
+  branch whose state is on its remote, or `no result of its key is by a
+  run the branch trusts`, on a branch in a host's own files;
+- `no result of its key was held to this run's limits`, on a branch in
+  a host's own files;
+- `no result the branch counts for its key is a pass`.
+
+A line written by an older sluice has no `keys`:
+
+```json
+{"schema":"sluice/log@1","event":"unproven","combination":"9ab3d07c11","tasks":["tests:t-amend"],"keys":[{"task":"tests:t-amend","key":"77aa01f3de","why":"no result of its key is signed by a signer the branch counts"}]}
+```
+
 `proof-missing` is logged when a run on a branch whose state is on its
 remote passed a test and kept no proof of it, so the pass has no result.
-It names the host that read the run and why, which names the store the
-proof was looked for in. It's logged once for each reason while that
+It names the host that read the run and why. The reason names whose
+manifest is missing, the test's own or one of a task it depends on, and
+the store it was looked for in. It also says what that store shows of
+itself. Either the store doesn't exist, or the user sluice runs as can't
+write it or a directory of it. Otherwise it says whether moon kept
+others of the run's manifests there. It's logged once for each reason while that
 host's runs keep no proof, never once a run, and each host logs its
 own. The first run on that host that proves a test that passed, and
 leaves none without proof, logs `proof-kept`. `since` is when the first
@@ -643,8 +691,8 @@ many of that host's runs it touched. A run that passed nothing ends
 nothing:
 
 ```json
-{"schema":"sluice/log@1","event":"proof-missing","host":"build-1","why":"it passed, but nothing the run kept proves it ran: moon's manifest of it is not in /home/me/app/.moon/cache"}
-{"schema":"sluice/log@1","event":"proof-kept","host":"build-1","why":"it passed, but nothing the run kept proves it ran: moon's manifest of it is not in /home/me/app/.moon/cache","since":"2026-11-09T09:16:40Z","stood":1800,"runs":3}
+{"schema":"sluice/log@1","event":"proof-missing","host":"build-1","why":"it passed, but nothing the run kept proves it ran: moon's manifest of it is not in /home/me/app/.moon/cache, where moon kept none of the run's manifests"}
+{"schema":"sluice/log@1","event":"proof-kept","host":"build-1","why":"it passed, but nothing the run kept proves it ran: moon's manifest of it is not in /home/me/app/.moon/cache, where moon kept none of the run's manifests","since":"2026-11-09T09:16:40Z","stood":1800,"runs":3}
 ```
 
 `protected` is logged once for each command a host's protection
