@@ -390,6 +390,7 @@ mod tests {
             .map(|n| sluice_seams::NotRun {
                 task: format!("p{n:02}:test"),
                 reason: gone.into(),
+                key: None,
             })
             .collect();
         not_run.insert(
@@ -397,6 +398,7 @@ mod tests {
             sluice_seams::NotRun {
                 task: "e2e:test".into(),
                 reason: "exited 77, which [tests] not_run names: it could not run here".into(),
+                key: None,
             },
         );
         let mut c = candidate(None, Some(1800));
@@ -421,6 +423,7 @@ mod tests {
             not_run: vec![sluice_seams::NotRun {
                 task: "a:test".into(),
                 reason: "the engine is down".into(),
+                key: None,
             }],
         });
         assert!(

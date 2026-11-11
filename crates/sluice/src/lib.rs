@@ -4051,6 +4051,14 @@ fn report(
                 let named: Vec<String> = ran.iter().map(|f| failed_name(f)).collect();
                 writeln!(out, "failed: {}", named.join(", "))?;
             }
+            // C.6, 20 (design D5 of the change
+            // `a-signed-run-without-a-sandbox-proves-its-passes`): a check
+            // whose key the combination's tree does not bear out, and why.
+            for f in &ran {
+                if let Some(why) = &f.unsigned {
+                    writeln!(out, "  {}", words::not_borne_out(&f.task, why))?;
+                }
+            }
             for f in &failed_by {
                 writeln!(out, "  {}", words::failed_by(&failed_name(f), &f.failed_by))?;
             }
