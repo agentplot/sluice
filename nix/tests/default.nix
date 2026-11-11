@@ -29,5 +29,6 @@ in
     ./file.nix
     ./darwin.nix
     ./nixos.nix
+    ./version.nix
   ];
 }

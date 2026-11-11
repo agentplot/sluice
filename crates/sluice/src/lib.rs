@@ -72,12 +72,11 @@ pub const UNANSWERED_FOR: chrono::TimeDelta = chrono::TimeDelta::minutes(5);
 /// conflict.
 pub const USAGE: i32 = 64;
 
-/// The release's version, from its tag (SLUICE_VERSION at build time);
-/// a build from a checkout is 0.0.0.
-pub const VERSION: &str = match option_env!("SLUICE_VERSION") {
-    Some(version) => version,
-    None => env!("CARGO_PKG_VERSION"),
-};
+/// sluice's version: the workspace's in `Cargo.toml`, as the tree it was
+/// built from gives it. main gives 0.0.0, which no release has; a release's
+/// tag names a release commit in which `set-version.sh` wrote the release's,
+/// so a build of the tag says it with nothing given (record 0111; core.55).
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The root's help: examples, and the telemetry flags every command takes,
 /// listed here alone so they do not repeat in each command's help.
@@ -6490,6 +6489,20 @@ fn worktree_json(p: &SessionPlace) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// core.55: the version is the workspace's in `Cargo.toml`, the tree's
+    /// alone, and `--version` says it (record 0111).
+    #[test]
+    fn the_version_is_the_workspaces() {
+        let manifest: toml::Table = toml::from_str(include_str!("../../../Cargo.toml")).unwrap();
+        let workspace = manifest["workspace"]["package"]["version"]
+            .as_str()
+            .expect("Cargo.toml gives [workspace.package] a version");
+        assert_eq!(VERSION, workspace);
+        let error = Cli::try_parse_from(["sluice", "--version"]).unwrap_err();
+        assert_eq!(error.kind(), clap::error::ErrorKind::DisplayVersion);
+        assert_eq!(error.to_string(), format!("sluice {workspace}\n"));
+    }
 
     /// 151: `--otel` takes no value, on, or a boolean, `--otel=false` off
     /// for the command, and never the word after it for its value; with
