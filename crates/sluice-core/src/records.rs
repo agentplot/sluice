@@ -2528,6 +2528,29 @@ mod tests {
         assert_eq!(serde_json::to_string(&read).unwrap(), before);
     }
 
+    /// 138 (check-grant spec, "An old line read back"): a result line
+    /// whose executor carries a grant reads back with it; one whose
+    /// executor names none, written before the grant, reads with `None`
+    /// and is written again without the key.
+    #[test]
+    fn a_result_line_with_no_grant_reads_back() {
+        let new = r#"{"schema":"sluice/result@1","at":"t","kind":"ran","task":"a:test","hash":"h","outcome":"pass","host":"h1","executor":{"kind":"sandbox","confined":false,"grant":"sb1:0123456789abcdef0123456789abcdef"},"branch":"main","combination":"c"}"#;
+        let read: ResultLine = serde_json::from_str(new).unwrap();
+        assert_eq!(
+            read.executor.as_ref().and_then(|e| e.grant.as_deref()),
+            Some("sb1:0123456789abcdef0123456789abcdef")
+        );
+        assert_eq!(serde_json::to_string(&read).unwrap(), new);
+
+        let old = r#"{"schema":"sluice/result@1","at":"t","kind":"ran","task":"a:test","hash":"h","outcome":"fail","host":"h1","executor":{"kind":"open","confined":false},"branch":"main","combination":"c"}"#;
+        let read: ResultLine = serde_json::from_str(old).unwrap();
+        let executor = read.executor.as_ref().expect("a ran line's executor");
+        assert_eq!(executor.grant, None);
+        let written = serde_json::to_string(&read).unwrap();
+        assert!(!written.contains("grant"), "{written}");
+        assert_eq!(written, old);
+    }
+
     /// 149: a failed check recorded before `failed_by` reads with none,
     /// and is written back as it was; one failed by a task it depends on
     /// names it, with no key of its own.
