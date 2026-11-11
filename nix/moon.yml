@@ -21,9 +21,11 @@ tasks:
     inputs: ['/flake.nix', '/flake.lock', '/nix/**/*', '/devenv.nix', '/devenv.lock', '/Cargo.toml', '/Cargo.lock', '/.prototools', '/crates/**/*']
     tags: [check-fast]
     options: {runFromWorkspaceRoot: true}
-  # The evaluated cases under nix/tests, then the activation's.
+  # The evaluated cases under nix/tests, then the activation's. The
+  # package's version is read from Cargo.toml, and its evaluation reads the
+  # lock and .prototools (nix/tests/version.nix).
   test:
     command: 'sh nix/check.sh test'
-    inputs: ['/flake.nix', '/flake.lock', '/nix/**/*', '/devenv.nix', '/devenv.lock']
+    inputs: ['/flake.nix', '/flake.lock', '/nix/**/*', '/devenv.nix', '/devenv.lock', '/Cargo.toml', '/Cargo.lock', '/.prototools']
     tags: [check-fast]
     options: {runFromWorkspaceRoot: true}

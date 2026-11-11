@@ -4,9 +4,11 @@
 # (record 0098, core.51). The development shell is devenv's (devenv.nix);
 # everything else of the flake's is under nix/, the moon project `nix`.
 # Rust is the version .prototools names, so the release is built by the
-# compiler the checks ran with. The version is the release tag's: CI
-# builds with `SLUICE_VERSION=<version> nix build --impure`; any other
-# build is 0.0.0, Cargo.toml's.
+# compiler the checks ran with. The version is the tree's, Cargo.toml's
+# workspace version: 0.0.0 on main, and the release's in the release commit
+# its tag names (set-version.sh). A build is given nothing: `nix build
+# github:agentplot/sluice/v<x.y.z>` says that release's version (record
+# 0111, core.55).
 {
   description = "sluice: a merge queue for agents in worktrees";
 
@@ -51,8 +53,7 @@
         );
       rustVersion = (builtins.fromTOML (builtins.readFile ./.prototools)).rust;
       workspace = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).workspace.package;
-      released = builtins.getEnv "SLUICE_VERSION";
-      version = if released != "" then released else workspace.version;
+      inherit (workspace) version;
       packages = forAll (
         pkgs:
         let
@@ -67,7 +68,6 @@
           default = platform.buildRustPackage {
             pname = "sluice";
             inherit version;
-            env.SLUICE_VERSION = version;
             src = self;
             cargoLock = {
               lockFile = ./Cargo.lock;
