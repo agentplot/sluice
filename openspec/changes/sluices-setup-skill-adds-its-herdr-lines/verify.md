@@ -4,6 +4,40 @@ Verified 2026-11-11 on `change/sluices-setup-skill-adds-its-herdr-lines`
 at 1838d1ce, cut from `bolt/sluices-setup-skill-adds-its-herdr-lines`
 (f8c119c4), with sluice 0.78.1 and herdr 0.9.5.
 
+## Verdict: not archived
+
+The gate passes and the work meets every requirement and task, but the
+change cannot be archived as it stands. Archiving it writes a
+`herdr-status` spec that fails `root:specs`, a `#check-fast` task of the
+bolt's gate:
+
+```
+$ openspec archive sluices-setup-skill-adds-its-herdr-lines -y
+$ openspec validate --specs --strict --no-interactive
+✗ spec/herdr-status
+  ⚠ [WARNING] requirements[6]: Requirement text is very long (>500 characters). Move examples and edge cases into scenarios, or split it into separate requirements that each state one behavior.
+Totals: 74 passed, 1 failed (75 items)
+```
+
+`requirements[6]` is "Setup shows, never edits". Its text is 498
+characters on the bolt and 801 once the delta's MODIFIED block replaces
+it, since the block adds the sentences on the two ways and on
+`herdr config check` and `herdr server reload-config` to the
+requirement's own text. `--strict` fails a warning as an error.
+
+The gate's run did not catch it: `root:specs` reads only
+`openspec/specs/**`, which the open change leaves untouched, so moon
+did not run it; and `root:changes`, which did run and pass, does not
+weigh a delta's requirement length.
+
+The archive was undone, uncommitted. The fix is the delta's
+(`specs/herdr-status/spec.md`): keep "Setup shows, never edits" within
+500 characters, for instance by leaving it as the bolt has it and
+adding the two ways and the check and reload as a requirement of its
+own (ADDED), "Setup names both ways to add its lines", carrying the
+scenario "The two ways to add the lines"; then archive again and run
+`openspec validate --specs --strict` on the result.
+
 ## The gate
 
 `sluice exec bolt/sluices-setup-skill-adds-its-herdr-lines`, the bolt's
