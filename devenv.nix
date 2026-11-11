@@ -331,12 +331,17 @@ in
 
   # Claude Code's project files (boomdrive's record 0022; record 0101):
   # .mcp.json from the servers below and .claude/settings.json from the
-  # rest, each a link devenv makes into the store and git ignores. The
-  # repository's one server is devenv's hosted one, which searches packages
-  # and devenv's options and starts no process on the host; it is named
-  # here because a list of the repository's own replaces devenv's default.
-  # Every server named is approved by name in the settings, so a session in
-  # a trusted folder, a place among them, starts them and asks nothing.
+  # rest, each a copy devenv writes afresh at every shell and readiness, and
+  # git ignores. Neither is a link into the store: Claude Code watches a
+  # project's settings by the file's real path, so a link had each session
+  # watching the store's own directory and reading all of it again whenever
+  # a build added or removed a path. On deneb on 2026-11-11 those reads held
+  # the store's lock and every nix program hung. The repository's one server
+  # is devenv's hosted one, which searches packages and devenv's options and
+  # starts no process on the host; it is named here because a list of the
+  # repository's own replaces devenv's default. Every server named is
+  # approved by name in the settings, so a session in a trusted folder, a
+  # place among them, starts them and asks nothing.
   claude.code = {
     enable = true;
     mcpServers."mcp.devenv.sh" = {
@@ -357,8 +362,11 @@ in
     # holds, and the gate on what lands.
     hooks.git-hooks-run.enable = false;
   };
-  files.${config.claude.code.settingsPath}.json.enabledMcpjsonServers =
-    lib.attrNames config.claude.code.mcpServers;
+  files.${config.claude.code.settingsPath} = {
+    json.enabledMcpjsonServers = lib.attrNames config.claude.code.mcpServers;
+    copyMode = "copy";
+  };
+  files.".mcp.json".copyMode = "copy";
 
   # moon's task archives (.moon/cache/outputs) are a link into the git common
   # dir, so every worktree of sluice shares them: a crate's tests that passed
