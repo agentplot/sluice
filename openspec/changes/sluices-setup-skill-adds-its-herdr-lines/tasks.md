@@ -30,7 +30,7 @@ part of the tree touched, citing record 0113 and rule core.57.
   - what the agent says.
 
   It covers every requirement the change adds to the plugin-setup spec, from "The setup adds the herdr plugin's lines at the person's asking" to "herdr's check gates the write and herdr is reloaded". It names no host, plugin or tool of ours (core.26). True when `sluice exec bolt/sluices-setup-skill-adds-its-herdr-lines -- moon run plugin-sluice:validate` passes.
-- [ ] 2.2 In `plugins/sluice/skills/setting-up-sluice/SKILL.md`, add the herdr plugin's setup to the description and the section `## herdr's plugin` after `## What does my policy do?`, as design D1 and D7 and Task notes 2.2 give them. The section says the asking is the person's word for herdr's file, and the plugin's install is still asked first. True when `sluice exec bolt/sluices-setup-skill-adds-its-herdr-lines -- moon run plugin-sluice:validate` passes.
+- [x] 2.2 In `plugins/sluice/skills/setting-up-sluice/SKILL.md`, add the herdr plugin's setup to the description and the section `## herdr's plugin` after `## What does my policy do?`, as design D1 and D7 and Task notes 2.2 give them. The section says the asking is the person's word for herdr's file, and the plugin's install is still asked first. True when `sluice exec bolt/sluices-setup-skill-adds-its-herdr-lines -- moon run plugin-sluice:validate` passes.
 
 ## 3. The plugin and its pages name the agent's way
 
