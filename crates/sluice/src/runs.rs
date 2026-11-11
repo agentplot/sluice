@@ -424,6 +424,26 @@ impl Runs {
         remove_dir(&dir)
     }
 
+    /// End the run of the place `name`, which is no session's, and run its
+    /// release command, as [`Runs::remove`] does, keeping its directory:
+    /// what ends after the release command (record 0112) finds the run as
+    /// it stood, and a [`Runs::remove`] after it runs the release command
+    /// no second time.
+    pub fn release_keeping(&self, name: &str) -> Result<()> {
+        self.end(name)?;
+        let dir = self.dir(name);
+        self.let_go(&dir, Instant::now() + Duration::from_secs(30))?;
+        self.release(&dir)
+    }
+
+    /// End the run of the place `name`, which is no session's, as
+    /// [`Runs::discard`] does, running no release command and keeping its
+    /// directory for the [`Runs::discard`] after it (record 0112).
+    pub fn end_keeping(&self, name: &str) -> Result<()> {
+        self.end(name)?;
+        self.let_go(&self.dir(name), Instant::now() + Duration::from_secs(30))
+    }
+
     /// 123: end the run of the place `name` and remove its directory, as
     /// [`Runs::remove`] does, running no release command: how a place
     /// whose working copy is gone, or whose release's failure was

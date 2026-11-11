@@ -1537,13 +1537,14 @@ impl Checkout for Places {
     fn free(&self, name: &str) -> Result<()> {
         let made = self.read_record(name)?;
         // 123: everything started in it ends, and nothing runs in its
-        // name: no release command.
-        self.runs.discard(name)?;
-        // Record 0112: a preview's containers end while it holds its ports;
-        // one left keeps the preview whole.
+        // name: no release command. Record 0112: a preview's containers
+        // end once its run has, while it holds its ports; one left keeps
+        // the preview whole, its run's directory with it.
         if let Some(made) = made.as_ref().filter(|m| m.kind == Kind::Preview) {
+            self.runs.end_keeping(name)?;
             self.end_containers(name, made)?;
         }
+        self.runs.discard(name)?;
         if let Some(made) = made.as_ref().filter(|m| m.kind != Kind::Session) {
             match made.method.as_str() {
                 METHOD => self.remove_worktree(&self.worktree_path(name))?,
@@ -1912,12 +1913,15 @@ impl Checkout for Places {
         }
         // 34: everything started in it ends, its release command included
         // (ADR 0016), then the containers it left (record 0112), before its
-        // checkout and ports go; 123: a release command that fails, or a
-        // container left, keeps the preview, held once its tries are spent.
+        // run's directory, its checkout and its ports go; 123: a release
+        // command that fails, or a container left, keeps the preview, held
+        // once its tries are spent, and a later try runs no release command
+        // that finished.
         if let Err(e) = self
             .runs
-            .remove(name)
+            .release_keeping(name)
             .and_then(|()| self.end_containers(name, &made))
+            .and_then(|()| self.runs.remove(name))
         {
             self.keep_failure(name, &e, |tries| tries > retries);
             return Err(e);

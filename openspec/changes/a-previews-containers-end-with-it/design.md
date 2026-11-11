@@ -149,15 +149,18 @@ Paths not taken:
 
 ### D3. The end runs after the release command and before the ports go
 
-In `release_preview` the order becomes: `self.runs.remove(name)` (the run
-ended and the release command run), then the end, then
-`remove_worktree`, the scratch, the block and the record. In `free` for
-a record of kind `Preview`: `self.runs.discard(name)`, then the end,
-then the worktree and `let_go`. `release_gone` reaches the end through
-`free`. The release command thus has its turn first, which matters where
-it tears down a deployment on an emulator before the emulator goes. And
-no other place can hold one of the preview's ports while the end looks
-for them. The place passed is `preview_run_place(name, &made)`, read
+In `release_preview` the order becomes: `self.runs.release_keeping(name)`
+(the run ended and the release command run, marked done in the run's
+directory, which stays), then the end, then `self.runs.remove(name)`
+(which runs no finished release again), `remove_worktree`, the scratch,
+the block and the record. In `free` for a record of kind `Preview`:
+`self.runs.end_keeping(name)`, then the end, then `self.runs.discard(name)`,
+the worktree and `let_go`. The run's directory stays until the end has
+succeeded, so a preview a container keeps still reads its run's state.
+`release_gone` reaches the end through `free`. The release command thus
+has its turn first, which matters where it tears down a deployment on an
+emulator before the emulator goes. And no other place can hold one of
+the preview's ports while the end looks for them. The place passed is `preview_run_place(name, &made)`, read
 from the record before anything is let go. A place of any other kind is
 not passed (proposal, out of scope).
 
@@ -210,9 +213,9 @@ before it fails, so one refusal does not leave the rest running.
   is: `keep_failure(name, &e, |tries| tries > retries)` and `Err(e)`. The
   preview keeps its checkout, block, names and record. `sluice release`
   exits 1 with its existing words around the error, and a round tries
-  again up to its branch's release tries, then holds it (123). The run's
-  directory and its release command are already gone, so a later try
-  runs the end alone.
+  again up to its branch's release tries, then holds it (123). Its
+  release command finished and is marked so in the run's directory, so
+  a later try runs the end alone.
 - In `free` the error is returned before the worktree is removed or
   anything is let go. `accept_preview` fails with it, and `sluice release
   --accept-failure` exits 1. `release_gone` has already noted its start
