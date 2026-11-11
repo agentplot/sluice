@@ -3,7 +3,7 @@
 use sluice_seams::{Enforced, NotRun, Outcome, RunReport, Source};
 
 use crate::policy::{Flaky, Rules};
-use crate::records::{FailedTask, FlakyKey, Recorded, ResultKind, ResultLine};
+use crate::records::{FailedTask, FlakyKey, Recorded, ResultKind, ResultLine, UnprovenKey};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Verdict {
@@ -13,8 +13,9 @@ pub struct Verdict {
     pub ran: usize,
     pub replayed: usize,
     /// 108: the tasks the run replayed with no trusted pass recorded for
-    /// their key, which count for nothing.
-    pub unproven: Vec<String>,
+    /// their key, which count for nothing, each with its key and why
+    /// (design D4 of `a-signed-run-without-a-sandbox-proves-its-passes`).
+    pub unproven: Vec<UnprovenKey>,
     /// 87, 28, S18: on a branch whose records are on its remote, the tasks
     /// the run ran with no result the gate counts for their key, the run's
     /// own signed result among none: missing, never failed.
@@ -42,7 +43,15 @@ pub struct Verdict {
 /// recorded executor. A replay is an observation of no one (core.9): it
 /// counts only when a trusted ran pass is recorded for its key (108),
 /// and otherwise is unproven, for the round to run again with no
-/// replay. A check left with no trusted result reads as missing: on a
+/// replay. An unproven replay is named with its key and why no counted
+/// pass proves it, the first that holds of: no run of its key is
+/// recorded; its key ran only on another system (85); no result of its
+/// key is by a signer the branch counts, on a branch whose records are
+/// on its remote, or by a run the branch trusts, on one in a host's own
+/// files (78, 79); there, no trusted result of its key was held to this
+/// run's limits (19, 83); and no result the branch counts for its key is
+/// a pass (design D4 of `a-signed-run-without-a-sandbox-proves-its-
+/// passes`). A check left with no trusted result reads as missing: on a
 /// branch whose records are on its remote, a check this run ran whose own
 /// result does not count there, signed with a key the branch's policy
 /// does not list, is missing until a result the gate counts settles it
@@ -90,6 +99,37 @@ pub fn read(
         (false, Some(e)) => trusted(e) && same_limits(e, &report.executor),
         (_, None) => false,
     };
+    // Design D4: why no counted pass proves a replay of `task` at `key`.
+    let why_unproven = |task: &str, key: &str| -> &'static str {
+        let ran: Vec<&ResultLine> = results
+            .iter()
+            .filter(|r| r.task == task && r.hash == key && r.kind == ResultKind::Ran)
+            .collect();
+        if ran.is_empty() {
+            return "no run of its key is recorded";
+        }
+        let here: Vec<&ResultLine> = ran.into_iter().filter(|r| on_system(r)).collect();
+        if here.is_empty() {
+            return "its key ran only on another system";
+        }
+        let by = |r: &&ResultLine| match (rules.signed, &r.executor) {
+            (true, Some(_)) => counts(r),
+            (false, Some(e)) => trusted(e),
+            (_, None) => false,
+        };
+        let trusted_here: Vec<&ResultLine> = here.into_iter().filter(by).collect();
+        if trusted_here.is_empty() {
+            return if rules.signed {
+                "no result of its key is signed by a signer the branch counts"
+            } else {
+                "no result of its key is by a run the branch trusts"
+            };
+        }
+        if !rules.signed && !trusted_here.iter().any(|r| counts(r)) {
+            return "no result of its key was held to this run's limits";
+        }
+        "no result the branch counts for its key is a pass"
+    };
     let failed_task = |task: &str, hash: &str, flaky: Option<FlakyKey>| FailedTask {
         task: task.to_string(),
         hash: hash.to_string(),
@@ -129,7 +169,11 @@ pub fn read(
             Source::Replayed { .. } => {
                 replayed += 1;
                 if !recorded.iter().any(|r| r.outcome == Outcome::Pass) {
-                    unproven.push(t.task.clone());
+                    unproven.push(UnprovenKey {
+                        task: t.task.clone(),
+                        key: t.hash.clone(),
+                        why: why_unproven(&t.task, &t.hash).to_string(),
+                    });
                     continue;
                 }
                 // The pass it replays is already among the recorded.
@@ -255,6 +299,11 @@ mod tests {
     fn read(report: &RunReport, results: &[ResultLine], rules: &Rules) -> Verdict {
         super::read(report, results, rules, None, None, None)
     }
+
+    /// The tasks a verdict reads unproven (108).
+    fn unproven(v: &Verdict) -> Vec<&str> {
+        v.unproven.iter().map(|u| u.task.as_str()).collect()
+    }
     use sluice_seams::TaskResult;
 
     fn rules(trust: &[&str]) -> Rules {
@@ -374,6 +423,120 @@ mod tests {
         assert_eq!((back.took_ms, back.attempts), (None, None));
     }
 
+    /// 108 (design D4 of `a-signed-run-without-a-sandbox-proves-its-
+    /// passes`), the run-signing spec's "Each why": five replays read
+    /// against results holding, in turn, no run of the first key, a run of
+    /// the second on another system alone, a run of the third by an
+    /// executor or signer the branch does not count, a trusted run of the
+    /// fourth held to other limits, and a counted fail of the fifth, are
+    /// each unproven with their key and why.
+    #[test]
+    fn an_unproven_replay_says_why_by_its_key() {
+        let replays = ["a:test", "b:test", "c:test", "d:test", "e:test"];
+        let run = RunReport {
+            tasks: replays
+                .iter()
+                .map(|t| TaskResult {
+                    took_ms: None,
+                    attempts: None,
+                    task: t.to_string(),
+                    hash: format!("{t}-key"),
+                    outcome: Outcome::Pass,
+                    source: Source::Replayed { from_run_at: None },
+                })
+                .collect(),
+            ..report(
+                Source::Replayed { from_run_at: None },
+                enforced("open", false),
+            )
+        };
+        let line = |task: &str, executor: Enforced, system: &str, outcome| ResultLine {
+            task: task.into(),
+            hash: format!("{task}-key"),
+            system: Some(system.into()),
+            signer: Some("box".into()),
+            ..recorded(ResultKind::Ran, Some(executor), outcome)
+        };
+        let docker = Enforced {
+            docker: true,
+            ..enforced("open", false)
+        };
+        let results = [
+            line("b:test", enforced("open", false), "macos", Outcome::Pass),
+            ResultLine {
+                signer: Some("stranger".into()),
+                ..line(
+                    "c:test",
+                    enforced("container", false),
+                    "linux",
+                    Outcome::Pass,
+                )
+            },
+            line("d:test", docker, "linux", Outcome::Pass),
+            line("e:test", enforced("open", false), "linux", Outcome::Fail),
+        ];
+        let whys = |v: &Verdict| -> Vec<(String, String, String)> {
+            v.unproven
+                .iter()
+                .map(|u| (u.task.clone(), u.key.clone(), u.why.clone()))
+                .collect()
+        };
+        let expect = |whys: &[(&str, &str)]| -> Vec<(String, String, String)> {
+            whys.iter()
+                .map(|(t, why)| (t.to_string(), format!("{t}-key"), why.to_string()))
+                .collect()
+        };
+
+        // A branch in a host's own files.
+        let v = super::read(&run, &results, &rules(&["open"]), Some("linux"), None, None);
+        assert!(!v.passed);
+        assert_eq!(
+            whys(&v),
+            expect(&[
+                ("a:test", "no run of its key is recorded"),
+                ("b:test", "its key ran only on another system"),
+                (
+                    "c:test",
+                    "no result of its key is by a run the branch trusts"
+                ),
+                (
+                    "d:test",
+                    "no result of its key was held to this run's limits"
+                ),
+                (
+                    "e:test",
+                    "no result the branch counts for its key is a pass"
+                ),
+            ])
+        );
+
+        // A branch whose records are on its remote, counting `box`'s
+        // signed results whatever limits they were held to, so `d:test`'s
+        // pass proves it there.
+        let signed = Rules {
+            trust: vec!["box".into()],
+            signed: true,
+            claims: [("box".to_string(), (false, None))].into_iter().collect(),
+            ..Rules::default()
+        };
+        let v = super::read(&run, &results, &signed, Some("linux"), None, None);
+        assert_eq!(
+            whys(&v),
+            expect(&[
+                ("a:test", "no run of its key is recorded"),
+                ("b:test", "its key ran only on another system"),
+                (
+                    "c:test",
+                    "no result of its key is signed by a signer the branch counts"
+                ),
+                (
+                    "e:test",
+                    "no result the branch counts for its key is a pass"
+                ),
+            ])
+        );
+    }
+
     /// 28: a result from an executor the gate does not trust never
     /// satisfies it; a replay counts only through a trusted pass recorded
     /// for its key (108), and is otherwise unproven.
@@ -390,19 +553,19 @@ mod tests {
         );
         let none = read(&replay, &[], &rules(&["open"]));
         assert!(!none.passed && none.failed.is_empty());
-        assert_eq!(none.unproven, ["a:test"]);
+        assert_eq!(unproven(&none), ["a:test"]);
         let pass = |kind| recorded(ResultKind::Ran, Some(enforced(kind, false)), Outcome::Pass);
         let proven = read(&replay, &[pass("open")], &rules(&["open"]));
         assert!(proven.passed && proven.unproven.is_empty());
         // A pass by an executor the gate does not trust proves nothing,
         // and neither does an earlier replay (core.9).
         assert_eq!(
-            read(&replay, &[pass("open")], &rules(&["sandbox"])).unproven,
+            unproven(&read(&replay, &[pass("open")], &rules(&["sandbox"]))),
             ["a:test"]
         );
         let replayed = recorded(ResultKind::Replayed, None, Outcome::Pass);
         assert_eq!(
-            read(&replay, &[replayed], &rules(&["open"])).unproven,
+            unproven(&read(&replay, &[replayed], &rules(&["open"]))),
             ["a:test"]
         );
 
@@ -532,7 +695,7 @@ mod tests {
             None,
             None,
         );
-        assert_eq!(v.unproven, ["a:test"]);
+        assert_eq!(unproven(&v), ["a:test"]);
         let v = super::read(
             &replay,
             &[on(Some("linux-x64"))],

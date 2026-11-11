@@ -1725,8 +1725,8 @@ impl Sluice<'_> {
                 now,
                 Event::Unproven {
                     combination: c.revision.clone(),
-                    tasks: v.unproven.clone(),
-                    keys: Vec::new(),
+                    tasks: v.unproven.iter().map(|u| u.task.clone()).collect(),
+                    keys: v.unproven.clone(),
                 },
             );
             return Ok(());
