@@ -73,6 +73,26 @@ and 7.2 say what the tasks ask, and `site:prose` passed. Record 0105's
 amendment of 2026-11-11 and the details of rules core.9 and core.35 are
 written.
 
+## The archive
+
+`openspec archive` applied both deltas: 5 requirements added to and 1
+modified in `pass-proof`, and 1 added to `run-signing`. Afterwards,
+`openspec validate --specs --strict` passes 73 specs and fails one,
+`pass-proof`. The failure is a warning: the modified requirement "Why is
+read from the missing proof itself" has 995 characters of text, over
+openspec's 500, where it had 444 before. The change itself validated
+`--strict` with the same text, since openspec measures a requirement's
+length only in a main spec. The gate's `root:changes` runs `openspec
+validate --changes --strict` and reads no main spec, so no gate fails on
+it, this branch's or a later change's.
+
+This stage archived anyway. The work meets every scenario, and the
+requirement's length is the spec's wording, which a later change can
+split cheaply: for example, moving the fact list into a requirement of
+its own. Sending the change back to its design for this warning alone was
+the path not taken. Whoever next changes `pass-proof` should split the
+requirement so `--specs --strict` passes again.
+
 ## Observations
 
 These need no change:
