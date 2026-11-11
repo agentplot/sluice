@@ -1560,6 +1560,7 @@ pub fn release_request(
         grace: 10,
         meta: serde_json::Value::Null,
         release: Some(argv),
+        watch: None,
     }))
 }
 
@@ -1849,6 +1850,7 @@ impl Tests for Checks {
                 grace: 10,
                 meta: serde_json::to_value(&meta)?,
                 release,
+                watch: None,
             },
         )?;
         // Its supervisor holds the run directory, which keeps it counted.

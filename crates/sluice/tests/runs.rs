@@ -27,6 +27,7 @@ fn request(place: &Path, script: &str, limit: Option<u64>) -> Request {
         grace: 1,
         meta: serde_json::Value::Null,
         release: None,
+        watch: None,
     }
 }
 
@@ -315,4 +316,94 @@ fn a_sessions_runs_are_released_once_and_only_together() {
     );
     let ran = std::fs::read_to_string(place.path().join("ran")).unwrap();
     assert_eq!(ran, "one\ntwo\n");
+}
+
+/// `request` with the watch `script` run beside it.
+fn watched(place: &Path, script: &str, watch: &str) -> Request {
+    Request {
+        watch: Some(vec!["/bin/sh".into(), "-c".into(), watch.into()]),
+        ..request(place, script, Some(60))
+    }
+}
+
+/// 139, design D5 (the run-outcome spec's "The command starts once the
+/// reports are kept"): a watch that takes a second to write its first line
+/// is ready before the command starts, which fails unless `watch.out`
+/// holds a line; the run passes, and the watch's group is gone once it has
+/// ended.
+#[test]
+fn a_watch_is_ready_before_the_command_starts_and_ends_after_it() {
+    let dir = Scratch::new("runs-watch-ready");
+    let r = runs(dir.path());
+    let out = r.dir("p1").join("watch.out");
+    r.start(
+        "p1",
+        &watched(
+            dir.path(),
+            &format!("grep -q . '{}'", out.display()),
+            "sleep 1; echo ready; exec sleep 300",
+        ),
+    )
+    .unwrap();
+    match wait(&r, "p1") {
+        RunState::Finished(e) => assert!(e.passed(), "{e:?}"),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(std::fs::read_to_string(&out).unwrap(), "ready\n");
+    assert!(!r.dir("p1").join("watch-error").exists());
+    let watch = number(&r.dir("p1").join("watch.pgid"));
+    assert_ne!(watch, number(&r.dir("p1").join("pgid")));
+    let until = Instant::now() + Duration::from_secs(10);
+    while !group_gone(watch) {
+        assert!(Instant::now() < until, "the watch outlived its run");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// 139, design D5 (the run-outcome spec's "A watch that never starts"): a
+/// watch that exits before writing a line is said in `watch-error`, with
+/// what it wrote to its errors and how it ended, and the command runs all
+/// the same.
+#[test]
+fn a_watch_that_never_gets_ready_is_said_and_the_run_goes_on() {
+    let dir = Scratch::new("runs-watch-never");
+    let r = runs(dir.path());
+    r.start(
+        "p1",
+        &watched(
+            dir.path(),
+            "echo ran > ran",
+            "echo 'no log here' >&2; exit 1",
+        ),
+    )
+    .unwrap();
+    match wait(&r, "p1") {
+        RunState::Finished(e) => assert!(e.passed(), "{e:?}"),
+        other => panic!("{other:?}"),
+    }
+    assert!(dir.path().join("ran").exists(), "the command never ran");
+    let said = std::fs::read_to_string(r.dir("p1").join("watch-error")).unwrap();
+    assert!(said.contains("no log here"), "{said}");
+    assert!(said.contains("exited 1"), "{said}");
+}
+
+/// 139, design D5, rule core.10 (the run-outcome spec's "A run ended from
+/// outside"): a run whose command sleeps, ended through `Runs::end`, leaves
+/// neither its group nor its watch's alive.
+#[test]
+fn ending_a_run_ends_its_watch() {
+    let dir = Scratch::new("runs-watch-end");
+    let r = runs(dir.path());
+    r.start(
+        "p1",
+        &watched(dir.path(), "sleep 300", "echo ready; exec sleep 300"),
+    )
+    .unwrap();
+    let (pgid, watch) = (r.dir("p1").join("pgid"), r.dir("p1").join("watch.pgid"));
+    wait_for(&pgid);
+    let (pgid, watch) = (number(&pgid), number(&watch));
+    assert!(!group_gone(pgid) && !group_gone(watch));
+    r.end("p1").unwrap();
+    assert!(group_gone(pgid), "the run's group outlived its end");
+    assert!(group_gone(watch), "the watch outlived its run's end");
 }
