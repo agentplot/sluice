@@ -1149,7 +1149,11 @@ fn proven_drops_a_key_the_tree_does_not_bear_out() {
 /// `a-pass-nothing-proves-blames-no-one` (114): a pass whose manifest is
 /// gone from the store the profile reads is neither proven nor dropped
 /// as a key the tree does not bear out. It is unkept, saying why and
-/// naming the store, read from the file's absence alone.
+/// naming the store, read from the file's absence alone. Design D3 of
+/// `a-signed-run-without-a-sandbox-proves-its-passes`, the pass-proof
+/// spec's "A manifest gone from the store": it names the missing
+/// manifest's key, and what the store says of itself, which kept
+/// `beta:test`'s.
 #[test]
 fn a_pass_whose_manifest_is_gone_is_unkept_naming_the_store() {
     let repo = workspace("moon-unkept");
@@ -1177,10 +1181,11 @@ fn a_pass_whose_manifest_is_gone_is_unkept_naming_the_store() {
             task: "alpha:test".into(),
             reason: format!(
                 "it passed, but nothing the run kept proves it ran: \
-                 moon's manifest of it is not in {}",
+                 moon's manifest of it is not in {}, \
+                 where moon kept others of the run's manifests",
                 store.display()
             ),
-            key: None,
+            key: Some(alpha.hash.clone()),
         }]
     );
 }

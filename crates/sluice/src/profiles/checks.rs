@@ -1906,7 +1906,12 @@ impl Tests for Checks {
     /// or a dependency's, is missing there is unkept: the run kept no
     /// proof of it, which says nothing of the work, so it is not warned of
     /// and has no outcome (114; record 0105; the change
-    /// `a-pass-nothing-proves-blames-no-one`, design D2 to D4). Every
+    /// `a-pass-nothing-proves-blames-no-one`, design D2 to D4). It names
+    /// the missing manifest's key, and its reason whose manifest is
+    /// missing, the record's store and what that store says of itself,
+    /// read from the store with nothing run, never from what moon printed
+    /// (rule core.35; design D3 of
+    /// `a-signed-run-without-a-sandbox-proves-its-passes`). Every
     /// other key the check refuses is one the tree does not bear out, in
     /// neither list and warned of. A fail, a task a check was failed by
     /// (149) and a replay (108) are never unkept.
@@ -1934,6 +1939,10 @@ impl Tests for Checks {
         let checks = report.tasks.iter().map(|t| (t, true));
         let dependencies = report.dependencies.iter().map(|t| (t, false));
         let mut proof = Proof::default();
+        // Design D3 of `a-signed-run-without-a-sandbox-proves-its-passes`:
+        // how many of the run's keys moon kept a manifest of, in either
+        // store, read once a pass is found unkept.
+        let kept = std::cell::OnceCell::new();
         for (t, check) in checks.chain(dependencies) {
             let e = match super::moon::check_key(&t.hash, &t.task, &blob, &tree) {
                 Ok(()) => {
@@ -1944,15 +1953,30 @@ impl Tests for Checks {
             };
             let ran_pass =
                 check && matches!(t.source, Source::Ran { .. }) && t.outcome == Outcome::Pass;
-            if ran_pass && e.downcast_ref::<moon::NoManifest>().is_some() {
+            let missing = e.downcast_ref::<moon::NoManifest>().filter(|_| ran_pass);
+            if let Some(missing) = missing {
+                let whose = if missing.task == t.task {
+                    "it".to_string()
+                } else {
+                    format!("{}, which it depends on", missing.task)
+                };
+                let kept = *kept.get_or_init(|| {
+                    report
+                        .tasks
+                        .iter()
+                        .chain(&report.dependencies)
+                        .filter(|t| blob(&t.hash).is_some())
+                        .count()
+                });
+                let fact = super::moon::store_fact(&store, &missing.key, kept);
                 proof.unkept.push(NotRun {
                     task: t.task.clone(),
                     reason: format!(
                         "it passed, but nothing the run kept proves it ran: \
-                         moon's manifest of it is not in {}",
+                         moon's manifest of {whose} is not in {}, {fact}",
                         store.display()
                     ),
-                    key: None,
+                    key: Some(missing.key.clone()),
                 });
                 continue;
             }
