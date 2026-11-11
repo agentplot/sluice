@@ -1086,10 +1086,23 @@ impl std::error::Error for NoManifest {}
 /// combination's tree, checked without running anything. moon keeps each
 /// task's hash manifest in its blob store under its key, the key the
 /// sha256 of the manifest; the manifest names the task, every input with
-/// the sha256 of its content, and each dependency's key, or `ignored`
-/// for one with no outputs. `blob` reads the store, `tree` a path of the
-/// combination's tree. A signer signs only keys this passes. Where a
+/// the sha256 of its content, and each dependency's key or one of the
+/// four marks moon 2.6.1's `dep_hash_input` writes for a dependency that
+/// gives the task no key ([`DEPENDENCY_MARKS`]), which names no manifest
+/// and is walked no further (design D2 of the change
+/// `a-signed-run-without-a-sandbox-proves-its-passes`). Any other value
+/// that is not a key is refused. `blob` reads the store, `tree` a path of
+/// the combination's tree. A signer signs only keys this passes. Where a
 /// manifest the walk needs is missing, it fails with [`NoManifest`].
+/// The marks moon 2.6.1's `dep_hash_input` gives a dependency in a hash
+/// manifest's `deps` in place of a key: `ignored`, its default for a
+/// dependency with no outputs; `passthrough`, for an edge the graph
+/// ignores or a dependency that passed through; and `outputs` and
+/// `outputs-passthrough`, for one whose outputs are among the task's
+/// inputs, which the manifest's inputs then name (C.2 moon row, C.6).
+pub const DEPENDENCY_MARKS: [&str; 4] =
+    ["ignored", "passthrough", "outputs", "outputs-passthrough"];
+
 pub fn check_key(
     key: &str,
     task: &str,
@@ -1134,7 +1147,7 @@ pub fn check_key(
         if let Some(deps) = m["deps"].as_object() {
             for (dep, k) in deps {
                 match k.as_str() {
-                    Some("ignored") => {}
+                    Some(mark) if DEPENDENCY_MARKS.contains(&mark) => {}
                     Some(k) => go(k, dep, blob, tree, depth + 1)?,
                     None => bail!("{task}: dependency {dep} has no key"),
                 }
@@ -1467,6 +1480,42 @@ mod tests {
             let e =
                 check_key(&b, "b:test", &blob, &tree(&[("a/x", "1"), ("b/y", "2")])).unwrap_err();
             assert!(e.to_string().starts_with("a:test:"), "{e}");
+        }
+
+        /// Design D2 of `a-signed-run-without-a-sandbox-proves-its-passes`:
+        /// a dependency moon 2.6.1 names by one of its four marks gives no
+        /// key and is walked no further, so the key is borne out walking
+        /// its keyed dependency alone; any other value that is no key is
+        /// refused as one.
+        #[test]
+        fn moons_dependency_marks_are_no_key() {
+            let mut s = Store(BTreeMap::new());
+            let a = s.manifest("a:test", &[("a/x", "1")], &[]);
+            let b = s.manifest(
+                "b:test",
+                &[("b/y", "2")],
+                &[
+                    ("a:test", &a),
+                    ("c:lint", "ignored"),
+                    ("d:gen", "passthrough"),
+                    ("e:build", "outputs"),
+                    ("f:setup", "outputs-passthrough"),
+                ],
+            );
+            let t = tree(&[("a/x", "1"), ("b/y", "2")]);
+            let walked = std::cell::RefCell::new(Vec::new());
+            let blob = |k: &str| {
+                walked.borrow_mut().push(k.to_string());
+                s.0.get(k).cloned()
+            };
+            check_key(&b, "b:test", &blob, &t).unwrap();
+            assert_eq!(*walked.borrow(), [b.clone(), a.clone()]);
+
+            let stale = s.manifest("b:test", &[("b/y", "2")], &[("c:lint", "stale")]);
+            let blob = |k: &str| s.0.get(k).cloned();
+            let e = check_key(&stale, "b:test", &blob, &t).unwrap_err();
+            assert_eq!(e.downcast_ref::<NoManifest>(), None, "{e}");
+            assert_eq!(e.to_string(), "c:lint: \"stale\" is no key");
         }
 
         /// Design D2: a missing manifest, the key's own or a dependency's,
