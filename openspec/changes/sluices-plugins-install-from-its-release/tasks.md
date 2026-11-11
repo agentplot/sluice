@@ -21,7 +21,7 @@ keeps.
 
 ## 2. The release moves `release`
 
-- [ ] 2.1 `.github/workflows/ci.yml`'s `release` job pushes `git push --atomic origin "refs/tags/$TAG" "+HEAD:refs/heads/release"` in place of the tag alone, and its comment and the workflow's header say so. `check-release.sh` holds that push as its one push, and `moon.yml`'s `release` task comment says so (design D1 and D6; Task notes 2.1; spec "Nothing of a release reaches main, and no tag moves"). True when `sluice exec bolt/sluices-plugins-install-from-its-release -- moon run root:release` passes.
+- [x] 2.1 `.github/workflows/ci.yml`'s `release` job pushes `git push --atomic origin "refs/tags/$TAG" "+HEAD:refs/heads/release"` in place of the tag alone, and its comment and the workflow's header say so. `check-release.sh` holds that push as its one push, and `moon.yml`'s `release` task comment says so (design D1 and D6; Task notes 2.1; spec "Nothing of a release reaches main, and no tag moves"). True when `sluice exec bolt/sluices-plugins-install-from-its-release -- moon run root:release` passes.
 
 ## 3. The install commands held to a release
 

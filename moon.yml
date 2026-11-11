@@ -47,9 +47,10 @@ tasks:
     inputs: ['/Cargo.toml', '/Cargo.lock', '/.claude-plugin/marketplace.json', '/plugins/*/.claude-plugin/plugin.json', '/plugins/*/herdr-plugin.toml', '/set-version.sh', '/check-versions.sh', '/devenv.nix', '/devenv.lock']
     tags: [check-fast]
     options: {runFromWorkspaceRoot: true}
-  # The workflow releases as record 0111 has it: the binaries built from
-  # the release's tree with nothing given, the release commit and its tag
-  # pushed alone, and the next version reckoned from the newest tag
+  # The workflow releases as records 0111 and 0112 have it: the binaries
+  # built from the release's tree with nothing given, the release commit's
+  # tag pushed with release, the branch the marketplace is read at,
+  # atomically, and the next version reckoned from the newest tag
   # (check-release.sh; core.55). actionlint, under format, reads the
   # workflow's keys and shell; this reads what a release's steps must be.
   release:
