@@ -25,12 +25,15 @@ code that passed.
 ## 1. Install
 
 ```sh
-nix profile install github:agentplot/sluice
+nix profile install github:agentplot/sluice/v<version>
 ```
 
-That installs `sluice`, and beside it `wt-submit`, which matters only to
-a team on [worktrunk](/sluice/guides/worktrunk/). (`cargo install --git
-https://github.com/agentplot/sluice sluice` does the same without nix.)
+`<version>` is a release's, from
+[the releases page](https://github.com/agentplot/sluice/releases). That
+installs `sluice`, and beside it `wt-submit`, which matters only to a team
+on [worktrunk](/sluice/guides/worktrunk/). (`cargo install --git
+https://github.com/agentplot/sluice --tag v<version> sluice` does the same
+without nix.)
 
 ## 2. The config: `.config/sluice.toml`
 

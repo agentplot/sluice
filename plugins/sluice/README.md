@@ -4,9 +4,13 @@ Teaches Claude Code to install sluice, set a repository up for it, and land
 work through the queue instead of merging.
 
 ```
-/plugin marketplace add agentplot/sluice
+/plugin marketplace add agentplot/sluice#release
 /plugin install sluice@sluice
 ```
+
+The marketplace is read at the `release` branch, which each release moves
+to the commit its tag names. To take a new release:
+`/plugin marketplace update sluice`, then `/plugin update sluice@sluice`.
 
 | skill | for |
 |---|---|

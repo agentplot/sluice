@@ -17,10 +17,13 @@ withdraws or lands anything.
 ## Install
 
 ```sh
-herdr plugin install agentplot/sluice/plugins/herdr
+herdr plugin install agentplot/sluice/plugins/herdr --ref v<version>
 ```
 
-It needs herdr 0.9.3 or later, sluice 0.12 or later and `jq` on `PATH`, on
+`<version>` is the version `sluice --version` prints. Install the plugin
+at the tag of the sluice you run, so the plugin and the binary are one
+release. At a new release, install it again at the new tag, and its
+watcher is replaced. It needs herdr 0.9.3 or later and `jq` on `PATH`, on
 Linux or macOS. It reads what it shows from `sluice overview --json
 --watch`, the same document the
 [Claude Code plugin](/sluice/guides/claude-code/) reads, run once in each

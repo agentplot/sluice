@@ -1,13 +1,14 @@
 #!/bin/sh
 # shellcheck disable=SC2016 # The workflow's lines name their own $TAG.
-# The workflow releases as record 0111 and rule core.55 have it, read from
-# .github/workflows/ci.yml's text, job by job:
+# The workflow releases as records 0111 and 0112 and rule core.55 have it,
+# read from .github/workflows/ci.yml's text, job by job:
 #   binaries      writes the release's version (set-version.sh), builds by a
 #                 plain `nix build .#default`, given nothing, and fails
 #                 unless the binary says that version;
 #   release       writes the version, commits the files set-version.sh lists
 #                 by path as `chore(release): $TAG`, tags that commit,
-#                 pushes the tag alone, with no branch and no force, and
+#                 pushes the tag and release in one atomic push, the tag
+#                 unforced and release forced to the release commit, and
 #                 publishes the GitHub release at the tag it pushed;
 #   version       reckons the next version from the newest tag, which is off
 #                 main's history (git-cliff --unreleased --bumped-version);
@@ -100,27 +101,29 @@ ordered binaries \
   "$build:nix build .#default, with nothing given" \
   "$(at "$binaries" 'test "$(./result/bin/sluice --version)" = "sluice ${TAG#v}"'):test that ./result/bin/sluice --version says sluice \${TAG#v}"
 
-# release: the release commit, its tag pushed alone, the release at the tag.
+# release: the release commit, its tag and release pushed atomically, the
+# release at the tag.
+push='git push --atomic origin "refs/tags/$TAG" "+HEAD:refs/heads/release"'
 commit=$(printf '%s\n' "$release" | grep -nE 'commit .*-m "chore\(release\): \$TAG" .*-- "\$\{files\[@\]\}"$' | head -n 1 | cut -d : -f 1)
 ordered release \
   "$(at "$release" 'sh set-version.sh "${TAG#v}"'):sh set-version.sh \"\${TAG#v}\"" \
   "$(at "$release" 'sh set-version.sh --files' in):the files of sh set-version.sh --files" \
   "$commit:git commit -m \"chore(release): \$TAG\" -- the files set-version.sh lists" \
   "$(at "$release" 'git tag "$TAG"'):git tag \"\$TAG\"" \
-  "$(at "$release" 'git push origin "refs/tags/$TAG"'):git push origin \"refs/tags/\$TAG\", the tag alone" \
+  "$(at "$release" "$push"):$push, the tag and release, atomically" \
   "$(at "$release" 'gh release create "$TAG" --verify-tag' in):gh release create \"\$TAG\" --verify-tag"
 if printf '%s\n' "$release" | grep -E 'commit ' | grep -Eq '(^| )(-a|--all|-am)( |$)'; then
   fail release "commits with -a: it commits the files set-version.sh lists, by path"
 fi
 pushes=$(printf '%s\n' "$release" | grep -cE '(^|[ ;&|])git( -c [^ ]+)* push( |$)')
 if [ "$pushes" -ne 1 ]; then
-  fail release "pushes $pushes times: its one push is the tag, alone"
+  fail release "pushes $pushes times: its one push is the tag and release, atomically"
 fi
-printf '%s\n' "$release" | grep -E 'git( -c [^ ]+)* push( |$)' | while IFS= read -r push; do
-  [ "$push" = 'git push origin "refs/tags/$TAG"' ] ||
-    echo "release: release: pushes other than the tag alone, with no branch and no force: $push" >&2
+printf '%s\n' "$release" | grep -E 'git( -c [^ ]+)* push( |$)' | while IFS= read -r line; do
+  [ "$line" = "$push" ] ||
+    echo "release: release: pushes other than the tag and release, atomically: $line" >&2
 done
-if printf '%s\n' "$release" | grep -E 'git( -c [^ ]+)* push( |$)' | grep -vxqF 'git push origin "refs/tags/$TAG"'; then
+if printf '%s\n' "$release" | grep -E 'git( -c [^ ]+)* push( |$)' | grep -vxqF -- "$push"; then
   status=1
 fi
 if printf '%s\n' "$release" | grep -qF -- '--target'; then
@@ -147,5 +150,5 @@ if grep -qF -e 'SLUICE_VERSION' -e '--impure' "$workflow"; then
   status=1
 fi
 
-[ "$status" -ne 0 ] || echo "release: the workflow releases as record 0111 has it"
+[ "$status" -ne 0 ] || echo "release: the workflow releases as records 0111 and 0112 have it"
 exit $status

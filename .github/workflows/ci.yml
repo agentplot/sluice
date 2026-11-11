@@ -9,7 +9,9 @@
 # that git-cliff finds a new version in is released (cliff.toml), under a
 # tag that names a release commit cut from the pushed commit, in which
 # set-version.sh writes the release's version into every file that carries
-# sluice's; main's tree names 0.0.0 (record 0111, core.55).
+# sluice's; main's tree names 0.0.0 (record 0111, core.55). The release
+# branch, which the Claude Code marketplace is read at, moves to each
+# release commit with its tag (record 0112).
 name: ci
 
 on:
@@ -197,11 +199,14 @@ jobs:
 
   # git-cliff's notes for the range, then the release commit: the pushed
   # commit, its one parent, with the release's version written into the
-  # files set-version.sh lists, committed by path. The tag names it and is
-  # pushed alone, and the binaries are published under it. Nothing is
-  # committed to main, which only sluice lands, no branch is pushed and no
-  # tag moves (record 0111, core.55). A test job a landing skipped would
-  # skip it too, as it would binaries.
+  # files set-version.sh lists, committed by path. The tag names it, and
+  # the tag and release, the branch the marketplace is read at, are pushed
+  # in one atomic push: the tag never forced, release forced to the release
+  # commit, since each release commit's parent is main's pushed commit. The
+  # binaries are published under the tag. Nothing is committed to main,
+  # which only sluice lands, and no tag moves (records 0111 and 0112,
+  # core.55). A test job a landing skipped would skip it too, as it would
+  # binaries.
   release:
     if: ${{ !cancelled() && needs.binaries.result == 'success' }}
     needs: [version, binaries]
@@ -226,7 +231,7 @@ jobs:
             -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
             commit -q -m "chore(release): $TAG" -- "${files[@]}"
           git tag "$TAG"
-          git push origin "refs/tags/$TAG"
+          git push --atomic origin "refs/tags/$TAG" "+HEAD:refs/heads/release"
           gh release create "$TAG" --verify-tag --title "$TAG" \
             --notes-file notes.md sluice-*.tar.gz
         env:

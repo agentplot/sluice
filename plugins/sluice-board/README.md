@@ -8,9 +8,14 @@ sluice's queue inside a Claude Code session.
 </picture>
 
 ```
-/plugin marketplace add agentplot/sluice
+/plugin marketplace add agentplot/sluice#release
 /plugin install sluice-board@sluice
 ```
+
+The marketplace is read at the `release` branch, which each release moves
+to the commit its tag names. To take a new release:
+`/plugin marketplace update sluice`, then
+`/plugin update sluice-board@sluice`.
 
 - **Band** above the prompt, while a branch has a queue:
   `sluice main · 3 submissions · testing main+#12+#13 2m10s/15m · #14 waiting · last #11 landed as 9ecc34a`.

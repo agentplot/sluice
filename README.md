@@ -32,9 +32,13 @@ names the one that broke the build, and moves the branch only to code that passe
 **With Claude Code.** At the prompt of a Claude Code session in a terminal:
 
 ```
-/plugin marketplace add agentplot/sluice
+/plugin marketplace add agentplot/sluice#release
 /plugin install sluice@sluice
 ```
+
+The marketplace is read at the `release` branch, which each release moves
+to the commit its tag names. To take a new release,
+`/plugin marketplace update sluice`, then `/plugin update sluice@sluice`.
 
 Then ask Claude to set sluice up in your repository. It installs the
 `sluice` binary if it is missing, asking first. In a plain clone, your
@@ -52,7 +56,9 @@ board (`sluice-board`) shows it in any Claude Code session, with
 full-screen mode on or off: [the queue in your
 session](https://agentplot.github.io/sluice/guides/claude-code/#the-queue-in-your-session).
 [The herdr plugin](https://agentplot.github.io/sluice/guides/herdr/) adds a
-view beside your agents' panes. It is not released yet.
+view beside your agents' panes. Install it at the tag of the sluice you
+run, `herdr plugin install agentplot/sluice/plugins/herdr --ref v<version>`,
+where `<version>` is the version `sluice --version` prints.
 
 **By hand.** Start from a repository laid out with a working copy per
 branch, as [one working copy per
@@ -113,8 +119,11 @@ combination passes.
 ## Install
 
 ```sh
-nix profile install github:agentplot/sluice
+nix profile install github:agentplot/sluice/v<version>
 ```
+
+`<version>` is a release's, from
+[the releases page](https://github.com/agentplot/sluice/releases).
 
 <details>
 <summary>Other ways: a release binary, cargo, a flake input</summary>
@@ -132,19 +141,19 @@ Linux: `sluice-x86_64-linux.tar.gz` or `sluice-aarch64-linux.tar.gz`.
 **With cargo** (Rust 1.98 or later):
 
 ```sh
-cargo install --locked --git https://github.com/agentplot/sluice sluice
+cargo install --locked --git https://github.com/agentplot/sluice --tag v<version> sluice
 ```
 
 **As a flake input**, for NixOS, home-manager or a devenv shell:
 
 ```nix
-inputs.sluice.url = "github:agentplot/sluice";
+inputs.sluice.url = "github:agentplot/sluice/v<version>";
 # then: inputs.sluice.packages.${system}.default
 ```
 
-A build of `main` reports `0.0.0`; a release's tag, as in
-`github:agentplot/sluice/v<x.y.z>`, builds that release, which reports
-its version with nothing given.
+A release's tag builds that release, which reports its version with
+nothing given. `main` is the development tree, never an install source,
+and a build of it reports `0.0.0`.
 
 Its modules, `darwinModules.sluice` and `nixosModules.sluice`, install
 the package and write the host's own settings from

@@ -8,11 +8,13 @@ sluice's merge queue beside your agents in [herdr](https://herdr.dev).
 </picture>
 
 ```sh
-herdr plugin install agentplot/sluice/plugins/herdr
+herdr plugin install agentplot/sluice/plugins/herdr --ref v<version>
 ```
 
-Needs herdr 0.9.3 or later, `sluice` 0.12 or later and `jq` on `PATH`, on
-Linux or macOS. It reads everything from `sluice overview --watch --json`,
+Install it at the tag of the sluice you run (`sluice --version`), so the
+plugin and the binary are one release; at a new release, install it again
+at the new tag. Needs herdr 0.9.3 or later and `jq` on `PATH`, on Linux or
+macOS. It reads everything from `sluice overview --watch --json`,
 run once in each repository with sluice's records that a pane of any of
 your herdr servers is in, and does nothing elsewhere. One watcher does
 this for all of your herdr servers on a host: the first server's startup
