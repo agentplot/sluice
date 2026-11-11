@@ -30,7 +30,7 @@ and rule core.10.
   - If 0112 is taken when this task is built, use the next free number and change it everywhere this change names it.
 
   True when `sluice exec bolt/what-a-place-starts-ends-with-it -- moon run root:adrs` passes.
-- [ ] 1.3 In `docs/architecture/core.md`, add the case to rule core.10's details, as design D7 gives it, citing the signal and record 0112, and add 0112 to its ADR list. Leave the rule's own line as it is. Then run `node site/scripts/rules.mjs` to write the site's rules page again. True when `sluice exec bolt/what-a-place-starts-ends-with-it -- moon run site:rules` passes.
+- [x] 1.3 In `docs/architecture/core.md`, add the case to rule core.10's details, as design D7 gives it, citing the signal and record 0112, and add 0112 to its ADR list. Leave the rule's own line as it is. Then run `node site/scripts/rules.mjs` to write the site's rules page again. True when `sluice exec bolt/what-a-place-starts-ends-with-it -- moon run site:rules` passes.
 
 ## 2. The check profile finds a place's containers and removes them
 
