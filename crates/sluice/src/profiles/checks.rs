@@ -1781,28 +1781,26 @@ impl Tests for Checks {
                 memory: None,
                 network: None,
                 docker,
-                grant: None,
+                // Design D1: every open run's.
+                grant: Some("open:1".into()),
             },
             Kind::Sandbox => {
                 let network = request.limits.network;
                 let profile = dir.join("sandbox.sb");
-                std::fs::write(
-                    &profile,
-                    sandbox_profile(
-                        &request.place,
-                        &request.limits,
-                        &plan.stamps,
-                        caches,
-                        // Record 0105: the store the run's record names,
-                        // and its release's, which runs under this profile.
-                        store.as_deref(),
-                        match request.limits.docker {
-                            true => self.engines(),
-                            false => Vec::new(),
-                        },
-                    )
-                    .text,
-                )?;
+                let written = sandbox_profile(
+                    &request.place,
+                    &request.limits,
+                    &plan.stamps,
+                    caches,
+                    // Record 0105: the store the run's record names,
+                    // and its release's, which runs under this profile.
+                    store.as_deref(),
+                    match request.limits.docker {
+                        true => self.engines(),
+                        false => Vec::new(),
+                    },
+                );
+                std::fs::write(&profile, &written.text)?;
                 let sandbox = [
                     "/usr/bin/sandbox-exec".to_string(),
                     "-f".into(),
@@ -1821,7 +1819,8 @@ impl Tests for Checks {
                     memory: None,
                     network: network.filter(|n| *n != Network::Allowed),
                     docker,
-                    grant: None,
+                    // Design D1: the profile it ran under, by role.
+                    grant: Some(written.grant),
                 }
             }
         };

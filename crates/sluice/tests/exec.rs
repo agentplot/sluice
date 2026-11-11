@@ -602,6 +602,23 @@ fn a_clean_run_of_the_checks_is_recorded_and_a_dirty_one_is_not() {
     );
 }
 
+/// 138, design D1 (the check-grant spec's "The open executor"): each
+/// result `sluice exec` records of a clean worktree's run under the open
+/// executor carries the open executor's grant.
+#[test]
+fn exec_records_the_open_executors_grant() {
+    let s = Setup::new("exec-open-grant");
+    let out = s.sluice(&["exec", "bolt/x"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let results = s.results();
+    assert!(!results.is_empty(), "{}", text(&out));
+    for l in results.lines() {
+        let v: serde_json::Value = serde_json::from_str(l).unwrap();
+        assert_eq!(v["executor"]["kind"], "open", "{l}");
+        assert_eq!(v["executor"]["grant"], "open:1", "{l}");
+    }
+}
+
 /// Session-runs-1 clause 97, 123: a worktree removed with `rm -rf`, with
 /// nothing released, is no session's. The next `sluice exec` on the host,
 /// from another worktree, runs the release its runs stored, once, in its
