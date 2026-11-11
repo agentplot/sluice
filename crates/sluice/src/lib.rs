@@ -5,7 +5,6 @@
 //! runs over the fakes in tests and over the real profiles that
 //! [`profiles`] binds.
 
-pub mod bounded;
 pub mod branch;
 pub mod equip;
 pub mod exec;
