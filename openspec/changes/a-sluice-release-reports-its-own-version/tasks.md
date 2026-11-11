@@ -25,7 +25,7 @@ part of the tree touched, citing record 0111 and rule core.55.
 ## 3. A build takes its version from the tree
 
 - [x] 3.1 The binary's `VERSION` is cargo's `CARGO_PKG_VERSION`, with no `SLUICE_VERSION`, and its doc says where the version comes from. `the_version_is_the_workspaces` checks it against the workspace's `Cargo.toml` and `--version`'s text (design D4; Task notes 3.1; spec "The binary's version"). True when `cargo test -p sluice --lib tests::the_version_is_the_workspaces` passes.
-- [ ] 3.2 The flake's package takes the workspace's version from `Cargo.toml`, reads no `SLUICE_VERSION` and hands the build none. `nix/tests/version.nix`'s case "The package's version is the tree's" holds it under `nix/check.sh`'s exported `SLUICE_VERSION=98.76.54`, and `nix/moon.yml`'s `test` takes `/Cargo.toml`, `/Cargo.lock` and `/.prototools` (design D4; Task notes 3.2; spec "The flake's package, whatever the builder's environment"). True when `sluice exec bolt/a-sluice-release-reports-its-own-version -- moon run nix:test` passes.
+- [x] 3.2 The flake's package takes the workspace's version from `Cargo.toml`, reads no `SLUICE_VERSION` and hands the build none. `nix/tests/version.nix`'s case "The package's version is the tree's" holds it under `nix/check.sh`'s exported `SLUICE_VERSION=98.76.54`, and `nix/moon.yml`'s `test` takes `/Cargo.toml`, `/Cargo.lock` and `/.prototools` (design D4; Task notes 3.2; spec "The flake's package, whatever the builder's environment"). True when `sluice exec bolt/a-sluice-release-reports-its-own-version -- moon run nix:test` passes.
 
 ## 4. The release on GitHub
 
