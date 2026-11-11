@@ -96,6 +96,9 @@ None.
   function that ends a place's containers and calls it for a preview in
   `release_preview` and `free`, so `release_gone` and an accepted failure
   reach it through `free`.
+- `crates/sluice/src/runs.rs`: a run is ended, and its release command
+  run, with its directory kept until the preview's containers have
+  ended.
 - `crates/sluice/src/profiles/mod.rs`: the binding hands that function to
   the place profile (rule core.2), as it hands the release command's
   builder.
@@ -112,6 +115,7 @@ crates/sluice/src/profiles/checks.rs
 crates/sluice/src/profiles/checks/engine.rs
 crates/sluice/src/profiles/places.rs
 crates/sluice/src/profiles/mod.rs
+crates/sluice/src/runs.rs
 crates/sluice/tests/support/mod.rs
 crates/sluice/tests/profiles/places.rs
 crates/sluice/tests/previews_tools.rs
