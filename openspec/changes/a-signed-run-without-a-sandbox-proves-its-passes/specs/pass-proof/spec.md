@@ -3,20 +3,12 @@
 ### Requirement: Why is read from the missing proof itself
 
 The reason SHALL be read from the fact itself, the task runner's record
-missing where the check profile reads it, and from what the store that
-should hold it says of itself. It SHALL name where the record was looked
-for and whose record is missing, never what the task runner printed
-(record 0105; rule core.35). For moon, the record is moon's manifest of
-the test's key and of each key it depends on (C.2 moon row). The reason
-SHALL read `it passed, but nothing the run kept proves it ran: moon's
-manifest of <whose> is not in <store>, <fact>`. `<whose>` is `it`, or
-`<task>, which it depends on`. `<store>` is the store the run's record
-names. `<fact>` is the first that holds of: `which does not exist`;
-`which <user> cannot write`; `a directory of which <user> cannot
-write`; `where moon kept none of the run's manifests`; `where moon kept
-others of the run's manifests`. `<user>` is the user sluice runs as.
-The facts are read from the store itself after the run, with nothing
-run (114).
+missing where the check profile reads it, and SHALL name where it was
+looked for and whose record is missing, never what the task runner
+printed (record 0105; rule core.35). For moon, the record is moon's
+manifest of the test's key and of each key it depends on (C.2 moon
+row), and the reason SHALL read `it passed, but nothing the run kept
+proves it ran: moon's manifest of <whose> is not in <store>, <fact>`.
 
 #### Scenario: A manifest gone from the store
 
@@ -30,6 +22,29 @@ run (114).
   (`a_pass_whose_manifest_is_gone_is_unkept_naming_the_store` in
   `crates/sluice/tests/profiles/moon.rs`)
 
+#### Scenario: A dependency's manifest missing
+
+- **WHEN** a passing task's own manifest is in the store and the
+  manifest of a task it depends on is not
+- **THEN** the task's proof is read as not kept, not as a key the tree
+  does not bear out, naming the task whose manifest is missing and its
+  key
+  (`a_missing_manifest_is_told_from_one_the_tree_does_not_bear_out` in
+  `crates/sluice/src/profiles/moon.rs`)
+
+## ADDED Requirements
+
+### Requirement: moon's reason names whose manifest, which store and its fact
+
+In moon's reason, `<whose>` SHALL be `it`, or `<task>, which it depends
+on`, and `<store>` the store the run's record names. `<fact>` SHALL be
+the first that holds of: `which does not exist`; `which <user> cannot
+write`; `a directory of which <user> cannot write`; `where moon kept
+none of the run's manifests`; `where moon kept others of the run's
+manifests`. `<user>` is the user sluice runs as. The facts are read
+from the store itself after the run, with nothing run (114; record
+0105).
+
 #### Scenario: What the store says of itself
 
 - **WHEN** a manifest is missing from a store that does not exist; from
@@ -42,18 +57,6 @@ run (114).
   others of the run's manifests`
   (`the_store_says_why_a_manifest_is_missing` in
   `crates/sluice/src/profiles/moon.rs`)
-
-#### Scenario: A dependency's manifest missing
-
-- **WHEN** a passing task's own manifest is in the store and the
-  manifest of a task it depends on is not
-- **THEN** the task's proof is read as not kept, not as a key the tree
-  does not bear out, naming the task whose manifest is missing and its
-  key
-  (`a_missing_manifest_is_told_from_one_the_tree_does_not_bear_out` in
-  `crates/sluice/src/profiles/moon.rs`)
-
-## ADDED Requirements
 
 ### Requirement: A manifest is read where the run's moon kept it
 
