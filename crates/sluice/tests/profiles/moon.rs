@@ -1493,6 +1493,92 @@ fn a_key_is_read_under_the_home_the_toolchain_gives_moon() {
     assert_eq!(c.proven(&run, &report).unwrap().proven, ["alpha:test"]);
 }
 
+/// C.2 moon row, the pass-proof spec's "An install and a check depending
+/// on it" (design of `a-signed-run-without-a-sandbox-proves-its-passes`,
+/// "What moon 2.6.1 does"): on the layout of
+/// `a_key_is_read_under_the_home_the_toolchain_gives_moon`, a task moon
+/// does not cache, with no outputs, and a check depending on it, run with
+/// no replay, each have their manifest in `cache/shared` under the
+/// toolchain's moon home; the check's names the uncached task `ignored`,
+/// and both are proven.
+#[test]
+fn a_task_moon_does_not_cache_and_its_dependent_are_proven() {
+    let src = workspace("moon-uncached-src");
+    change(
+        &src,
+        &[(
+            "alpha/moon.yml",
+            "tasks:\n  install:\n    command: 'true'\n    options:\n      cache: false\n  \
+             test:\n    command: 'sh test.sh'\n    inputs: ['test.sh', 'value.txt', 'notes.md']\n    \
+             deps: ['alpha:install']\n    tags: [check-fast]\n",
+        )],
+    );
+    let scratch = support::Scratch::new("moon-uncached");
+    let bare = scratch.path().join("repo.git");
+    let worktree = scratch.path().join("main");
+    let home = scratch.path().join("moon-home");
+    src.git(&["clone", "-q", "--bare", ".", bare.to_str().unwrap()]);
+    src.git(&[
+        "--git-dir",
+        bare.to_str().unwrap(),
+        "worktree",
+        "add",
+        "-q",
+        worktree.to_str().unwrap(),
+        "main",
+    ]);
+    let mut req = request(&src, "p1", &["alpha:install", "alpha:test"], None);
+    req.place.path = worktree.clone();
+    req.replay = false;
+    req.tests.insert(
+        "toolchain".into(),
+        Setting::List(vec![
+            "echo".into(),
+            format!(
+                "export MOON_HOME='{}' MOON_CACHE_SHARED_WORKTREE_CACHE=true \
+                 MOON_EXPERIMENT_CAS_OUTPUTS_CACHE=true",
+                home.display()
+            ),
+        ]),
+    );
+    let c = checks_in(&bare, Vec::new());
+    let (run, report) = finish_run(&c, &req);
+    let mut ran = tasks(&report);
+    ran.sort_by(|a, b| a.0.cmp(&b.0));
+    assert_eq!(
+        ran,
+        [
+            ("alpha:install".into(), Outcome::Pass, false),
+            ("alpha:test".into(), Outcome::Pass, false),
+        ]
+    );
+
+    let shared = home.join("cache/shared");
+    let manifest = |key: &str| -> serde_json::Value {
+        let at = shared.join("blobs").join(&key[..2]).join(&key[2..]);
+        let bytes =
+            std::fs::read(&at).unwrap_or_else(|_| panic!("no manifest at {}", at.display()));
+        serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()[0].clone()
+    };
+    let key = |task: &str| {
+        report
+            .tasks
+            .iter()
+            .find(|t| t.task == task)
+            .unwrap()
+            .hash
+            .clone()
+    };
+    assert_eq!(manifest(&key("alpha:install"))["target"], "alpha:install");
+    assert_eq!(
+        manifest(&key("alpha:test"))["deps"]["alpha:install"],
+        "ignored"
+    );
+    let mut proven = c.proven(&run, &report).unwrap().proven;
+    proven.sort();
+    assert_eq!(proven, ["alpha:install", "alpha:test"]);
+}
+
 /// Design D1 of the change `a-signed-run-without-a-sandbox-proves-its-
 /// passes` (C.2 moon row; rule core.9), the pass-proof spec's "moon kept
 /// the manifest in the checkout" and "Neither store holds it": on the
