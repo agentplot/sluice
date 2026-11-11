@@ -740,6 +740,114 @@ mod tests {
         assert!(read(&run(None), &both, &flaky(&["sandbox"], Flaky::Pass)).passed);
     }
 
+    /// 108, 138 (the check-grant spec's "A replay under another grant"):
+    /// on a branch in a host's own files and on a signed one, a replay
+    /// whose only counted pass is under another grant is unproven, and one
+    /// with a pass under its own grant is proven.
+    #[test]
+    fn a_replay_is_proven_only_by_a_pass_under_its_grant() {
+        let open = |grant| granted(enforced("open", false), grant);
+        let replay = report(Source::Replayed { from_run_at: None }, open(Some("open:1")));
+        let pass = |grant, signer: Option<&str>| ResultLine {
+            signer: signer.map(str::to_string),
+            ..recorded(ResultKind::Ran, Some(open(grant)), Outcome::Pass)
+        };
+        for (rules, signer) in [
+            (rules(&["open"]), None),
+            (signed_by_box(Flaky::Fail), Some("box")),
+        ] {
+            let v = read(&replay, &[pass(Some("sb1:g1"), signer)], &rules);
+            assert_eq!(unproven(&v), ["a:test"], "signed: {}", rules.signed);
+            assert!(!v.passed);
+            let v = read(&replay, &[pass(None, signer)], &rules);
+            assert_eq!(unproven(&v), ["a:test"], "signed: {}", rules.signed);
+            let v = read(
+                &replay,
+                &[pass(Some("sb1:g1"), signer), pass(Some("open:1"), signer)],
+                &rules,
+            );
+            assert!(v.passed && v.unproven.is_empty(), "{v:?}");
+        }
+    }
+
+    /// 108, 138 (the check-grant spec's "Another grant" and "Other limits
+    /// on a signed branch"): a replay whose key holds a counted pass held
+    /// to the run's limits under another grant is unproven for its grant,
+    /// on a branch in a host's own files and on a signed one; one whose key
+    /// holds only a counted signer's pass held to other limits, for its
+    /// limits.
+    #[test]
+    fn an_unproven_replay_names_another_grant() {
+        let open = |grant| granted(enforced("open", false), grant);
+        let replay = report(Source::Replayed { from_run_at: None }, open(Some("open:1")));
+        let pass = |executor: Enforced, signer: Option<&str>| ResultLine {
+            signer: signer.map(str::to_string),
+            ..recorded(ResultKind::Ran, Some(executor), Outcome::Pass)
+        };
+        let why =
+            |v: &Verdict| -> Vec<String> { v.unproven.iter().map(|u| u.why.clone()).collect() };
+        let grant = "no result of its key was run under this run's grant";
+        let limits = "no result of its key was held to this run's limits";
+
+        let v = read(
+            &replay,
+            &[pass(open(Some("sb1:g1")), None)],
+            &rules(&["open"]),
+        );
+        assert_eq!(why(&v), [grant]);
+        let v = read(
+            &replay,
+            &[pass(open(Some("sb1:g1")), Some("box"))],
+            &signed_by_box(Flaky::Fail),
+        );
+        assert_eq!(why(&v), [grant]);
+
+        let docker = Enforced {
+            docker: true,
+            ..open(Some("open:1"))
+        };
+        let v = read(
+            &replay,
+            &[pass(docker, Some("box"))],
+            &signed_by_box(Flaky::Fail),
+        );
+        assert_eq!(why(&v), [limits]);
+    }
+
+    /// 19, 83, record 0072 (the check-grant spec's "Another network"): on
+    /// a branch whose state is on its remote, a counted signer's fail of a
+    /// key held to no network is not weighed against a run held to
+    /// `network = "localhost"` that passes it.
+    #[test]
+    fn a_signed_key_is_weighed_only_under_the_runs_limits() {
+        let localhost = Enforced {
+            network: Some(sluice_seams::Network::Localhost),
+            ..granted(enforced("sandbox", false), Some("sb1:g1"))
+        };
+        let run = report(Source::Ran { host: "h".into() }, localhost.clone());
+        let signed = |executor: Enforced, outcome| ResultLine {
+            signer: Some("box".into()),
+            ..recorded(ResultKind::Ran, Some(executor), outcome)
+        };
+        let unheld = Enforced {
+            network: None,
+            ..localhost.clone()
+        };
+        let results = [
+            signed(unheld, Outcome::Fail),
+            signed(localhost.clone(), Outcome::Pass),
+        ];
+        let v = read(&run, &results, &signed_by_box(Flaky::Fail));
+        assert!(v.passed, "{v:?}");
+        assert!(v.failed.is_empty());
+
+        let results = [
+            signed(localhost.clone(), Outcome::Fail),
+            signed(localhost, Outcome::Pass),
+        ];
+        assert!(!read(&run, &results, &signed_by_box(Flaky::Fail)).passed);
+    }
+
     /// 19: a task read as failed for its key holding a pass and a fail
     /// names what this run observed and the newest result that says
     /// otherwise; one that failed on its own names neither.
