@@ -3671,6 +3671,7 @@ fn unstarted(checks: &[String], kind: &str, reason: String) -> RunReport {
             memory: None,
             network: None,
             docker: false,
+            grant: None,
         },
         missing: Vec::new(),
         not_run: checks

@@ -425,6 +425,7 @@ fn a_session_run_records_what_it_ran_and_never_a_replay() {
             memory: None,
             network: None,
             docker: false,
+            grant: None,
         },
         missing: vec![],
         not_run: vec![],

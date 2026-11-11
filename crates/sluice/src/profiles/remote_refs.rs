@@ -659,6 +659,7 @@ fn verify(signer: &str, key: &SignerKey, bytes: &[u8]) -> Result<Vec<ResultLine>
                 memory: None,
                 network: None,
                 docker: false,
+                grant: None,
             }),
             branch: run.branch.clone(),
             combination: run.combination.clone(),

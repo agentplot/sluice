@@ -321,6 +321,7 @@ mod tests {
             memory: None,
             network: None,
             docker: false,
+            grant: None,
         }
     }
 

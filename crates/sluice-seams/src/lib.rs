@@ -524,6 +524,15 @@ pub struct Enforced {
     /// The run could reach the host's container engine (ADR 0016).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub docker: bool,
+    /// 83, 138: what the executor let the run reach, as one string a key's
+    /// results are weighed under. The sandbox's is `sb1:` and a digest of
+    /// the profile it wrote with every path named by its role, so places
+    /// and hosts given one profile give one grant; the open executor's is
+    /// `open:1`. sluice's version is no part of it. `None` on a line
+    /// recorded before the grant, which is weighed only with others that
+    /// carry none (rule core.34).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grant: Option<String>,
 }
 
 /// What the core asks the check seam to run on one candidate (37).
@@ -1847,6 +1856,7 @@ mod tests {
                 memory: None,
                 network: None,
                 docker: false,
+                grant: None,
             },
             missing: vec![],
             not_run: vec![],

@@ -1651,6 +1651,7 @@ impl Tests for Checks {
                 memory: None,
                 network: None,
                 docker,
+                grant: None,
             },
             Kind::Sandbox => {
                 let network = request.limits.network;
@@ -1689,6 +1690,7 @@ impl Tests for Checks {
                     memory: None,
                     network: network.filter(|n| *n != Network::Allowed),
                     docker,
+                    grant: None,
                 }
             }
         };

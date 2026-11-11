@@ -266,6 +266,7 @@ fn ran(task: &str, outcome: Outcome) -> ResultLine {
             memory: None,
             network: None,
             docker: false,
+            grant: None,
         }),
         branch: "main".into(),
         combination: Rev::new("c0ffee"),
