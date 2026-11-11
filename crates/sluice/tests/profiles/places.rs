@@ -1339,7 +1339,7 @@ fn held_blocks(dir: &std::path::Path) -> usize {
         .unwrap_or(0)
 }
 
-/// Record 0112's containers for the preview `place`: one mounting a file
+/// Record 0114's containers for the preview `place`: one mounting a file
 /// of its checkout, one publishing its `web` port, one labelled with its
 /// `SLUICE_PLACE`, and one of another checkout that does none of these.
 fn preview_containers(place: &Place) -> serde_json::Value {
@@ -1364,7 +1364,7 @@ type Seen = std::rc::Rc<std::cell::RefCell<Vec<(Place, bool, usize)>>>;
 /// The place profile of `repo`, holding its blocks in `blocks` and ending
 /// a preview's containers at `engine`, noting in what it returns what
 /// each end was handed and whether the checkout was there and how many
-/// blocks were held as it began (record 0112, design D1, D3).
+/// blocks were held as it began (record 0114, design D1, D3).
 fn ending(repo: &Repo, blocks: &std::path::Path, engine: &support::Engine) -> (Places, Seen) {
     let seen: Seen = Default::default();
     let (noted, held, socket) = (seen.clone(), blocks.to_path_buf(), engine.socket());
@@ -1382,7 +1382,7 @@ fn ending(repo: &Repo, blocks: &std::path::Path, engine: &support::Engine) -> (P
     (p, seen)
 }
 
-/// 34, previews-1 clause 101, record 0112 (design D1, D3): a preview
+/// 34, previews-1 clause 101, record 0114 (design D1, D3): a preview
 /// released at its caller's asking has its release command run, then the
 /// containers it left ended while its checkout and its block of ports are
 /// still held, the place handed as its command was given it; a container
@@ -1447,7 +1447,7 @@ fn ported_preview(p: &Places, rev: &Rev) -> (String, Place) {
     (name, place)
 }
 
-/// 123, previews-1 clause 101, record 0112 (design D3): a preview whose
+/// 123, previews-1 clause 101, record 0114 (design D3): a preview whose
 /// checkout was removed has its stored release run once in its scratch
 /// directory, where the script it names in the checkout cannot be found
 /// and it fails; its containers are ended all the same, after that
@@ -1492,7 +1492,7 @@ fn a_gone_previews_containers_end_after_its_stored_release() {
     assert_eq!(held_blocks(blocks.path()), 0);
 }
 
-/// 123, previews-1 clause 101, record 0112 (design D3): a preview freed
+/// 123, previews-1 clause 101, record 0114 (design D3): a preview freed
 /// at its release's failure's acceptance runs nothing in its name, its
 /// release command included, and has its containers ended while its
 /// checkout and block are still held; then it is freed.
@@ -1523,7 +1523,7 @@ fn an_accepted_previews_containers_end_with_nothing_run() {
     assert_eq!(held_blocks(blocks.path()), 0);
 }
 
-/// 123, record 0112 (design D5): a container the engine will not remove
+/// 123, record 0114 (design D5): a container the engine will not remove
 /// keeps its preview whole. A release fails, keeping the failure with one
 /// try, the checkout and the block; with the checkout then removed, a
 /// gone release fails and lets nothing go; once the engine removes it, the

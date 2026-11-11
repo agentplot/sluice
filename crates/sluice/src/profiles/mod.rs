@@ -173,7 +173,7 @@ impl Bound {
             // A session's place's release command is the check seam's to
             // build, and the end of a preview's containers the check seam's
             // to make, at each engine a run's is looked for at; the binding
-            // hands both over (rule core.2; record 0112).
+            // hands both over (rule core.2; record 0114).
             checkout: {
                 let places =
                     places::Places::new(&common, crate::runs::Runs::new(&common, program.clone()))

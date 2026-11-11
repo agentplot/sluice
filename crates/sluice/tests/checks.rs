@@ -1703,7 +1703,7 @@ fn a_run_whose_working_copy_could_not_be_equipped_could_not_start() {
 
 /// A preview's place under `dir`, as the place profile hands it to the
 /// end of its containers: its checkout, made, its scratch, its `web` port
-/// and its `SLUICE_PLACE` (record 0112).
+/// and its `SLUICE_PLACE` (record 0114).
 fn preview_place(dir: &Path) -> Place {
     let path = dir.join("previews/preview+2F0123456789ab");
     std::fs::create_dir_all(path.join("tls")).unwrap();
@@ -1721,7 +1721,7 @@ fn preview_place(dir: &Path) -> Place {
     }
 }
 
-/// Record 0112's four containers for `place`: one mounting a file of its
+/// Record 0114's four containers for `place`: one mounting a file of its
 /// checkout, one publishing its `web` port, one labelled with its
 /// `SLUICE_PLACE`, and one of another checkout that does none of these.
 fn four_containers(place: &Place, dir: &Path) -> serde_json::Value {
@@ -1744,7 +1744,7 @@ fn four_containers(place: &Place, dir: &Path) -> serde_json::Value {
     ])
 }
 
-/// 34, previews-1 clause 101, record 0112 (design D2, D4), the
+/// 34, previews-1 clause 101, record 0114 (design D2, D4), the
 /// preview-release spec's "Another checkout's container is left" at the
 /// check profile's level: a container that mounts the checkout, one that
 /// publishes its port and one labelled with its place are removed, and
@@ -1768,7 +1768,7 @@ fn the_places_containers_are_removed_and_no_other() {
     assert_eq!(engine.listings(), 1, "one engine, asked once");
 }
 
-/// Record 0112 (design D4): an engine that answers in HTTP/1.1 and holds
+/// Record 0114 (design D4): an engine that answers in HTTP/1.1 and holds
 /// each connection open after its answer, as one host's did (2026-11-11),
 /// is read by the end each answer gives itself, its last chunk or a
 /// `204`, and never waited on: its refusal's words are read from its
@@ -1801,7 +1801,7 @@ fn an_engine_that_keeps_its_connections_open_is_read_to_each_answers_end() {
     );
 }
 
-/// Record 0112 (design D5): a removal the engine refuses is named with
+/// Record 0114 (design D5): a removal the engine refuses is named with
 /// the engine's words, the other containers are removed all the same, and
 /// one the engine says is gone counts as removed.
 #[test]
@@ -1839,7 +1839,7 @@ fn a_removal_the_engine_refuses_is_named_and_the_rest_go_on() {
     assert_eq!(engine.removed(), ["publishes", "labelled", "mounts"]);
 }
 
-/// Record 0112 (design D4): where no engine answers, there is nothing to
+/// Record 0114 (design D4): where no engine answers, there is nothing to
 /// end: no endpoint, a socket path with nothing at it, and an engine that
 /// answers its ping with a 500 are each passed over.
 #[test]
@@ -1854,7 +1854,7 @@ fn a_host_with_no_engine_has_no_container_to_end() {
     end(&[Endpoint::Unix(socket)]).unwrap();
 }
 
-/// Record 0112 (design D4): an engine at a TCP address is listed and its
+/// Record 0114 (design D4): an engine at a TCP address is listed and its
 /// containers removed as one on a socket is.
 #[test]
 fn a_tcp_engine_is_asked_as_a_socket_is() {

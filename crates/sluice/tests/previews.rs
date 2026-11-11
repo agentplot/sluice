@@ -84,7 +84,7 @@ fn a_preview_gets_the_hosts_cache_environment() {
         ),
     )
     .unwrap();
-    // Record 0112: its release ends its containers at this engine of its
+    // Record 0114: its release ends its containers at this engine of its
     // own, never the host's.
     let engine_dir = support::Scratch::short();
     let engine = support::containers_engine(engine_dir.path());

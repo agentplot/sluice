@@ -1,5 +1,5 @@
 ---
-number: 112
+number: 114
 title: A preview's containers end with it, found by its checkout, its ports or its label
 status: proposed
 date: 2026-11-11
@@ -9,7 +9,7 @@ decision-makers:
 
 # A preview's containers end with it, found by its checkout, its ports or its label
 
-Status: proposed. This is the construct stage's own decision within clause 34, previews-1 clause 101 and rule core.10, which it keeps. The statement's amendment is on the agentplot/blueprints branch `design/sluice-a-previews-containers-end-with-it` at 2d2bd69, marked proposed under this record.
+Status: proposed. This is the construct stage's own decision within clause 34, previews-1 clause 101 and rule core.10, which it keeps. The statement's amendment is on the agentplot/blueprints branch `design/sluice-a-previews-containers-end-with-it` at e3433e8, marked proposed under this record.
 
 Deciders: the construct stage of `change/a-previews-containers-end-with-it`, cut from `bolt/what-a-place-starts-ends-with-it`.
 Sources: signal `2026-11-11-agentplot-operator-6799f524/01`, from `2026-11-11-wldn-ops-d900f68d/01`; `agentplot/blueprints:design/sluice/requirements.md` clauses 31, 34 and 123; `design/sluice/proposals/previews-1.md` clause 101 and its C.1 preview row; records 0016 and 0074; rule core.10; the OpenSpec change `a-previews-containers-end-with-it` and its `preview-release` delta; the Docker Engine API v1.47.
