@@ -33,6 +33,16 @@ No round or landing ever releases a preview that is up: release yours when
 the person is done. A preview is never a test result and no submission waits
 on it.
 
+However a preview goes (released, its command failed, its checkout removed by
+hand, or its failed release accepted), sluice then removes what its release
+command left in the host's container engine, before its ports go: every
+container that mounts its checkout or `SLUICE_TMP`, publishes one of its
+ports, or carries the label `sluice.place=$SLUICE_PLACE`. Others are left
+alone. Label a container that mounts and publishes nothing of the preview's.
+A container sluice cannot remove keeps the preview: `sluice release` exits
+`1` naming it and the engine's words, and the preview stays listed with that
+failure until a later release removes it.
+
 A preview answers "does the work behave?" on the repository's own fakes. It
 is not a deployment: infrastructure, permissions and real integrations need
 a real environment from a deployment tool.
