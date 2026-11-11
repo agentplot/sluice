@@ -46,7 +46,9 @@ a stack of containers above all, stays between runs. Before worktrunk
 removes the worktree, `wt submit` runs `sluice release` in it: the
 policy's `[tests] release` command runs, every run's process group ends
 and the ports are free, so a `post-remove` hook finds nothing of the
-agent's runs left. Keep in `post-remove` only what is not a run's: a
+agent's runs left. The release command runs even where the agent never
+ran `sluice exec`, so what its own commands started there ends too, and
+a release that fails keeps the worktree. Keep in `post-remove` only what is not a run's: a
 cache directory, a scratch database the agent made by hand. Under
 `--no-remove` the worktree is kept and not released; run
 `sluice release` when it is done with. On plain git, run

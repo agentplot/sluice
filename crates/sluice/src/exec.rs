@@ -647,11 +647,22 @@ impl Exec<'_> {
 
 /// `sluice release`: release the session's place of the worktree `dir`,
 /// at its session's or driver's asking (session-runs-1 clause 95; rule
-/// core.16). The release command is the policy's, read from the branch's
-/// current revision (56); only when the branch cannot be read is it the
-/// one the last run carried, and the output says so. A release that
-/// fails leaves the place held with what failed (123); with `accept`, the
-/// place is freed with nothing run and the worktree left.
+/// core.16). Where sluice holds a place for `dir`, the release command is
+/// the policy's, read from its branch's current revision (56); only when
+/// the branch cannot be read is it the one the last run carried, and the
+/// output says so. A release that fails leaves the place held with what
+/// failed (123); with `accept`, the place is freed with nothing run and the
+/// worktree left.
+///
+/// Where sluice holds nothing for it, the worktree released is the top of
+/// the git worktree that holds `dir`, by the same path: the release
+/// command is the one the repository's default branch's policy names at
+/// its current revision, run with no ports, and nothing is kept for the
+/// worktree once it answers, so `sluice release` runs it again when asked
+/// again (95; rule core.10; record 0112). It says `nothing to release`
+/// only where that policy names no release command, or where `dir` is in
+/// no worktree of the repository; a default branch or a policy that
+/// cannot be read fails it.
 pub fn release(
     s: &Sluice<'_>,
     host: &dyn Host,
@@ -661,91 +672,144 @@ pub fn release(
     out: &mut dyn Write,
 ) -> Result<Release> {
     let seams = s.seams();
-    let adopted = match host.worktree(dir) {
-        Ok(w) => seams.checkout.adopted(&w)?.map(|a| (w, a)),
-        Err(_) => None,
-    };
-    let Some((worktree, adopted)) = adopted else {
+    let nothing = |out: &mut dyn Write, worktree: &str| -> Result<Release> {
         say(out, json, "nothing to release")?;
-        return Ok(Release {
-            worktree: dir.to_string(),
+        Ok(Release {
+            worktree: worktree.to_string(),
             released: false,
             accepted: false,
             failed: None,
-        });
+        })
     };
-    if accept {
-        let freed = s.accept_session(&worktree)?;
-        host.end_session(&worktree)?;
-        if freed {
-            say(
-                out,
-                json,
-                &format!(
-                    "freed {worktree} without its release command: its runs ended, its ports free; the worktree stays"
-                ),
-            )?;
-        }
-        return Ok(Release {
+    // A folder that has gone has nothing to release (record 0112).
+    let Ok(named) = host.worktree(dir) else {
+        return nothing(out, dir);
+    };
+    let (worktree, adopted) = match seams.checkout.adopted(&named)? {
+        Some(a) => (named, Some(a)),
+        None => match host.working_copy(dir)? {
+            None => return nothing(out, dir),
+            Some(top) => {
+                let adopted = seams.checkout.adopted(&top)?;
+                (top, adopted)
+            }
+        },
+    };
+    let failed = |out: &mut dyn Write, worktree: String, failed: String| -> Result<Release> {
+        say(
+            out,
+            json,
+            &format!("could not release {worktree}: {failed}"),
+        )?;
+        Ok(Release {
             worktree,
-            released: freed,
-            accepted: freed,
-            failed: None,
-        });
-    }
-    let branch = &adopted.branch;
-    let policy = match s.release_policy(branch) {
-        Ok(p) => Some(p),
-        Err(e) => {
-            say(
-                out,
-                json,
-                &format!(
-                    "{branch} cannot be read ({e:#}): running the release command saved with the last run"
-                ),
-            )?;
-            None
+            released: false,
+            accepted: false,
+            failed: Some(failed),
+        })
+    };
+    let (name, policy) = match &adopted {
+        Some(adopted) => {
+            if accept {
+                let freed = s.accept_session(&worktree)?;
+                host.end_session(&worktree)?;
+                if freed {
+                    say(
+                        out,
+                        json,
+                        &format!(
+                            "freed {worktree} without its release command: its runs ended, its ports free; the worktree stays"
+                        ),
+                    )?;
+                }
+                return Ok(Release {
+                    worktree,
+                    released: freed,
+                    accepted: freed,
+                    failed: None,
+                });
+            }
+            let branch = &adopted.branch;
+            let policy = match s.release_policy(branch) {
+                Ok(p) => Some(p),
+                Err(e) => {
+                    say(
+                        out,
+                        json,
+                        &format!(
+                            "{branch} cannot be read ({e:#}): running the release command saved with the last run"
+                        ),
+                    )?;
+                    None
+                }
+            };
+            (adopted.name.clone(), policy)
+        }
+        // `--accept-failure` frees a hold, and sluice holds nothing here.
+        None if accept => return nothing(out, &worktree),
+        None => {
+            // Record 0112: sluice holds nothing that names the branch the
+            // worktree was taken off, so the default branch's policy
+            // releases it, read at its current revision (56).
+            let Some(default) = host.default_branch()? else {
+                return failed(
+                    out,
+                    worktree,
+                    "the repository's HEAD names no branch whose policy names its release command"
+                        .into(),
+                );
+            };
+            let branch = default.branch;
+            match s.release_policy(&branch) {
+                Ok(p) => (format!("{}{worktree}", crate::runs::SESSION), Some(p)),
+                Err(e) => {
+                    return failed(
+                        out,
+                        worktree,
+                        format!(
+                            "{branch} cannot be read ({e:#}), so its release command is not known"
+                        ),
+                    )
+                }
+            }
         }
     };
-    let released = match seams
-        .checkout
-        .release_session(&adopted.name, policy.as_ref())
-    {
+    let released = match seams.checkout.release_session(&name, policy.as_ref()) {
         Ok(r) => r,
         Err(e) => {
-            let failed = format!("{e:#}");
+            let words = format!("{e:#}");
+            let then = match adopted {
+                Some(_) => "it keeps its ports until `sluice release` runs again, or `sluice release --accept-failure` frees it without",
+                None => "sluice holds nothing for it: `sluice release` runs its release command again",
+            };
             say(
                 out,
                 json,
-                &format!(
-                    "could not release {worktree}: {failed}\n\
-                     it keeps its ports until `sluice release` runs again, or `sluice release --accept-failure` frees it without"
-                ),
+                &format!("could not release {worktree}: {words}\n{then}"),
             )?;
             return Ok(Release {
                 worktree,
                 released: false,
                 accepted: false,
-                failed: Some(failed),
+                failed: Some(words),
             });
         }
     };
-    host.end_session(&worktree)?;
-    let released = !matches!(released, Released::Nothing);
-    if released {
-        say(
-            out,
-            json,
-            &format!(
-                "released {worktree}: its runs ended, the release command run, its ports free"
-            ),
-        )?;
-    } else {
-        say(out, json, "nothing to release")?;
+    let nothing_run = matches!(released, Released::Nothing);
+    if adopted.is_some() || !nothing_run {
+        host.end_session(&worktree)?;
     }
+    if nothing_run {
+        return nothing(out, &worktree);
+    }
+    say(
+        out,
+        json,
+        &format!("released {worktree}: its runs ended, the release command run, its ports free"),
+    )?;
     Ok(Release {
-        worktree: worktree.to_string(),
-        released,
+        worktree,
+        released: true,
         accepted: false,
         failed: None,
     })
