@@ -34,9 +34,9 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use sluice_seams::{Branch, Formed, HostCopy, LandingCommit, Moved, ReadRefused, Rev};
+use weir_bounded::span;
 
 use super::local_refs::LocalRefs;
-use crate::bounded::{self, span};
 use crate::identity::{withheld, Credentials, Identity, PASSWORD_VAR, USERNAME_VAR};
 use crate::retry::{Failed, Judged, Kind, Policy};
 
@@ -221,13 +221,12 @@ impl PushedRefs {
                 // push is settled by reading what the remote holds (122).
                 Ok((out, true)) => {
                     let verb = args.first().copied().unwrap_or("call");
-                    let limit = span(self.policy.try_for());
                     last = Some(told(
                         out,
-                        &format!(
-                            "git {verb} with {} was still going after {limit}, the most a try \
-                             may take, and was stopped",
-                            self.remote
+                        &weir_bounded::stopped(
+                            &format!("git {verb}"),
+                            &self.remote,
+                            self.policy.try_for(),
                         ),
                     ));
                     return Err(Failed::new(Judged::Unknown, ()));
@@ -438,7 +437,7 @@ impl PushedRefs {
         if let Some(lock) = held {
             cmd.env(FETCH_HELD_VAR, lock);
         }
-        let ended = bounded::output(&mut cmd, self.policy.try_for())
+        let ended = weir_bounded::output(&mut cmd, self.policy.try_for())
             .with_context(|| format!("running git {}", args.join(" ")))?;
         let out = Output {
             status: ended.status,
