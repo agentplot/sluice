@@ -17,7 +17,7 @@ and clause 123.
 
 ## 1. The decision recorded
 
-- [ ] 1.1 Write `docs/adr/0115-a-checkout-git-no-longer-lists-is-gone-and-sluice-removes-what-is-left-of-it.md`, as design D8 and Task notes 1.1 give it, taking the next free number where 0115 is taken on main, this bolt or an in-flight branch. True when `sluice exec bolt/what-a-place-starts-ends-with-it -- moon run root:adrs` passes.
+- [x] 1.1 Write `docs/adr/0115-a-checkout-git-no-longer-lists-is-gone-and-sluice-removes-what-is-left-of-it.md`, as design D8 and Task notes 1.1 give it, taking the next free number where 0115 is taken on main, this bolt or an in-flight branch. True when `sluice exec bolt/what-a-place-starts-ends-with-it -- moon run root:adrs` passes.
 - [ ] 1.2 In `docs/architecture/core.md`, amend core.16's details with the incident and its "Not ruled out", and add the record to its ADRs, as Task notes 1.2 words them. Rewrite `site/src/content/docs/architecture/rules.md` with `node site/scripts/rules.mjs`. True when `sluice exec bolt/what-a-place-starts-ends-with-it -- moon run site:rules` passes.
 
 ## 2. Gone, as git reads it
