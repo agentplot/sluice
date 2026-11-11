@@ -142,6 +142,10 @@ inputs.sluice.url = "github:agentplot/sluice";
 # then: inputs.sluice.packages.${system}.default
 ```
 
+A build of `main` reports `0.0.0`; a release's tag, as in
+`github:agentplot/sluice/v<x.y.z>`, builds that release, which reports
+its version with nothing given.
+
 Its modules, `darwinModules.sluice` and `nixosModules.sluice`, install
 the package and write the host's own settings from
 `services.sluice.settings`, each key named as the file names it
@@ -337,6 +341,9 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org),
 checked by a commit hook. Each push to `main` with a feature, a fix or a
 docs change is tagged and released, with notes by
 [git-cliff](https://git-cliff.org); `release-preview` shows the next one.
+Each release's tag names a release commit cut from the pushed commit, in
+which `set-version.sh` writes the version into `Cargo.toml` and the
+plugins' manifests; `main`'s tree names `0.0.0`.
 
 ## License
 

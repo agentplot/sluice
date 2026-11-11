@@ -33,4 +33,4 @@ part of the tree touched, citing record 0111 and rule core.55.
 
 ## 5. The docs
 
-- [ ] 5.1 `README.md` says, as Task notes 5.1 gives it, that a build of main reports `0.0.0`, that a release's tag builds that release with nothing given, and that each release's tag names a release commit in which `set-version.sh` writes the version. No gate reads `*.md` outside the site (core.21's details), so this is checked by reading. True when `git grep -n 'SLUICE_VERSION' -- README.md` prints nothing and `git grep -n 'set-version.sh' -- README.md` prints the paragraph on releases.
+- [x] 5.1 `README.md` says, as Task notes 5.1 gives it, that a build of main reports `0.0.0`, that a release's tag builds that release with nothing given, and that each release's tag names a release commit in which `set-version.sh` writes the version. No gate reads `*.md` outside the site (core.21's details), so this is checked by reading. True when `git grep -n 'SLUICE_VERSION' -- README.md` prints nothing and `git grep -n 'set-version.sh' -- README.md` prints the paragraph on releases.
