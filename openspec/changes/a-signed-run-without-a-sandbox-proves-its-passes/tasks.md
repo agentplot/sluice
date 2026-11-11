@@ -26,7 +26,7 @@ rules core.9 and core.35 are already written on this branch.
 
 ## 3. The fakes answer keys and refusals
 
-- [ ] 3.1 In `crates/sluice-fakes/src/lib.rs`, make `FakeTests::proven` give each pass `keeps_no_proof` leaves unkept `key: Some(<its key>)`, and answer each task `forges` names in `refused` with its key and `why` `<task>: its record names an input the tree does not hold` (design D6). The fakes name no moon (rule core.1). Make `a_world_that_keeps_no_proof_answers_each_ran_pass_unkept` assert the key, and add `a_forged_key_is_refused_with_why` beside it. True when `cargo test -p sluice-fakes --lib a_forged_key_is_refused_with_why` passes.
+- [x] 3.1 In `crates/sluice-fakes/src/lib.rs`, make `FakeTests::proven` give each pass `keeps_no_proof` leaves unkept `key: Some(<its key>)`, and answer each task `forges` names in `refused` with its key and `why` `<task>: its record names an input the tree does not hold` (design D6). The fakes name no moon (rule core.1). Make `a_world_that_keeps_no_proof_answers_each_ran_pass_unkept` assert the key, and add `a_forged_key_is_refused_with_why` beside it. True when `cargo test -p sluice-fakes --lib a_forged_key_is_refused_with_why` passes.
 
 ## 4. The records carry keys and why
 
