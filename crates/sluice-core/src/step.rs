@@ -1609,7 +1609,7 @@ impl Sluice<'_> {
         // Design D9 (C.6): on a branch whose records are on its remote, a
         // result is recorded signed, and only for a key the candidate's
         // tree bears out, a task a check was failed by as a check (149).
-        let proven: Option<Vec<String>> = if rules.signed {
+        let (proven, refused): (Option<Vec<String>>, Vec<sluice_seams::Refused>) = if rules.signed {
             let proof = self.seams.tests.proven(run, &report)?;
             // 114, 16, record 0105 (design D5, D6 of the change
             // `a-pass-nothing-proves-blames-no-one`; rule core.35): a pass
@@ -1638,9 +1638,9 @@ impl Sluice<'_> {
                 .tasks
                 .retain(|t| !proof.unkept.iter().any(|n| n.task == t.task));
             report.not_run.extend(proof.unkept);
-            Some(proof.proven)
+            (Some(proof.proven), proof.refused)
         } else {
-            None
+            (None, Vec::new())
         };
         // 149, 16: the run of a task a check was failed by is recorded
         // under its own key as any check's run is (rule core.7).
@@ -1709,6 +1709,15 @@ impl Sluice<'_> {
         // the tree did not bear out was signed by no one, so it is no pass
         // (15, 149): the verdict reads it failed under that key.
         let mut v = verdict::read(&report, &results, rules, system, home, proven.as_deref());
+        // C.6, 20 (design D5 of the change
+        // `a-signed-run-without-a-sandbox-proves-its-passes`): a check
+        // failed under a key the check profile refused says why, in the
+        // profile's words, on the submission blamed for it.
+        for f in &mut v.failed {
+            if let Some(r) = refused.iter().find(|r| r.task == f.task && r.key == f.hash) {
+                f.unsigned = Some(r.why.clone());
+            }
+        }
         // 108: a replay no trusted pass proved counts for nothing, and the
         // checks run again with no replay.
         if !v.unproven.is_empty() && !r.no_replay {

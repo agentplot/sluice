@@ -285,6 +285,43 @@ fn a_key_the_tree_does_not_bear_out_is_still_failed() {
     assert!(missing(&h).is_empty());
 }
 
+/// satisfies: C.6, 20; the pass-proof spec's "A forged key" (design D5
+/// of the change `a-signed-run-without-a-sandbox-proves-its-passes`)
+#[test]
+fn a_key_the_tree_does_not_bear_out_is_blamed_with_why() {
+    let h = rig();
+    h.w().forges("a:test");
+    h.work(
+        "unit/a",
+        "agent-a",
+        &[("a/lib", Some("a2")), ("b/lib", Some("b2"))],
+    );
+    let one = h.submit("unit/a");
+    settle(&h);
+    assert_eq!(h.sub(one).state, State::Failed);
+    let key = h
+        .w()
+        .observed()
+        .into_iter()
+        .find(|(task, _, _)| task == "a:test")
+        .map(|(_, key, _)| key)
+        .expect("a:test ran");
+    let failed: Vec<(String, String, Option<String>)> = h
+        .sub(one)
+        .failed
+        .iter()
+        .map(|f| (f.task.clone(), f.hash.clone(), f.unsigned.clone()))
+        .collect();
+    assert_eq!(
+        failed,
+        [(
+            "a:test".to_string(),
+            key,
+            Some("a:test: its record names an input the tree does not hold".to_string())
+        )]
+    );
+}
+
 /// satisfies: 78; record 0105; the pass-proof spec's "Its runs keep no
 /// manifest"
 #[test]
