@@ -21,7 +21,7 @@ sidebar:
 | `sluice protect` | Install the branch-protection hook; `--remove` takes it out. Warns of a worktree that has checked out a protected branch. `--json` for scripts. |
 | `sluice exec <branch>` | Run the tests this worktree's head affects against the branch, in the worktree, under the host's bound, with the worktree's ports and the branch's limits. `-- <command>` runs a command instead. `--json` for scripts. |
 | `sluice equip <branch>` | Make this worktree ready for the branch's runner, as sluice makes every checkout ready before it runs anything there: the toolchain, then under moon the tool versions `.prototools` lists installed, moon's version checked and `moon setup`. It holds nothing. `--at <revision>` reads the policy at that revision; `--json` for scripts ([below](#sluice-equip)). |
-| `sluice release` | Release this worktree: run the policy's release command, end what its runs left running, and free its ports. The worktree stays. `--accept-failure` frees its ports and ends its runs without running the release command. `--json` for scripts. |
+| `sluice release` | Release this worktree: run the policy's release command, end what its runs left running, and free its ports. The worktree stays. In a worktree sluice holds nothing for, it runs the default branch's release command all the same ([below](#worktrees-sluice-holds)). `--accept-failure` frees its ports and ends its runs without running the release command. `--json` for scripts. |
 | `sluice preview <branch> <revision>` | Bring up a revision the branch has landed in a checkout of its own, at addresses a person opens, until it is released. `--wait` returns once its command has ended; `--json` for scripts. |
 | `sluice previews` | Every preview on the host, with its addresses and state. `--json` for scripts. |
 | `sluice release <name>` | Release a preview, by its name or its revision: its release command runs, its checkout goes, its ports and names are free. Given a checkout held because its release failed, `sluice/try/<branch>/<n>`, run its release once more. `--accept-failure` frees either without running the release command. `--json` for scripts. |
@@ -411,8 +411,8 @@ refuses a branch whose policy names no `[branches]` table for it. Under
 
 It holds nothing: no ports, no record of the worktree and no part of
 the host's bound, and it never waits for room in it. Nothing of its own
-is left once it answers, so `sluice release` there finds nothing to
-release.
+is left once it answers, so `sluice release` there runs the policy's
+release command, as in any worktree sluice holds nothing for.
 
 ## Worktrees sluice holds
 
@@ -451,6 +451,16 @@ A worktree's head is ready to submit when `kind` is `checks`, `outcome`
 is `pass`, `recorded` is true and `head` is the worktree's head now. Its
 files may have changed since; that is for the reader to check, since
 sluice reads nothing from the worktree to list it.
+
+A worktree sluice holds nothing for, one where no `sluice exec` ran or
+one already released, is released all the same. `sluice release` there
+runs the release command the policy of the repository's default branch
+names, in the worktree and with no ports, and sluice keeps nothing for
+the worktree after. It exits `0` when the command passed and `1` with
+what the command printed when it failed, and says `nothing to release`
+only when the policy names no release command. So a driver that removes
+the worktree after `sluice release` ends what the worktree's own
+commands started, whether or not they ran under `sluice exec`.
 
 A worktree that has checked out a branch sluice lands on is named
 too, whether sluice holds anything for it or not. sluice moves that
@@ -1510,7 +1520,7 @@ else they say goes to stderr:
 | `sluice amend` | `{"id","after","priority"}`, as the submission now stands |
 | `sluice withdraw` | `{"id","state":"withdrawn"}`, with `"already":true` when it was withdrawn before |
 | `sluice set-aside` | `{"schema","at","task","hash","run_at","branch","combination","reason","by"}`, the record kept |
-| `sluice release` | `{"worktree","released"}`, or `{"preview","released"}` for a preview; `released` is `false` when there was nothing to release. With `--accept-failure` it adds `accepted`, and a release that failed adds `failed`. For a held checkout, `{"place","released","accepted","failed"}` |
+| `sluice release` | `{"worktree","released"}`, or `{"preview","released"}` for a preview; `released` is `false` when the policy names no release command, the folder is in no worktree, or the release failed. With `--accept-failure` it adds `accepted`, and a release that failed adds `failed`. For a held checkout, `{"place","released","accepted","failed"}` |
 | `sluice protect` | `{"protection":"installed","changed","held"}`: `changed` is `false` when the hook was in place already, and `held` lists each worktree that has checked out a protected branch; with `--remove`, `{"protection":"removed","changed"}` |
 | `sluice forge check` | `{"branch","ok","checks"}`, each check with its `ok` and `message` |
 
@@ -1523,7 +1533,8 @@ failed; `2` when the revision or the branch is refused; `130` when
 stopped while it waits.
 
 `sluice release` exits `1` when the release it ran failed, saying what
-failed, and `0` otherwise, nothing to release included.
+failed, or when the policy that names its release command could not be
+read, naming the branch, and `0` otherwise, nothing to release included.
 
 `sluice exec` exits `0` when every test passed, `1` when one failed, was
 not run, could not run or timed out, `2` on a refusal, and `130` when stopped with

@@ -862,6 +862,152 @@ impl Places {
         }
     }
 
+    /// Session-runs-1 clause 95: release the session's place `name`, held
+    /// as its record `made` says: every run in it ended, the release
+    /// command run once, as `policy` states it or, given none, as its last
+    /// run carried it, then its scratch, ports and record let go. A release
+    /// that fails keeps the place, held (123).
+    fn release_held(
+        &self,
+        name: &str,
+        made: &Made,
+        policy: Option<&ReleasePolicy>,
+    ) -> Result<Released> {
+        if made.kind != Kind::Session {
+            bail!("place {name} is a candidate's, not a session's");
+        }
+        let released = (|| {
+            // 95: the policy's release command, built now, under the
+            // executor its runs had; the last run's only when no policy is
+            // given.
+            let (with, released) = match policy {
+                None => (ReleaseWith::LastRun, Released::LastRun),
+                Some(p) => {
+                    let place = self.session_place(name, made)?;
+                    let request = self.build_release(&place, p, name)?;
+                    (ReleaseWith::Fresh(request), Released::Policy)
+                }
+            };
+            self.runs.remove_all_with(name, with)?;
+            self.let_go(name, Some(made))?;
+            Ok(released)
+        })();
+        // 123: held at once: no round releases a session's place (25).
+        if let Err(e) = &released {
+            self.keep_failure(name, e, |_| true);
+        }
+        released
+    }
+
+    /// Session-runs-1 clause 95, rule core.10, record 0112: release `name`,
+    /// a session's place with no record, under `policy`, where its folder
+    /// is a worktree of the repository: by the path a held place's release
+    /// takes, with a record and a scratch of the release's own, the
+    /// policy's branch on it and no ports, so the scratch is named while it
+    /// exists (rule core.30) and the release is given the `SLUICE_PLACE` a
+    /// run there is. Both are let go once the release ends, whether it
+    /// passed or failed, so nothing is kept for the worktree and a release
+    /// asked again runs again. A policy that names no release command, a
+    /// folder that has gone and one that is no worktree of the repository,
+    /// another repository's among them, have nothing to release.
+    fn release_unheld(&self, name: &str, policy: &ReleasePolicy) -> Result<Released> {
+        let Some(folder) = name.strip_prefix(SESSION) else {
+            return Ok(Released::Nothing);
+        };
+        let Ok((path, _)) = Places::session_name(folder) else {
+            return Ok(Released::Nothing);
+        };
+        if !self.is_worktree(&path)? {
+            return Ok(Released::Nothing);
+        }
+        let made = {
+            let lock = self.lock_records()?;
+            if let Some(made) = self.read_record(name)? {
+                // Adopted meanwhile: held now, and released as held.
+                drop(lock);
+                return self.release_held(name, &made, Some(policy));
+            }
+            let made = Made {
+                branch: Some(policy.branch.clone()),
+                path: Some(path),
+                scratch: Some(self.new_scratch(name)?),
+                ..Made::new(Kind::Session, "session")
+            };
+            self.write_record(name, &made)?;
+            made
+        };
+        let released = (|| {
+            self.make_scratch(&self.scratch(name, &made))?;
+            let place = self.session_place(name, &made)?;
+            let Some(request) = self.build_release(&place, policy, name)? else {
+                return Ok(Released::Nothing);
+            };
+            self.runs
+                .remove_all_with(name, ReleaseWith::Fresh(Some(request)))?;
+            Ok(Released::Policy)
+        })();
+        // Record 0112: nothing kept for it, passed or failed; a failed
+        // release's run is no hold either.
+        if released.is_err() {
+            if let Err(e) = self.runs.discard_all(name) {
+                tracing::warn!(
+                    sluice.place = name,
+                    "removing a failed release's run failed: {e:#}"
+                );
+            }
+        }
+        let freed = self.let_go(name, Some(&made));
+        match (released, freed) {
+            (Err(e), Err(f)) => {
+                tracing::warn!(
+                    sluice.place = name,
+                    "letting go of a failed release's record failed: {f:#}"
+                );
+                Err(e)
+            }
+            (released, freed) => freed.and(released),
+        }
+    }
+
+    /// 95: the release of `place`, the session's place `name`, as `policy`
+    /// states it, built by the check seam's builder; `None` where the
+    /// policy names no release command.
+    fn build_release(
+        &self,
+        place: &Place,
+        policy: &ReleasePolicy,
+        name: &str,
+    ) -> Result<Option<Request>> {
+        let build = self
+            .release
+            .as_ref()
+            .ok_or_else(|| anyhow!("no release command builder is bound"))?;
+        build(
+            place,
+            &policy.tests,
+            &policy.limits,
+            &self.runs.release_dir(name),
+        )
+    }
+
+    /// Record 0112: whether `path`, canonical, is the repository's main
+    /// worktree or a linked worktree git lists, detached or not, read with
+    /// no process started (129).
+    fn is_worktree(&self, path: &Path) -> Result<bool> {
+        let repo = self.repo()?;
+        let is = |dir: &Path| std::fs::canonicalize(dir).is_ok_and(|d| d == path);
+        if !repo.is_bare() && repo.workdir().is_some_and(is) {
+            return Ok(true);
+        }
+        let linked = repo
+            .worktrees()
+            .map_err(|e| anyhow!("listing the worktrees: {e}"))?;
+        Ok(linked
+            .into_iter()
+            .filter(|w| !w.is_prunable())
+            .any(|w| w.base().is_ok_and(|b| is(&b))))
+    }
+
     /// Hold blocks of ports in `dir` rather than the host's own.
     pub fn with_blocks(mut self, dir: PathBuf) -> Self {
         self.blocks = Some(dir);
@@ -1571,36 +1717,14 @@ impl Checkout for Places {
             if crate::runs::is_session(name) {
                 self.runs.remove_all_with(name, ReleaseWith::Fresh(None))?;
             }
-            return Ok(Released::Nothing);
-        };
-        if made.kind != Kind::Session {
-            bail!("place {name} is a candidate's, not a session's");
-        }
-        let released = (|| {
-            // 95: the policy's release command, built now, under the
-            // executor its runs had; the last run's only when no policy is
-            // given.
-            let (with, released) = match policy {
-                None => (ReleaseWith::LastRun, Released::LastRun),
-                Some(p) => {
-                    let build = self
-                        .release
-                        .as_ref()
-                        .ok_or_else(|| anyhow!("no release command builder is bound"))?;
-                    let place = self.session_place(name, &made)?;
-                    let request = build(&place, &p.tests, &p.limits, &self.runs.release_dir(name))?;
-                    (ReleaseWith::Fresh(request), Released::Policy)
-                }
+            // Record 0112: a worktree sluice holds nothing for is released
+            // by the policy's release command all the same.
+            return match policy {
+                Some(p) => self.release_unheld(name, p),
+                None => Ok(Released::Nothing),
             };
-            self.runs.remove_all_with(name, with)?;
-            self.let_go(name, Some(&made))?;
-            Ok(released)
-        })();
-        // 123: held at once: no round releases a session's place (25).
-        if let Err(e) = &released {
-            self.keep_failure(name, e, |_| true);
-        }
-        released
+        };
+        self.release_held(name, &made, policy)
     }
 
     fn session_places(&self) -> Result<Vec<SessionPlace>> {

@@ -9,6 +9,8 @@ decision-makers:
 
 # An agent's worktree is a place sluice equips and never removes
 
+Amended in part by record 0112, 2026-11-11: in a worktree sluice holds nothing for, `sluice release` runs the policy's release command all the same. It is read from the repository's default branch at its current revision, run with no ports and a scratch of the release's own, and keeps nothing once it answers. It says `nothing to release` only where that policy names no release command.
+
 Deciders: the user, reviewing the OpenSpec change `session-runs`, 2026-10-14.
 Sources: `agentplot/blueprints:design/sluice/proposals/session-runs-1.md` clauses 89 to 95; `agentplot/blueprints:design/sluice/requirements.md` clauses 25, 31, 34, 35, 56, 71, 83, 84; ADRs 0012, 0013, 0016.
 

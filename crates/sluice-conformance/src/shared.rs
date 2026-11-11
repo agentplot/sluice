@@ -888,6 +888,7 @@ pub fn s27_a_sessions_place_stays_until_it_is_released(h: &impl Rig) {
         .expect("the policy reads")
         .expect("a policy");
     let release = ReleasePolicy {
+        branch: "bolt/x".into(),
         tests: policy.tests,
         limits: policy.limits,
     };
