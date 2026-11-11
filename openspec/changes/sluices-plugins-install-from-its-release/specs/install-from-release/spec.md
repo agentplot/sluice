@@ -1,3 +1,12 @@
+# Spec Delta
+
+## Purpose
+
+How sluice and its plugins are installed, so that what a person
+installs is one release: every install command the docs give names a
+release's tag, its archive or the `release` branch each release moves,
+and none names main (record 0112; rule core.56).
+
 ## ADDED Requirements
 
 ### Requirement: Every install command names a release
