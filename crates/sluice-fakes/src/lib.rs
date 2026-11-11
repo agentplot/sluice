@@ -2651,8 +2651,27 @@ impl Checkout for FakeCheckout {
     }
 
     fn release_session(&self, name: &str, policy: Option<&ReleasePolicy>) -> Result<Released> {
+        let release = policy.and_then(|p| match p.tests.get("release") {
+            Some(sluice_seams::Setting::Text(t)) => Some(t.clone()),
+            _ => None,
+        });
         if !self.0 .0.borrow().adopted.iter().any(|a| a == name) {
-            return Ok(Released::Nothing);
+            // Record 0112: a worktree of the world's it holds nothing for
+            // is released by the policy's release command all the same,
+            // and nothing is kept for it, passed or failed.
+            let worktree = name.strip_prefix("session/").unwrap_or(name);
+            let Some(release) =
+                release.filter(|_| self.0 .0.borrow().worktrees.contains_key(worktree))
+            else {
+                return Ok(Released::Nothing);
+            };
+            self.attempt(name)?;
+            self.0
+                 .0
+                .borrow_mut()
+                .session_releases
+                .push((name.into(), Some(release)));
+            return Ok(Released::Policy);
         }
         if let Err(e) = self.attempt(name) {
             // 123: kept, held: no round releases a session's place.
@@ -2663,10 +2682,6 @@ impl Checkout for FakeCheckout {
             return Err(e);
         }
         self.drop_place(name);
-        let release = policy.and_then(|p| match p.tests.get("release") {
-            Some(sluice_seams::Setting::Text(t)) => Some(t.clone()),
-            _ => None,
-        });
         self.0
              .0
             .borrow_mut()
