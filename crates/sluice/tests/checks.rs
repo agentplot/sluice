@@ -1768,6 +1768,39 @@ fn the_places_containers_are_removed_and_no_other() {
     assert_eq!(engine.listings(), 1, "one engine, asked once");
 }
 
+/// Record 0112 (design D4): an engine that answers in HTTP/1.1 and holds
+/// each connection open after its answer, as one host's did (2026-11-11),
+/// is read by the end each answer gives itself, its last chunk or a
+/// `204`, and never waited on: its refusal's words are read from its
+/// chunks, the rest removed, and the next end removes what it refused.
+#[test]
+fn an_engine_that_keeps_its_connections_open_is_read_to_each_answers_end() {
+    let dir = Scratch::short();
+    let engine = support::containers_engine(dir.path());
+    engine.keep_open();
+    let place = preview_place(dir.path());
+    engine.hold(four_containers(&place, dir.path()));
+    engine.refuse("labelled", 1);
+    let at = [Endpoint::Unix(engine.socket())];
+
+    let began = std::time::Instant::now();
+    let e = sluice::profiles::checks::end_containers(&at, &place)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        e.contains(&format!("labelled: {}", support::REFUSED.1)),
+        "{e}"
+    );
+    assert_eq!(engine.removed(), ["mounts", "publishes"]);
+    sluice::profiles::checks::end_containers(&at, &place).unwrap();
+    assert_eq!(engine.removed(), ["mounts", "publishes", "labelled"]);
+    assert!(
+        began.elapsed() < std::time::Duration::from_secs(5),
+        "waited {:?} on connections the engine held",
+        began.elapsed()
+    );
+}
+
 /// Record 0112 (design D5): a removal the engine refuses is named with
 /// the engine's words, the other containers are removed all the same, and
 /// one the engine says is gone counts as removed.

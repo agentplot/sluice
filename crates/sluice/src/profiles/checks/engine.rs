@@ -173,9 +173,11 @@ fn call(
     }
 }
 
-/// [`call`] over a unix socket, spoken as [`super::ping`] speaks: HTTP/1.0,
-/// the answer read to its end, on a thread of its own, so a socket that
-/// never takes the connection, or never answers, holds nothing.
+/// [`call`] over a unix socket, spoken as [`super::ping`] speaks, in
+/// HTTP/1.0 asking the engine to close the connection, the answer read to
+/// the end it gives itself ([`read_answer`]), on a thread of its own, so a
+/// socket that never takes the connection, or never answers, holds
+/// nothing.
 fn unix_call(
     socket: &Path,
     method: &str,
@@ -183,14 +185,14 @@ fn unix_call(
     wait: Duration,
     most: u64,
 ) -> std::result::Result<(u16, Vec<u8>), String> {
-    use std::io::{Read, Write};
+    use std::io::Write;
     enum Step {
         Connected,
         Said(std::io::Result<Vec<u8>>),
     }
     let (tx, rx) = std::sync::mpsc::channel();
     let at = socket.to_path_buf();
-    let ask = format!("{method} {path} HTTP/1.0\r\nHost: docker\r\n\r\n");
+    let ask = format!("{method} {path} HTTP/1.0\r\nHost: docker\r\nConnection: close\r\n\r\n");
     let limit = most + HEAD_MOST;
     std::thread::spawn(move || {
         let said = (|| {
@@ -199,9 +201,7 @@ fn unix_call(
             s.set_read_timeout(Some(wait))?;
             s.set_write_timeout(Some(wait))?;
             s.write_all(ask.as_bytes())?;
-            let mut got = Vec::new();
-            s.take(limit + 1).read_to_end(&mut got)?;
-            Ok(got)
+            read_answer(&mut s, limit)
         })();
         let _ = tx.send(Step::Said(said));
     });
@@ -221,10 +221,117 @@ fn unix_call(
     answer(&got)
 }
 
+/// An answer read from `s` up to the end it gives itself, else to the
+/// connection's close, and never past `limit` bytes and one more. An
+/// engine may hold the connection open once it has answered, whatever the
+/// ask said (one host's, 2026-11-11: an HTTP/1.1 answer to an HTTP/1.0 ask,
+/// the connection held until the asker closed it), so a read that waited
+/// for the close would wait out its bound on every call.
+fn read_answer(s: &mut impl std::io::Read, limit: u64) -> std::io::Result<Vec<u8>> {
+    let mut got = Vec::new();
+    let mut buf = vec![0u8; 64 << 10];
+    let mut ends = None;
+    loop {
+        let n = match s.read(&mut buf) {
+            Ok(0) => return Ok(got),
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
+        got.extend_from_slice(&buf[..n]);
+        if got.len() as u64 > limit {
+            return Ok(got);
+        }
+        if ends.is_none() {
+            ends = body_at(&got).map(|at| (at, ending(&got[..at])));
+        }
+        let whole = match &ends {
+            None | Some((_, Ending::Close)) => false,
+            Some((_, Ending::Now)) => true,
+            Some((at, Ending::After(n))) => got.len() - at >= *n,
+            Some((at, Ending::LastChunk)) => last_chunk_read(&got[*at..]),
+        };
+        if whole {
+            return Ok(got);
+        }
+    }
+}
+
+/// Where an answer's body ends, as its head says.
+enum Ending {
+    /// It has none: a `1xx`, `204` or `304`.
+    Now,
+    /// After as many bytes as its `Content-Length` says.
+    After(usize),
+    /// At its last chunk, a chunk of no size.
+    LastChunk,
+    /// With the connection.
+    Close,
+}
+
+/// Where `got`'s body begins, once it holds the whole head.
+fn body_at(got: &[u8]) -> Option<usize> {
+    got.windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .map(|at| at + 4)
+}
+
+/// A header's value in `head`, by its name in any case.
+fn header(head: &str, name: &str) -> Option<String> {
+    head.lines().skip(1).find_map(|l| {
+        let (k, v) = l.split_once(':')?;
+        k.trim()
+            .eq_ignore_ascii_case(name)
+            .then(|| v.trim().to_string())
+    })
+}
+
+/// Where the body of an answer whose head is `head` ends.
+fn ending(head: &[u8]) -> Ending {
+    let head = String::from_utf8_lossy(head);
+    let status = head
+        .lines()
+        .next()
+        .and_then(|l| l.split_whitespace().nth(1))
+        .and_then(|s| s.parse::<u16>().ok());
+    if matches!(status, Some(100..=199 | 204 | 304)) {
+        return Ending::Now;
+    }
+    if header(&head, "transfer-encoding").is_some_and(|v| v.eq_ignore_ascii_case("chunked")) {
+        return Ending::LastChunk;
+    }
+    match header(&head, "content-length").and_then(|v| v.parse().ok()) {
+        Some(n) => Ending::After(n),
+        None => Ending::Close,
+    }
+}
+
+/// Whether a chunked `body` holds its last chunk's line.
+fn last_chunk_read(mut body: &[u8]) -> bool {
+    loop {
+        let Some(line) = body.windows(2).position(|w| w == b"\r\n") else {
+            return false;
+        };
+        let size = String::from_utf8_lossy(&body[..line]);
+        let size = size.split(';').next().unwrap_or("").trim();
+        let Ok(size) = usize::from_str_radix(size, 16) else {
+            // Not a chunk: read on to the close, and [`answer`] says so.
+            return false;
+        };
+        if size == 0 {
+            return true;
+        }
+        match body.get(line + 2 + size + 2..) {
+            Some(rest) => body = rest,
+            None => return false,
+        }
+    }
+}
+
 /// An HTTP answer read whole: its status and its body, the body as its
 /// `Content-Length` or its chunks give it.
 fn answer(got: &[u8]) -> std::result::Result<(u16, Vec<u8>), String> {
-    let Some(end) = got.windows(4).position(|w| w == b"\r\n\r\n") else {
+    let Some(at) = body_at(got) else {
         let first = String::from_utf8_lossy(got);
         let first = first.lines().next().unwrap_or("").trim();
         return Err(match first.is_empty() {
@@ -232,30 +339,20 @@ fn answer(got: &[u8]) -> std::result::Result<(u16, Vec<u8>), String> {
             false => format!("answered {first:?}"),
         });
     };
-    let head = String::from_utf8_lossy(&got[..end]);
-    let mut lines = head.lines();
-    let first = lines.next().unwrap_or("").trim();
+    let head = String::from_utf8_lossy(&got[..at - 4]);
+    let first = head.lines().next().unwrap_or("").trim();
     let status = first
         .split_whitespace()
         .nth(1)
         .and_then(|s| s.parse::<u16>().ok())
         .ok_or_else(|| format!("answered {first:?}"))?;
-    let header = |name: &str| {
-        head.lines().skip(1).find_map(|l| {
-            let (k, v) = l.split_once(':')?;
-            k.trim()
-                .eq_ignore_ascii_case(name)
-                .then(|| v.trim().to_string())
-        })
-    };
-    let body = &got[end + 4..];
-    if header("transfer-encoding").is_some_and(|v| v.eq_ignore_ascii_case("chunked")) {
-        return Ok((status, unchunked(body)?));
-    }
-    match header("content-length").and_then(|v| v.parse::<usize>().ok()) {
-        Some(n) if body.len() < n => Err("cut its answer short".into()),
-        Some(n) => Ok((status, body[..n].to_vec())),
-        None => Ok((status, body.to_vec())),
+    let body = &got[at..];
+    match ending(&got[..at]) {
+        Ending::Now => Ok((status, Vec::new())),
+        Ending::LastChunk => Ok((status, unchunked(body)?)),
+        Ending::After(n) if body.len() < n => Err("cut its answer short".into()),
+        Ending::After(n) => Ok((status, body[..n].to_vec())),
+        Ending::Close => Ok((status, body.to_vec())),
     }
 }
 

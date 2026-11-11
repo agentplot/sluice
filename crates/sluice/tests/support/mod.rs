@@ -774,6 +774,8 @@ struct EngineState {
     refuse: std::collections::BTreeMap<String, u32>,
     /// How many times its containers were listed.
     listings: u32,
+    /// Whether it answers as an engine that keeps each connection open.
+    open: bool,
 }
 
 /// A fake container engine (record 0112): `GET /_ping` answers `200`;
@@ -782,7 +784,8 @@ struct EngineState {
 /// answers `204`, `404` for one it does not hold, or [`REFUSED`] while
 /// [`Engine::refuse`] says; any other ask a `404`, or a `400` for a
 /// removal without both of its parameters. Each connection is answered
-/// as the engine answers HTTP/1.0, then closed.
+/// as the engine answers HTTP/1.0, then closed, unless
+/// [`Engine::keep_open`] says otherwise.
 #[derive(Clone)]
 pub struct Engine {
     socket: Option<PathBuf>,
@@ -800,6 +803,7 @@ impl Engine {
                 removed: Vec::new(),
                 refuse: Default::default(),
                 listings: 0,
+                open: false,
             })),
         }
     }
@@ -813,6 +817,15 @@ impl Engine {
     /// depend on what a run wrote.
     pub fn hold_with(&self, make: impl Fn() -> serde_json::Value + Send + 'static) -> &Engine {
         self.state.lock().unwrap().held = Box::new(make);
+        self
+    }
+
+    /// Answer as one host's engine answers (2026-11-11): in HTTP/1.1
+    /// whatever was asked, a listing in chunks, a removal's `204` with no
+    /// length, and each connection held open after its answer until the
+    /// asker closes it.
+    pub fn keep_open(&self) -> &Engine {
+        self.state.lock().unwrap().open = true;
         self
     }
 
@@ -901,12 +914,33 @@ impl Engine {
             }
             _ => ("404 Not Found".into(), message("page not found")),
         };
-        let _ = write!(
-            c,
-            "HTTP/1.0 {status}\r\nApi-Version: 1.47\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
-            body.len()
-        );
+        if !self.state.lock().unwrap().open {
+            let _ = write!(
+                c,
+                "HTTP/1.0 {status}\r\nApi-Version: 1.47\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = c.flush();
+            return;
+        }
+        let head = format!("HTTP/1.1 {status}\r\nApi-Version: 1.47\r\n");
+        let _ = match status.starts_with("204 ") {
+            true => write!(c, "{head}\r\n"),
+            false => {
+                let chunks: String = body
+                    .as_bytes()
+                    .chunks(7)
+                    .map(|b| format!("{:x}\r\n{}\r\n", b.len(), String::from_utf8_lossy(b)))
+                    .collect();
+                write!(
+                    c,
+                    "{head}Content-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n{chunks}0\r\n\r\n"
+                )
+            }
+        };
         let _ = c.flush();
+        // Held until the asker closes it.
+        while matches!(c.read(&mut buf), Ok(n) if n > 0) {}
     }
 }
 
