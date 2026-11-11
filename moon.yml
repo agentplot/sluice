@@ -47,6 +47,16 @@ tasks:
     inputs: ['/Cargo.toml', '/Cargo.lock', '/.claude-plugin/marketplace.json', '/plugins/*/.claude-plugin/plugin.json', '/plugins/*/herdr-plugin.toml', '/set-version.sh', '/check-versions.sh', '/devenv.nix', '/devenv.lock']
     tags: [check-fast]
     options: {runFromWorkspaceRoot: true}
+  # The workflow releases as record 0111 has it: the binaries built from
+  # the release's tree with nothing given, the release commit and its tag
+  # pushed alone, and the next version reckoned from the newest tag
+  # (check-release.sh; core.55). actionlint, under format, reads the
+  # workflow's keys and shell; this reads what a release's steps must be.
+  release:
+    command: 'sh check-release.sh'
+    inputs: ['/.github/workflows/ci.yml', '/check-release.sh']
+    tags: [check-fast]
+    options: {runFromWorkspaceRoot: true}
   # Every spec under openspec/specs passes openspec validate --strict, which
   # fails a warning as an error, by the openspec devenv.nix pins (core.24).
   # It sends no usage statistics and asks for no newer release.

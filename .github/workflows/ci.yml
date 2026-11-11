@@ -6,7 +6,10 @@
 # pull request's Linux run passed (core.17), so it builds and tests
 # nothing and goes straight to its release; a push to main no landing made
 # is built on macOS and Linux and tested whole first. Each push to main
-# that git-cliff finds a new version in is released (cliff.toml).
+# that git-cliff finds a new version in is released (cliff.toml), under a
+# tag that names a release commit cut from the pushed commit, in which
+# set-version.sh writes the release's version into every file that carries
+# sluice's; main's tree names 0.0.0 (record 0111, core.55).
 name: ci
 
 on:
@@ -113,7 +116,10 @@ jobs:
   # The commits since the last release are conventional (.versionrc): a
   # session can skip the commit-msg hook, and git-cliff releases from them.
   # Merge commits are not checked, nor a commit `git revert` wrote, whose
-  # subject opens `Revert "`, as the hook takes it (devenv.nix).
+  # subject opens `Revert "`, as the hook takes it (devenv.nix). The last
+  # release is the newest v* tag by version, whose release commit is off
+  # main, its one parent the commit it released: the range from it is the
+  # commits main took since.
   conventional:
     needs: landing
     if: needs.landing.outputs.tested == ''
@@ -124,11 +130,12 @@ jobs:
           fetch-depth: 0
       - uses: cachix/install-nix-action@v31
       - run: |
-          last="$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)"
+          last="$(git tag --list 'v*' --sort=-v:refname | head -n 1)"
           nix shell --inputs-from . nixpkgs#convco -c convco check --ignore-reverts ${last:+"$last..HEAD"}
 
-  # The next version from the commits since the last v* tag; empty when
-  # it is already tagged.
+  # The next version from the commits since the newest v* tag; empty when
+  # it is already tagged. `--unreleased` starts the range at the newest tag,
+  # which is off main's history.
   version:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
@@ -141,16 +148,21 @@ jobs:
       - uses: cachix/install-nix-action@v31
       - id: next
         run: |
-          tag="$(nix shell --inputs-from . nixpkgs#git-cliff -c git-cliff --bumped-version)"
+          tag="$(nix shell --inputs-from . nixpkgs#git-cliff -c git-cliff --unreleased --bumped-version)"
           if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
             echo "$tag is already released"
           else
             echo "tag=$tag" >> "$GITHUB_OUTPUT"
           fi
 
-  # A landing's tests were skipped, its tree passed already; any other
-  # push's must each have passed. A skipped job skips what needs it unless
-  # the condition says otherwise, hence !cancelled().
+  # Each platform's binaries, built from the tree the release's tag will
+  # name: the pushed commit with the release's version written
+  # (set-version.sh). The flake's source is the checkout's tracked files, so
+  # the build is the one any builder of the tag makes, given nothing, and it
+  # fails unless the binary says the release's version (record 0111). A
+  # landing's tests were skipped, its tree passed already; any other push's
+  # must each have passed. A skipped job skips what needs it unless the
+  # condition says otherwise, hence !cancelled().
   binaries:
     if: |-
       !cancelled() && needs.version.outputs.tag != '' &&
@@ -171,19 +183,25 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: cachix/install-nix-action@v31
-      - run: SLUICE_VERSION="${TAG#v}" nix build --impure .#default --print-build-logs
+      - run: |
+          sh set-version.sh "${TAG#v}"
+          nix build .#default --print-build-logs
+          test "$(./result/bin/sluice --version)" = "sluice ${TAG#v}"
         env:
           TAG: ${{ needs.version.outputs.tag }}
-      - run: ./result/bin/sluice --version
       - run: tar -czf "sluice-${{ matrix.system }}.tar.gz" -C result/bin sluice wt-submit
       - uses: actions/upload-artifact@v4
         with:
           name: sluice-${{ matrix.system }}
           path: sluice-${{ matrix.system }}.tar.gz
 
-  # Tags the pushed commit and publishes the binaries with git-cliff's
-  # notes for the range. Nothing is committed back to main. A test job a
-  # landing skipped would skip it too, as it would binaries.
+  # git-cliff's notes for the range, then the release commit: the pushed
+  # commit, its one parent, with the release's version written into the
+  # files set-version.sh lists, committed by path. The tag names it and is
+  # pushed alone, and the binaries are published under it. Nothing is
+  # committed to main, which only sluice lands, no branch is pushed and no
+  # tag moves (record 0111, core.55). A test job a landing skipped would
+  # skip it too, as it would binaries.
   release:
     if: ${{ !cancelled() && needs.binaries.result == 'success' }}
     needs: [version, binaries]
@@ -202,7 +220,14 @@ jobs:
       - run: |
           nix shell --inputs-from . nixpkgs#git-cliff -c \
             git-cliff --unreleased --tag "$TAG" --strip all > notes.md
-          gh release create "$TAG" --target "$GITHUB_SHA" --title "$TAG" \
+          sh set-version.sh "${TAG#v}"
+          mapfile -t files < <(sh set-version.sh --files)
+          git -c user.name='github-actions[bot]' \
+            -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -q -m "chore(release): $TAG" -- "${files[@]}"
+          git tag "$TAG"
+          git push origin "refs/tags/$TAG"
+          gh release create "$TAG" --verify-tag --title "$TAG" \
             --notes-file notes.md sluice-*.tar.gz
         env:
           TAG: ${{ needs.version.outputs.tag }}
