@@ -1775,6 +1775,7 @@ impl Tests for Checks {
                     .map(|t| NotRun {
                         task: t.clone(),
                         reason: e.clone(),
+                        key: None,
                     })
                     .collect(),
             ),
@@ -1893,15 +1894,32 @@ impl Tests for Checks {
 
     /// A command runner's one key is sluice's own, so every task is
     /// proven. A moon task's key is checked against the candidate's tree
-    /// by its manifest, read in the store the run's moon kept it in
-    /// (design D9; C.2 moon row). A ran check that passed whose manifest,
-    /// or a dependency's, is missing there is unkept: the run kept no
-    /// proof of it, which says nothing of the work, so it is not warned of
-    /// and has no outcome (114; record 0105; the change
-    /// `a-pass-nothing-proves-blames-no-one`, design D2 to D4). Every
-    /// other key the check refuses is one the tree does not bear out, in
-    /// neither list and warned of. A fail, a task a check was failed by
-    /// (149) and a replay (108) are never unkept.
+    /// by its manifest, read where the run's moon kept it, in the checkout
+    /// or in the shared store moon's own settings place it (C.2 moon row;
+    /// rule core.9): each manifest the walk needs, the key's own and each
+    /// dependency's, is read in the store the run's record names and,
+    /// where that store is not the checkout's own `.moon/cache` and lacks
+    /// it, in the checkout's own, which this run's moon alone writes
+    /// (design D9; design D1 of the change
+    /// `a-signed-run-without-a-sandbox-proves-its-passes`). Either is held
+    /// to the same proof by its content.
+    ///
+    /// A ran check that passed whose manifest, or a dependency's, is
+    /// missing there is unkept: the run kept no proof of it, which says
+    /// nothing of the work, so it is not warned of and has no outcome
+    /// (114; record 0105; the change `a-pass-nothing-proves-blames-no-one`,
+    /// design D2 to D4). It names the missing manifest's key, and its
+    /// reason whose manifest is missing, the record's store and what that
+    /// store says of itself, read from the store with nothing run, never
+    /// from what moon printed (rule core.35; design D3 of
+    /// `a-signed-run-without-a-sandbox-proves-its-passes`). A fail, a task
+    /// a check was failed by (149) and a replay (108) are never unkept.
+    ///
+    /// Every other key the check refuses is one the tree does not bear
+    /// out, in neither list and warned of; one refused for a cause other
+    /// than a missing manifest is answered in `refused` with its key and
+    /// the check's words for why, so the submission blamed for it says why
+    /// (C.6, 20; design D5).
     fn proven(&self, run: &RunHandle, report: &RunReport) -> Result<Proof> {
         let meta: Meta = serde_json::from_value(self.runs.request(&run.0)?.meta)
             .with_context(|| format!("reading run {}", run.0))?;
@@ -1909,19 +1927,27 @@ impl Tests for Checks {
         if meta.runner != "moon" {
             return Ok(Proof {
                 proven: tasks.map(|t| t.task.clone()).collect(),
-                unkept: Vec::new(),
+                ..Proof::default()
             });
         }
-        let store = meta
-            .store
-            .clone()
-            .unwrap_or_else(|| meta.place.join(".moon/cache"));
-        let blob = |k: &str| super::moon::blob_in(&store, k);
+        let own = meta.place.join(".moon/cache");
+        let store = meta.store.clone().unwrap_or_else(|| own.clone());
+        let blob = |k: &str| {
+            super::moon::blob_in(&store, k).or_else(|| {
+                (store != own)
+                    .then(|| super::moon::blob_in(&own, k))
+                    .flatten()
+            })
+        };
         let tree = |p: &str| super::moon::file_at(&meta.place, &meta.revision, p);
         // A task a check was failed by is no check of the run (149).
         let checks = report.tasks.iter().map(|t| (t, true));
         let dependencies = report.dependencies.iter().map(|t| (t, false));
         let mut proof = Proof::default();
+        // Design D3 of `a-signed-run-without-a-sandbox-proves-its-passes`:
+        // how many of the run's keys moon kept a manifest of, in either
+        // store, read once a pass is found unkept.
+        let kept = std::cell::OnceCell::new();
         for (t, check) in checks.chain(dependencies) {
             let e = match super::moon::check_key(&t.hash, &t.task, &blob, &tree) {
                 Ok(()) => {
@@ -1932,16 +1958,39 @@ impl Tests for Checks {
             };
             let ran_pass =
                 check && matches!(t.source, Source::Ran { .. }) && t.outcome == Outcome::Pass;
-            if ran_pass && e.downcast_ref::<moon::NoManifest>().is_some() {
+            let missing = e.downcast_ref::<moon::NoManifest>().filter(|_| ran_pass);
+            if let Some(missing) = missing {
+                let whose = if missing.task == t.task {
+                    "it".to_string()
+                } else {
+                    format!("{}, which it depends on", missing.task)
+                };
+                let kept = *kept.get_or_init(|| {
+                    report
+                        .tasks
+                        .iter()
+                        .chain(&report.dependencies)
+                        .filter(|t| blob(&t.hash).is_some())
+                        .count()
+                });
+                let fact = super::moon::store_fact(&store, &missing.key, kept);
                 proof.unkept.push(NotRun {
                     task: t.task.clone(),
                     reason: format!(
                         "it passed, but nothing the run kept proves it ran: \
-                         moon's manifest of it is not in {}",
+                         moon's manifest of {whose} is not in {}, {fact}",
                         store.display()
                     ),
+                    key: Some(missing.key.clone()),
                 });
                 continue;
+            }
+            if e.downcast_ref::<moon::NoManifest>().is_none() {
+                proof.refused.push(sluice_seams::Refused {
+                    task: t.task.clone(),
+                    key: t.hash.clone(),
+                    why: format!("{e:#}"),
+                });
             }
             tracing::warn!(
                 sluice.task = %t.task,
@@ -2138,6 +2187,7 @@ fn command_result(meta: &Meta, ended: &Ended) -> (Vec<TaskResult>, Vec<NotRun>) 
             .map(|t| NotRun {
                 task: t.clone(),
                 reason: not_run_reason(code),
+                key: None,
             })
             .collect();
         return (Vec::new(), not_run);
