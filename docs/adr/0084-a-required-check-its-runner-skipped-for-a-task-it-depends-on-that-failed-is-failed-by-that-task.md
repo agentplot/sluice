@@ -58,4 +58,4 @@ Option 1 keeps a record whose top level names a failed check with no key, which 
 - The check seam's run report gains the failed tasks' results and the checks they failed. Every reader of a run, the gate, `sluice exec`, a session's last result and a preview, reads such a check as failed.
 - The record gains `failed_by` under `sluice/submission@1`, and a record without it reads as before.
 - Rule core.7's details rule out the check read as left without a result and the task's run left unrecorded. Rule core.34's rule out the failure weighed under the check's key.
-- The open change `a-checks-key-holds-its-executor` reads the executor's refusal (139) over the failed tasks and the checks they failed, as this change's reading of a gone engine does.
+- The change `a-check-its-executor-refused-has-no-outcome` reads the executor's refusal (139) over the failed tasks and the checks they failed, as this change's reading of a gone engine does.
