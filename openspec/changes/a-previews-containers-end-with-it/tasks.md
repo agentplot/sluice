@@ -17,14 +17,14 @@ and rule core.10.
 
 ## 1. The decision recorded
 
-- [ ] 1.1 Amend the statement on the agentplot/blueprints branch `design/sluice-a-previews-containers-end-with-it`, in a worktree `~/Code/github_agentplot/blueprints/design-sluice-a-previews-containers-end-with-it` cut from `origin/main`, as design D7 gives it. Edit `design/sluice/proposals/previews-1.md` in four places:
+- [x] 1.1 Amend the statement on the agentplot/blueprints branch `design/sluice-a-previews-containers-end-with-it`, in a worktree `~/Code/github_agentplot/blueprints/design-sluice-a-previews-containers-end-with-it` cut from `origin/main`, as design D7 gives it. Edit `design/sluice/proposals/previews-1.md` in four places:
   - Clause 101 gains the end of the preview's containers, by mounts, ports or `sluice.place` label, whichever way it is let go, after its release command and before its ports and names go. A preview whose container cannot be removed is kept, with what failed.
   - The C.1 preview row's release cell gains the removal between the release command and `git worktree remove`.
   - "What it changes elsewhere" gains that 123's free of a gone preview and of an accepted failure reaches the removal first.
   - One scenario after S35, numbered as the next S number free in `design/sluice/`. In it a checkout is removed by hand, its release command fails in the scratch directory, and its container is removed all the same before its ports go.
 
   Mark each one proposed, record 0112. Commit there and do not push: the orchestrator pushes it on the user's word, before the code lands (rule core.12). True when `git -C ~/Code/github_agentplot/blueprints/design-sluice-a-previews-containers-end-with-it log -1 --format=%s` names clause 101 and record 0112.
-- [ ] 1.2 Write record 0112 as `docs/adr/0112-a-previews-containers-end-with-it-found-by-its-checkout-its-ports-or-its-label.md`, as design D7 gives it, in MADR form like record 0109.
+- [x] 1.2 Write record 0112 as `docs/adr/0112-a-previews-containers-end-with-it-found-by-its-checkout-its-ports-or-its-label.md`, as design D7 gives it, in MADR form like record 0109.
   - Status: proposed, dated 2026-11-11. Its decision-makers are this change's construct stage, and its sources are signal 2026-11-11-agentplot-operator-6799f524/01, clause 34, previews-1 clauses 101 and 123, records 0016 and 0074, and rule core.10.
   - It holds D1 to D5 of the design, each with its path not taken.
   - If 0112 is taken when this task is built, use the next free number and change it everywhere this change names it.
