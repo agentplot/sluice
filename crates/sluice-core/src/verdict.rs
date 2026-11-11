@@ -34,24 +34,29 @@ pub struct Verdict {
 /// A check reads as its key reads across every recorded result (69): a
 /// pass only passes, a fail only fails, and both read as the policy's
 /// `flaky` says, the same for every candidate of the branch (19). Only
-/// ran results held to this run's limits are read with it: a fail with
-/// no container engine says nothing of a pass with one (19, 83). A run
-/// that hit its time limit reads as failed (66), and so does one that left
-/// a required check without a result (15).
+/// ran results held to this run's limits and run under its executor's
+/// grant are read with it, on a branch whose records are on its remote as
+/// on one in a host's own files: a fail with no container engine says
+/// nothing of a pass with one (19, 83), a fail under one grant nothing of
+/// a pass under another, and a result recorded with no grant is weighed
+/// only with others recorded with none (138; rule core.34). A run that
+/// hit its time limit reads as failed (66), and so does one that left a
+/// required check without a result (15).
 ///
 /// Only results the gate trusts are read (28): a ran result by its
 /// recorded executor. A replay is an observation of no one (core.9): it
-/// counts only when a trusted ran pass is recorded for its key (108),
-/// and otherwise is unproven, for the round to run again with no
-/// replay. An unproven replay is named with its key and why no counted
-/// pass proves it, the first that holds of: no run of its key is
-/// recorded; its key ran only on another system (85); no result of its
-/// key is by a signer the branch counts, on a branch whose records are
-/// on its remote, or by a run the branch trusts, on one in a host's own
-/// files (78, 79); there, no trusted result of its key was held to this
-/// run's limits (19, 83); and no result the branch counts for its key is
-/// a pass (design D4 of `a-signed-run-without-a-sandbox-proves-its-
-/// passes`). A check left with no trusted result reads as missing: on a
+/// counts only when a trusted ran pass under this run's limits and grant
+/// is recorded for its key (108, 138), and otherwise is unproven, for the
+/// round to run again with no replay. An unproven replay is named with
+/// its key and why no counted pass proves it, the first that holds of: no
+/// run of its key is recorded; its key ran only on another system (85);
+/// no result of its key is by a signer the branch counts, on a branch
+/// whose records are on its remote, or by a run the branch trusts, on one
+/// in a host's own files (78, 79); no such result of its key was held to
+/// this run's limits (19, 83); none so held was run under this run's
+/// grant (138); and no result the branch counts for its key is a pass
+/// (design D4 of `a-signed-run-without-a-sandbox-proves-its-passes`). A
+/// check left with no trusted result reads as missing: on a
 /// branch whose records are on its remote, a check this run ran whose own
 /// result does not count there, signed with a key the branch's policy
 /// does not list, is missing until a result the gate counts settles it
@@ -90,14 +95,22 @@ pub fn read(
     let on_system = |r: &ResultLine| r.system.as_deref().or(unnamed) == system;
     // 78, 79: on a branch whose records are on its remote, a result counts
     // through its signer and the claims that signer may make, and this
-    // run's own report counts once it is recorded signed.
-    let counts = |r: &ResultLine| match (rules.signed, &r.executor) {
+    // run's own report counts once it is recorded signed; on one in a
+    // host's own files, through its executor.
+    let by_trusted = |r: &ResultLine| match (rules.signed, &r.executor) {
         (true, Some(e)) => r
             .signer
             .as_deref()
             .is_some_and(|s| rules.trusts_signed(s, e.confined, r.system.as_deref().or(unnamed))),
-        (false, Some(e)) => trusted(e) && same_limits(e, &report.executor),
+        (false, Some(e)) => trusted(e),
         (_, None) => false,
+    };
+    // 19, 138: on every branch, and only under this run's limits and grant.
+    let counts = |r: &ResultLine| {
+        by_trusted(r)
+            && r.executor
+                .as_ref()
+                .is_some_and(|e| same_limits(e, &report.executor))
     };
     // Design D4: why no counted pass proves a replay of `task` at `key`.
     let why_unproven = |task: &str, key: &str| -> &'static str {
@@ -112,12 +125,7 @@ pub fn read(
         if here.is_empty() {
             return "its key ran only on another system";
         }
-        let by = |r: &&ResultLine| match (rules.signed, &r.executor) {
-            (true, Some(_)) => counts(r),
-            (false, Some(e)) => trusted(e),
-            (_, None) => false,
-        };
-        let trusted_here: Vec<&ResultLine> = here.into_iter().filter(by).collect();
+        let trusted_here: Vec<&ResultLine> = here.into_iter().filter(|r| by_trusted(r)).collect();
         if trusted_here.is_empty() {
             return if rules.signed {
                 "no result of its key is signed by a signer the branch counts"
@@ -125,8 +133,16 @@ pub fn read(
                 "no result of its key is by a run the branch trusts"
             };
         }
-        if !rules.signed && !trusted_here.iter().any(|r| counts(r)) {
+        let held = |r: &ResultLine| {
+            r.executor
+                .as_ref()
+                .is_some_and(|e| held_alike(e, &report.executor))
+        };
+        if !trusted_here.iter().any(|r| held(r)) {
             return "no result of its key was held to this run's limits";
+        }
+        if !trusted_here.iter().any(|r| counts(r)) {
+            return "no result of its key was run under this run's grant";
         }
         "no result the branch counts for its key is a pass"
     };
@@ -281,11 +297,20 @@ pub fn read(
     }
 }
 
-/// Whether two runs were held to the same limits (83): the executor, and
-/// so the paths it held, the memory, the network and the container
-/// engine. The cores a run was given vary with the instance's load,
-/// so they are not one of them.
+/// Whether two runs were held to the same limits (83) and run under one
+/// grant (138): the executor, the memory, the network, the container
+/// engine, and what the executor let the run reach, so a key's results
+/// are weighed together, and a replay proven, only under one grant (19;
+/// rule core.34). Two results recorded with no grant are under one, and a
+/// result with none is under no grant a run records. The cores a run was
+/// given vary with the instance's load, so they are not one of them.
 fn same_limits(a: &Enforced, b: &Enforced) -> bool {
+    held_alike(a, b) && a.grant == b.grant
+}
+
+/// Whether two runs were held to the same limits but for the grant: what
+/// tells an unproven replay's two whys apart.
+fn held_alike(a: &Enforced, b: &Enforced) -> bool {
     (&a.kind, a.confined, a.memory, a.network, a.docker)
         == (&b.kind, b.confined, b.memory, b.network, b.docker)
 }
@@ -512,14 +537,16 @@ mod tests {
         );
 
         // A branch whose records are on its remote, counting `box`'s
-        // signed results whatever limits they were held to, so `d:test`'s
-        // pass proves it there.
+        // signed results held to this run's limits, as `d:test`'s pass is
+        // there, so it proves it (19).
         let signed = Rules {
             trust: vec!["box".into()],
             signed: true,
             claims: [("box".to_string(), (false, None))].into_iter().collect(),
             ..Rules::default()
         };
+        let mut results = results;
+        results[2] = line("d:test", enforced("open", false), "linux", Outcome::Pass);
         let v = super::read(&run, &results, &signed, Some("linux"), None, None);
         assert_eq!(
             whys(&v),
@@ -627,6 +654,90 @@ mod tests {
             Outcome::Fail,
         );
         assert!(!read(&run, &[same], &rules(&["sandbox"])).passed);
+    }
+
+    /// `executor` under `grant`.
+    fn granted(executor: Enforced, grant: Option<&str>) -> Enforced {
+        Enforced {
+            grant: grant.map(str::to_string),
+            ..executor
+        }
+    }
+
+    /// A branch whose records are on its remote, counting `box`'s signed
+    /// results, reading a key with a pass and a fail as `flaky` says.
+    fn signed_by_box(flaky: Flaky) -> Rules {
+        Rules {
+            trust: vec!["box".into()],
+            signed: true,
+            claims: [("box".to_string(), (false, None))].into_iter().collect(),
+            flaky,
+            ..Rules::default()
+        }
+    }
+
+    /// 19, 138, rule core.34 (the check-grant spec's "A fail under a
+    /// narrower profile", "A fail under the same grant", "A branch whose
+    /// state is on its remote", "An old fail" and "Two old lines"): a key's
+    /// fail is weighed against a run's pass only under the run's grant, on
+    /// a signed branch as on a host's own; a fail recorded with no grant is
+    /// weighed with no run that records one, and two lines recorded with
+    /// none are weighed together as before.
+    #[test]
+    fn a_key_is_flaky_only_under_the_same_grant() {
+        let sandbox = |grant| granted(enforced("sandbox", false), grant);
+        let run = |grant| report(Source::Ran { host: "h".into() }, sandbox(grant));
+        let fail = |grant| recorded(ResultKind::Ran, Some(sandbox(grant)), Outcome::Fail);
+        let fails = flaky(&["sandbox"], Flaky::Fail);
+
+        // A fail under a narrower profile.
+        let v = read(&run(Some("sb1:g2")), &[fail(Some("sb1:g1"))], &fails);
+        assert!(v.passed, "{v:?}");
+        assert!(v.failed.iter().all(|f| f.flaky.is_none()));
+
+        // A fail under the same grant.
+        let v = read(&run(Some("sb1:g1")), &[fail(Some("sb1:g1"))], &fails);
+        assert!(!v.passed);
+        let k = v.failed[0].flaky.clone().expect("read as flaky");
+        assert_eq!((k.here, k.other.outcome), (Outcome::Pass, Outcome::Fail));
+
+        // A branch whose state is on its remote: the run's own signed pass
+        // under its grant, and a counted signer's fail under another.
+        let signed = |line: ResultLine| ResultLine {
+            signer: Some("box".into()),
+            ..line
+        };
+        let own = signed(recorded(
+            ResultKind::Ran,
+            Some(sandbox(Some("sb1:g2"))),
+            Outcome::Pass,
+        ));
+        let v = read(
+            &run(Some("sb1:g2")),
+            &[signed(fail(Some("sb1:g1"))), own.clone()],
+            &signed_by_box(Flaky::Fail),
+        );
+        assert!(v.passed, "{v:?}");
+        let v = read(
+            &run(Some("sb1:g2")),
+            &[signed(fail(Some("sb1:g2"))), own],
+            &signed_by_box(Flaky::Fail),
+        );
+        assert!(!v.passed, "the same grant's fail is weighed");
+
+        // An old fail.
+        let v = read(&run(Some("sb1:g2")), &[fail(None)], &fails);
+        assert!(v.passed, "{v:?}");
+        let v = read(&run(Some("open:1")), &[fail(None)], &fails);
+        assert!(v.passed, "{v:?}");
+
+        // Two old lines.
+        let old_pass = recorded(ResultKind::Ran, Some(sandbox(None)), Outcome::Pass);
+        let both = [old_pass, fail(None)];
+        let v = read(&run(None), &both, &fails);
+        assert!(!v.passed);
+        assert!(v.failed[0].flaky.is_some());
+        assert!(read(&run(None), &both, &flaky(&["sandbox"], Flaky::Pass)).passed);
     }
 
     /// 19: a task read as failed for its key holding a pass and a fail
