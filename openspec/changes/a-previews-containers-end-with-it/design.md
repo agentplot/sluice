@@ -181,9 +181,14 @@ graceful turn. `204` and `404` count as removed. Anything else is a
 failure, kept with the container's first name and the engine's
 `message`.
 
-Unix sockets are spoken to as `ping` speaks: HTTP/1.0, a response read
-to its end, through a thread so that a socket that never takes the
-connection holds nothing. TCP endpoints go through `ureq` with the TLS
+Unix sockets are spoken to in HTTP/1.0, as `ping` speaks, asking the
+engine to close the connection, through a thread so that a socket that
+never takes the connection holds nothing. A response is read to the end
+it gives itself: its `Content-Length`, its last chunk, or a status that
+carries no body. It is read to the connection's close only where it
+gives none, since an engine may hold the connection open once it has
+answered, whatever was asked (one host's did, 2026-11-11, answering in
+HTTP/1.1). TCP endpoints go through `ureq` with the TLS
 `engine_tls_config` gives, as `ping_tcp` does. Each call is one try,
 since the engine is the host's and no remote (rule core.29). Connecting
 is bounded by `ENGINE_WAIT`. A listing must answer within ten seconds,
