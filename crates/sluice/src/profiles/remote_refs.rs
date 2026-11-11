@@ -713,6 +713,7 @@ fn statements(lines: &[ResultLine]) -> Vec<Statement> {
                 combination: Rev::new(combination),
                 claim: None,
                 at: ls.iter().map(|l| l.at.clone()).max().unwrap_or_default(),
+                held: None,
             })
         })
         .collect()
