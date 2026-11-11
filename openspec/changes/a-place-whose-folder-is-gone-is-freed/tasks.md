@@ -28,4 +28,4 @@ and clause 123.
 
 ## 3. The docs
 
-- [ ] 3.1 Say it on the site, as Task notes 3.1 gives it: `site/src/content/docs/reference/commands.md` ("Checkouts held because their release failed": the `--accept-failure` paragraph and the last paragraph) and `site/src/content/docs/reference/state.md` (the `gone` paragraph). True when `sluice exec bolt/what-a-place-starts-ends-with-it -- moon run site:prose` passes.
+- [x] 3.1 Say it on the site, as Task notes 3.1 gives it: `site/src/content/docs/reference/commands.md` ("Checkouts held because their release failed": the `--accept-failure` paragraph and the last paragraph) and `site/src/content/docs/reference/state.md` (the `gone` paragraph). True when `sluice exec bolt/what-a-place-starts-ends-with-it -- moon run site:prose` passes.
