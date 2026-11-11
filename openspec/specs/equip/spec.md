@@ -195,7 +195,8 @@ be gone (147, 71; rules core.16, core.18, core.46).
 
 #### Scenario: Nothing to release after it
 
-- **WHEN** `sluice equip main` has run in a worktree sluice never ran in
+- **WHEN** `sluice equip main` has run in a worktree sluice never ran
+  in, under a policy that names no release command
 - **THEN** the host's state names no record and no ports for the
   worktree, and `sluice release` there says `nothing to release` and
   exits 0 (`equip_adopts_nothing` in
