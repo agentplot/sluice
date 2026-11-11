@@ -16,7 +16,7 @@ part of the tree touched, citing record 0113 and rule core.57.
 ## 1. The decision recorded
 
 - [x] 1.1 Write `docs/adr/0113-sluices-setup-skill-has-the-persons-agent-add-the-herdr-plugins-lines-to-their-own-herdr-file.md`, status proposed, as design D8 and Task notes 1.1 give it. Take the next free number where 0113 is taken on main or this bolt. True when `sluice exec bolt/sluices-setup-skill-adds-its-herdr-lines -- moon run root:adrs` passes.
-- [ ] 1.2 In `docs/architecture/core.md`, add core.57's line to `### Setting up` after core.54, and its details after the last rule's, as design D8 gives them. Rewrite `site/src/content/docs/architecture/rules.md` with `node site/scripts/rules.mjs`. True when `sluice exec bolt/sluices-setup-skill-adds-its-herdr-lines -- moon run site:rules` passes.
+- [x] 1.2 In `docs/architecture/core.md`, add core.57's line to `### Setting up` after core.54, and its details after the last rule's, as design D8 gives them. Rewrite `site/src/content/docs/architecture/rules.md` with `node site/scripts/rules.mjs`. True when `sluice exec bolt/sluices-setup-skill-adds-its-herdr-lines -- moon run site:rules` passes.
 
 ## 2. The setup skill adds the herdr plugin's lines
 
