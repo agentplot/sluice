@@ -29,6 +29,12 @@ scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
 mkdir "$scratch/conf"
 unset NIX_CONFIG NIX_PATH
+# A version no release has, in the evaluation's environment: the eval is
+# --impure, so a flake that read the builder's environment for its version
+# would give this one and fail "The package's version is the tree's"
+# (nix/tests/version.nix; record 0111; core.55).
+SLUICE_VERSION=98.76.54
+export SLUICE_VERSION
 NIX_CONF_DIR="$scratch/conf"
 NIX_USER_CONF_FILES="$scratch/conf/nix.conf"
 XDG_CACHE_HOME="$scratch/cache"
