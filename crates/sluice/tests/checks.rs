@@ -1700,3 +1700,150 @@ fn a_run_whose_working_copy_could_not_be_equipped_could_not_start() {
     let log = w.log();
     assert!(!log.iter().any(|l| l.starts_with("moon exec")), "{log:?}");
 }
+
+/// A preview's place under `dir`, as the place profile hands it to the
+/// end of its containers: its checkout, made, its scratch, its `web` port
+/// and its `SLUICE_PLACE` (record 0112).
+fn preview_place(dir: &Path) -> Place {
+    let path = dir.join("previews/preview+2F0123456789ab");
+    std::fs::create_dir_all(path.join("tls")).unwrap();
+    Place {
+        name: "preview/0123456789ab".into(),
+        path,
+        tmp: dir.join("scratch/0123456789"),
+        env: [
+            ("SLUICE_PLACE", "sluice-0a1b2c3d4e"),
+            ("SLUICE_PORT_WEB", "20000"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect(),
+    }
+}
+
+/// Record 0112's four containers for `place`: one mounting a file of its
+/// checkout, one publishing its `web` port, one labelled with its
+/// `SLUICE_PLACE`, and one of another checkout that does none of these.
+fn four_containers(place: &Place, dir: &Path) -> serde_json::Value {
+    let other = dir.join("previews/preview+2F0123456789ab-other/tls");
+    serde_json::json!([
+        support::container("mounts", &[&place.path.join("tls/cert.pem")], &[], &[]),
+        support::container("publishes", &[], &[20000], &[]),
+        support::container(
+            "labelled",
+            &[],
+            &[],
+            &[(sluice::profiles::checks::PLACE_LABEL, "sluice-0a1b2c3d4e")]
+        ),
+        support::container(
+            "other",
+            &[&other],
+            &[20001],
+            &[("sluice.place", "sluice-ffffffffff")]
+        ),
+    ])
+}
+
+/// 34, previews-1 clause 101, record 0112 (design D2, D4), the
+/// preview-release spec's "Another checkout's container is left" at the
+/// check profile's level: a container that mounts the checkout, one that
+/// publishes its port and one labelled with its place are removed, and
+/// one of another checkout is left; a link to the engine's socket is the
+/// same engine, asked once.
+#[test]
+fn the_places_containers_are_removed_and_no_other() {
+    let dir = Scratch::short();
+    let engine = support::containers_engine(dir.path());
+    let place = preview_place(dir.path());
+    engine.hold(four_containers(&place, dir.path()));
+    let link = dir.path().join("l.sock");
+    std::os::unix::fs::symlink(engine.socket(), &link).unwrap();
+
+    sluice::profiles::checks::end_containers(
+        &[Endpoint::Unix(link), Endpoint::Unix(engine.socket())],
+        &place,
+    )
+    .unwrap();
+    assert_eq!(engine.removed(), ["mounts", "publishes", "labelled"]);
+    assert_eq!(engine.listings(), 1, "one engine, asked once");
+}
+
+/// Record 0112 (design D5): a removal the engine refuses is named with
+/// the engine's words, the other containers are removed all the same, and
+/// one the engine says is gone counts as removed.
+#[test]
+fn a_removal_the_engine_refuses_is_named_and_the_rest_go_on() {
+    let dir = Scratch::short();
+    let engine = support::containers_engine(dir.path());
+    let place = preview_place(dir.path());
+    let shown = four_containers(&place, dir.path());
+    let asked = std::sync::atomic::AtomicU32::new(0);
+    engine.hold_with(move || {
+        let mut all = shown.clone();
+        // Listed, then gone before its removal: the engine answers 404.
+        if asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+            let vanished = support::container("vanished", &[], &[20000], &[]);
+            all.as_array_mut().unwrap().push(vanished);
+        }
+        all
+    });
+    engine.refuse("mounts", 1);
+
+    let e = sluice::profiles::checks::end_containers(&[Endpoint::Unix(engine.socket())], &place)
+        .unwrap_err()
+        .to_string();
+    assert_eq!(
+        e,
+        format!(
+            "could not remove the containers preview/0123456789ab left: mounts: {}",
+            support::REFUSED.1
+        )
+    );
+    assert_eq!(engine.removed(), ["publishes", "labelled"]);
+
+    // The next try removes it.
+    sluice::profiles::checks::end_containers(&[Endpoint::Unix(engine.socket())], &place).unwrap();
+    assert_eq!(engine.removed(), ["publishes", "labelled", "mounts"]);
+}
+
+/// Record 0112 (design D4): where no engine answers, there is nothing to
+/// end: no endpoint, a socket path with nothing at it, and an engine that
+/// answers its ping with a 500 are each passed over.
+#[test]
+fn a_host_with_no_engine_has_no_container_to_end() {
+    let dir = Scratch::short();
+    let place = preview_place(dir.path());
+    let end = |endpoints: &[Endpoint]| sluice::profiles::checks::end_containers(endpoints, &place);
+    end(&[]).unwrap();
+    end(&[Endpoint::Unix(dir.path().join("none.sock"))]).unwrap();
+    let failing = Scratch::short();
+    let socket = support::engine(failing.path(), "HTTP/1.0 500 Internal Server Error");
+    end(&[Endpoint::Unix(socket)]).unwrap();
+}
+
+/// Record 0112 (design D4): an engine at a TCP address is listed and its
+/// containers removed as one on a socket is.
+#[test]
+fn a_tcp_engine_is_asked_as_a_socket_is() {
+    let dir = Scratch::short();
+    let engine = support::tcp_containers_engine();
+    let place = preview_place(dir.path());
+    engine.hold(four_containers(&place, dir.path()));
+    engine.refuse("labelled", 1);
+    let at = Endpoint::Tcp {
+        host: "127.0.0.1".into(),
+        port: engine.port(),
+        tls: None,
+    };
+    let e = sluice::profiles::checks::end_containers(std::slice::from_ref(&at), &place)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        e.ends_with(&format!("labelled: {}", support::REFUSED.1)),
+        "{e}"
+    );
+    assert_eq!(engine.removed(), ["mounts", "publishes"]);
+    sluice::profiles::checks::end_containers(&[at], &place).unwrap();
+    assert_eq!(engine.removed(), ["mounts", "publishes", "labelled"]);
+    assert_eq!(engine.listings(), 2);
+}
