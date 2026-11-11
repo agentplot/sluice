@@ -1082,6 +1082,15 @@ impl std::fmt::Display for NoManifest {
 
 impl std::error::Error for NoManifest {}
 
+/// The marks moon 2.6.1's `dep_hash_input` gives a dependency in a hash
+/// manifest's `deps` in place of a key: `ignored`, its default for a
+/// dependency with no outputs; `passthrough`, for an edge the graph
+/// ignores or a dependency that passed through; and `outputs` and
+/// `outputs-passthrough`, for one whose outputs are among the task's
+/// inputs, which the manifest's inputs then name (C.2 moon row, C.6).
+pub const DEPENDENCY_MARKS: [&str; 4] =
+    ["ignored", "passthrough", "outputs", "outputs-passthrough"];
+
 /// Design D9 (C.6): whether `key` is moon's key for `task` on the
 /// combination's tree, checked without running anything. moon keeps each
 /// task's hash manifest in its blob store under its key, the key the
@@ -1094,15 +1103,6 @@ impl std::error::Error for NoManifest {}
 /// that is not a key is refused. `blob` reads the store, `tree` a path of
 /// the combination's tree. A signer signs only keys this passes. Where a
 /// manifest the walk needs is missing, it fails with [`NoManifest`].
-/// The marks moon 2.6.1's `dep_hash_input` gives a dependency in a hash
-/// manifest's `deps` in place of a key: `ignored`, its default for a
-/// dependency with no outputs; `passthrough`, for an edge the graph
-/// ignores or a dependency that passed through; and `outputs` and
-/// `outputs-passthrough`, for one whose outputs are among the task's
-/// inputs, which the manifest's inputs then name (C.2 moon row, C.6).
-pub const DEPENDENCY_MARKS: [&str; 4] =
-    ["ignored", "passthrough", "outputs", "outputs-passthrough"];
-
 pub fn check_key(
     key: &str,
     task: &str,
