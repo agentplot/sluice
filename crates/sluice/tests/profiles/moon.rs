@@ -14,8 +14,8 @@ use std::time::{Duration, Instant};
 use sluice::instance::{HostCache, Instance};
 use sluice::profiles::checks::Checks;
 use sluice_seams::{
-    FailedBy, Limits, Network, NotRun, Outcome, Place, Progress, Reading, Reads, Rev, RunHandle,
-    RunReport, RunRequest, Setting, Settings, Source, TaskState, Tests,
+    FailedBy, Limits, Network, NotRun, Outcome, Place, Progress, Reading, Reads, Refused, Rev,
+    RunHandle, RunReport, RunRequest, Setting, Settings, Source, TaskState, Tests,
 };
 use support::Repo;
 
@@ -1120,6 +1120,10 @@ fn a_key_is_checked_against_the_tree_without_running() {
 /// Design D9: the profile's `proven` keeps every task whose key the
 /// candidate's tree bears out, and drops one whose manifest was changed
 /// after the run, as a check that lies about its key would leave it.
+/// Design D5 of `a-signed-run-without-a-sandbox-proves-its-passes`, the
+/// pass-proof spec's "The check profile says why": the dropped task is
+/// answered among the refused with its key and the words `check_key`
+/// gave.
 #[test]
 fn proven_drops_a_key_the_tree_does_not_bear_out() {
     let repo = workspace("moon-proven");
@@ -1142,7 +1146,28 @@ fn proven_drops_a_key_the_tree_does_not_bear_out() {
         .unwrap()
         .replace("alpha/value.txt", "alpha/other.txt");
     std::fs::write(&blob, forged).unwrap();
-    assert_eq!(c.proven(&run, &report).unwrap().proven, ["beta:test"]);
+    let proof = c.proven(&run, &report).unwrap();
+    assert_eq!(proof.proven, ["beta:test"]);
+    assert_eq!(proof.unkept, []);
+    let words = sluice::profiles::moon::check_key(
+        &alpha.hash,
+        "alpha:test",
+        &|k| sluice::profiles::moon::blob_in(&repo.dir().join(".moon/cache"), k),
+        &|p| sluice::profiles::moon::file_at(repo.dir(), "HEAD", p),
+    )
+    .unwrap_err();
+    assert_eq!(
+        proof.refused,
+        [Refused {
+            task: "alpha:test".into(),
+            key: alpha.hash.clone(),
+            why: format!("{words:#}"),
+        }]
+    );
+    assert!(
+        proof.refused[0].why.starts_with("alpha:test: "),
+        "{proof:?}"
+    );
 }
 
 /// Record 0105, design D2 to D4 of the change

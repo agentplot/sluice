@@ -1902,19 +1902,24 @@ impl Tests for Checks {
     /// it, in the checkout's own, which this run's moon alone writes
     /// (design D9; design D1 of the change
     /// `a-signed-run-without-a-sandbox-proves-its-passes`). Either is held
-    /// to the same proof by its content. A ran check that passed whose manifest,
-    /// or a dependency's, is missing there is unkept: the run kept no
-    /// proof of it, which says nothing of the work, so it is not warned of
-    /// and has no outcome (114; record 0105; the change
-    /// `a-pass-nothing-proves-blames-no-one`, design D2 to D4). It names
-    /// the missing manifest's key, and its reason whose manifest is
-    /// missing, the record's store and what that store says of itself,
-    /// read from the store with nothing run, never from what moon printed
-    /// (rule core.35; design D3 of
-    /// `a-signed-run-without-a-sandbox-proves-its-passes`). Every
-    /// other key the check refuses is one the tree does not bear out, in
-    /// neither list and warned of. A fail, a task a check was failed by
-    /// (149) and a replay (108) are never unkept.
+    /// to the same proof by its content.
+    ///
+    /// A ran check that passed whose manifest, or a dependency's, is
+    /// missing there is unkept: the run kept no proof of it, which says
+    /// nothing of the work, so it is not warned of and has no outcome
+    /// (114; record 0105; the change `a-pass-nothing-proves-blames-no-one`,
+    /// design D2 to D4). It names the missing manifest's key, and its
+    /// reason whose manifest is missing, the record's store and what that
+    /// store says of itself, read from the store with nothing run, never
+    /// from what moon printed (rule core.35; design D3 of
+    /// `a-signed-run-without-a-sandbox-proves-its-passes`). A fail, a task
+    /// a check was failed by (149) and a replay (108) are never unkept.
+    ///
+    /// Every other key the check refuses is one the tree does not bear
+    /// out, in neither list and warned of; one refused for a cause other
+    /// than a missing manifest is answered in `refused` with its key and
+    /// the check's words for why, so the submission blamed for it says why
+    /// (C.6, 20; design D5).
     fn proven(&self, run: &RunHandle, report: &RunReport) -> Result<Proof> {
         let meta: Meta = serde_json::from_value(self.runs.request(&run.0)?.meta)
             .with_context(|| format!("reading run {}", run.0))?;
@@ -1979,6 +1984,13 @@ impl Tests for Checks {
                     key: Some(missing.key.clone()),
                 });
                 continue;
+            }
+            if e.downcast_ref::<moon::NoManifest>().is_none() {
+                proof.refused.push(sluice_seams::Refused {
+                    task: t.task.clone(),
+                    key: t.hash.clone(),
+                    why: format!("{e:#}"),
+                });
             }
             tracing::warn!(
                 sluice.task = %t.task,
