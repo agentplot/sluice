@@ -29,4 +29,4 @@ part of the tree touched, citing record 0112 and rule core.10.
 
 ## 3. The docs
 
-- [ ] 3.1 Say it on the site, as Task notes 3.1 gives it: `site/src/content/docs/reference/commands.md` (the commands table, "Worktrees sluice holds", the `sluice equip` paragraph, the `--json` table and the exit codes), `site/src/content/docs/reference/configuration.md` (the `release` row) and `site/src/content/docs/guides/worktrunk.md` ("What the agent's tests leave running"). True when `sluice exec bolt/what-a-place-starts-ends-with-it -- moon run site:prose` passes.
+- [x] 3.1 Say it on the site, as Task notes 3.1 gives it: `site/src/content/docs/reference/commands.md` (the commands table, "Worktrees sluice holds", the `sluice equip` paragraph, the `--json` table and the exit codes), `site/src/content/docs/reference/configuration.md` (the `release` row) and `site/src/content/docs/guides/worktrunk.md` ("What the agent's tests leave running"). True when `sluice exec bolt/what-a-place-starts-ends-with-it -- moon run site:prose` passes.
