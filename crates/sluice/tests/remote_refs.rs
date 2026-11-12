@@ -10,12 +10,15 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use sluice::profiles::local_files::LocalFiles;
+use sluice::profiles::places::Places;
 use sluice::profiles::pushed_refs::PushedRefs;
 use sluice::profiles::remote_refs::{RemoteRefs, SignerKey, Signing};
 use sluice::retry;
+use sluice::runs::Runs;
 use sluice_core::records::{parse_lines, to_line, ResultKind, ResultLine, RESULT_SCHEMA};
 use sluice_seams::{
-    read_refused, Changes, Enforced, Outcome, Rev, State, TaskLog, Written, KEPT_LOGS,
+    read_refused, Changes, Checkout, Enforced, Outcome, Rev, Settings, State, TaskLog, Written,
+    KEPT_LOGS,
 };
 use ssh_key::{Algorithm, PrivateKey};
 use support::http::{commands, is_push, listing, lists_for_push, Fake, CUT};
@@ -660,6 +663,55 @@ fn a_ticks_ask_brings_the_branch_and_the_work_in_one_fetch() {
     );
     assert!(holds(&a, &head), "the head submitted from b");
     assert!(holds(&a, &combination), "the combination b formed");
+}
+
+/// 82, C.6 (record 0118): a combination another host opened, which this
+/// host lacks, is fetched by its own ref, the others left on the remote,
+/// and a claimed run's place is made at it here; a combination the
+/// remote no longer holds fetches nothing.
+#[test]
+fn a_combination_only_the_remote_holds_is_fetched_and_a_place_made_at_it() {
+    let (a, _bare, b) = two_hosts("rr-one-candidate");
+    let (ha, hb) = (host(&a, None), host(&b, None));
+    let combination = b.branch("combined", "main", &[("both", Some("1 and 2\n"))]);
+    hb.publish_candidate("main", "c7", &Rev::new(combination.clone()))
+        .unwrap();
+    let other = b.branch("other", "main", &[("other", Some("3\n"))]);
+    hb.publish_candidate("main", "c8", &Rev::new(other.clone()))
+        .unwrap();
+    assert!(!holds(&a, &combination) && !holds(&a, &other));
+
+    ha.fetch_candidate("main", "c7").unwrap();
+    assert!(holds(&a, &combination), "the combination asked for");
+    assert!(!holds(&a, &other), "and no other");
+    assert_eq!(
+        ref_at(&a, "refs/sluice-fetched/origin/combinations/main/c7").as_deref(),
+        Some(combination.as_str())
+    );
+    ha.fetch_candidate("main", "c9").unwrap();
+    assert_eq!(
+        ref_at(&a, "refs/sluice-fetched/origin/combinations/main/c9"),
+        None
+    );
+
+    let common = a.dir().join(".git");
+    let user = Scratch::short();
+    let places = Places::new(
+        &common,
+        Runs::new(&common, env!("CARGO_BIN_EXE_sluice").into()),
+    )
+    .with_scratch_root(user.path().join("u"));
+    let name = "sluice/try/main/7";
+    let place = places
+        .materialize(name, &Rev::new(combination.clone()), &Settings::new())
+        .unwrap();
+    let at = support::git_command()
+        .current_dir(&place.path)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&at.stdout).trim(), combination);
+    places.release(name).unwrap();
 }
 
 /// 64, 129: where the remote no longer holds the branch, the tick's ask

@@ -1714,6 +1714,13 @@ pub trait State {
         Ok(())
     }
 
+    /// 82, C.6: fetch the one candidate `id` of the branch, by its own
+    /// ref, so a place can be made at its revision here, however the
+    /// run's claim reached this host (record 0118).
+    fn fetch_candidate(&self, _branch: &str, _id: &str) -> Result<()> {
+        Ok(())
+    }
+
     /// The submissions this host had queued on the branch in its own
     /// records, when the branch's records moved to the remote and another
     /// host's queue was there first (design D10): each a submission's

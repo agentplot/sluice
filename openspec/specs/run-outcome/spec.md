@@ -224,7 +224,11 @@ state saying why. The run SHALL be open again for any host (16, 114).
 
 - **WHEN** the checkout of a claimed run cannot be made
 - **THEN** the run is recorded with no result and the error's words,
-  and nobody is blamed
+  it is open again with no host holding it, nobody is blamed, and it
+  counts toward no runs in a row (60; record 0118)
+  (`a_run_whose_checkout_cannot_be_made_is_recorded_with_why` and
+  `a_claimed_run_whose_combination_the_remote_no_longer_holds_never_began`
+  in `crates/sluice-conformance/tests/could_not_start.rs`)
 
 #### Scenario: The executor turns the run down at its start
 
@@ -249,11 +253,11 @@ state saying why. The run SHALL be open again for any host (16, 114).
 
 ### Requirement: A run that could not be started counts toward the runs in a row
 
-A run whose tests could not be started SHALL count as a run whose tests
-could not run, so that when a combination's tests could not run in
-three runs in a row, whatever the causes, the combination SHALL be read
-as not passed, its newest submission blamed, and its session told each
-test that could not run and why (115).
+A run whose checkout was made and whose tests could not be started SHALL
+count as a run whose tests could not run, so that when a combination's
+tests could not run in three runs in a row, whatever the causes, the
+combination SHALL be read as not passed, its newest submission blamed,
+and its session told each test that could not run and why (115).
 
 #### Scenario: Three starts that fail
 
@@ -351,3 +355,19 @@ from that run until the run's next result.
   each test with why under `lost`, until its next run has a result
   (`a_pass_nothing_proves_has_no_outcome_and_runs_again` in
   `crates/sluice-conformance/tests/unkept_proof.rs`)
+
+### Requirement: A run whose checkout could not be made counts toward nothing
+
+A run whose checkout could not be made never began. It SHALL count
+toward no runs in a row and SHALL blame no submission, however many
+times it is tried (60; record 0118).
+
+#### Scenario: Checkouts that cannot be made, run after run
+
+- **WHEN** a combination's checkout cannot be made in five runs in a
+  row, and then can
+- **THEN** each of the five is recorded with the error's words and no
+  result, no submission is blamed, and once its checkout is made its
+  tests run and it lands
+  (`checkouts_that_cannot_be_made_run_after_run_blame_no_one` in
+  `crates/sluice-conformance/tests/could_not_start.rs`)
