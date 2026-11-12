@@ -670,7 +670,7 @@ impl Sluice<'_> {
         }
         let mut ids = Vec::new();
         for _ in &sessions {
-            ids.push(self.seams.state.allocate_id()?);
+            ids.push(self.seams.state.allocate_id(&req.branch)?);
         }
         let now = self.now();
         let _lock = self.seams.state.wait_lock(&req.branch)?;
@@ -2027,7 +2027,7 @@ mod tests {
             Ok(all)
         }
 
-        fn allocate_id(&self) -> Result<u64> {
+        fn allocate_id(&self, _branch: &str) -> Result<u64> {
             let id = self.next_id.get();
             self.next_id.set(id + 1);
             Ok(id)

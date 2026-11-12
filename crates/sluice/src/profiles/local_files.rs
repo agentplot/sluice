@@ -170,6 +170,46 @@ impl LocalFiles {
         std::fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
         sync_dir(dir)
     }
+
+    /// Keep `candidate`'s tasks on `branch`, or drop them with `None`,
+    /// while `lock` holds the branch's lock through a live guard: these
+    /// records' own lock, or, for what a host keeps of a remote's records,
+    /// the host's one lock of the branch, which the records seam takes
+    /// (rule core.14).
+    pub(crate) fn put_progress_under(
+        &self,
+        lock: &LocalFiles,
+        branch: &str,
+        candidate: &str,
+        tasks: Option<&[TaskProgress]>,
+    ) -> Result<()> {
+        // Beside the branch's records, as its kept logs are: no read of the
+        // branch sees them, and they move no version (ADR 0028). Kept by a
+        // round, under the branch's lock (rule core.14).
+        if !lock.held.borrow().contains(branch) {
+            bail!("keeping {branch}'s tasks without holding its lock");
+        }
+        self.dir(branch)?;
+        let dir = self.root.join(PROGRESS).join(branch);
+        let name = format!("{}.json", flat_name(candidate));
+        match tasks {
+            Some(tasks) => {
+                let kept = Kept {
+                    schema: PROGRESS_SCHEMA.into(),
+                    candidate: candidate.into(),
+                    tasks: tasks.to_vec(),
+                };
+                let mut bytes = serde_json::to_vec_pretty(&kept)?;
+                bytes.push(b'\n');
+                write_atomic(&dir, &name, &bytes)
+            }
+            None => match std::fs::remove_file(dir.join(&name)) {
+                Ok(()) => Ok(()),
+                Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
+                Err(e) => Err(e).with_context(|| format!("removing {name}")),
+            },
+        }
+    }
 }
 
 fn apply(dir: &Path, p: &Pending) -> Result<()> {
@@ -494,7 +534,9 @@ impl State for LocalFiles {
         Ok(out)
     }
 
-    fn allocate_id(&self) -> Result<u64> {
+    /// The host's count, one for every branch whose records are its own
+    /// (record 0114).
+    fn allocate_id(&self, _branch: &str) -> Result<u64> {
         let lock = open_lock(&self.root.join(".lock"))?;
         lock.lock().context("locking the repository's records")?;
         let path = self.root.join(".next-id");
@@ -606,32 +648,7 @@ impl State for LocalFiles {
         candidate: &str,
         tasks: Option<&[TaskProgress]>,
     ) -> Result<()> {
-        // Beside the branch's records, as its kept logs are: no read of the
-        // branch sees them, and they move no version (ADR 0028). Kept by a
-        // round, under the branch's lock (rule core.14).
-        if !self.held.borrow().contains(branch) {
-            bail!("keeping {branch}'s tasks without holding its lock");
-        }
-        self.dir(branch)?;
-        let dir = self.root.join(PROGRESS).join(branch);
-        let name = format!("{}.json", flat_name(candidate));
-        match tasks {
-            Some(tasks) => {
-                let kept = Kept {
-                    schema: PROGRESS_SCHEMA.into(),
-                    candidate: candidate.into(),
-                    tasks: tasks.to_vec(),
-                };
-                let mut bytes = serde_json::to_vec_pretty(&kept)?;
-                bytes.push(b'\n');
-                write_atomic(&dir, &name, &bytes)
-            }
-            None => match std::fs::remove_file(dir.join(&name)) {
-                Ok(()) => Ok(()),
-                Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
-                Err(e) => Err(e).with_context(|| format!("removing {name}")),
-            },
-        }
+        self.put_progress_under(self, branch, candidate, tasks)
     }
 
     fn record_results(&self, lines: &[u8]) -> Result<()> {

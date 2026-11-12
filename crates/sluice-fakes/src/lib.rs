@@ -195,6 +195,12 @@ struct Inner {
     equip_steps: Vec<EquipStep>,
     /// Every head published for its submission, in order (82).
     published: Vec<Rev>,
+    /// The candidates open to claims on the remote, by branch and id,
+    /// each at its revision (82, C.6).
+    candidates: BTreeMap<(String, String), Rev>,
+    /// Every fetch of one candidate by its own ref, by the host that
+    /// fetched it, its branch and its id, in order (record 0118).
+    candidate_fetches: Vec<(String, String, String)>,
     took: BTreeMap<String, (u64, u32)>,
     /// Checks a run leaves not run, with why (could-not-run-1 114).
     cannot_run: BTreeMap<String, String>,
@@ -786,6 +792,12 @@ impl World {
     /// Every head published for its submission, in order (82).
     pub fn published(&self) -> Vec<Rev> {
         self.0.borrow().published.clone()
+    }
+
+    /// Every fetch of one candidate by its own ref, by the host that
+    /// fetched it, its branch and its id, in order (record 0118).
+    pub fn candidate_fetches(&self) -> Vec<(String, String, String)> {
+        self.0.borrow().candidate_fetches.clone()
     }
 
     /// The runner says `task` took `ms` in `attempts` tries, and the run
@@ -2709,6 +2721,10 @@ impl Checkout for FakeCheckout {
         if !inner.commits.contains_key(rev) {
             bail!("no revision {rev}");
         }
+        // git's worktree, at a revision whose objects the host lacks.
+        if inner.lacking.contains(rev) {
+            bail!("git worktree add /fake/places/{name}: fatal: invalid reference: {rev}");
+        }
         inner.places.insert(name.into(), rev.clone());
         inner.made.push(name.into());
         let host = inner.host.clone();
@@ -3316,14 +3332,63 @@ impl State for FakeState {
         }
     }
 
+    /// Every candidate the remote holds of the branch comes to the host.
     fn fetch_candidates(&self, branch: &str) -> Result<()> {
-        match World::state_refused(&self.0 .0.borrow(), branch) {
-            Some(said) => Err(World::refused(
+        let mut inner = self.0 .0.borrow_mut();
+        if let Some(said) = World::state_refused(&inner, branch) {
+            return Err(World::refused(
                 format!("refs/sluice/combinations/{branch}/*"),
                 &said,
-            )),
-            None => Ok(()),
+            ));
         }
+        let fetched: Vec<Rev> = inner
+            .candidates
+            .iter()
+            .filter(|((b, _), _)| b == branch)
+            .map(|(_, rev)| rev.clone())
+            .collect();
+        for rev in fetched {
+            inner.lacking.remove(&rev);
+        }
+        Ok(())
+    }
+
+    fn publish_candidate(&self, branch: &str, id: &str, rev: &Rev) -> Result<()> {
+        self.0
+             .0
+            .borrow_mut()
+            .candidates
+            .insert((branch.into(), id.into()), rev.clone());
+        Ok(())
+    }
+
+    fn unpublish_candidate(&self, branch: &str, id: &str) -> Result<()> {
+        self.0
+             .0
+            .borrow_mut()
+            .candidates
+            .remove(&(branch.to_string(), id.to_string()));
+        Ok(())
+    }
+
+    /// The candidate comes to the host where the remote holds it.
+    fn fetch_candidate(&self, branch: &str, id: &str) -> Result<()> {
+        let mut inner = self.0 .0.borrow_mut();
+        if let Some(said) = World::state_refused(&inner, branch) {
+            return Err(World::refused(
+                format!("refs/sluice/combinations/{branch}/{id}"),
+                &said,
+            ));
+        }
+        let host = inner.host.clone();
+        inner
+            .candidate_fetches
+            .push((host, branch.into(), id.into()));
+        if let Some(rev) = inner.candidates.get(&(branch.to_string(), id.to_string())) {
+            let rev = rev.clone();
+            inner.lacking.remove(&rev);
+        }
+        Ok(())
     }
 
     fn stale(&self, branch: &str) -> Option<ReadRefused> {
@@ -3353,7 +3418,7 @@ impl State for FakeState {
         Ok(())
     }
 
-    fn allocate_id(&self) -> Result<u64> {
+    fn allocate_id(&self, _branch: &str) -> Result<u64> {
         let mut inner = self.0 .0.borrow_mut();
         let id = inner.next_id;
         inner.next_id += 1;
@@ -3470,13 +3535,13 @@ mod tests {
     #[test]
     fn numbers_from_gives_the_next_number() {
         let f = Fakes::new();
-        assert_eq!(f.state.allocate_id().unwrap(), 1);
-        assert_eq!(f.state.allocate_id().unwrap(), 2);
+        assert_eq!(f.state.allocate_id("main").unwrap(), 1);
+        assert_eq!(f.state.allocate_id("main").unwrap(), 2);
         f.world.numbers_from(1);
-        assert_eq!(f.state.allocate_id().unwrap(), 1);
-        assert_eq!(f.state.allocate_id().unwrap(), 2);
+        assert_eq!(f.state.allocate_id("main").unwrap(), 1);
+        assert_eq!(f.state.allocate_id("main").unwrap(), 2);
         f.world.numbers_from(26);
-        assert_eq!(f.state.allocate_id().unwrap(), 26);
+        assert_eq!(f.state.allocate_id("main").unwrap(), 26);
     }
 
     /// 51: the driver fake delivers to the session its submitter recorded,
