@@ -212,6 +212,18 @@ struct Inner {
     /// Every ask whether a host's system was switched during a run, by the
     /// host that asked, in order.
     system_looks: Vec<String>,
+    /// The grant each host's executor records with its runs, by host; a
+    /// host with none records none (138; design D9).
+    grants: BTreeMap<String, String>,
+    /// What each host's executor reports refusing a finished run, by host,
+    /// in the profile's words (139; design D9).
+    refuses: BTreeMap<String, String>,
+    /// Why each host's executor cannot read its report of what it refused
+    /// a run, by host (139; design D8, D9).
+    refusals_unread: BTreeMap<String, String>,
+    /// Every ask of what a host's executor refused a run, by the host that
+    /// asked, in order.
+    refusal_looks: Vec<String>,
     /// Each start's place, with the places live as it started, in order.
     live_at_start: Vec<(String, Vec<String>)>,
     /// Why each host's executor cannot hold a run's memory limit, by host,
@@ -843,6 +855,48 @@ impl World {
         };
     }
 
+    /// From now, this world's host's executor records `grant` with every
+    /// run it reports; with `None`, none, as every host does until this is
+    /// asked (138; design D9).
+    pub fn grant(&self, grant: Option<&str>) {
+        let mut inner = self.0.borrow_mut();
+        let host = inner.host.clone();
+        match grant {
+            Some(g) => inner.grants.insert(host, g.into()),
+            None => inner.grants.remove(&host),
+        };
+    }
+
+    /// From now, this world's host's executor reports refusing every run
+    /// it is asked of `words`; with `None`, nothing (139; design D9).
+    pub fn refuses(&self, words: Option<&str>) {
+        let mut inner = self.0.borrow_mut();
+        let host = inner.host.clone();
+        match words {
+            Some(w) => inner.refuses.insert(host, w.into()),
+            None => inner.refuses.remove(&host),
+        };
+    }
+
+    /// From now, this world's host's executor cannot read its report of
+    /// what it refused a run, for `words`; with `None`, it reads it again
+    /// (139; design D8, D9). A report it cannot read outweighs what it
+    /// would report.
+    pub fn refusals_unread(&self, words: Option<&str>) {
+        let mut inner = self.0.borrow_mut();
+        let host = inner.host.clone();
+        match words {
+            Some(w) => inner.refusals_unread.insert(host, w.into()),
+            None => inner.refusals_unread.remove(&host),
+        };
+    }
+
+    /// Each ask of what a host's executor refused a run, by the host that
+    /// asked, in order.
+    pub fn refusal_looks(&self) -> Vec<String> {
+        self.0.borrow().refusal_looks.clone()
+    }
+
     /// Each ask whether the host's system was switched during a run, by
     /// the host that asked, in order.
     pub fn system_looks(&self) -> Vec<String> {
@@ -1232,6 +1286,8 @@ impl World {
     }
 
     fn evaluate(inner: &mut Inner, request: &RunRequest) -> RunReport {
+        // Design D9: the grant of the host the run reports as its own.
+        let grant = inner.grants.get(&inner.host).cloned();
         if request.place.name.starts_with("preview/") {
             // A preview's command: one exit, never a check (103).
             return RunReport {
@@ -1258,12 +1314,14 @@ impl World {
                     memory: None,
                     network: None,
                     docker: false,
+                    grant: grant.clone(),
                 },
                 missing: Vec::new(),
                 not_run: Vec::new(),
                 dependencies: Vec::new(),
                 failed_by: Vec::new(),
                 timed_out: false,
+                refusals_unread: None,
             };
         }
         let tree = inner.commits[&request.revision].tree.clone();
@@ -1299,12 +1357,14 @@ impl World {
                     memory: None,
                     network: None,
                     docker: request.limits.docker,
+                    grant: grant.clone(),
                 },
                 missing: Vec::new(),
                 not_run: Vec::new(),
                 dependencies: Vec::new(),
                 failed_by: Vec::new(),
                 timed_out: false,
+                refusals_unread: None,
             };
         }
         let since = request
@@ -1335,12 +1395,14 @@ impl World {
                 memory: None,
                 network: None,
                 docker: request.limits.docker,
+                grant,
             },
             missing: Vec::new(),
             not_run: Vec::new(),
             dependencies: Vec::new(),
             failed_by: Vec::new(),
             timed_out: false,
+            refusals_unread: None,
         };
         let names: Vec<String> = wanted.iter().map(|t| t.name.clone()).collect();
         let mut seen = BTreeMap::new();
@@ -1822,6 +1884,14 @@ impl World {
         self.0.borrow_mut().after_allocating = Some(Rc::new(then));
     }
 
+    /// The next number the records give is `n`: a branch whose records are
+    /// on its remote numbers from the remote's count and one in the host's
+    /// own files from the host's, so two branches may hold one number (26;
+    /// record 0114).
+    pub fn numbers_from(&self, n: u64) {
+        self.0.borrow_mut().next_id = n;
+    }
+
     /// A branch's record file as written.
     pub fn file(&self, branch: &str, path: &str) -> Option<String> {
         self.0
@@ -2280,6 +2350,21 @@ impl Tests for FakeTests {
             )),
             _ => None,
         })
+    }
+
+    /// 139 (design D9): what the host's executor reports refusing the run,
+    /// as the world says, each ask counted.
+    fn refused(&self, _: &RunHandle) -> Result<sluice_seams::Refusals> {
+        let mut inner = self.0 .0.borrow_mut();
+        let host = inner.host.clone();
+        inner.refusal_looks.push(host.clone());
+        Ok(
+            match (inner.refusals_unread.get(&host), inner.refuses.get(&host)) {
+                (Some(why), _) => sluice_seams::Refusals::Unread(why.clone()),
+                (None, Some(words)) => sluice_seams::Refusals::Refused(words.clone()),
+                (None, None) => sluice_seams::Refusals::None,
+            },
+        )
     }
 
     fn bound(&self) -> Result<usize> {
@@ -3380,6 +3465,20 @@ mod tests {
     use super::*;
     use sluice_seams::Decided;
 
+    /// Record 0114: the records give the number `numbers_from` sets next,
+    /// and count on from it, so a test can make two branches hold one.
+    #[test]
+    fn numbers_from_gives_the_next_number() {
+        let f = Fakes::new();
+        assert_eq!(f.state.allocate_id().unwrap(), 1);
+        assert_eq!(f.state.allocate_id().unwrap(), 2);
+        f.world.numbers_from(1);
+        assert_eq!(f.state.allocate_id().unwrap(), 1);
+        assert_eq!(f.state.allocate_id().unwrap(), 2);
+        f.world.numbers_from(26);
+        assert_eq!(f.state.allocate_id().unwrap(), 26);
+    }
+
     /// 51: the driver fake delivers to the session its submitter recorded,
     /// or its agent where it recorded none, and an agent whose sessions
     /// take nothing is answered undelivered, kept apart from those delivered.
@@ -3419,6 +3518,88 @@ mod tests {
         ));
         assert_eq!(f.world.delivered().len(), 2);
         assert_eq!(f.world.undelivered(), [to("unit/b")]);
+    }
+
+    /// 138, design D9: a host's grant is on the executor of every report
+    /// its runs make, a check's run, a command's and a preview's; another
+    /// host's, and a host's once it records none, carry none.
+    #[test]
+    fn a_hosts_grant_is_on_its_reports() {
+        let f = Fakes::new();
+        let rev = f.world.init("main", &[("a/x", "1")]);
+        f.world.task("a:test", "a/");
+        let n = std::cell::Cell::new(0);
+        let grant = |place: &str, command: Option<&str>| -> Option<String> {
+            n.set(n.get() + 1);
+            let request = RunRequest {
+                place: f
+                    .checkout
+                    .materialize(&format!("{place}/{}", n.get()), &rev, &Settings::new())
+                    .unwrap(),
+                revision: rev.clone(),
+                required: vec!["a:test".into()],
+                since: None,
+                limit: None,
+                limits: Default::default(),
+                tests: Settings::new(),
+                command: command.map(str::to_string),
+                replay: false,
+                system: None,
+            };
+            let h = f.tests.start(&request).unwrap();
+            match f.tests.progress(&h).unwrap() {
+                Progress::Finished(r) => r.executor.grant,
+                other => panic!("{other:?}"),
+            }
+        };
+        assert_eq!(grant("sluice/try/main", None), None);
+        f.world.grant(Some("sb1:g1"));
+        for (place, command) in [
+            ("sluice/try/main", None),
+            ("session/w", Some("make check")),
+            ("preview/main", None),
+        ] {
+            assert_eq!(grant(place, command).as_deref(), Some("sb1:g1"), "{place}");
+        }
+        f.world.be_host("b");
+        assert_eq!(grant("sluice/try/main", None), None);
+        f.world.grant(Some("open:1"));
+        assert_eq!(grant("sluice/try/main", None).as_deref(), Some("open:1"));
+        f.world.be_host("fake-host");
+        assert_eq!(grant("sluice/try/main", None).as_deref(), Some("sb1:g1"));
+        f.world.grant(None);
+        assert_eq!(grant("sluice/try/main", None), None);
+    }
+
+    /// 139, design D9: a host's executor answers what the world says it
+    /// refused or could not read, nothing for another host, and counts
+    /// each ask by the host that asked.
+    #[test]
+    fn a_hosts_refusals_are_answered_and_counted() {
+        use sluice_seams::Refusals;
+        let f = Fakes::new();
+        let run = RunHandle("run-0".into());
+        assert_eq!(f.tests.refused(&run).unwrap(), Refusals::None);
+        f.world.refuses(Some("refused x"));
+        assert_eq!(
+            f.tests.refused(&run).unwrap(),
+            Refusals::Refused("refused x".into())
+        );
+        f.world.refusals_unread(Some("log: exited 1"));
+        assert_eq!(
+            f.tests.refused(&run).unwrap(),
+            Refusals::Unread("log: exited 1".into())
+        );
+        f.world.be_host("b");
+        assert_eq!(f.tests.refused(&run).unwrap(), Refusals::None);
+        f.world.be_host("fake-host");
+        f.world.refusals_unread(None);
+        f.world.refuses(None);
+        assert_eq!(f.tests.refused(&run).unwrap(), Refusals::None);
+        assert_eq!(
+            f.world.refusal_looks(),
+            ["fake-host", "fake-host", "fake-host", "b", "fake-host"]
+        );
     }
 
     /// The check fake counts the host's session runs while they run, and

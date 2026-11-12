@@ -396,3 +396,32 @@ fn a_signed_branch_counts_the_dependency_through_its_signer() {
     assert_eq!(signed[0].hash, sub.failed[0].hash);
     assert_eq!(signed[0].signer.as_deref(), Some("box"));
 }
+
+/// satisfies: 149, 114, 139; records 0072 and 0084; rule core.35; the
+/// run-outcome spec's "A test failed by a task the run was refused"
+#[test]
+fn a_refusal_leaves_a_check_failed_by_a_dependency_unjudged() {
+    const REFUSED: &str = "sluice's sandbox refused the run file-write-create \
+                           /Users/me/.cache/x (by python3)";
+    let h = rig(&integration("fail"));
+    h.fails_with(DEP, "a/lib", "broken");
+    h.w().refuses(Some(REFUSED));
+    let one = submit_a(&h, "broken");
+    for _ in 0..8 {
+        if !not_run_events(&h).is_empty() {
+            break;
+        }
+        h.step();
+    }
+    assert_eq!(
+        not_run_events(&h),
+        [vec![(CHECK.to_string(), REFUSED.to_string())]]
+    );
+    assert!(results(&h).iter().all(|r| r.task != CHECK && r.task != DEP));
+    assert!(!h.events().iter().any(|e| matches!(
+        e,
+        Event::Ran { task, .. } if task == DEP
+    )));
+    assert_ne!(h.sub(one).state, State::Failed);
+    assert!(h.w().delivered().is_empty(), "nobody is blamed");
+}

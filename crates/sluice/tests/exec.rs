@@ -602,6 +602,117 @@ fn a_clean_run_of_the_checks_is_recorded_and_a_dirty_one_is_not() {
     );
 }
 
+/// 138, design D1 (the check-grant spec's "The open executor"): each
+/// result `sluice exec` records of a clean worktree's run under the open
+/// executor carries the open executor's grant.
+#[test]
+fn exec_records_the_open_executors_grant() {
+    let s = Setup::new("exec-open-grant");
+    let out = s.sluice(&["exec", "bolt/x"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let results = s.results();
+    assert!(!results.is_empty(), "{}", text(&out));
+    for l in results.lines() {
+        let v: serde_json::Value = serde_json::from_str(l).unwrap();
+        assert_eq!(v["executor"]["kind"], "open", "{l}");
+        assert_eq!(v["executor"]["grant"], "open:1", "{l}");
+    }
+}
+
+/// The grant each run of the session's place at `worktree` recorded in
+/// its request, oldest first.
+fn run_grants(s: &Setup) -> Vec<String> {
+    let canon = std::fs::canonicalize(&s.worktree).unwrap();
+    let dir = s
+        .repo
+        .dir()
+        .join(".git/sluice/.runs")
+        .join(sluice::runs::flat_name(&format!(
+            "session/{}",
+            canon.display()
+        )));
+    let mut runs: Vec<(u64, PathBuf)> = std::fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(|e| {
+            let e = e.unwrap();
+            let n = e.file_name().to_str()?.parse().ok()?;
+            Some((n, e.path()))
+        })
+        .collect();
+    runs.sort();
+    runs.into_iter()
+        .map(|(_, d)| {
+            let r: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(d.join("request.json")).unwrap()).unwrap();
+            r["meta"]["executor"]["grant"].as_str().unwrap().to_string()
+        })
+        .collect()
+}
+
+/// 114, 138, 139, S66; record 0072 (the run-outcome spec's "S66"): a
+/// sandboxed branch's test that writes a folder outside the worktree is
+/// listed as not run by the first `sluice exec`, naming the write the
+/// sandbox refused, and nothing is recorded; once the host's `[[caches]]`
+/// declares the folder, the second records its pass under a wider grant,
+/// the one result under the test's key.
+#[cfg(target_os = "macos")]
+#[test]
+fn exec_records_nothing_for_a_test_the_sandbox_refused_and_its_pass_under_a_wider_grant() {
+    let s = Setup::new("exec-sandbox-refused");
+    s.policy(&format!(
+        "{}\n[executor]\nkind = \"sandbox\"\nnetwork = \"localhost\"\n",
+        POLICY.replace("\"41500\"", "\"43400\"")
+    ));
+    let outside = s.config.path().join("shared");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(
+        s.worktree.join("check.sh"),
+        format!(
+            "/bin/mkdir -p '{0}/made' && /usr/bin/touch '{0}/made/x'\n",
+            outside.display()
+        ),
+    )
+    .unwrap();
+    let git = |args: &[&str]| {
+        let mut a = vec!["-C", s.worktree.to_str().unwrap()];
+        a.extend(args);
+        s.repo.git(&a)
+    };
+    git(&["commit", "-q", "-am", "the check writes outside"]);
+
+    let out = s.sluice(&["exec", "bolt/x"]);
+    let said = text(&out);
+    assert!(
+        said.contains(
+            "could not run: sh check.sh: sluice's sandbox refused the run file-write-create "
+        ),
+        "{said}"
+    );
+    assert!(said.contains("/made (by mkdir)"), "{said}");
+    assert_eq!(s.results(), "", "nothing recorded: {said}");
+
+    std::fs::create_dir_all(s.config.path().join("sluice")).unwrap();
+    std::fs::write(
+        s.config.path().join("sluice/config.toml"),
+        format!("[[caches]]\ndir = {:?}\n", outside.display().to_string()),
+    )
+    .unwrap();
+    let out = s.sluice(&["exec", "bolt/x"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let results = s.results();
+    let lines: Vec<serde_json::Value> = results
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(lines.len(), 1, "{results}");
+    assert_eq!(lines[0]["task"], "sh check.sh");
+    assert_eq!(lines[0]["outcome"], "pass");
+    let grants = run_grants(&s);
+    assert_eq!(grants.len(), 2, "{grants:?}");
+    assert_ne!(grants[0], grants[1], "a wider grant");
+    assert_eq!(lines[0]["executor"]["grant"], grants[1].as_str());
+}
+
 /// Session-runs-1 clause 97, 123: a worktree removed with `rm -rf`, with
 /// nothing released, is no session's. The next `sluice exec` on the host,
 /// from another worktree, runs the release its runs stored, once, in its

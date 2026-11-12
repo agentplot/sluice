@@ -75,11 +75,13 @@ read_line() {
 }
 
 # A submission's worktree, and for a blame its tests, read once from
-# sluice when the document did not carry them: $1 its id, $2 its kind.
-# Prints the tests, comma-separated, for a blame's toast.
+# sluice when the document did not carry them: $1 its id, $2 its kind, $3
+# the branch its event is on, which sluice reads alone, since another
+# branch may hold its number too (record 0114). Prints the tests,
+# comma-separated, for a blame's toast.
 learn() {
   [ -n "$dir" ] || return 0
-  got=$(cd "$dir" && sluice status "$1" --json 2>/dev/null) || return 0
+  got=$(cd "$dir" && sluice status "$1" --branch "$3" --json 2>/dev/null) || return 0
   ln=$(printf '%s' "$got" | jq -r --arg i "$1" --arg paths "$paths" '
     ([.failed // [] | .[] | .task | select(type == "string") | gsub("[[:cntrl:]]"; "")]) as $f
     | ((.from.path // "") | tostring | gsub("[[:cntrl:]]"; "")) as $p
@@ -202,11 +204,11 @@ keep() {
     case $f1 in
     blamed)
       learned_tests=$f4
-      [ "$f5" = learn ] && learn "$f2" blamed
+      [ "$f5" = learn ] && learn "$f2" blamed "$f3"
       toasts="${toasts}sluice: #$f2 blamed on $f3$tab${learned_tests:+$learned_tests failed. }Run jump to go to its pane.$nl"
       ;;
     conflict)
-      [ "$f5" = learn ] && learn "$f2" conflict
+      [ "$f5" = learn ] && learn "$f2" conflict "$f3"
       toasts="${toasts}sluice: #$f2 conflicts on $f3$tab$f4$nl"
       ;;
     landed) landings="$landings$f2$tab$f3$tab$f4$tab$f5$nl" ;;

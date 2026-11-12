@@ -194,6 +194,10 @@ impl Tests for RecordedChecks {
         self.inner.switched(run)
     }
 
+    fn refused(&self, run: &RunHandle) -> Result<sluice_seams::Refusals> {
+        self.inner.refused(run)
+    }
+
     fn bound(&self) -> Result<usize> {
         self.inner.bound()
     }

@@ -211,6 +211,7 @@ fn releasing_a_place_ends_its_run() {
             grace: 1,
             meta: serde_json::Value::Null,
             release: None,
+            watch: None,
         },
     )
     .unwrap();
@@ -587,6 +588,7 @@ fn releasing_a_sessions_place_leaves_its_worktree() {
         env: place.env.clone(),
         limit: None,
         grace: 1,
+        watch: None,
         meta: serde_json::Value::Null,
         release: Some(vec![
             "/bin/sh".into(),
@@ -700,6 +702,7 @@ fn a_sessions_place_is_released_under_the_policy_read_now() {
                     .collect(),
                 limit: None,
                 grace: 1,
+                watch: None,
                 meta: serde_json::Value::Null,
                 release: Some(vec!["/bin/sh".into(), "-c".into(), cmd.into()]),
             },
@@ -940,6 +943,7 @@ fn a_failed_preview_is_kept_holding_nothing() {
             env: place.env.clone(),
             limit: None,
             grace: 1,
+            watch: None,
             meta: serde_json::Value::Null,
             release: Some(vec![
                 "/bin/sh".into(),
@@ -1134,6 +1138,7 @@ fn ended_run(r: &Runs, name: &str, place: &Place, release: &str) {
             env: place.env.clone(),
             limit: None,
             grace: 1,
+            watch: None,
             meta: serde_json::Value::Null,
             release: Some(vec!["/bin/sh".into(), "-c".into(), release.into()]),
         },
@@ -1347,6 +1352,7 @@ fn tooled_run(r: &Runs, name: &str, place: &Place, tooled: &std::path::Path, rel
             env: place.env.clone(),
             limit: None,
             grace: 1,
+            watch: None,
             meta: serde_json::Value::Null,
             release: Some(vec![
                 "bash".into(),
@@ -1879,6 +1885,7 @@ fn a_place_with_a_run_going_keeps_its_former_scratch_for_it() {
             grace: 1,
             meta: serde_json::Value::Null,
             release: None,
+            watch: None,
         },
     )
     .unwrap();

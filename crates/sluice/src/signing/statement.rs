@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
-use sluice_seams::{Outcome, Rev};
+use sluice_seams::{Network, Outcome, Rev};
 
 use super::dsse::{Envelope, IN_TOTO};
 
@@ -46,6 +46,33 @@ pub struct Run {
     pub claim: Option<String>,
     /// When it finished, RFC 3339, as the signer's host read its clock.
     pub at: String,
+    /// What the executor held the run to beyond its claims (19, 83, 138;
+    /// design D3); `None` on a statement signed before it, whose results
+    /// read with no limits and no grant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held: Option<Held>,
+}
+
+/// 19, 83, 138 (design D3): what the executor held a run to beyond the
+/// claims, each absent where it held none: its memory, network, container
+/// engine and grant. It is what the executor observed, as the system is,
+/// so it needs no allowance of the signer's, and a signed result's limits
+/// and grant are read from it alone (rule core.22). One statement holds
+/// one executor's limits and grant.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Held {
+    /// The most memory the run could use, in bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory: Option<u64>,
+    /// The network the executor held the run to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network: Option<Network>,
+    /// The run could reach the host's container engine (ADR 0016).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub docker: bool,
+    /// What the executor let the run reach (138; record 0072).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grant: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -157,7 +184,44 @@ mod tests {
             combination: Rev::new("c0ffee"),
             claim: Some("main/c3/linux-x64".into()),
             at: "2026-10-19T12:00:00Z".into(),
+            held: None,
         }
+    }
+
+    /// 138, design D3 (the check-grant spec's "An older statement"): a
+    /// statement signed with no limits and no grant reads with none and is
+    /// written without them; one with limits and a grant reads them back.
+    #[test]
+    fn a_statement_with_no_grant_reads_with_none() {
+        let s = Statement::of(run());
+        let json = serde_json::to_value(&s).unwrap();
+        assert!(json["predicate"].get("held").is_none(), "{json}");
+        let read = Statement::from_envelope(&s.envelope().unwrap()).unwrap();
+        assert_eq!(read.predicate.held, None);
+        assert_eq!(serde_json::to_value(&read).unwrap(), json);
+
+        let held = Held {
+            memory: Some(8 << 30),
+            network: Some(Network::Localhost),
+            docker: true,
+            grant: Some("sb1:0123456789abcdef0123456789abcdef".into()),
+        };
+        let s = Statement::of(Run {
+            held: Some(held.clone()),
+            ..run()
+        });
+        let json = serde_json::to_value(&s).unwrap();
+        assert_eq!(json["predicate"]["held"]["network"], "localhost");
+        assert_eq!(json["predicate"]["held"]["docker"], true);
+        let read = Statement::from_envelope(&s.envelope().unwrap()).unwrap();
+        assert_eq!(read.predicate.held, Some(held));
+
+        let bare = Statement::of(Run {
+            held: Some(Held::default()),
+            ..run()
+        });
+        let json = serde_json::to_value(&bare).unwrap();
+        assert_eq!(json["predicate"]["held"], serde_json::json!({}));
     }
 
     #[test]

@@ -41,8 +41,10 @@ pub const COMMAND_FOR: Duration = Duration::from_secs(30);
 /// whatever called it: a forge call's, a credential command's and each try
 /// of a git call's, git ended with every process it started and the
 /// repository's fetch lock let go (134; rule core.29; record 0109). A
-/// fetch waits for that lock no longer either.
-pub const TRY_FOR: Duration = Duration::from_secs(30);
+/// fetch waits for that lock no longer either. It is the family's limit,
+/// weir-bounded's, one value for every tool (record 0109 as amended
+/// 2026-11-11; agentplot/weir record 0008).
+pub const TRY_FOR: Duration = weir_bounded::TRY_FOR;
 
 /// The first pause, and the longest the backoff grows to before jitter.
 const FIRST: Duration = Duration::from_secs(1);
