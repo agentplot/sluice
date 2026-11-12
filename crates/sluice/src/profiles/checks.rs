@@ -200,6 +200,11 @@ struct Meta {
     /// sluice started, each read as before (D4).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     nix_system: Option<PathBuf>,
+    /// 139, design D4: the mark each refusal rule of a sandboxed run's
+    /// profile carries; none for an open run and for a run an older sluice
+    /// started, whose refusals are never read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mark: Option<String>,
 }
 
 /// A pool the binding hands this profile, to start runs on (88; ADR 0034).
@@ -232,6 +237,9 @@ pub struct Checks {
     engines: Option<Vec<Endpoint>>,
     /// The link the active system is read from, when not the host's.
     system_link: Option<PathBuf>,
+    /// The program a sandboxed run's reports are streamed with, when not
+    /// the host's.
+    log: Option<PathBuf>,
 }
 
 impl Checks {
@@ -246,6 +254,7 @@ impl Checks {
             pool: None,
             engines: None,
             system_link: None,
+            log: None,
         }
     }
 
@@ -286,6 +295,14 @@ impl Checks {
     /// `path` in place of the host's (design D8).
     pub fn with_system_link(mut self, path: PathBuf) -> Self {
         self.system_link = Some(path);
+        self
+    }
+
+    /// The same profile, streaming a sandboxed run's reports with the
+    /// program at `path` in place of the host's `log` (design D5): how a
+    /// test stands for a log that cannot be streamed.
+    pub fn with_log(mut self, path: PathBuf) -> Self {
+        self.log = Some(path);
         self
     }
 
@@ -464,6 +481,10 @@ struct Reach {
     tcp: Vec<(String, u16)>,
     /// The user's own temporary directory, resolved.
     user_tmp: Option<PathBuf>,
+    /// The run's own mark, which each refusal rule carries so the kernel's
+    /// report of a refusal names the run (139; design D4); `None` for a
+    /// profile no run's refusals are read from.
+    mark: Option<String>,
 }
 
 /// A sandboxed run's profile, and the grant it gives (83, 138; design D1).
@@ -498,6 +519,12 @@ impl Reach {
 /// and, whatever the network, each of its sockets and the container
 /// engine's TCP addresses, by host and port (ADR 0016; design D5).
 ///
+/// Design D4: each refusal rule carries the run's mark, `(with message
+/// "<mark>")`, so the kernel's report of what it refused names the run;
+/// after the allowed writes, a write to `/dev/dtracehelper`, which every
+/// program's loader is refused and goes on from and no check needs, is
+/// refused with no report.
+///
 /// Design D1: with `roles`, each path is named by its role and each line
 /// is kept once, in order, so two hosts with two and three caches, or a
 /// path given and resolved, render the same; this is the text the grant
@@ -522,8 +549,15 @@ fn seatbelt(reach: &Reach, roles: bool) -> String {
             "(regex #\"^{t}/\\.?(com\\.google\\.[Cc]hrome|org\\.chromium\\.[Cc]hromium)[.a-zA-Z]*\\.[A-Za-z0-9]+(/|$)\")"
         )
     });
-    let mut p =
-        String::from("(version 1)\n(allow default)\n(deny file-write*)\n(allow file-write*\n");
+    // Design D4: the run's mark on each refusal rule, `<mark>` by role.
+    let deny = |what: &str| match (&reach.mark, roles) {
+        (Some(_), true) => format!("(deny {what} (with message \"<mark>\"))\n"),
+        (Some(m), false) => format!("(deny {what} (with message \"{}\"))\n", quote(m)),
+        (None, _) => format!("(deny {what})\n"),
+    };
+    let mut p = String::from("(version 1)\n(allow default)\n");
+    p.push_str(&deny("file-write*"));
+    p.push_str("(allow file-write*\n");
     for (role, w) in &reach.writable {
         p.push_str(&format!("  (subpath \"{}\")\n", path(*role, w)));
     }
@@ -536,13 +570,17 @@ fn seatbelt(reach: &Reach, roles: bool) -> String {
     // C.3: the null and terminal devices, and `/dev/ptmx`, from which a
     // command opens a pseudo-terminal of its own, whose end is a `ttys`.
     p.push_str("  (literal \"/dev/null\") (literal \"/dev/tty\") (literal \"/dev/ptmx\") (regex #\"^/dev/fd/\") (regex #\"^/dev/ttys\"))\n");
+    // Design D4: refused as before, and reported by no one.
+    p.push_str("(deny file-write-data (literal \"/dev/dtracehelper\") (with no-report))\n");
     match reach.network {
-        Some(Network::Denied) => p.push_str("(deny network*)\n"),
-        Some(Network::Localhost) => p.push_str(
-            "(deny network*)\n\
-             (allow network-bind network-inbound (local ip \"localhost:*\"))\n\
-             (allow network-outbound (remote ip \"localhost:*\"))\n",
-        ),
+        Some(Network::Denied) => p.push_str(&deny("network*")),
+        Some(Network::Localhost) => {
+            p.push_str(&deny("network*"));
+            p.push_str(
+                "(allow network-bind network-inbound (local ip \"localhost:*\"))\n\
+                 (allow network-outbound (remote ip \"localhost:*\"))\n",
+            );
+        }
         Some(Network::Allowed) | None => {}
     }
     // A local socket of the run's own, its browser's included, unless the
@@ -1370,7 +1408,9 @@ fn given_and_resolved(path: &Path) -> Vec<PathBuf> {
 /// engine's `engines`, its sockets and its TCP addresses, reachable when
 /// `limits` allow it (ADR 0016; design D5), and each `socket` of the
 /// caches, whatever the network (35; design D4). The grant names the
-/// store a `<cache>`, as a declared cache is (design D1).
+/// store a `<cache>`, as a declared cache is (design D1). Each refusal
+/// rule carries `mark`, the run's (139; design D4 of the change
+/// `a-check-its-executor-refused-has-no-outcome`).
 fn sandbox_profile(
     place: &Place,
     limits: &Limits,
@@ -1378,8 +1418,13 @@ fn sandbox_profile(
     caches: &[HostCache],
     store: Option<&Path>,
     engines: Vec<Endpoint>,
+    mark: Option<&str>,
 ) -> Profile {
-    sandbox_reach(place, limits, stamps, caches, store, engines, user_tmp()).profile()
+    Reach {
+        mark: mark.map(str::to_string),
+        ..sandbox_reach(place, limits, stamps, caches, store, engines, user_tmp())
+    }
+    .profile()
 }
 
 /// What [`sandbox_profile`] writes its profile from, with `user_tmp` the
@@ -1447,8 +1492,41 @@ fn sandbox_reach(
         sockets,
         tcp,
         user_tmp,
+        mark: None,
     }
 }
+
+/// Design D4: a run's mark, `sluice-run:` and 16 hex characters of the
+/// SHA-256 of its directory and the time it started, so no two runs share
+/// one.
+fn run_mark(dir: &Path, started_ms: i64) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(dir.as_os_str().as_encoded_bytes());
+    h.update(b"\0");
+    h.update(started_ms.to_string().as_bytes());
+    let hex: String = h.finalize()[..8]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    format!("sluice-run:{hex}")
+}
+
+/// Design D5: the watch a sandboxed run's supervisor keeps its sandbox's
+/// reports with, `log` streaming every report of `mark`.
+fn watch_argv(log: &Path, mark: &str) -> Vec<String> {
+    vec![
+        log.to_string_lossy().into_owned(),
+        "stream".into(),
+        "--style".into(),
+        "ndjson".into(),
+        "--predicate".into(),
+        format!("sender == \"Sandbox\" AND eventMessage CONTAINS \"{mark}\""),
+    ]
+}
+
+/// The program a sandboxed run's reports are streamed with on the host.
+const LOG: &str = "/usr/bin/log";
 
 /// `[tests] release`: the command, or `None`.
 fn release_argv(tests: &Settings) -> Result<Option<Vec<String>>> {
@@ -1541,7 +1619,7 @@ pub fn release_request(
         std::fs::write(
             &profile,
             // A release runs no check whose proof sluice reads.
-            sandbox_profile(place, limits, &[], caches, None, engines).text,
+            sandbox_profile(place, limits, &[], caches, None, engines, None).text,
         )?;
         argv.splice(
             0..0,
@@ -1774,6 +1852,18 @@ impl Tests for Checks {
             _ => None,
         };
         let docker = request.limits.docker;
+        let started_ms = chrono::Utc::now().timestamp_millis();
+        // Design D4, D5: a sandboxed run's mark, and the watch that keeps
+        // its sandbox's reports of it.
+        let (mark, watch) = match kind {
+            Kind::Open => (None, None),
+            Kind::Sandbox => {
+                let mark = run_mark(&dir, started_ms);
+                let log = self.log.clone().unwrap_or_else(|| PathBuf::from(LOG));
+                let watch = watch_argv(&log, &mark);
+                (Some(mark), Some(watch))
+            }
+        };
         let executor = match kind {
             Kind::Open => Enforced {
                 kind: "open".into(),
@@ -1800,6 +1890,7 @@ impl Tests for Checks {
                         true => self.engines(),
                         false => Vec::new(),
                     },
+                    mark.as_deref(),
                 );
                 std::fs::write(&profile, &written.text)?;
                 let sandbox = [
@@ -1832,12 +1923,13 @@ impl Tests for Checks {
             targets: plan.targets,
             executor,
             host: hostname(),
-            started_ms: Some(chrono::Utc::now().timestamp_millis()),
+            started_ms: Some(started_ms),
             not_run,
             kept_out: plan.kept_out,
             deps: plan.deps,
             store,
             nix_system: system,
+            mark,
         };
         self.runs.start(
             name,
@@ -1850,7 +1942,7 @@ impl Tests for Checks {
                 grace: 10,
                 meta: serde_json::to_value(&meta)?,
                 release,
-                watch: None,
+                watch,
             },
         )?;
         // Its supervisor holds the run directory, which keeps it counted.
@@ -2617,6 +2709,67 @@ mod tests {
         );
     }
 
+    /// 139, design D4 (the run-outcome spec's "Every refusal rule carries
+    /// the mark"): under each network, every refusal rule of a run's
+    /// profile carries the run's mark but the one for `/dev/dtracehelper`,
+    /// which reports nothing; two marks give one grant.
+    #[test]
+    fn each_refusal_of_the_profile_carries_the_runs_mark() {
+        let host = Host::new("grant-mark");
+        let place = host.place("a");
+        let mark = "sluice-run:0123456789abcdef";
+        for network in [
+            None,
+            Some(Network::Denied),
+            Some(Network::Localhost),
+            Some(Network::Allowed),
+        ] {
+            let reach = Reach {
+                mark: Some(mark.into()),
+                ..sandbox_reach(
+                    &place,
+                    &sandbox(network, false),
+                    &[],
+                    &host.caches(1),
+                    None,
+                    Vec::new(),
+                    None,
+                )
+            };
+            let text = reach.profile().text;
+            let denies: Vec<&str> = text.lines().filter(|l| l.starts_with("(deny")).collect();
+            let want = match network {
+                Some(Network::Denied | Network::Localhost) => 3,
+                _ => 2,
+            };
+            assert_eq!(denies.len(), want, "{network:?}: {text}");
+            for d in denies {
+                if d.contains("/dev/dtracehelper") {
+                    assert_eq!(
+                        d,
+                        "(deny file-write-data (literal \"/dev/dtracehelper\") (with no-report))"
+                    );
+                } else {
+                    assert!(
+                        d.ends_with(&format!("(with message \"{mark}\"))")),
+                        "{network:?}: {d}"
+                    );
+                }
+            }
+            assert!(seatbelt(&reach, true).contains("(with message \"<mark>\")"));
+            let other = Reach {
+                mark: Some("sluice-run:fedcba9876543210".into()),
+                ..reach.clone()
+            };
+            assert_ne!(other.profile().text, reach.profile().text);
+            assert_eq!(other.profile().grant, reach.profile().grant);
+        }
+        let dir = Path::new("/tmp/sluice/.runs/p");
+        assert_ne!(run_mark(dir, 1), run_mark(dir, 2));
+        assert!(run_mark(dir, 1).starts_with("sluice-run:"));
+        assert_eq!(run_mark(dir, 1).len(), "sluice-run:".len() + 16);
+    }
+
     /// The host-caches spec's "Only the store is opened", "A store moon has
     /// not made yet" and "A store in the checkout" (C.2 sandbox row as
     /// amended at agentplot/blueprints 0c38f24; record 0105; rules core.9,
@@ -2650,7 +2803,16 @@ mod tests {
             env: BTreeMap::new(),
         };
         let profile = |store: Option<&Path>| {
-            sandbox_profile(&place, &Limits::default(), &[], &[], store, Vec::new()).text
+            sandbox_profile(
+                &place,
+                &Limits::default(),
+                &[],
+                &[],
+                store,
+                Vec::new(),
+                None,
+            )
+            .text
         };
         let opened = |p: &str| -> std::collections::BTreeSet<PathBuf> {
             p.split("(subpath \"")
