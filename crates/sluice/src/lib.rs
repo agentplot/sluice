@@ -4080,6 +4080,23 @@ fn report(
                     )?;
                 }
             }
+            // 139, design D8: a run of it whose executor could not read
+            // what its sandbox refused it, read as refused nothing.
+            let mut unread: Vec<&str> = Vec::new();
+            for l in &combination_log {
+                if let Event::Detail {
+                    refusals_unread: Some(why),
+                    ..
+                } = &l.event
+                {
+                    if !unread.contains(&why.as_str()) {
+                        unread.push(why);
+                    }
+                }
+            }
+            for why in unread {
+                writeln!(out, "  {}", words::refusals_unread(why))?;
+            }
             // Could-not-run-1 115: a test that could not run, and why.
             for f in &could_not {
                 let why = f.not_run.as_deref().unwrap_or_default();
