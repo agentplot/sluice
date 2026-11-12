@@ -13,10 +13,13 @@ root="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
 case "$file" in "$root"/site/src/content/docs/* | "$root"/docs/*) ;; *) exit 0 ;; esac
 case "$file" in "$root"/site/src/content/docs/decisions/*) exit 0 ;; esac
 cd "$root" || exit 0
+# Relative to the root, as .vale.ini's sections name their files: an
+# absolute path matches none, and decision records lose their exemptions.
+rel="${file#"$root"/}"
 if [ -x .devenv/profile/bin/vale ]; then
-  out="$(.devenv/profile/bin/vale --minAlertLevel=warning --output=line "$file" 2>&1)"
+  out="$(.devenv/profile/bin/vale --minAlertLevel=warning --output=line "$rel" 2>&1)"
 else
-  out="$(devenv shell -- vale --minAlertLevel=warning --output=line "$file" 2>/dev/null)"
+  out="$(devenv shell -- vale --minAlertLevel=warning --output=line "$rel" 2>/dev/null)"
 fi
 if [ -n "$out" ]; then
   printf 'Vale (.vale.ini, styles/Sluice) on %s:\n%s\nClear each warning before you commit.\n' "${file#"$root"/}" "$out" >&2

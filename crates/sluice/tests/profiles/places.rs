@@ -1757,6 +1757,199 @@ fn a_gone_checkout_is_freed_whatever_its_stored_release_did() {
     assert!(p.made().unwrap().is_empty());
 }
 
+/// Drop git's own entry for the worktree `folder`, as git's removal that
+/// stopped part way leaves it (deneb, 2026-11-10: `Directory not empty`,
+/// then `is not a working tree`): the entry its `.git` file names is
+/// removed, the folder stays, and `git worktree list` no longer names it.
+fn drop_entry(repo: &Repo, folder: &std::path::Path) {
+    let dot_git = std::fs::read_to_string(folder.join(".git")).unwrap();
+    let entry = dot_git.trim().strip_prefix("gitdir: ").unwrap();
+    std::fs::remove_dir_all(entry).unwrap();
+    assert!(folder.is_dir());
+    let real = std::fs::canonicalize(folder).unwrap();
+    assert!(
+        !worktrees(repo)
+            .iter()
+            .any(|w| std::path::Path::new(w) == folder || std::path::Path::new(w) == real),
+        "git still lists {}",
+        folder.display()
+    );
+}
+
+/// 123, record 0115: a combination's checkout or a preview whose folder
+/// git no longer lists is gone, whatever is left in the folder; one git
+/// lists under another spelling of its path is not; a worktree's place git
+/// no longer lists is not gone while its folder is there.
+#[test]
+fn a_checkout_git_no_longer_lists_is_gone() {
+    let _ports = ports_lock();
+    let (repo, rev) = scratch("places-unlisted");
+    let blocks = support::Scratch::new("places-unlisted-blocks");
+    let link = repo.dir().with_extension("link");
+    let _ = std::fs::remove_file(&link);
+    std::os::unix::fs::symlink(repo.dir(), &link).unwrap();
+    // A place made through the link: its record spells its path so, while
+    // git lists the folder by the path it resolves to.
+    let through = Places::new(&link.join(".git"), runs(&repo))
+        .with_scratch_root(user_dir(&repo))
+        .with_blocks(blocks.path().to_path_buf());
+    let place = through.materialize(NAME, &rev, &Settings::new()).unwrap();
+    assert!(place.path.starts_with(&link), "{}", place.path.display());
+    assert!(
+        !worktrees(&repo).contains(&place.path.display().to_string()),
+        "git lists it as spelled"
+    );
+    assert!(!through.gone(NAME).unwrap());
+    let p = places(&repo).with_blocks(blocks.path().to_path_buf());
+    assert!(!p.gone(NAME).unwrap());
+
+    drop_entry(&repo, &place.path);
+    assert!(through.gone(NAME).unwrap());
+    assert!(p.gone(NAME).unwrap());
+
+    // A preview.
+    let name = preview_name(&rev);
+    let (preview, _) = p
+        .preview(
+            &name,
+            &rev,
+            "main",
+            &ported(&["web"], &ports(1).to_string()),
+            &BTreeMap::new(),
+            "now",
+        )
+        .unwrap();
+    assert!(!p.previews().unwrap()[0].gone);
+    drop_entry(&repo, &preview.path);
+    let listed = p.previews().unwrap();
+    assert_eq!(listed.len(), 1);
+    assert!(listed[0].gone, "{:?}", listed[0]);
+    assert!(p.gone(&name).unwrap());
+
+    // A worktree's place keeps its reading: not gone while its folder is.
+    let session = repo.dir().with_extension("session");
+    let adopted = p
+        .adopt(session.to_str().unwrap(), "bolt/x", &Settings::new(), "now")
+        .unwrap();
+    drop_entry(&repo, &session);
+    let held = p.session_places().unwrap();
+    assert_eq!(held.len(), 1);
+    assert!(!held[0].gone);
+    assert!(!p.gone(&adopted.name).unwrap());
+
+    for n in [NAME, name.as_str(), adopted.name.as_str()] {
+        p.free(n).unwrap();
+    }
+    assert!(p.made().unwrap().is_empty());
+    assert!(p.previews().unwrap().is_empty());
+    assert!(p.session_places().unwrap().is_empty());
+    std::fs::remove_file(&link).unwrap();
+}
+
+/// Makes `dir` its owner's to write again when dropped, so a test that
+/// fails with it read-only leaves nothing its scratch cannot remove.
+struct Unlock(PathBuf);
+
+impl Drop for Unlock {
+    fn drop(&mut self) {
+        let _ =
+            std::fs::set_permissions(&self.0, std::os::unix::fs::PermissionsExt::from_mode(0o755));
+    }
+}
+
+/// A directory of `place` a check left read-only, holding a file.
+fn read_only(place: &Place) -> Unlock {
+    let dir = place.path.join("locked");
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::write(dir.join("file"), "x").unwrap();
+    std::fs::set_permissions(&dir, std::os::unix::fs::PermissionsExt::from_mode(0o555)).unwrap();
+    Unlock(dir)
+}
+
+/// 123, record 0115: a combination's checkout whose folder git no longer
+/// lists, holding a directory a check left read-only, is released once
+/// from what sluice holds and freed: the release its run stored runs once,
+/// or nothing where it ran already, as on deneb, and sluice removes what
+/// is left of the folder, its scratch, its record and its ports going with
+/// it. The operator's acceptance frees one the same way, with nothing run.
+#[test]
+fn a_checkout_git_no_longer_lists_is_freed() {
+    let _ports = ports_lock();
+    let (repo, rev) = scratch("places-unlisted-freed");
+    let blocks = support::Scratch::new("places-unlisted-freed-blocks");
+    let p = places(&repo).with_blocks(blocks.path().to_path_buf());
+    let settings = ported(&["web"], &ports(1).to_string());
+    let r = runs(&repo);
+    let mark = repo.dir().with_extension("unlisted-released");
+    let _ = std::fs::remove_file(&mark);
+    let lines = || {
+        std::fs::read_to_string(&mark)
+            .map(|s| s.lines().count())
+            .unwrap_or(0)
+    };
+    let release = format!("echo ran >> {}", mark.display());
+    let freed = |name: &str, place: &Place| {
+        left_behind(&repo, place);
+        assert!(p.made().unwrap().is_empty());
+        assert!(!p.gone(name).unwrap());
+    };
+
+    // Released once: its stored release runs, and what is left goes.
+    let first = p.materialize(NAME, &rev, &settings).unwrap();
+    ended_run(&r, NAME, &first, &release);
+    let _unlock = read_only(&first);
+    drop_entry(&repo, &first.path);
+    assert!(p.gone(NAME).unwrap());
+    let gone = p.release_gone(NAME).unwrap();
+    assert_eq!((gone.ran, gone.failed), (true, None));
+    assert_eq!(lines(), 1);
+    assert!(!r.dir(NAME).exists());
+    freed(NAME, &first);
+
+    // The incident: its release ran as its run was removed, before git
+    // stopped part way; nothing runs again.
+    let second_name = "sluice/try/bolt/x/2";
+    let second = p.materialize(second_name, &rev, &settings).unwrap();
+    assert_eq!(
+        port(&second, "SLUICE_PORT_WEB"),
+        port(&first, "SLUICE_PORT_WEB"),
+        "its block of ports is free"
+    );
+    ended_run(&r, second_name, &second, &release);
+    r.remove(second_name).unwrap();
+    assert_eq!(lines(), 2);
+    let _unlock = read_only(&second);
+    drop_entry(&repo, &second.path);
+    let gone = p.release_gone(second_name).unwrap();
+    assert_eq!((gone.ran, gone.failed), (false, None));
+    assert_eq!(lines(), 2, "its release ran again");
+    freed(second_name, &second);
+
+    // The operator's acceptance: nothing runs, and what is left goes.
+    let third_name = "sluice/try/bolt/x/3";
+    let third = p.materialize(third_name, &rev, &settings).unwrap();
+    assert_eq!(
+        port(&third, "SLUICE_PORT_WEB"),
+        port(&first, "SLUICE_PORT_WEB")
+    );
+    ended_run(&r, third_name, &third, &release);
+    let _unlock = read_only(&third);
+    drop_entry(&repo, &third.path);
+    p.free(third_name).unwrap();
+    assert_eq!(lines(), 2, "the release command ran");
+    assert!(!r.dir(third_name).exists());
+    freed(third_name, &third);
+
+    let next = p
+        .materialize("sluice/try/bolt/x/4", &rev, &settings)
+        .unwrap();
+    assert_eq!(
+        port(&next, "SLUICE_PORT_WEB"),
+        port(&first, "SLUICE_PORT_WEB")
+    );
+    p.release("sluice/try/bolt/x/4").unwrap();
+}
+
 /// Where a candidate's or a session's place's record is.
 fn record_path(repo: &Repo, name: &str) -> PathBuf {
     repo.dir().join(format!(
