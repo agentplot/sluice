@@ -25,8 +25,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{anyhow, bail, Result};
 use sluice_seams::{
     read_refused, AtBound, Contested, CoveringVerdict, Delivery, Formed, HostCopy, LandingCommit,
-    Limits, Moved, NotRun, Notification, Outcome, Progress, ReadRefused, Reading, Rev, RunHandle,
-    RunReport, RunRequest, Source, Submitter, TaskLog, Written,
+    Limits, Moved, NotRun, Notification, Outcome, Progress, ReadRefused, Reading, Refusals, Rev,
+    RunHandle, RunReport, RunRequest, Source, Submitter, TaskLog, Written,
 };
 use tracing::{info, info_span, warn};
 
@@ -1502,20 +1502,25 @@ impl Sluice<'_> {
         Ok(())
     }
 
-    /// 114, 139; records 0074 (design D5) and 0097 (design D3): the
-    /// finished run `run` under `limits`, read with what became of the host
-    /// during it. Where a check did not pass in a run its time limit did
-    /// not end, the host is looked at again, once, as the report is first
-    /// taken: first whether its system was switched during the run,
-    /// whatever the policy asks of the host; then, where it was not and
-    /// the run asks for the container engine, whether the engine has gone.
-    /// Where either holds, every check that failed, was failed by a task
-    /// it depends on or was left without a result has no outcome, with
+    /// 114, 139; records 0072 (design D7 of the change
+    /// `a-check-its-executor-refused-has-no-outcome`), 0074 (design D5) and
+    /// 0097 (design D3): the finished run `run` under `limits`, read with
+    /// what became of the host during it and what its executor refused it.
+    /// Where a check did not pass in a run its time limit did not end, the
+    /// check seam is asked, once, as the report is first taken: first
+    /// whether the host's system was switched during the run, whatever the
+    /// policy asks of the host; then what the executor reports refusing
+    /// the run; then, where the run asks for the container engine, whether
+    /// the engine has gone. The first that answers gives the reason, and
+    /// none after it is asked: every check that failed, was failed by a
+    /// task it depends on or was left without a result has no outcome, with
     /// why, the tasks it was failed by none either, and a check that passed
-    /// keeps its pass (84, 149). A switch is the reason where both hold,
-    /// and the engine is then not looked at. A run whose checks all passed,
-    /// or that its time limit ended, is never looked at, and a required
-    /// check the runner keeps out of its CI mode stays missing.
+    /// keeps its pass (84, 149; rule core.35). A report of what was
+    /// refused that could not be read is kept on the report, the run read
+    /// as one refused nothing and the engine asked as before (design D8).
+    /// A run whose checks all passed, or that its time limit ended, is
+    /// never looked at, and a required check the runner keeps out of its
+    /// CI mode stays missing.
     pub(crate) fn after_run(
         &self,
         run: &RunHandle,
@@ -1530,17 +1535,25 @@ impl Sluice<'_> {
         }
         let reason = match self.seams.tests.switched(run)? {
             Some(why) => why,
-            None if limits.docker => {
-                let engine = Limits {
-                    docker: true,
-                    ..Limits::default()
-                };
-                match self.seams.tests.unmet(&engine)? {
-                    Some(why) => format!("after the run, {why}"),
-                    None => return Ok(report),
+            None => match self.seams.tests.refused(run)? {
+                Refusals::Refused(why) => why,
+                refusals => {
+                    if let Refusals::Unread(why) = refusals {
+                        report.refusals_unread = Some(why);
+                    }
+                    if !limits.docker {
+                        return Ok(report);
+                    }
+                    let engine = Limits {
+                        docker: true,
+                        ..Limits::default()
+                    };
+                    match self.seams.tests.unmet(&engine)? {
+                        Some(why) => format!("after the run, {why}"),
+                        None => return Ok(report),
+                    }
                 }
-            }
-            None => return Ok(report),
+            },
         };
         let (failed, passed) = std::mem::take(&mut report.tasks)
             .into_iter()

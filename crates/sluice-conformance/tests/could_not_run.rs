@@ -681,3 +681,200 @@ fn a_session_run_failed_after_a_switch_records_no_fail() {
     );
     assert_eq!(h.w().system_looks().len(), looked, "never read");
 }
+
+/// What the fake's sandbox reports refusing a run (design D6, D9).
+const REFUSED: &str = "sluice's sandbox refused the run network-outbound \
+                       /private/var/run/mDNSResponder (a name lookup, by bun)";
+
+/// `a:test`, which fails, and `b:test`, which passes, submitted from
+/// `unit/a` as one held run starts; what the run is refused and its end
+/// are the caller's.
+fn one_held_run(h: &Harness) -> u64 {
+    h.w().hold_runs(true);
+    h.fails_with("a:test", "a/lib", "broken");
+    h.work(
+        "unit/a",
+        "agent-a",
+        &[("a/lib", Some("broken")), ("b/lib", Some("b2"))],
+    );
+    let one = h.submit("unit/a");
+    until_started(h, 1);
+    one
+}
+
+/// satisfies: 114, 139, 149; record 0072 (design D7); rule core.35; the
+/// run-outcome spec's "A refused run" and "No refusal"
+#[test]
+fn a_check_failed_in_a_refused_run_has_no_outcome_and_a_pass_stands() {
+    let h = Harness::bolt();
+    let one = one_held_run(&h);
+    h.w().refuses(Some(REFUSED));
+    h.w().complete_all();
+    h.step();
+    assert_eq!(
+        not_run_events(&h),
+        [vec![("a:test".to_string(), REFUSED.to_string())]]
+    );
+    let mine = first_results(&h);
+    assert!(mine
+        .iter()
+        .any(|r| r.task == "b:test" && r.outcome == Outcome::Pass));
+    assert!(mine.iter().all(|r| r.task != "a:test"), "{mine:?}");
+    assert_ne!(h.sub(one).state, State::Failed);
+    assert!(h.w().delivered().is_empty(), "nobody is blamed");
+
+    // The next run is refused nothing: its fail is recorded and blamed.
+    h.w().refuses(None);
+    h.w().hold_runs(false);
+    h.w().complete_all();
+    h.settle();
+    assert_eq!(h.w().started().len(), 2, "tested again");
+    assert_eq!(h.sub(one).state, State::Failed);
+    let a = h
+        .sub(one)
+        .failed
+        .into_iter()
+        .find(|f| f.task == "a:test")
+        .unwrap();
+    assert!(!a.hash.is_empty() && a.not_run.is_none(), "{a:?}");
+    assert!(results(&h)
+        .iter()
+        .any(|r| r.task == "a:test" && r.outcome == Outcome::Fail));
+    assert_eq!(h.delivered_to("agent-a").len(), 1, "blamed");
+}
+
+/// satisfies: 66, 139; record 0072 (design D7); rule core.35; the
+/// run-outcome spec's "A passing run, or one its time limit ended"
+#[test]
+fn a_run_that_passed_or_timed_out_never_reads_its_refusals() {
+    let h = Harness::bolt();
+    h.w().refuses(Some(REFUSED));
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let one = h.submit("unit/a");
+    h.settle();
+    assert_eq!(h.sub(one).state, State::Landed);
+    assert!(h.w().refusal_looks().is_empty(), "no read after a pass");
+
+    let h = Harness::bolt();
+    h.w().refuses(Some(REFUSED));
+    h.w().hold_runs(true);
+    h.w().hangs("a:test");
+    h.work("unit/a", "agent-a", &[("a/lib", Some("slow"))]);
+    let one = h.submit("unit/a");
+    until_started(&h, 1);
+    h.w().complete_all();
+    h.step();
+    assert_eq!(h.sub(one).state, State::Failed);
+    assert_eq!(h.sub(one).result.as_deref(), Some("timed out"));
+    assert!(h.w().refusal_looks().is_empty(), "no read after a cut");
+}
+
+/// satisfies: 84, 114, 139; records 0072 and 0097 (design D7); the
+/// run-outcome spec's "A switch and a refusal"
+#[test]
+fn a_switch_and_a_refusal_name_the_switch() {
+    let h = Harness::bolt();
+    let one = one_run_on_aaa(&h);
+    h.w().refuses(Some(REFUSED));
+    switch_and_end(&h);
+    assert_eq!(
+        not_run_events(&h),
+        [vec![("a:test".to_string(), switched(AAA, BBB))]]
+    );
+    assert!(h.w().refusal_looks().is_empty(), "the refusals not read");
+    assert_ne!(h.sub(one).state, State::Failed);
+    assert!(h.w().delivered().is_empty(), "nobody is blamed");
+}
+
+/// satisfies: 84, 114, 139; records 0072 and 0074 (design D7); the
+/// run-outcome spec's "A refusal and an engine gone"
+#[test]
+fn a_refusal_and_an_engine_gone_name_the_refusal() {
+    let h = Harness::new(&docker());
+    let one = one_held_run(&h);
+    let looked = h.w().engine_looks().len();
+    h.w().engine_unmet(Some(GONE));
+    h.w().refuses(Some(REFUSED));
+    h.w().complete_all();
+    h.step();
+    assert_eq!(
+        not_run_events(&h),
+        [vec![("a:test".to_string(), REFUSED.to_string())]]
+    );
+    // The one look is the one before the run again is claimed (84),
+    // which finds the engine gone and claims nothing; none follows the run.
+    assert_eq!(
+        h.w().engine_looks().len(),
+        looked + 1,
+        "the engine not looked at after the run"
+    );
+    assert_eq!(h.w().refusal_looks().len(), 1);
+    assert_ne!(h.sub(one).state, State::Failed);
+    assert!(h.w().delivered().is_empty(), "nobody is blamed");
+}
+
+/// satisfies: 89, 92, 114, 139; records 0072 and 0074 (design D7); the
+/// run-outcome spec's "A session's run refused something"
+#[test]
+fn a_session_run_refused_something_records_no_fail() {
+    let h = Harness::bolt();
+    h.fails_with("a:test", "a/lib", "broken");
+    let head = h.work(
+        "unit/a",
+        "agent-a",
+        &[("a/lib", Some("broken")), ("b/lib", Some("b2"))],
+    );
+    h.w().refuses(Some(REFUSED));
+    let (report, _) = h.session_run("unit/a");
+    assert_eq!(report.not_run.len(), 1, "{report:?}");
+    assert_eq!(report.not_run[0].task, "a:test");
+    assert_eq!(report.not_run[0].reason, REFUSED);
+    let mine: Vec<ResultLine> = results(&h)
+        .into_iter()
+        .filter(|r| r.combination == head)
+        .collect();
+    assert!(mine.iter().any(|r| r.task == "b:test"));
+    assert!(mine.iter().all(|r| r.task != "a:test"), "{mine:?}");
+
+    // A command's fail is its own, whatever its executor refused it.
+    let looked = h.w().refusal_looks().len();
+    h.fails_with("false", "a/lib", "broken");
+    let (report, _) = h.session_exec("unit/a", Some("false"));
+    assert!(report.not_run.is_empty(), "{report:?}");
+    assert_eq!(
+        report
+            .tasks
+            .iter()
+            .map(|t| (t.task.as_str(), t.outcome))
+            .collect::<Vec<_>>(),
+        [("false", Outcome::Fail)]
+    );
+    assert_eq!(h.w().refusal_looks().len(), looked, "never read");
+}
+
+/// satisfies: 114, 115, 17, 20, 139; record 0072 (design D7); the
+/// run-outcome spec's "A refusal in every run"
+#[test]
+fn a_refusal_in_every_run_reads_not_passed_at_the_bound_naming_it() {
+    let h = Harness::bolt();
+    h.w().refuses(Some(REFUSED));
+    h.fails_with("a:test", "a/lib", "broken");
+    h.work("unit/a", "agent-a", &[("a/lib", Some("broken"))]);
+    let one = h.submit("unit/a");
+    h.settle();
+    assert_eq!(h.w().started().len(), 3);
+    assert_eq!(h.sub(one).state, State::Failed);
+    let a = h
+        .sub(one)
+        .failed
+        .into_iter()
+        .find(|f| f.task == "a:test")
+        .unwrap();
+    assert!(a.hash.is_empty(), "no key: it has no result");
+    assert_eq!(a.not_run.as_deref(), Some(REFUSED));
+    match &h.delivered_to("agent-a")[0].decided {
+        Decided::Failed { failed, .. } => assert!(failed.contains(&"a:test".to_string())),
+        other => panic!("delivered {other:?}"),
+    }
+    assert!(results(&h).iter().all(|r| r.task != "a:test"));
+}
