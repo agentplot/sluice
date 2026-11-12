@@ -188,3 +188,98 @@ fn a_number_two_branches_left_behind_is_refused() {
     assert_eq!(s.moved_to(41).unwrap(), None);
     assert_eq!(s.state(41).unwrap(), None);
 }
+
+/// satisfies: 26, record 0114
+#[test]
+fn the_branch_named_is_read_alone() {
+    let h = landed_and_queued();
+    branch(&h, REFUSED);
+    submit_to(&h, REFUSED, "unit/b", "a/b");
+    h.w().fail_state_reads(REFUSED, Some(WORDS));
+    let s = h.sluice();
+
+    match s.lookup_on(BRANCH, N).unwrap() {
+        Lookup::Found(sub) => {
+            assert_eq!((sub.branch.as_str(), sub.state), (BRANCH, State::Landed))
+        }
+        other => panic!("{BRANCH}'s {N} not found: {other:?}"),
+    }
+    assert_eq!(
+        s.state_on(OTHER, N).unwrap().map(|s| (s.branch, s.state)),
+        Some((OTHER.into(), State::Queued))
+    );
+    assert_eq!(
+        s.landed_as_on(BRANCH, N).unwrap(),
+        on(&h, BRANCH, N).landed_as
+    );
+    assert_eq!(s.landed_as_on(OTHER, N).unwrap(), None);
+
+    // Amended and withdrawn on the branch named, the other left as it was.
+    s.amend_on(OTHER, N, &Requester::Operator, None, Some(5))
+        .unwrap()
+        .expect("amended");
+    assert_eq!(on(&h, OTHER, N).priority, 5);
+    assert_eq!(
+        s.withdraw_on(BRANCH, N, &Requester::Operator).unwrap(),
+        Err(WithdrawRefusal::Final(State::Landed))
+    );
+    assert_eq!(
+        s.withdraw_on(OTHER, N, &Requester::Operator).unwrap(),
+        Ok(Withdrew::Now)
+    );
+    assert_eq!(on(&h, OTHER, N).state, State::Withdrawn);
+    assert_eq!(on(&h, BRANCH, N).state, State::Landed);
+}
+
+/// satisfies: 26, record 0114, rule core.11
+#[test]
+fn a_branch_named_that_cannot_be_read_is_named_alone() {
+    let h = landed_and_queued();
+    branch(&h, REFUSED);
+    submit_to(&h, REFUSED, "unit/b", "a/b");
+    h.w().fail_state_reads(REFUSED, Some(WORDS));
+    h.w()
+        .fail_state_reads(OTHER, Some("another branch's words"));
+    let s = h.sluice();
+    let alone = || {
+        vec![Unread {
+            branch: REFUSED.into(),
+            error: WORDS.into(),
+        }]
+    };
+
+    assert_eq!(s.lookup_on(REFUSED, N).unwrap(), Lookup::Unfound(alone()));
+    assert_eq!(s.state_on(REFUSED, N).unwrap(), None);
+    assert_eq!(s.landed_as_on(REFUSED, N).unwrap(), None);
+    assert_eq!(
+        s.amend_on(REFUSED, N, &Requester::Operator, None, Some(5))
+            .unwrap(),
+        Err(AmendRefusal::NoSuchSubmission(alone()))
+    );
+    assert_eq!(
+        s.withdraw_on(REFUSED, N, &Requester::Operator).unwrap(),
+        Err(WithdrawRefusal::NoSuchSubmission(alone()))
+    );
+}
+
+/// satisfies: 26, record 0114
+#[test]
+fn a_branch_named_that_holds_no_such_number_holds_none() {
+    let h = landed_and_queued();
+    branch(&h, REFUSED);
+    submit_to(&h, REFUSED, "unit/b", "a/b");
+    let s = h.sluice();
+
+    assert_eq!(s.lookup_on(REFUSED, N).unwrap(), Lookup::Unfound(vec![]));
+    assert_eq!(s.state_on(REFUSED, N).unwrap(), None);
+    assert_eq!(s.landed_as_on(REFUSED, N).unwrap(), None);
+    assert_eq!(
+        s.amend_on(REFUSED, N, &Requester::Operator, None, Some(5))
+            .unwrap(),
+        Err(AmendRefusal::NoSuchSubmission(vec![]))
+    );
+    assert_eq!(
+        s.withdraw_on(REFUSED, N, &Requester::Operator).unwrap(),
+        Err(WithdrawRefusal::NoSuchSubmission(vec![]))
+    );
+}

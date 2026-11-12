@@ -1048,6 +1048,21 @@ impl Sluice<'_> {
         self.amend_in(None, id, by, after, priority)
     }
 
+    /// [`Sluice::amend`] of `branch`'s submission `id`, reading `branch`
+    /// alone: a branch that holds no such number answers
+    /// `NoSuchSubmission(vec![])`, and one that cannot be read names
+    /// itself alone (26; record 0114).
+    pub fn amend_on(
+        &self,
+        branch: &str,
+        id: u64,
+        by: &Requester,
+        after: Option<Vec<u64>>,
+        priority: Option<i64>,
+    ) -> Result<Result<(), AmendRefusal>> {
+        self.amend_in(Some(branch), id, by, after, priority)
+    }
+
     /// [`Sluice::amend`], on `on` alone where it is named.
     fn amend_in(
         &self,
@@ -1117,6 +1132,17 @@ impl Sluice<'_> {
     /// each, and nothing is withdrawn (26; record 0114).
     pub fn withdraw(&self, id: u64, by: &Requester) -> Result<Result<Withdrew, WithdrawRefusal>> {
         self.withdraw_in(None, id, by)
+    }
+
+    /// [`Sluice::withdraw`] of `branch`'s submission `id`, reading
+    /// `branch` alone, as [`Sluice::amend_on`] reads it (26; record 0114).
+    pub fn withdraw_on(
+        &self,
+        branch: &str,
+        id: u64,
+        by: &Requester,
+    ) -> Result<Result<Withdrew, WithdrawRefusal>> {
+        self.withdraw_in(Some(branch), id, by)
     }
 
     /// [`Sluice::withdraw`], on `on` alone where it is named.
@@ -1190,6 +1216,12 @@ impl Sluice<'_> {
         self.state_in(None, id)
     }
 
+    /// [`Sluice::state`] of `branch`'s submission `id`, reading `branch`
+    /// alone, whatever other branch holds the number (26; record 0114).
+    pub fn state_on(&self, branch: &str, id: u64) -> Result<Option<Submission>> {
+        self.state_in(Some(branch), id)
+    }
+
     /// [`Sluice::state`], on `on` alone where it is named.
     fn state_in(&self, on: Option<&str>, id: u64) -> Result<Option<Submission>> {
         let Found::On(branch) = self.find(id, on)? else {
@@ -1217,6 +1249,14 @@ impl Sluice<'_> {
     /// them alone (record 0114).
     pub fn lookup(&self, id: u64) -> Result<Lookup> {
         self.lookup_in(None, id)
+    }
+
+    /// [`Sluice::lookup`] of `branch`'s submission `id`, reading `branch`
+    /// alone: one that holds no such number, nor a submission it became,
+    /// answers `Unfound(vec![])`, and one that cannot be read is named
+    /// alone, so no other branch is ever named (26; record 0114).
+    pub fn lookup_on(&self, branch: &str, id: u64) -> Result<Lookup> {
+        self.lookup_in(Some(branch), id)
     }
 
     /// [`Sluice::lookup`], on `on` alone where it is named.
@@ -1249,6 +1289,12 @@ impl Sluice<'_> {
     /// with no step running; it writes nothing (rule core.4).
     pub fn landed_as(&self, id: u64) -> Result<Option<Rev>> {
         self.landed_as_in(None, id)
+    }
+
+    /// [`Sluice::landed_as`] of `branch`'s submission `id`, reading
+    /// `branch` alone (26; record 0114).
+    pub fn landed_as_on(&self, branch: &str, id: u64) -> Result<Option<Rev>> {
+        self.landed_as_in(Some(branch), id)
     }
 
     /// [`Sluice::landed_as`], on `on` alone where it is named.
