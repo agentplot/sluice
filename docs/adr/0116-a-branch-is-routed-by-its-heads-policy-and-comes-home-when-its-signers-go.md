@@ -11,7 +11,7 @@ decision-makers:
 
 Status: accepted on 2026-11-12 by agentplot-design. It is the design agent's own choice, decided by the statement's 26 and C.6 and record 0037. It is cheap to change and holds no choice of the user's.
 
-Sources: the statement's C.6, as amended on agentplot/blueprints's branch `design/sluice-a-branch-comes-home-when-its-signers-go` (`696270d`); record 0037; `crates/sluice/src/profiles/branches.rs` `policy_of` and `routing`, `crates/sluice/src/profiles/records.rs` `route`, `lock` and `migrate`, at `v0.78.1` and `a9edcd90`; agentplot-ops's and wldn-ops's readings of switchboard-kit on chuck-herdr-alpha, 2026-11-12.
+Sources: the statement's C.6, as amended on agentplot/blueprints's branch `design/sluice-a-branch-comes-home-when-its-signers-go` (`38b00d5`); record 0037; `crates/sluice/src/profiles/branches.rs` `policy_of` and `routing`, `crates/sluice/src/profiles/records.rs` `route`, `lock` and `migrate`, at `v0.78.1` and `a9edcd90`; agentplot-ops's and wldn-ops's readings of switchboard-kit on chuck-herdr-alpha, 2026-11-12.
 
 ## Context and problem statement
 
