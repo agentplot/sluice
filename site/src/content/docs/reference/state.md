@@ -64,6 +64,13 @@ readable with plain tools whether or not sluice is running.
     result.json        how the run ended, once it has
     release.log        what the release command printed
     released           written once the release command has run
+    watch.out          under the sandbox, the sandbox's reports of what it
+                       refused the run, kept from before the run starts
+                       until a second after it ends
+    watch.err          what the program that keeps them said
+    watch.pgid         that program's process group, ended with the run
+    watch-error        written when that program wasn't ready as the run
+                       started: what it said and how it ended
 ```
 
 A checkout's scratch, the [`SLUICE_TMP`](/sluice/reference/configuration/#environment)
@@ -293,7 +300,11 @@ A signed result is an [in-toto](https://in-toto.io) statement in a
 and system is one subject, named `<test>@<system>`, its digest the
 test's key. The predicate holds each outcome, the branch, the
 combination, and what the signer claims of the run: its executor,
-whether it was confined, and its system. A host signs with the SSH key
+whether it was confined, and its system. It also holds what the
+executor held the run to, its memory, network and container engine,
+and its grant, each left out where it held none. A statement signed
+before these has neither, and its results are weighed with no new
+run's. A host signs with the SSH key
 its [`[signing]`](/sluice/reference/configuration/#signing) names. sluice counts a result
 only once the signature checks against a signer the branch's policy
 names.
@@ -649,10 +660,24 @@ result. Its combination is tested again. `not_run` lists each test the
 run left not run, with its `reason`. A test that passed in a run that
 kept no proof of it also has `key`, the key of the manifest that's
 missing. That's the test's own key, or, as its reason names, the key of
-a task it depends on. A line written by an older sluice has no `key`:
+a task it depends on. A line written by an older sluice has no `key`. A
+test that did not pass in a run the sandbox refused something names what
+was refused:
 
 ```json
 {"schema":"sluice/log@1","event":"lost","combination":"e20a6f9b48","not_run":[{"task":"tests:t-after","reason":"it passed, but nothing the run kept proves it ran: moon's manifest of it is not in /home/me/app/.moon/cache, where moon kept none of the run's manifests","key":"4d1e22b0c9"}]}
+{"schema":"sluice/log@1","event":"lost","combination":"e20a6f9b48","not_run":[{"task":"site:install","reason":"sluice's sandbox refused the run network-outbound /private/var/run/mDNSResponder (a name lookup, by bun)"}]}
+```
+
+`detail` is logged after a run with what its runner said of it beyond
+its results. `detail` holds how long the run took, its estimate and the
+files it read as changed; `kept_out`, the required tests it keeps out of
+its CI mode. Where sluice couldn't read what the sandbox refused the
+run, so read it as refused nothing, `refusals_unread` says why. No
+verdict reads this event:
+
+```json
+{"schema":"sluice/log@1","event":"detail","combination":"e20a6f9b48","refusals_unread":"log: exited 1 before it was ready"}
 ```
 
 `unproven` is logged when a run replayed tests whose keys no result the
@@ -665,8 +690,8 @@ of these that holds:
 - `no result of its key is signed by a signer the branch counts`, on a
   branch whose state is on its remote, or `no result of its key is by a
   run the branch trusts`, on a branch in a host's own files;
-- `no result of its key was held to this run's limits`, on a branch in
-  a host's own files;
+- `no result of its key was held to this run's limits`;
+- `no result of its key was run under this run's grant`;
 - `no result the branch counts for its key is a pass`.
 
 A line written by an older sluice has no `keys`:
