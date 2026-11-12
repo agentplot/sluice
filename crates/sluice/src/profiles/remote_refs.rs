@@ -872,6 +872,14 @@ impl State for RemoteRefs {
         Ok(())
     }
 
+    /// Into the ref the branch's fetch of every candidate fills, so the
+    /// two agree; a candidate the remote no longer holds fetches nothing.
+    fn fetch_candidate(&self, branch: &str, id: &str) -> Result<()> {
+        state_ref(branch)?;
+        self.fetch(&format!("refs/sluice/combinations/{branch}/{id}"))?;
+        Ok(())
+    }
+
     fn observed(&self, branch: &str) -> Result<Option<(u64, String)>> {
         let path = self.observation(branch)?;
         match std::fs::read(&path) {

@@ -507,6 +507,13 @@ impl State for Records {
         }
     }
 
+    fn fetch_candidate(&self, branch: &str, id: &str) -> Result<()> {
+        match self.route(branch)? {
+            None => Ok(()),
+            Some(r) => r.fetch_candidate(branch, id),
+        }
+    }
+
     fn observed(&self, branch: &str) -> Result<Option<(u64, String)>> {
         match self.route(branch)? {
             None => Ok(None),
