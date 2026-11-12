@@ -13,6 +13,8 @@ decision-makers:
 
 Status: accepted. The session-runs-1 proposal's clause 95, rule core.10 and wldn-design's ruling decide it: `sluice release --worktree` runs the policy's release command in any worktree of the repository, held or not. The choices within it, which policy is read (D2), what the release runs with (D3), what it keeps (D4), its answer (D5) and which folder it releases (D6), are the construct's own, each cheap to change.
 
+Amended in part by record 0116: a failed release of a worktree sluice holds nothing for keeps its place, held once its tries are spent.
+
 Deciders: wldn-design's ruling in switchboard-kit PR 522, commit d53448f57 (`docs/architecture/testing.md`), relayed by agentplot-operator on 2026-11-11 with its form, one path in sluice's release and one test; the planner's brief of 2026-11-11; and the construct of the change `an-unheld-worktrees-release-runs-its-release-command`, which chose the form below.
 Sources: signal 2026-11-11-agentplot-planner-b1e1f248/01 (afterthought/crew-state, `agentplot/main`); switchboard-kit PR 522, d53448f57, and its `infra/ministack/release.sh`; the user, 2026-11-11, refusing a sweeper on proposal 1128: "This is the whole point of having Sleuth with its release command."; agentplot/blueprints `design/sluice/proposals/session-runs-1.md` (origin/main ad3a1ae) clauses 94 and 95, C.1's session worktree row, C.5's worktrunk row and C.7; `design/sluice/requirements.md` clauses 25, 34 and 56; sluice at 49fcf7d3: `crates/sluice/src/exec.rs` `release`, `crates/sluice/src/profiles/places.rs` `release_session`, `crates/sluice/src/profiles/checks.rs` `release_request`, `crates/sluice-core/src/session.rs` `release_policy`; records 0018, 0036, 0063, 0081.
 
