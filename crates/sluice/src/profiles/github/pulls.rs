@@ -682,7 +682,7 @@ impl Pulls {
                 continue;
             }
             // Landing since: it lands, and nothing of it is withdrawn.
-            if let Ok(Withdrew::Now) = s.withdraw(sub.id, &by)? {
+            if let Ok(Withdrew::Now) = s.withdraw_on(&sub.branch, sub.id, &by)? {
                 withdrew.push((
                     n,
                     known(
@@ -1001,7 +1001,11 @@ impl Pulls {
             };
             if gone {
                 // Landing already: it lands, and the next round finds it so.
-                let _ = s.withdraw(sub.id, &Requester::Session(sub.from.agent.clone()))?;
+                let _ = s.withdraw_on(
+                    &sub.branch,
+                    sub.id,
+                    &Requester::Session(sub.from.agent.clone()),
+                )?;
                 withdrew = true;
             }
         }
@@ -3900,7 +3904,7 @@ impl Pulls {
             {
                 // Landing since it was read: it lands, and the new head waits.
                 if let Ok(Withdrew::Now) =
-                    s.withdraw(e.id, &Requester::Session(e.from.agent.clone()))?
+                    s.withdraw_on(&e.branch, e.id, &Requester::Session(e.from.agent.clone()))?
                 {
                     said.push_str(&format!(" · withdrew its submission {}", e.id));
                 }
