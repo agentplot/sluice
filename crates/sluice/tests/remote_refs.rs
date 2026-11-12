@@ -1088,3 +1088,45 @@ fn a_branch_in_the_hosts_own_files_reads_with_its_own_list() {
     assert!(r.route("scratch").unwrap().is_none(), "in the host's files");
     assert!(signed(&r, "scratch").is_empty());
 }
+
+/// Rule core.14 (ADR 0028): a round of a branch whose records are on its
+/// remote keeps its run's tasks under the lock the records seam took for
+/// it, and keeps none without that lock (swb-1, 2026-11-12: every round of
+/// a branch on its remote with a run testing refused at its tasks,
+/// `keeping <branch>'s tasks without holding its lock`, so it wrote
+/// nothing, its verdicts and releases among it).
+#[test]
+fn a_branch_on_its_remote_keeps_its_tasks_under_the_lock_its_records_took() {
+    use sluice_seams::{TaskProgress, TaskState};
+
+    let a = Repo::new("rr-tasks");
+    a.write(
+        ".config/sluice.toml",
+        &signers_policy(&[("box", &[&key()])]),
+    );
+    a.git(&["add", "-A"]);
+    a.git(&["commit", "-q", "-m", "signers"]);
+    let _bare = a.bare_origin();
+    let r = records(&a);
+    assert!(r.route("main").unwrap().is_some(), "routed to origin");
+    let tasks = [TaskProgress {
+        target: "a:test".into(),
+        state: TaskState::Running,
+        started: None,
+        ended: None,
+        exit: None,
+    }];
+    assert!(r.put_progress("main", "c1", Some(&tasks)).is_err());
+    {
+        let _g = r.lock("main").unwrap().expect("main's lock is free");
+        r.put_progress("main", "c1", Some(&tasks)).unwrap();
+        assert_eq!(r.progress("main").unwrap()["c1"], tasks);
+    }
+    assert!(r.put_progress("main", "c1", None).is_err());
+    assert_eq!(r.progress("main").unwrap()["c1"], tasks);
+    {
+        let _g = r.wait_lock("main").unwrap();
+        r.put_progress("main", "c1", None).unwrap();
+    }
+    assert!(r.progress("main").unwrap().is_empty());
+}
