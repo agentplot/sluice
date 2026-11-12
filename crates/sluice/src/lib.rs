@@ -327,6 +327,10 @@ pub enum Command {
         /// landing whose worktree it removes.
         #[arg(long, hide = true)]
         confirm_landing: bool,
+        /// The branch the submission's number is on, where more than one
+        /// branch holds it.
+        #[arg(long)]
+        branch: Option<String>,
     },
     /// Hand over every outcome still owed to this worktree's submissions,
     /// printing each with the key to confirm it by; each is handed over
@@ -397,6 +401,10 @@ pub enum Command {
         /// One JSON document on stdout.
         #[arg(long)]
         json: bool,
+        /// The branch the submission's number is on, where more than one
+        /// branch holds it.
+        #[arg(long)]
+        branch: Option<String>,
     },
     /// Every branch's queue at a glance: its combinations under test, its
     /// submissions, its latest landings and blames, and the worktrees and
@@ -429,6 +437,10 @@ pub enum Command {
         /// One JSON document on stdout; the rest on stderr.
         #[arg(long)]
         json: bool,
+        /// The branch the submission's number is on, where more than one
+        /// branch holds it.
+        #[arg(long)]
+        branch: Option<String>,
     },
     /// Withdraw a submission.
     #[command(after_help = "Example:\n  $ sluice withdraw 42")]
@@ -441,6 +453,10 @@ pub enum Command {
         /// One JSON document on stdout; the rest on stderr.
         #[arg(long)]
         json: bool,
+        /// The branch the submission's number is on, where more than one
+        /// branch holds it.
+        #[arg(long)]
+        branch: Option<String>,
     },
     /// Set aside a recorded result its host caused, not its test: no gate
     /// reads it again, and its line stays. The operator's to do, never a
@@ -1767,17 +1783,22 @@ pub fn run(
             json,
             confirm,
             confirm_landing,
+            branch,
         } => {
             let confirms = Confirms::of(confirm, confirm_landing);
             let deadline = timeout.map(|t| {
                 clock.now() + chrono::Duration::from_std(t).unwrap_or(chrono::Duration::MAX)
             });
-            let sub = match target.parse::<u64>() {
-                Ok(id) => match s.lookup(id)? {
+            let number = target.parse::<u64>();
+            if number.is_err() && branch.is_some() {
+                writeln!(out, "sluice wait: {}", branch_goes_with_a_number(&target))?;
+                return Ok(USAGE);
+            }
+            let sub = match number {
+                Ok(id) => match lookup(&s, id, branch.as_deref())? {
                     Lookup::Found(sub) => sub,
                     Lookup::Unfound(unread) if unread.is_empty() => {
-                        let next = ["sluice overview".to_string()];
-                        let text = format!("no submission {id}");
+                        let (text, next) = no_such(id, branch.as_deref());
                         told::tell(out, json, Kind::NotFound, &text, &next)?;
                         return Ok(FAILED);
                     }
@@ -1885,6 +1906,18 @@ pub fn run(
             }
         }
         Command::Status {
+            target: None,
+            branch: Some(_),
+            ..
+        } => {
+            writeln!(
+                out,
+                "sluice status: --branch names the branch of a submission's number; give the \
+                 number with it"
+            )?;
+            Ok(USAGE)
+        }
+        Command::Status {
             target: None, json, ..
         } => {
             let places = s.session_places()?;
@@ -1905,19 +1938,22 @@ pub fn run(
         }
         Command::Status {
             target: Some(target),
+            branch: Some(_),
+            ..
+        } if target.parse::<u64>().is_err() => {
+            writeln!(out, "sluice status: {}", branch_goes_with_a_number(&target))?;
+            Ok(USAGE)
+        }
+        Command::Status {
+            target: Some(target),
             all,
             json,
+            branch,
         } => match target.parse::<u64>() {
-            Ok(id) => match s.lookup(id)? {
+            Ok(id) => match lookup(&s, id, branch.as_deref())? {
                 Lookup::Unfound(unread) if unread.is_empty() => {
-                    let next = ["sluice overview".to_string()];
-                    told::tell(
-                        out,
-                        json,
-                        Kind::NotFound,
-                        &format!("no submission {id}"),
-                        &next,
-                    )?;
+                    let (text, next) = no_such(id, branch.as_deref());
+                    told::tell(out, json, Kind::NotFound, &text, &next)?;
                     Ok(1)
                 }
                 Lookup::Unfound(unread) => unfound(id, &unread, json, out),
@@ -2062,7 +2098,11 @@ pub fn run(
             priority,
             by,
             json,
-        } => match s.amend(id, &requester(&by), after, priority)? {
+            branch,
+        } => match match &branch {
+            Some(b) => s.amend_on(b, id, &requester(&by), after, priority)?,
+            None => s.amend(id, &requester(&by), after, priority)?,
+        } {
             Ok(()) if json => {
                 let sub = s.state(id)?.expect("a submission just amended");
                 writeln!(
@@ -2087,7 +2127,7 @@ pub fn run(
             Err(r) => {
                 let (why, next) = match r {
                     AmendRefusal::NoSuchSubmission(_) | AmendRefusal::Several(_) => {
-                        (no_submission(id), vec!["sluice overview".into()])
+                        no_submission(id, branch.as_deref())
                     }
                     AmendRefusal::NotYours => (
                         format!("#{id} is not {by}'s to change: {}", owner(&s, id)?),
@@ -2123,7 +2163,15 @@ pub fn run(
                 Ok(2)
             }
         },
-        Command::Withdraw { id, by, json } => match s.withdraw(id, &requester(&by))? {
+        Command::Withdraw {
+            id,
+            by,
+            json,
+            branch,
+        } => match match &branch {
+            Some(b) => s.withdraw_on(b, id, &requester(&by))?,
+            None => s.withdraw(id, &requester(&by))?,
+        } {
             Ok(withdrew) => {
                 let already = withdrew == Withdrew::Already;
                 if json {
@@ -2148,7 +2196,7 @@ pub fn run(
             Err(r) => {
                 let (why, next) = match r {
                     WithdrawRefusal::NoSuchSubmission(_) | WithdrawRefusal::Several(_) => {
-                        (no_submission(id), vec!["sluice overview".into()])
+                        no_submission(id, branch.as_deref())
                     }
                     WithdrawRefusal::NotYours => (
                         format!("#{id} is not {by}'s to withdraw: {}", owner(&s, id)?),
@@ -3759,7 +3807,7 @@ fn wait_on(
                         return Ok(undecided(STOPPED, &reading));
                     }
                     // Record 0100 D2: what it follows landed, its own end.
-                    if let Some(landed) = landed(s, id) {
+                    if let Some(landed) = landed(s, id, &branch) {
                         if landed.id == own.id {
                             return Ok(Waited::Decided(landed, None, Some(e)));
                         }
@@ -3915,11 +3963,10 @@ fn driven_by(host: &dyn exec::Host) -> impl Fn() -> bool {
     }
 }
 
-/// Submission `id`'s record, from the records of `branch`, looked up as
-/// `sluice wait <n>` looks it up, past any other branch that cannot be
-/// read (26).
+/// Submission `id`'s record, from the records of `branch` alone, whatever
+/// other branch holds its number or cannot be read (26; record 0114).
 fn record(s: &Sluice<'_>, id: u64, branch: &str) -> Result<Submission> {
-    match s.lookup(id)? {
+    match s.lookup_on(branch, id)? {
         Lookup::Found(sub) => Ok(sub),
         Lookup::Unfound(unread) if unread.is_empty() => Err(anyhow::anyhow!(
             "submission {id} is no longer in {branch}'s records"
@@ -3946,14 +3993,15 @@ fn branch_in(doc: &serde_json::Value, branch: &str) -> Option<BranchView> {
         .filter(|b| b.unread.is_none())
 }
 
-/// 122: submission `id` as landed, when its work is on its branch: its
-/// record, or the record the next round writes when the round that moved
-/// the branch stopped before writing it (24). `None` when it is not, or
-/// when the records cannot be read, which leaves the round's own error
-/// the outcome.
-fn landed(s: &Sluice<'_>, id: u64) -> Option<Submission> {
-    let to = s.landed_as(id).ok()??;
-    let mut sub = s.state(id).ok()??;
+/// 122: `branch`'s submission `id` as landed, when its work is on the
+/// branch: its record, or the record the next round writes when the round
+/// that moved the branch stopped before writing it (24). `None` when it is
+/// not, or when the records cannot be read, which leaves the round's own
+/// error the outcome. `branch` alone is read, whatever other branch holds
+/// the number (26; record 0114).
+fn landed(s: &Sluice<'_>, id: u64, branch: &str) -> Option<Submission> {
+    let to = s.landed_as_on(branch, id).ok()??;
+    let mut sub = s.state_on(branch, id).ok()??;
     sub.state = State::Landed;
     sub.landed_as = Some(to);
     Some(sub)
@@ -4697,9 +4745,52 @@ fn takes_pulls(s: &Sluice<'_>, branch: &str) -> Result<bool> {
 
 /// `sluice submit --status`: where `worktree`'s last submission to
 /// `branch` stands.
-/// A refusal's words for a number that names no submission.
-fn no_submission(id: u64) -> String {
-    format!("no submission {id}: sluice overview lists the queues")
+/// A refusal's words for a number that names no submission, on the
+/// branch the command was given, or on any, and the command that moves
+/// its reader on (26; record 0114).
+fn no_submission(id: u64, branch: Option<&str>) -> (String, Vec<String>) {
+    match branch {
+        Some(b) => (
+            format!("no submission {id} on {b}: sluice status {b} lists its queue"),
+            vec![format!("sluice status {b}")],
+        ),
+        None => (
+            format!("no submission {id}: sluice overview lists the queues"),
+            vec!["sluice overview".into()],
+        ),
+    }
+}
+
+/// What `sluice wait <n>` and `sluice status <n>` say of a number that
+/// names no submission, on the branch they were given, or on any, every
+/// branch read, and the command that moves their reader on (26; record
+/// 0114).
+fn no_such(id: u64, branch: Option<&str>) -> (String, Vec<String>) {
+    match branch {
+        Some(b) => (
+            format!("no submission {id} on {b}"),
+            vec![format!("sluice status {b}")],
+        ),
+        None => (
+            format!("no submission {id}"),
+            vec!["sluice overview".into()],
+        ),
+    }
+}
+
+/// Submission `id`, looked up on `branch` alone where the command was
+/// given it, and on every branch where it was not (26; record 0114).
+fn lookup(s: &Sluice<'_>, id: u64, branch: Option<&str>) -> Result<Lookup> {
+    match branch {
+        Some(b) => s.lookup_on(b, id),
+        None => s.lookup(id),
+    }
+}
+
+/// Why `--branch` beside `target`, a branch, is a command line sluice
+/// cannot read (record 0114).
+fn branch_goes_with_a_number(target: &str) -> String {
+    format!("--branch names the branch of a submission's number; {target} is a branch")
 }
 
 /// 26: the words for submission `id` on none of the branches sluice
@@ -5389,7 +5480,7 @@ fn submit_pull(
                 };
                 let landed = submitted
                     .and_then(|h| taken_in(s, branch, &h.head))
-                    .and_then(|id| landed(s, id));
+                    .and_then(|id| landed(s, id, branch));
                 if let Some(sub) = landed {
                     let names = match pulls.follow(seams, clock, branch, number) {
                         Ok(Followed::Done(_, names)) => names,
@@ -5614,7 +5705,7 @@ fn submit_pull_group(
                         .ok()
                         .and_then(|w| s.submitted_head(&w).ok())
                         .and_then(|h| taken_in(s, branch, &h.head))
-                        .and_then(|id| landed(s, id));
+                        .and_then(|id| landed(s, id, branch));
                     if let Some(sub) = sub {
                         let names = match pulls.follow(seams, clock, branch, o.number) {
                             Ok(Followed::Done(_, names)) => names,

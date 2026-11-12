@@ -9543,3 +9543,211 @@ fn status_and_wait_say_a_combination_waits_for_a_host_whose_engine_answers() {
     let (_, out) = sluice(&f, &["status", BRANCH, "--json"]);
     assert_eq!(json(&out)["waiting"], serde_json::json!([]));
 }
+
+/// Record 0114: a number more than one branch holds names none of them
+/// alone; a lookup by it is refused naming each, and `wait`, `status`,
+/// `amend` and `withdraw` take `--branch` to name one (26; rule core.11).
+mod number_on_two_branches {
+    use super::*;
+
+    /// The first branch that holds the number.
+    const A: &str = "bolt/a";
+
+    /// The second, listed after `bolt/a`.
+    const B: &str = "bolt/b";
+
+    /// A branch whose records cannot be read, listed after both.
+    const C: &str = "bolt/c";
+
+    /// The number both branches hold.
+    const N: &str = "26";
+
+    /// `branch` made, under the bolts' policy.
+    fn branch(f: &Fakes, name: &str) {
+        f.world.init(
+            name,
+            &[(".config/sluice.toml", POLICY), ("plugin/lib/plan.py", "p")],
+        );
+    }
+
+    /// A submission from `worktree` to `branch`, on its tip, numbered `n`.
+    fn submit_as(f: &Fakes, n: u64, branch: &str, worktree: &str) {
+        let head = f.world.work(
+            &f.world.tip(branch),
+            &[(&format!("plugin/{worktree}"), Some("n"))],
+        );
+        f.world
+            .session(worktree, &format!("agent-{worktree}"), &head);
+        f.world.numbers_from(n);
+        let (code, out) = sluice(f, &["submit", branch, "--worktree", worktree, "--no-wait"]);
+        assert_eq!(code, 0, "{out}");
+    }
+
+    /// Submission 26 queued on `bolt/a` and on `bolt/b`.
+    fn both_queued() -> Fakes {
+        let f = setup();
+        branch(&f, A);
+        branch(&f, B);
+        submit_as(&f, 26, A, "unit/a");
+        submit_as(&f, 26, B, "unit/b");
+        f
+    }
+
+    /// [`both_queued`], with `bolt/c` holding a submission of its own and
+    /// every read of its records failing with [`UNREADABLE`].
+    fn both_and_unread() -> Fakes {
+        let f = both_queued();
+        branch(&f, C);
+        submit_as(&f, 40, C, "unit/c");
+        f.world.fail_state_reads(C, Some(UNREADABLE));
+        f
+    }
+
+    /// `branch`'s submission 26, as `sluice status 26 --branch` shows it.
+    fn on(f: &Fakes, branch: &str) -> serde_json::Value {
+        let (code, out) = sluice(f, &["status", N, "--branch", branch, "--json"]);
+        assert_eq!(code, 0, "{out}");
+        let v = json(&out);
+        assert_eq!(v["branch"], branch, "{v}");
+        v
+    }
+
+    /// 26, record 0114: amend, withdraw and status given the branch act on
+    /// and show that branch's submission, and leave the other as it was.
+    #[test]
+    fn each_command_given_the_branch_acts_on_that_branchs_submission() {
+        let f = both_queued();
+        let (code, out) = sluice(&f, &["amend", N, "--branch", B, "--priority", "5"]);
+        assert_eq!((code, out.as_str()), (0, "amended #26\n"));
+        let (code, out) = sluice(&f, &["withdraw", N, "--branch", A]);
+        assert_eq!((code, out.as_str()), (0, "withdrew #26\n"));
+
+        let b = on(&f, B);
+        assert_eq!(
+            (b["state"].clone(), b["priority"].clone()),
+            ("queued".into(), 5.into())
+        );
+        let a = on(&f, A);
+        assert_eq!(
+            (a["state"].clone(), a["priority"].clone()),
+            ("withdrawn".into(), 0.into())
+        );
+
+        let (code, out) = sluice(&f, &["status", N, "--branch", B]);
+        assert_eq!(code, 0, "{out}");
+        assert!(out.contains(B) && !out.contains(A), "{out}");
+    }
+
+    /// 26, record 0114: a wait given the branch follows that branch's
+    /// submission to its landing, and leaves the other queued.
+    #[test]
+    fn a_wait_given_the_branch_follows_it_to_its_landing() {
+        let f = both_queued();
+        let (code, out) = sluice(&f, &["wait", N, "--branch", B, "--json"]);
+        assert_eq!(code, LANDED, "{out}");
+        let v = json(&out);
+        assert_eq!(
+            (v["id"].clone(), v["branch"].clone(), v["state"].clone()),
+            (26.into(), B.into(), "landed".into())
+        );
+        assert_eq!(on(&f, A)["state"], "queued");
+    }
+
+    /// 26, record 0114: given the branch, a command reads it alone, and
+    /// names no other branch that cannot be read.
+    #[test]
+    fn another_branch_that_cannot_be_read_is_not_named() {
+        let f = both_and_unread();
+        for args in [
+            &["status", N, "--branch", A][..],
+            &["status", N, "--branch", A, "--json"],
+        ] {
+            let (code, out) = sluice(&f, args);
+            assert_eq!(code, 0, "{args:?}: {out}");
+            assert!(out.contains(A), "{args:?}: {out}");
+            assert!(!out.contains(C) && !out.contains(B), "{args:?}: {out}");
+        }
+    }
+
+    /// Record 0114: the branch named holds no such number: no submission
+    /// there, with the exit no submission has, and its status next.
+    #[test]
+    fn a_branch_named_holding_no_such_number_is_no_submission_there() {
+        let f = both_queued();
+        for args in [
+            &["status", "27", "--branch", A][..],
+            &["wait", "27", "--branch", A],
+        ] {
+            let (code, out) = sluice(&f, args);
+            assert_eq!(
+                (code, out.as_str()),
+                (FAILED, "no submission 27 on bolt/a\n"),
+                "{args:?}"
+            );
+        }
+        let (code, out) = sluice(&f, &["status", "27", "--branch", A, "--json"]);
+        assert_eq!(code, FAILED, "{out}");
+        let v = json(&out);
+        assert_eq!(v["error"]["kind"], "not_found", "{v}");
+        assert_eq!(v["error"]["message"], "no submission 27 on bolt/a");
+        assert_eq!(
+            v["error"]["next"],
+            serde_json::json!(["sluice status bolt/a"])
+        );
+
+        for args in [
+            &["amend", "27", "--branch", A, "--priority", "1"][..],
+            &["withdraw", "27", "--branch", A],
+        ] {
+            let (code, out) = sluice(&f, args);
+            assert_eq!(code, 2, "{args:?}: {out}");
+            assert_eq!(
+                out, "refused: no submission 27 on bolt/a: sluice status bolt/a lists its queue\n",
+                "{args:?}"
+            );
+        }
+    }
+
+    /// 26, record 0114: the branch named cannot be read: the number is on
+    /// none of the branches sluice could read, that branch named alone,
+    /// exit 3.
+    #[test]
+    fn a_branch_named_that_cannot_be_read_is_named() {
+        let f = both_and_unread();
+        let (code, out) = sluice(&f, &["wait", N, "--branch", C]);
+        assert_eq!(code, sluice::INTERNAL, "{out}");
+        assert_eq!(
+            out,
+            format!(
+                "submission 26 is on none of the branches sluice could read\n\
+                 {C} could not be read: {UNREADABLE}\n"
+            )
+        );
+    }
+
+    /// Record 0114: `--branch` goes with a number; with a branch, or with
+    /// `status` and no target, it is a command line sluice cannot read.
+    #[test]
+    fn branch_with_a_branch_target_is_a_usage_error() {
+        let f = both_queued();
+        let (code, out) = sluice(&f, &["wait", "main", "--branch", A]);
+        assert_eq!(code, sluice::USAGE, "{out}");
+        assert_eq!(
+            out,
+            "sluice wait: --branch names the branch of a submission's number; main is a branch\n"
+        );
+        let (code, out) = sluice(&f, &["status", B, "--branch", A, "--json"]);
+        assert_eq!(code, sluice::USAGE, "{out}");
+        assert_eq!(
+            out,
+            "sluice status: --branch names the branch of a submission's number; bolt/b is a \
+             branch\n"
+        );
+        let (code, out) = sluice(&f, &["status", "--branch", A]);
+        assert_eq!(code, sluice::USAGE, "{out}");
+        assert!(
+            out.starts_with("sluice status: --branch names the branch"),
+            "{out}"
+        );
+    }
+}
