@@ -4,8 +4,43 @@ Verified on 2026-11-11 at `df50806d` on
 `change/a-place-whose-folder-is-gone-is-freed`, against its base
 `bolt/what-a-place-starts-ends-with-it` (`5c4e580e`), with sluice 0.78.1.
 
-**Verdict: the whole checks pass, and the work holds. The change can be
-archived.**
+**Verdict: the whole checks pass and every scenario holds, but the work
+falls short. Once archived, the delta spec leaves
+`openspec/specs/place-release/spec.md` failing `openspec validate
+--strict`. The change is not archived, and it goes back to its code
+stage.**
+
+## What falls short
+
+`openspec archive a-place-whose-folder-is-gone-is-freed` applies the
+delta cleanly, `~ 3 modified`. Afterwards,
+`openspec validate --specs --strict` reports `74 passed, 1 failed`. The
+one that fails is `place-release`, which passes on the base `5c4e580e`.
+Its three issues are the three requirements this change modifies, each
+with the warning `Requirement text is very long (>500 characters)`,
+which `--strict` reads as a failure:
+
+| Requirement | Text on the base | Text after the archive |
+|---|---|---|
+| The operator may accept a release's failure | 421 | 561 |
+| A checkout whose working copy is gone is released once and freed | 468 | 1032 |
+| A gone checkout is freed whatever its release did | (under 400) | 643 |
+
+The lengths count the requirement's text up to its first scenario.
+
+The gate cannot see this. `root:changes` runs `openspec validate
+--changes --strict`, which passes for the change: the delta's
+requirements are not held to the length a main spec is. CLAUDE.md asks
+that `openspec/specs/` change only through a change validated strictly
+and archived so the spec reconciles. An archive that leaves a spec
+failing strict validation does not meet that.
+
+What the code stage does: shorten the three requirements in
+`specs/place-release/spec.md` under 500 characters each, as the warning
+says. Move the edge cases into their scenarios, or split a requirement
+so that each states one behavior. Then check that
+`openspec validate --specs --strict` still passes once the change is
+archived, in a scratch copy, before it comes back here.
 
 ## The whole checks
 
