@@ -1104,7 +1104,8 @@ pub enum Event {
         host: String,
     },
     /// Clause 119: what a run's runner said of it beyond
-    /// its results, and the required checks it keeps out of its CI mode.
+    /// its results, the required checks it keeps out of its CI mode, and
+    /// why its executor could not read what it refused the run (139).
     /// Shown; nothing reads a verdict from it.
     Detail {
         combination: Rev,
@@ -1114,6 +1115,12 @@ pub enum Event {
         detail: RunDetail,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         kept_out: Vec<String>,
+        /// 139 (design D8 of the change
+        /// `a-check-its-executor-refused-has-no-outcome`): why the run's
+        /// executor could not read what it refused the run, which was then
+        /// read as refused nothing.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        refusals_unread: Option<String>,
     },
     Result {
         combination: Rev,

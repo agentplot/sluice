@@ -1691,10 +1691,11 @@ impl Sluice<'_> {
             }
             line.log(now, event);
         }
-        // Clause 119: what the runner said of the run,
-        // kept for the report; no verdict reads it.
+        // Clause 119: what the runner said of the run, kept for the
+        // report, and, 139 (design D8), why its executor could not read
+        // what it refused it; no verdict reads either.
         let detail = report.detail.clone().unwrap_or_default();
-        if !detail.is_empty() || !report.kept_out.is_empty() {
+        if !detail.is_empty() || !report.kept_out.is_empty() || report.refusals_unread.is_some() {
             line.log(
                 now,
                 Event::Detail {
@@ -1702,6 +1703,7 @@ impl Sluice<'_> {
                     system: system.map(str::to_string),
                     detail,
                     kept_out: report.kept_out.clone(),
+                    refusals_unread: report.refusals_unread.clone(),
                 },
             );
         }

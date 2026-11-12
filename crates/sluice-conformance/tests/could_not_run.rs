@@ -878,3 +878,33 @@ fn a_refusal_in_every_run_reads_not_passed_at_the_bound_naming_it() {
     }
     assert!(results(&h).iter().all(|r| r.task != "a:test"));
 }
+
+/// satisfies: 139; record 0072 (design D8); the run-outcome spec's
+/// "Through the queue"
+#[test]
+fn a_run_whose_refusals_could_not_be_read_is_read_as_before_and_says_so() {
+    let h = Harness::bolt();
+    h.w().refusals_unread(Some("log: exited 1"));
+    h.fails_with("a:test", "a/lib", "broken");
+    h.work("unit/a", "agent-a", &[("a/lib", Some("broken"))]);
+    let one = h.submit("unit/a");
+    h.settle();
+    assert_eq!(h.w().started().len(), 1, "a verdict, not a run again");
+    assert!(not_run_events(&h).is_empty());
+    assert_eq!(h.sub(one).state, State::Failed);
+    assert!(results(&h)
+        .iter()
+        .any(|r| r.task == "a:test" && r.outcome == Outcome::Fail));
+    assert_eq!(h.delivered_to("agent-a").len(), 1, "blamed");
+    let said: Vec<Option<String>> = h
+        .events()
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::Detail {
+                refusals_unread, ..
+            } => Some(refusals_unread),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(said, [Some("log: exited 1".to_string())]);
+}
