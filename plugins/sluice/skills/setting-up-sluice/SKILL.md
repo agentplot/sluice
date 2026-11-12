@@ -1,6 +1,6 @@
 ---
 name: setting-up-sluice
-description: Install sluice and set it up in a repository. Use when the user asks to install, set up, configure or adopt sluice, write or change `.config/sluice.toml`, explain or read back `.config/sluice.toml`, gate a branch, move from `wt merge` or direct merges to a merge queue, land on GitHub through sluice, give sluice a GitHub App, or take pull requests through it; also when `sluice` is not installed or is too old. Chooses the runner, executor, worktree driver and forge for the tools the repository already uses (moon, worktrunk, devenv, GitHub) and shows a reference example for each.
+description: Install sluice and set it up in a repository. Use when the user asks to install, set up, configure or adopt sluice, write or change `.config/sluice.toml`, explain or read back `.config/sluice.toml`, gate a branch, move from `wt merge` or direct merges to a merge queue, land on GitHub through sluice, give sluice a GitHub App, or take pull requests through it, or set up sluice's herdr plugin: its keys, sidebar rows, tab bar and toasts in herdr's `config.toml`; also when `sluice` is not installed or is too old. Chooses the runner, executor, worktree driver and forge for the tools the repository already uses (moon, worktrunk, devenv, GitHub) and shows a reference example for each.
 ---
 
 # Setting up sluice
@@ -571,3 +571,16 @@ When the user asks what an existing `.config/sluice.toml` does, or why a
 branch landed something untested, give the same read-back
 ([read-back](references/read-back.md)), warnings first for their
 branches.
+
+## herdr's plugin
+
+When the user asks to set up sluice's herdr plugin, its keys, sidebar
+rows, tab bar or toasts, follow [herdr](references/herdr.md). It needs no
+repository: of the steps above, only the binary's, since the plugin runs
+`sluice`.
+
+The asking is the user's word to edit herdr's own `config.toml`: the
+opening rule's ask before changing host config is met for that file, so
+ask nothing more before writing it, and say what you added afterwards. The
+rule still holds for the rest: ask before installing the plugin, and
+before changing a line of sluice's the file already holds.

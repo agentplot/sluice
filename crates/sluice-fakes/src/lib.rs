@@ -1169,14 +1169,20 @@ impl World {
     }
 
     /// From now, `task`'s reported key is one the candidate's tree does
-    /// not bear out, as a check that lies about its key reports it.
+    /// not bear out, as a check that lies about its key reports it: the
+    /// profile answers it refused, saying `<task>: its record names an
+    /// input the tree does not hold` (C.6, 20; design D6 of
+    /// `a-signed-run-without-a-sandbox-proves-its-passes`).
     pub fn forges(&self, task: &str) {
         self.0.borrow_mut().forged.insert(task.into());
     }
 
     /// Design D8 of the change `a-pass-nothing-proves-blames-no-one` (114;
     /// record 0105): with `Some(store)`, from now on each ran pass of a run
-    /// is unkept, its record not in `store`, and no longer proven; fails,
+    /// is unkept, its record not in `store`, naming its own key as the
+    /// missing record's (design D6 of
+    /// `a-signed-run-without-a-sandbox-proves-its-passes`), and no longer
+    /// proven; fails,
     /// the tasks a check was failed by and replays are proven as before.
     /// A run that keeps no proof keeps no pass to replay either, as a
     /// store a run could not write holds neither. `None` keeps proof
@@ -1363,6 +1369,7 @@ impl World {
                 report.not_run.push(NotRun {
                     task: t.name.clone(),
                     reason: reason.clone(),
+                    key: None,
                 });
                 continue;
             }
@@ -1401,6 +1408,7 @@ impl World {
                 report.not_run.push(NotRun {
                     task: t.name.clone(),
                     reason: format!("its dependency {d} could not run: {why}"),
+                    key: None,
                 });
                 continue;
             }
@@ -1409,6 +1417,7 @@ impl World {
                 Seen::NotRun(reason) => report.not_run.push(NotRun {
                     task: t.name.clone(),
                     reason,
+                    key: None,
                 }),
                 Seen::Skipped => report.missing.push(t.name.clone()),
             }
@@ -1811,6 +1820,14 @@ impl World {
     /// a submit's numbering and its write.
     pub fn after_allocating(&self, then: impl Fn(&World, u64) + 'static) {
         self.0.borrow_mut().after_allocating = Some(Rc::new(then));
+    }
+
+    /// The next number the records give is `n`: a branch whose records are
+    /// on its remote numbers from the remote's count and one in the host's
+    /// own files from the host's, so two branches may hold one number (26;
+    /// record 0114).
+    pub fn numbers_from(&self, n: u64) {
+        self.0.borrow_mut().next_id = n;
     }
 
     /// A branch's record file as written.
@@ -2344,9 +2361,20 @@ impl Tests for FakeTests {
                 .as_ref()
                 .filter(|_| matches!(t.source, Source::Ran { .. }) && t.outcome == Outcome::Pass)
         };
+        // Design D6 of `a-signed-run-without-a-sandbox-proves-its-passes`
+        // (C.6, 20): a forged key is refused with the profile's words.
+        let refuse = |t: &TaskResult| sluice_seams::Refused {
+            task: t.task.clone(),
+            key: t.hash.clone(),
+            why: format!(
+                "{}: its record names an input the tree does not hold",
+                t.task
+            ),
+        };
         let mut proof = Proof::default();
         for t in &report.tasks {
             if inner.forged.contains(&t.task) {
+                proof.refused.push(refuse(t));
                 continue;
             }
             match unkept(t) {
@@ -2356,17 +2384,18 @@ impl Tests for FakeTests {
                         "it passed, but nothing the run kept proves it ran: \
                          its record is not in {store}"
                     ),
+                    key: Some(t.hash.clone()),
                 }),
                 None => proof.proven.push(t.task.clone()),
             }
         }
-        proof.proven.extend(
-            report
-                .dependencies
-                .iter()
-                .filter(|t| !inner.forged.contains(&t.task))
-                .map(|t| t.task.clone()),
-        );
+        for t in &report.dependencies {
+            if inner.forged.contains(&t.task) {
+                proof.refused.push(refuse(t));
+            } else {
+                proof.proven.push(t.task.clone());
+            }
+        }
         Ok(proof)
     }
 
@@ -3359,6 +3388,20 @@ mod tests {
     use super::*;
     use sluice_seams::Decided;
 
+    /// Record 0114: the records give the number `numbers_from` sets next,
+    /// and count on from it, so a test can make two branches hold one.
+    #[test]
+    fn numbers_from_gives_the_next_number() {
+        let f = Fakes::new();
+        assert_eq!(f.state.allocate_id().unwrap(), 1);
+        assert_eq!(f.state.allocate_id().unwrap(), 2);
+        f.world.numbers_from(1);
+        assert_eq!(f.state.allocate_id().unwrap(), 1);
+        assert_eq!(f.state.allocate_id().unwrap(), 2);
+        f.world.numbers_from(26);
+        assert_eq!(f.state.allocate_id().unwrap(), 26);
+    }
+
     /// 51: the driver fake delivers to the session its submitter recorded,
     /// or its agent where it recorded none, and an agent whose sessions
     /// take nothing is answered undelivered, kept apart from those delivered.
@@ -3506,6 +3549,7 @@ mod tests {
             [NotRun {
                 task: "root:integration".into(),
                 reason: "its dependency api:integration could not run: exited 77".into(),
+                key: None,
             }]
         );
 
@@ -3584,6 +3628,7 @@ mod tests {
         );
         let proof = f.tests.proven(&h, &r).unwrap();
         assert_eq!(proof.proven, ["a:test"]);
+        let b = r.tasks.iter().find(|t| t.task == "b:test").unwrap();
         assert_eq!(
             proof.unkept,
             [NotRun {
@@ -3591,6 +3636,7 @@ mod tests {
                 reason: "it passed, but nothing the run kept proves it ran: \
                          its record is not in /the/store"
                     .into(),
+                key: Some(b.hash.clone()),
             }]
         );
         f.world.keeps_no_proof(None);
@@ -3599,6 +3645,50 @@ mod tests {
         proven.sort();
         assert_eq!(proven, ["a:test", "b:test"]);
         assert!(f.tests.proven(&h, &r).unwrap().unkept.is_empty());
+    }
+
+    /// Design D6 of `a-signed-run-without-a-sandbox-proves-its-passes`
+    /// (C.6, 20): a task the world forges is neither proven nor unkept,
+    /// and is answered refused with its key and the profile's words; the
+    /// rest are proven as before.
+    #[test]
+    fn a_forged_key_is_refused_with_why() {
+        let f = Fakes::new();
+        let rev = f.world.init("main", &[("a/x", "1"), ("b/x", "1")]);
+        f.world.task("a:test", "a/");
+        f.world.task("b:test", "b/");
+        f.world.forges("a:test");
+        let request = RunRequest {
+            place: f
+                .checkout
+                .materialize("sluice/try/main/1", &rev, &Settings::new())
+                .unwrap(),
+            revision: rev.clone(),
+            required: vec!["a:test".into(), "b:test".into()],
+            since: None,
+            limit: None,
+            limits: Default::default(),
+            tests: Settings::new(),
+            command: None,
+            replay: false,
+            system: None,
+        };
+        let h = f.tests.start(&request).unwrap();
+        let Progress::Finished(r) = f.tests.progress(&h).unwrap() else {
+            panic!("finished")
+        };
+        let a = r.tasks.iter().find(|t| t.task == "a:test").unwrap();
+        let proof = f.tests.proven(&h, &r).unwrap();
+        assert_eq!(proof.proven, ["b:test"]);
+        assert!(proof.unkept.is_empty(), "{proof:?}");
+        assert_eq!(
+            proof.refused,
+            [sluice_seams::Refused {
+                task: "a:test".into(),
+                key: a.hash.clone(),
+                why: "a:test: its record names an input the tree does not hold".into(),
+            }]
+        );
     }
 
     /// 71: the host's count holds other repositories' runs beside its own,

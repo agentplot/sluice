@@ -173,11 +173,14 @@ async function flip($: $, key: string) {
   await update($, opened, (list) => flipped(list, key));
 }
 
-/** The failed tests of a blamed submission, from sluice. */
-async function blamedTests($: $, id: number): Promise<OverviewFailed[]> {
+/**
+ * The failed tests of a blamed submission, from sluice, read on the branch
+ * that blamed it: another branch may hold its number too (record 0114).
+ */
+async function blamedTests($: $, id: number, branch: string): Promise<OverviewFailed[]> {
   const cwd = (await read($, mine)).root ?? undefined;
   const got = await $.process
-    .run(["sluice", "status", String(id), "--json"], cwd ? { cwd } : undefined)
+    .run(["sluice", "status", String(id), "--branch", branch, "--json"], cwd ? { cwd } : undefined)
     .catch(() => null);
   try {
     return got && got.exitCode === 0 ? (JSON.parse(got.stdout).failed ?? []) : [];
@@ -1008,7 +1011,7 @@ export const register: Register = (on, options) => {
                           plain
                           onPress={() =>
                             r.event === "blamed"
-                              ? toggle($, k, () => blamedTests($, id))
+                              ? toggle($, k, () => blamedTests($, id, b.branch))
                               : flip($, k)
                           }
                         >
