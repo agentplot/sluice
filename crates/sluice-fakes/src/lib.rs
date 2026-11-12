@@ -1884,6 +1884,14 @@ impl World {
         self.0.borrow_mut().after_allocating = Some(Rc::new(then));
     }
 
+    /// The next number the records give is `n`: a branch whose records are
+    /// on its remote numbers from the remote's count and one in the host's
+    /// own files from the host's, so two branches may hold one number (26;
+    /// record 0114).
+    pub fn numbers_from(&self, n: u64) {
+        self.0.borrow_mut().next_id = n;
+    }
+
     /// A branch's record file as written.
     pub fn file(&self, branch: &str, path: &str) -> Option<String> {
         self.0
@@ -3456,6 +3464,20 @@ impl Clock for FakeClock {
 mod tests {
     use super::*;
     use sluice_seams::Decided;
+
+    /// Record 0114: the records give the number `numbers_from` sets next,
+    /// and count on from it, so a test can make two branches hold one.
+    #[test]
+    fn numbers_from_gives_the_next_number() {
+        let f = Fakes::new();
+        assert_eq!(f.state.allocate_id().unwrap(), 1);
+        assert_eq!(f.state.allocate_id().unwrap(), 2);
+        f.world.numbers_from(1);
+        assert_eq!(f.state.allocate_id().unwrap(), 1);
+        assert_eq!(f.state.allocate_id().unwrap(), 2);
+        f.world.numbers_from(26);
+        assert_eq!(f.state.allocate_id().unwrap(), 26);
+    }
 
     /// 51: the driver fake delivers to the session its submitter recorded,
     /// or its agent where it recorded none, and an agent whose sessions

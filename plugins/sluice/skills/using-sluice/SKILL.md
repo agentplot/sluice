@@ -165,6 +165,9 @@ order, or none. sluice queues all of them, in that order, or none,
 and forms no combination on any of them until every one is queued. Once
 queued, each is its own submission: blamed, withdrawn and waited on
 (`sluice wait <id>`) alone. See [references/submit.md](references/submit.md).
+A number more than one branch holds is refused by `sluice wait`, `status`,
+`amend` and `withdraw`, naming each branch, and `--branch <branch>` names
+the one meant, as `sluice wait 26 --branch main`.
 
 Nothing moves while nobody waits and no `sluice run` is going, so a
 `--no-wait` submission with nobody waiting on it sits at `queued`; `sluice

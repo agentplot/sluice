@@ -135,6 +135,47 @@ fn s48_deepest_first_with_a_hold_tests_the_deepest_beside_the_first() {
     assert_eq!(h.moves(), 1);
 }
 
+/// satisfies: 117, 14, S47
+#[test]
+fn a_hold_run_out_beside_a_longer_combination_with_a_new_arrival_lands_the_pass() {
+    let h = holding(true, 3);
+    h.w().hold_runs(true);
+    h.work("unit/a", "agent-a", &[("a/one", Some("1"))]);
+    h.work("unit/b", "agent-b", &[("b/two", Some("2"))]);
+    h.work("unit/c", "agent-c", &[("c/three", Some("3"))]);
+    let a = h.submit("unit/a");
+    h.step();
+    let b = h.submit("unit/b");
+    h.step();
+    assert_eq!(h.tested(), vec![vec![a], vec![a, b]]);
+    h.w().complete(&candidate(&h, &[a]));
+    h.step();
+    assert_eq!(h.sub(a).held.unwrap().by, vec![a, b]);
+
+    // C arrives within A's hold: the longer combination takes it.
+    h.w().advance(Span::minutes(2));
+    let c = h.submit("unit/c");
+    h.step();
+    assert_eq!(h.tested(), vec![vec![a], vec![a, b], vec![a, b, c]]);
+    h.step();
+    assert_eq!(h.sub(a).held.unwrap().by, vec![a, b, c]);
+    assert_eq!(h.moves(), 0);
+
+    // A's hold runs out with A+B+C under test: A lands on its own pass,
+    // with nothing tested again for it.
+    h.w().advance(Span::minutes(3));
+    let started = h.started().len();
+    h.step();
+    assert_eq!(landings(&h), vec![vec![a]]);
+    assert_eq!(h.started().len(), started);
+
+    h.w().hold_runs(false);
+    h.w().complete_all();
+    h.settle();
+    assert_eq!(landings(&h), vec![vec![a], vec![b, c]]);
+    assert_eq!(h.moves(), 2);
+}
+
 /// satisfies: 117, 14
 #[test]
 fn deepest_first_without_a_hold_starts_nothing_beside_a_candidate_under_test() {
