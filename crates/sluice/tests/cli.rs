@@ -9725,6 +9725,149 @@ mod number_on_two_branches {
         );
     }
 
+    /// Submission 26 queued on `bolt/a`, and submission 26 landed on
+    /// `bolt/b`.
+    fn queued_and_landed() -> Fakes {
+        let f = setup();
+        branch(&f, A);
+        branch(&f, B);
+        submit_as(&f, 26, B, "unit/b");
+        let (code, out) = sluice(&f, &["wait", N, "--json"]);
+        assert_eq!(code, LANDED, "{out}");
+        submit_as(&f, 26, A, "unit/a");
+        f
+    }
+
+    /// The refusal's first line, for `ask`.
+    fn refusal(ask: &str) -> String {
+        format!(
+            "refused: submission 26 is on more than one branch: bolt/a, bolt/b; name one with \
+             --branch, as {ask} 26 --branch bolt/a"
+        )
+    }
+
+    /// The branches' records' versions, which a write or a round moves.
+    fn versions(f: &Fakes) -> (u64, u64) {
+        (f.world.version(A), f.world.version(B))
+    }
+
+    /// 26, record 0114: a withdrawal of a number two branches hold is
+    /// refused naming both, exit 2, and both are as they were.
+    #[test]
+    fn a_number_two_branches_hold_is_refused_naming_both() {
+        let f = queued_and_landed();
+        let before = versions(&f);
+        let (code, out) = sluice(&f, &["withdraw", N]);
+        assert_eq!(code, 2, "{out}");
+        assert_eq!(out, format!("{}\n", refusal("sluice withdraw")));
+        assert_eq!(versions(&f), before);
+        assert_eq!(on(&f, A)["state"], "queued");
+        assert_eq!(on(&f, B)["state"], "landed");
+    }
+
+    /// 26, record 0114: status and amend are refused the same way, exit 2,
+    /// and no priority changes.
+    #[test]
+    fn status_and_amend_are_refused_the_same_way() {
+        let f = both_queued();
+        let before = versions(&f);
+        for (ask, args) in [
+            ("sluice status", &["status", N][..]),
+            ("sluice amend", &["amend", N, "--priority", "5"]),
+        ] {
+            let (code, out) = sluice(&f, args);
+            assert_eq!(code, 2, "{args:?}: {out}");
+            assert_eq!(out, format!("{}\n", refusal(ask)), "{args:?}");
+        }
+        assert_eq!(versions(&f), before);
+        assert_eq!(on(&f, A)["priority"], 0);
+        assert_eq!(on(&f, B)["priority"], 0);
+    }
+
+    /// 26, record 0114: a branch that could not be read is named beside
+    /// those that hold the number, with its words, a line of its own.
+    #[test]
+    fn the_refusal_names_a_branch_that_could_not_be_read() {
+        let f = both_and_unread();
+        let (code, out) = sluice(&f, &["status", N]);
+        assert_eq!(code, 2, "{out}");
+        assert_eq!(
+            out,
+            format!(
+                "{}\n{C} could not be read: {UNREADABLE}\n",
+                refusal("sluice status")
+            )
+        );
+    }
+
+    /// Record 0114: under `--json`, the refused document, its message the
+    /// lines joined by `; `, and next the command once per branch.
+    #[test]
+    fn under_json_the_refusal_names_a_command_per_branch() {
+        let f = both_and_unread();
+        let (code, out) = sluice(&f, &["withdraw", N, "--json"]);
+        assert_eq!(code, 2, "{out}");
+        let v = json(&out);
+        assert_eq!(v["error"]["kind"], "refused", "{v}");
+        let first = refusal("sluice withdraw");
+        assert_eq!(
+            v["error"]["message"],
+            format!(
+                "{}; {C} could not be read: {UNREADABLE}",
+                first.strip_prefix("refused: ").unwrap()
+            )
+        );
+        assert_eq!(
+            v["error"]["next"],
+            serde_json::json!([
+                "sluice withdraw 26 --branch bolt/a",
+                "sluice withdraw 26 --branch bolt/b"
+            ])
+        );
+    }
+
+    /// Record 0114: a wait on a number two branches hold is refused, exits
+    /// 64, never a conflict's 2, and runs no round.
+    #[test]
+    fn a_wait_refused_exits_64_and_runs_no_round() {
+        let f = both_queued();
+        let before = versions(&f);
+        let (code, out) = sluice(&f, &["wait", N, "--json"]);
+        assert_eq!(code, sluice::USAGE, "{out}");
+        let v = json(&out);
+        assert_eq!(v["error"]["kind"], "refused", "{v}");
+        assert_eq!(
+            v["error"]["next"],
+            serde_json::json!([
+                "sluice wait 26 --branch bolt/a",
+                "sluice wait 26 --branch bolt/b"
+            ])
+        );
+        assert_eq!(versions(&f), before);
+        assert!(f.world.started().is_empty(), "a round ran");
+        let (code, out) = sluice(&f, &["wait", N]);
+        assert_eq!(
+            (code, out),
+            (sluice::USAGE, format!("{}\n", refusal("sluice wait")))
+        );
+    }
+
+    /// Record 0114: `sluice wait --help` says 64 is also a number more
+    /// than one branch holds, given with no `--branch`.
+    #[test]
+    fn wait_help_says_64_for_a_number_two_branches_hold() {
+        let help = Cli::try_parse_from(["sluice", "wait", "--help"])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            help.contains(
+                "64   a command line sluice cannot read; or the number is on more than\n       \
+                 one branch and no --branch names one: each branch is named"
+            ),
+            "{help}"
+        );
+    }
+
     /// Record 0114: `--branch` goes with a number; with a branch, or with
     /// `status` and no target, it is a command line sluice cannot read.
     #[test]

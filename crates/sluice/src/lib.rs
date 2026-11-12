@@ -150,7 +150,8 @@ Exit codes:
        it could not read is named with why
   4    withdrawn
   5    still waiting: --timeout ran out, and the submission stays queued
-  64   a command line sluice cannot read
+  64   a command line sluice cannot read; or the number is on more than
+       one branch and no --branch names one: each branch is named
   130  stopped with Ctrl-C; the submission stays queued";
 
 /// `sluice inbox --help`'s examples and exits (51, 135).
