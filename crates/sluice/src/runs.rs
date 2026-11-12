@@ -21,7 +21,23 @@
 //!   result.json    how it ended; written last, by rename
 //!   release.log    the release command's stdout and stderr
 //!   released       the release command finished; written last
+//!   watch.out      the watch's stdout, where the request names a watch
+//!   watch.err      the watch's stderr
+//!   watch.pgid     the watch's process group, once it is spawned
+//!   watch-error    what the watch said, and how it ended, where it was
+//!                  not ready when the command started
 //! ```
+//!
+//! A request may name a watch (139; design D5 of the change
+//! `a-check-its-executor-refused-has-no-outcome`): a command run beside
+//! the run's, in a process group of its own, which keeps what only a
+//! process running through the run can see. The command starts once the
+//! watch has written its first line to `watch.out`; a watch that exits
+//! first, or writes none within ten seconds, is ended and said in
+//! `watch-error`, and the command starts all the same, so a watch never
+//! holds a run back. It is given a second after the run's group has
+//! ended for what is still on its way, then ended, and [`Runs::end`] ends
+//! a watch left alive whether or not its run has ended (rule core.10).
 //!
 //! A session's place (session-runs-1 clauses 89, 94) keeps a directory
 //! per run, `.runs/<place, flat>/<n>/`, a fresh `n` for each, named
@@ -81,7 +97,20 @@ pub struct Request {
     /// run has ended, when its place is released (ADR 0016).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub release: Option<Vec<String>>,
+    /// A command run beside the run's, with the same `cwd` and `env`, from
+    /// before the command starts until a second after its group has ended
+    /// (139; design D5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub watch: Option<Vec<String>>,
 }
+
+/// How long a watch has to write its first line before the run's command
+/// starts without it (design D5).
+const WATCH_READY: Duration = Duration::from_secs(10);
+
+/// How long a watch is given after the run's group has ended, for what is
+/// still on its way to it (design D5).
+const WATCH_AFTER: Duration = Duration::from_secs(1);
 
 fn default_grace() -> u64 {
     10
@@ -400,17 +429,20 @@ impl Runs {
     }
 
     /// End the run of the place `name`, if one is left: its group, when
-    /// no result says it was ended already. Nothing when there is no run.
+    /// no result says it was ended already, and its watch, whose group is
+    /// ended wherever it is alive, whether or not the run has ended
+    /// (design D5; rule core.10). Nothing when there is no run.
     pub fn end(&self, name: &str) -> Result<()> {
         let dir = self.dir(name);
-        if read_ended(&dir)?.is_some() {
-            return Ok(());
+        let grace = || self.request(name).map(|r| r.grace).unwrap_or(10);
+        if read_ended(&dir)?.is_none() {
+            if let Some(pgid) = read_pgid_at(&dir.join("pgid"))? {
+                end_group(pgid, Duration::from_secs(grace()), &mut || false);
+            }
         }
-        let Some(pgid) = read_pgid(&dir)? else {
-            return Ok(());
-        };
-        let grace = self.request(name).map(|r| r.grace).unwrap_or(10);
-        end_group(pgid, Duration::from_secs(grace), &mut || false);
+        if let Some(pgid) = read_pgid_at(&dir.join("watch.pgid"))? {
+            end_group(pgid, Duration::from_secs(grace()), &mut || false);
+        }
         Ok(())
     }
 
@@ -598,20 +630,26 @@ pub fn supervise(dir: &Path) -> Result<()> {
         return Ok(());
     }
     let request: Request = serde_json::from_slice(&std::fs::read(dir.join("request.json"))?)?;
-    let started = now();
     let finish =
         |ended: Ended| write_atomic(&dir.join("result.json"), &serde_json::to_vec(&ended)?);
 
     let Some((program, args)) = request.argv.split_first() else {
+        let at = now();
         return finish(Ended {
             exit: None,
             signal: None,
             timed_out: false,
             error: Some("the run names no command".into()),
-            started: started.clone(),
-            ended: now(),
+            started: at.clone(),
+            ended: at,
         });
     };
+    // Design D5: the watch is ready, or said, before the command starts.
+    let mut watch = match request.watch.as_deref() {
+        Some(argv) if !argv.is_empty() => start_watch(dir, &request, argv)?,
+        _ => None,
+    };
+    let started = now();
     let out = File::create(dir.join("out.log"))?;
     let mut child = match Command::new(program)
         .args(args)
@@ -626,6 +664,9 @@ pub fn supervise(dir: &Path) -> Result<()> {
     {
         Ok(c) => c,
         Err(e) => {
+            if let Some(w) = watch.as_mut() {
+                w.end(Duration::from_secs(request.grace));
+            }
             return finish(Ended {
                 exit: None,
                 signal: None,
@@ -633,7 +674,7 @@ pub fn supervise(dir: &Path) -> Result<()> {
                 error: Some(format!("starting {program}: {e}")),
                 started,
                 ended: now(),
-            })
+            });
         }
     };
     let pgid = child.id() as i32;
@@ -655,6 +696,11 @@ pub fn supervise(dir: &Path) -> Result<()> {
             break;
         }
         times.note(false);
+        // A watch ended from outside is reaped at once, so its group is
+        // gone for whoever ended it (rule core.10).
+        if let Some(w) = watch.as_mut() {
+            w.reap();
+        }
         std::thread::sleep(Duration::from_millis(100));
     }
     // Every run ends its group, so nothing it started outlives it (32).
@@ -669,6 +715,15 @@ pub fn supervise(dir: &Path) -> Result<()> {
         Some(s) => Some(s),
         None => Some(child.wait()?),
     };
+    // Design D5: a second for reports still on their way, then the watch
+    // is ended.
+    if let Some(w) = watch.as_mut() {
+        let until = Instant::now() + WATCH_AFTER;
+        while Instant::now() < until && !w.reap() {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        w.end(Duration::from_secs(request.grace));
+    }
     times.note(true);
     use std::os::unix::process::ExitStatusExt;
     finish(Ended {
@@ -679,6 +734,107 @@ pub fn supervise(dir: &Path) -> Result<()> {
         started,
         ended: now(),
     })
+}
+
+/// A run's watch, as its supervisor holds it (design D5).
+struct Watch {
+    child: std::process::Child,
+    pgid: i32,
+    exited: bool,
+}
+
+impl Watch {
+    /// Reap the watch if it has exited; whether it has.
+    fn reap(&mut self) -> bool {
+        if !self.exited {
+            self.exited = self.child.try_wait().ok().flatten().is_some();
+        }
+        self.exited
+    }
+
+    /// End the watch's group, giving it `grace`.
+    fn end(&mut self, grace: Duration) {
+        let pgid = self.pgid;
+        end_group(pgid, grace, &mut || self.reap());
+        let _ = self.child.wait();
+    }
+}
+
+/// Start the watch `argv` of the run in `dir`, and wait until it has
+/// written its first line to `watch.out`. A watch that cannot start,
+/// exits first, or writes none within [`WATCH_READY`] is ended and said in
+/// `watch-error` with what it wrote to `watch.err` and how it ended, and
+/// the run goes on without it (design D5).
+fn start_watch(dir: &Path, request: &Request, argv: &[String]) -> Result<Option<Watch>> {
+    let (program, args) = argv.split_first().expect("a watch names its command");
+    let name = Path::new(program)
+        .file_name()
+        .map_or_else(|| program.clone(), |n| n.to_string_lossy().into_owned());
+    let out_path = dir.join("watch.out");
+    let err_path = dir.join("watch.err");
+    let out = File::create(&out_path)?;
+    let err = File::create(&err_path)?;
+    let said = |how: String| -> Result<()> {
+        let words = std::fs::read_to_string(&err_path).unwrap_or_default();
+        let words = words.trim();
+        let line = match words.is_empty() {
+            true => format!("{name}: {how}"),
+            false => format!("{name}: {how}: {words}"),
+        };
+        write_atomic(&dir.join("watch-error"), line.as_bytes())
+    };
+    let child = match Command::new(program)
+        .args(args)
+        .current_dir(&request.cwd)
+        .env_clear()
+        .envs(&request.env)
+        .stdin(Stdio::null())
+        .stdout(out)
+        .stderr(err)
+        .process_group(0)
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            said(format!("could not start: {e}"))?;
+            return Ok(None);
+        }
+    };
+    let pgid = child.id() as i32;
+    write_atomic(&dir.join("watch.pgid"), format!("{pgid}\n").as_bytes())?;
+    let mut watch = Watch {
+        child,
+        pgid,
+        exited: false,
+    };
+    let until = Instant::now() + WATCH_READY;
+    loop {
+        let ready = std::fs::read(&out_path)
+            .map(|b| b.contains(&b'\n'))
+            .unwrap_or(false);
+        if ready {
+            return Ok(Some(watch));
+        }
+        if let Some(status) = watch.child.try_wait()? {
+            watch.exited = true;
+            use std::os::unix::process::ExitStatusExt;
+            let how = match (status.code(), status.signal()) {
+                (Some(code), _) => format!("exited {code} before it was ready"),
+                (_, Some(signal)) => format!("ended by signal {signal} before it was ready"),
+                _ => "ended before it was ready".to_string(),
+            };
+            // Whatever of its group is left goes with it.
+            watch.end(Duration::from_secs(request.grace));
+            said(how)?;
+            return Ok(None);
+        }
+        if Instant::now() >= until {
+            watch.end(Duration::from_secs(request.grace));
+            said(format!("wrote no line in {} s", WATCH_READY.as_secs()))?;
+            return Ok(None);
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 /// The last lines of a log, for an error.
@@ -811,11 +967,12 @@ fn read_ended(dir: &Path) -> Result<Option<Ended>> {
     }
 }
 
-fn read_pgid(dir: &Path) -> Result<Option<i32>> {
-    match std::fs::read_to_string(dir.join("pgid")) {
+/// The process group the file at `path` names, `pgid` or `watch.pgid`.
+fn read_pgid_at(path: &Path) -> Result<Option<i32>> {
+    match std::fs::read_to_string(path) {
         Ok(s) => {
             Ok(Some(s.trim().parse().with_context(|| {
-                format!("{} holds no pgid", dir.display())
+                format!("{} holds no pgid", path.display())
             })?))
         }
         Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
@@ -963,6 +1120,7 @@ mod tests {
             grace: 1,
             meta: serde_json::Value::Null,
             release: Some(vec!["/usr/bin/touch".into(), marker.display().to_string()]),
+            watch: None,
         };
         write_atomic(
             &dir.join("request.json"),

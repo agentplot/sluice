@@ -54,6 +54,24 @@ A test that could not run (it exited as `[tests] not_run` names, or it
 could not be started) is listed as `could not run: <test>: <why>` and
 recorded nowhere. A command after `--` is not held to `not_run`.
 
+Under the sandbox, a test that did not pass in a run the sandbox refused
+something could not run either, and is listed with what was refused:
+
+```console
+could not run: cli:tools: sluice's sandbox refused the run file-write-create /Users/me/.cache/tool/lock (by tool)
+nothing was recorded for a test that could not run: once the host can run it, run again
+```
+
+sluice's sandbox stopped it, not the test's code. The cure is the
+branch's policy, the host's `[[caches]]` or the test, never a set-aside,
+since nothing was recorded. A command after `--` is never read so. When
+sluice can't read what the sandbox refused the run, it says so after the
+run's lines, and records the run as one refused nothing:
+
+```console
+sluice could not read what its sandbox refused the run: log: exited 1 before it was ready
+```
+
 A required test the task runner skipped because a task it depends on ran
 and failed is failed by that task. The task is listed under `failed:`, the
 test on the line beneath, and the task's fail is recorded under its key

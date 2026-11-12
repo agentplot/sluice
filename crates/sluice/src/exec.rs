@@ -581,6 +581,10 @@ impl Exec<'_> {
                 "nothing was recorded for a test that could not run: once the host can run it, run again",
             )?;
         }
+        // 139, design D8: the run was read as refused nothing.
+        if let Some(why) = &report.refusals_unread {
+            say(out, json, &words::refusals_unread(why))?;
+        }
         Ok(())
     }
 

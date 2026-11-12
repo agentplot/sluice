@@ -425,12 +425,14 @@ fn a_session_run_records_what_it_ran_and_never_a_replay() {
             memory: None,
             network: None,
             docker: false,
+            grant: None,
         },
         missing: vec![],
         not_run: vec![],
         dependencies: Vec::new(),
         failed_by: Vec::new(),
         timed_out: false,
+        refusals_unread: None,
     };
     assert_eq!(s.record_session(&plan, &head, "/w/a", &report).unwrap(), 1);
     // The same run again is never recorded twice.
@@ -811,4 +813,38 @@ fn a_check_with_no_system_named_takes_a_pass_from_the_host_it_ran_on() {
     assert!(results(&h)
         .iter()
         .all(|l| l.system.as_deref() == Some("macos-arm64")));
+}
+
+/// satisfies: 19, 138; the check-grant spec's "Through the queue": a
+/// submission blamed for `a:test`'s fail under one grant, submitted again
+/// where its host's runs are under another, where `a:test` passes, lands
+/// with no flake named on a branch with `flaky = "fail"` (rule core.34)
+#[test]
+fn a_fail_under_another_grant_is_never_weighed_against_a_pass() {
+    let h = Harness::new(&policy(false, "fail", 4));
+    h.w().flaky("a:test", &[Outcome::Fail, Outcome::Pass]);
+    h.w().grant(Some("g1"));
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let first = h.submit("unit/a");
+    h.settle();
+    assert_eq!(h.sub(first).state, State::Failed);
+
+    h.w().grant(Some("g2"));
+    let again = h.submit("unit/a");
+    h.settle();
+    let sub = h.sub(again);
+    assert_eq!(sub.state, State::Landed, "{sub:?}");
+    assert!(sub.failed.iter().all(|f| f.flaky.is_none()), "{sub:?}");
+    // One key, its fail and its pass each under its own grant.
+    let a: Vec<(Outcome, Option<String>, String)> = results(&h)
+        .into_iter()
+        .filter(|l| l.task == "a:test")
+        .map(|l| (l.outcome, l.executor.and_then(|e| e.grant), l.hash))
+        .collect();
+    assert_eq!(a.len(), 2, "{a:?}");
+    assert_eq!(a[0].2, a[1].2, "one key");
+    assert_eq!(
+        (a[0].0, a[0].1.as_deref(), a[1].0, a[1].1.as_deref()),
+        (Outcome::Fail, Some("g1"), Outcome::Pass, Some("g2"))
+    );
 }

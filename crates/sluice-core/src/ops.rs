@@ -2163,6 +2163,10 @@ mod tests {
             Ok(None)
         }
 
+        fn refused(&self, _: &RunHandle) -> Result<sluice_seams::Refusals> {
+            Ok(sluice_seams::Refusals::None)
+        }
+
         fn bound(&self) -> Result<usize> {
             unreachable!("a submit runs nothing")
         }

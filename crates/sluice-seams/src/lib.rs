@@ -524,6 +524,15 @@ pub struct Enforced {
     /// The run could reach the host's container engine (ADR 0016).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub docker: bool,
+    /// 83, 138: what the executor let the run reach, as one string a key's
+    /// results are weighed under. The sandbox's is `sb1:` and a digest of
+    /// the profile it wrote with every path named by its role, so places
+    /// and hosts given one profile give one grant; the open executor's is
+    /// `open:1`. sluice's version is no part of it. `None` on a line
+    /// recorded before the grant, which is weighed only with others that
+    /// carry none (rule core.34).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grant: Option<String>,
 }
 
 /// What the core asks the check seam to run on one candidate (37).
@@ -738,6 +747,29 @@ pub struct RunReport {
     /// Required checks the runner keeps out of its CI mode, so never runs
     /// (moon's `runInCI: false`); each is also in `missing`.
     pub kept_out: Vec<String>,
+    /// 139 (design D8 of the change
+    /// `a-check-its-executor-refused-has-no-outcome`): why the executor
+    /// could not read its own report of what it refused the run, in the
+    /// words of what failed; the run is read as one refused nothing. `None`
+    /// where it read it, and wherever it was not asked.
+    pub refusals_unread: Option<String>,
+}
+
+/// 139 (design D6 of the change
+/// `a-check-its-executor-refused-has-no-outcome`): what the executor
+/// reports it refused a finished run, read from its own report alone,
+/// never from what a check printed, its exit or how it failed (38; rule
+/// core.35).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Refusals {
+    /// It refused nothing, or keeps no report of what it refuses: the open
+    /// executor, and a run an older sluice started.
+    None,
+    /// What it refused, in the profile's words.
+    Refused(String),
+    /// It could not read its own report, in the words of what failed; the
+    /// run is read as one refused nothing, and says so (design D8).
+    Unread(String),
 }
 
 impl RunReport {
@@ -838,9 +870,10 @@ pub trait Tests {
     ///
     /// The core asks it before it claims a run, and claims none while it
     /// answers a reason; before it starts a run claimed without that look
-    /// (88); and after a run in which a check did not pass, so that an
-    /// engine gone during the run leaves those checks with no outcome,
-    /// never a fail (114, 139).
+    /// (88); and after a run in which a check did not pass, last of the
+    /// three, once [`Tests::switched`] and [`Tests::refused`] answered
+    /// nothing, so that an engine gone during the run leaves those checks
+    /// with no outcome, never a fail (114, 139).
     fn unmet(&self, limits: &Limits) -> Result<Option<String>>;
 
     /// 84, 114, 139, record 0097: whether the host's system moved since
@@ -852,10 +885,25 @@ pub trait Tests {
     ///
     /// The core asks it only after a run in which a check did not pass and
     /// the time limit did not end it, whatever the policy asks of the host,
-    /// and before it looks at the engine: where it answers, those checks
-    /// have no outcome, for the reason it gives, and the engine is not
-    /// looked at.
+    /// first of the three, before [`Tests::refused`] and the engine: where
+    /// it answers, those checks have no outcome, for the reason it gives,
+    /// and neither is asked (139; record 0072).
     fn switched(&self, run: &RunHandle) -> Result<Option<String>>;
+
+    /// 139, record 0072 (design D6 of the change
+    /// `a-check-its-executor-refused-has-no-outcome`): what the executor
+    /// reports it refused `run`, read from its own report of the run alone,
+    /// never from what a check printed, its exit or how it failed (38; rule
+    /// core.35). It runs nothing, so reading a run again reads the same
+    /// answer.
+    ///
+    /// The core asks it only after a run in which a check did not pass and
+    /// the time limit did not end it, after [`Tests::switched`] and before
+    /// it looks at the engine: where it answers `Refused`, those checks
+    /// have no outcome, naming what was refused, and the engine is not
+    /// looked at; where it answers `Unread`, the run is read as before and
+    /// says so.
+    fn refused(&self, run: &RunHandle) -> Result<Refusals>;
 
     /// 71: the most checks running on the host at once, whatever
     /// repositories and branches they serve and whatever their windows.
@@ -1856,6 +1904,7 @@ mod tests {
                 memory: None,
                 network: None,
                 docker: false,
+                grant: None,
             },
             missing: vec![],
             not_run: vec![],
@@ -1864,6 +1913,7 @@ mod tests {
             timed_out: false,
             detail: None,
             kept_out: vec![],
+            refusals_unread: None,
         }
     }
 

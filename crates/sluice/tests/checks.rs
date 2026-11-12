@@ -11,8 +11,8 @@ use std::time::{Duration, Instant};
 use sluice::instance::{HostCache, Instance};
 use sluice::profiles::checks::{docker_host, Checks, Endpoint, EngineTls};
 use sluice_seams::{
-    AtBound, Equip, EquipStep, Limits, Network, Outcome, Place, Progress, RunHandle, RunReport,
-    RunRequest, Setting, Settings, Source, Tests, Through,
+    AtBound, Equip, EquipStep, Limits, Network, Outcome, Place, Progress, Refusals, RunHandle,
+    RunReport, RunRequest, Setting, Settings, Source, Tests, Through,
 };
 use support::{Repo, Scratch};
 
@@ -554,6 +554,152 @@ fn the_sandbox_holds_writes_and_the_network() {
         Outcome::Pass
     );
     drop(listener);
+}
+
+/// 83, 138, design D1 (the check-grant spec's "A sandboxed run"): a
+/// sandboxed run's report carries the grant of the profile it ran under,
+/// the same as the same request's run in another place, and another than
+/// the same run held to no network.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_sandbox_run_records_the_grant_of_its_profile() {
+    let (one, two) = (
+        Repo::new("checks-sandbox-grant-one"),
+        Repo::new("checks-sandbox-grant-two"),
+    );
+    let run = |repo: &Repo, name: &str, network: Option<Network>| {
+        let mut req = request(repo, name, command("true"));
+        req.limits = Limits {
+            executor: Some("sandbox".into()),
+            network,
+            memory: None,
+            docker: false,
+        };
+        let report = finish(&checks(repo), &req);
+        assert_eq!(report.tasks[0].outcome, Outcome::Pass);
+        report.executor.grant.expect("a sandboxed run's grant")
+    };
+    let here = run(&one, "p1", Some(Network::Localhost));
+    assert!(here.starts_with("sb1:"), "{here}");
+    assert_eq!(run(&two, "p2", Some(Network::Localhost)), here);
+    assert_ne!(run(&one, "p3", Some(Network::Denied)), here);
+}
+
+/// `req` held to the sandbox, with `network`.
+fn sandboxed(mut req: RunRequest, network: Option<Network>) -> RunRequest {
+    req.limits = Limits {
+        executor: Some("sandbox".into()),
+        network,
+        memory: None,
+        docker: false,
+    };
+    req
+}
+
+/// 139, record 0072 (the run-outcome spec's "What the sandbox refused"):
+/// a sandboxed run that writes outside its checkout and fails answers what
+/// the sandbox refused it, the write's operation and path and the program
+/// that tried, from the sandbox's own report.
+#[cfg(target_os = "macos")]
+#[test]
+fn the_sandbox_reports_what_it_refused_a_run() {
+    let repo = Repo::new("checks-sandbox-refused");
+    let outside = repo.dir().with_extension("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    let c = checks(&repo);
+    let escape = format!("/usr/bin/touch {}/escaped", outside.display());
+    let (run, report) = ran(&c, &sandboxed(request(&repo, "p1", command(&escape)), None));
+    assert_eq!(report.tasks[0].outcome, Outcome::Fail);
+    match c.refused(&run).unwrap() {
+        Refusals::Refused(words) => {
+            assert!(
+                words.starts_with("sluice's sandbox refused the run file-write-create "),
+                "{words}"
+            );
+            assert!(words.contains("/escaped (by touch)"), "{words}");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(c.refused(&run).unwrap(), c.refused(&run).unwrap());
+}
+
+/// 38, 139, rule core.35 (the run-outcome spec's "A test that prints a
+/// refusal"): a sandboxed run that writes nothing outside its checkout,
+/// prints "Operation not permitted" and fails is refused nothing, and so
+/// is an open run that fails.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_sandbox_run_that_writes_nothing_outside_reports_no_refusal() {
+    let repo = Repo::new("checks-sandbox-no-refusal");
+    let c = checks(&repo);
+    let says = "echo 'touch: /x: Operation not permitted' >&2; exit 1";
+    let (run, report) = ran(&c, &sandboxed(request(&repo, "p1", command(says)), None));
+    assert_eq!(report.tasks[0].outcome, Outcome::Fail);
+    assert_eq!(c.refused(&run).unwrap(), Refusals::None);
+    let (run, report) = ran(&c, &request(&repo, "p2", command(says)));
+    assert_eq!(report.tasks[0].outcome, Outcome::Fail);
+    assert_eq!(c.refused(&run).unwrap(), Refusals::None);
+}
+
+/// 139, design D4 (the run-outcome spec's "Two runs at once"): two
+/// sandboxed runs started together, each failing, one writing outside its
+/// checkout: only that one reads a refusal, since each reads only its own
+/// mark.
+#[cfg(target_os = "macos")]
+#[test]
+fn two_sandbox_runs_at_once_report_only_their_own_refusals() {
+    let repo = Repo::new("checks-sandbox-two-runs");
+    let outside = repo.dir().with_extension("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    let c = checks(&repo);
+    let escape = format!(
+        "sleep 1; touch {}/escaped; sleep 1; exit 1",
+        outside.display()
+    );
+    let stays = "sleep 1; touch \"$SLUICE_TMP/in\"; sleep 1; exit 1";
+    let one = c
+        .start(&sandboxed(request(&repo, "p1", command(&escape)), None))
+        .unwrap();
+    let two = c
+        .start(&sandboxed(request(&repo, "p2", command(stays)), None))
+        .unwrap();
+    for run in [&one, &two] {
+        let until = Instant::now() + Duration::from_secs(60);
+        while !matches!(c.progress(run).unwrap(), Progress::Finished(_)) {
+            assert!(Instant::now() < until, "the run never finished");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+    assert!(
+        matches!(c.refused(&one).unwrap(), Refusals::Refused(w) if w.contains("/escaped")),
+        "{:?}",
+        c.refused(&one)
+    );
+    assert_eq!(c.refused(&two).unwrap(), Refusals::None);
+}
+
+/// 139, design D5, D8 (the run-outcome spec's "The log cannot be
+/// streamed"): where the program the sandbox's reports are streamed with
+/// exits at once, saying why, a sandboxed run that fails answers its
+/// refusals unread, holding those words.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_sandbox_run_whose_log_cannot_be_read_reports_it_unread() {
+    let repo = Repo::new("checks-sandbox-log-unread");
+    let log = repo.dir().with_extension("log.sh");
+    std::fs::write(&log, "#!/bin/sh\necho 'no log here' >&2\nexit 1\n").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&log, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let c = checks(&repo).with_log(log);
+    let (run, report) = ran(
+        &c,
+        &sandboxed(request(&repo, "p1", command("exit 1")), None),
+    );
+    assert_eq!(report.tasks[0].outcome, Outcome::Fail);
+    match c.refused(&run).unwrap() {
+        Refusals::Unread(words) => assert!(words.contains("no log here"), "{words}"),
+        other => panic!("{other:?}"),
+    }
 }
 
 /// Design D5, ADR 0016; the host-requirements spec's "An engine at a TCP

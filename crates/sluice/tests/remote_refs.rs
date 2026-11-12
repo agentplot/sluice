@@ -269,6 +269,7 @@ fn ran(task: &str, outcome: Outcome) -> ResultLine {
             memory: None,
             network: None,
             docker: false,
+            grant: None,
         }),
         branch: "main".into(),
         combination: Rev::new("c0ffee"),
@@ -333,6 +334,64 @@ fn signed_runs_are_read_verified_on_another_host() {
     assert!(parse_lines::<ResultLine>(&hc.results("main").unwrap())
         .unwrap()
         .is_empty());
+}
+
+/// 19, 138, design D3 (the check-grant spec's "Two grants in one
+/// combination"): one combination's results run under two grants, held
+/// to `network = "localhost"` and the container engine, are signed as two
+/// statements, and each reads back on another host with those limits and
+/// the grant it was run under.
+#[test]
+fn a_signed_runs_grant_is_read_from_its_statement() {
+    let (a, bare, b) = two_hosts("rr-grant");
+    let box_key = key();
+    let under = |task: &str, grant: &str| {
+        let mut l = ran(task, Outcome::Pass);
+        l.executor = Some(Enforced {
+            network: Some(sluice_seams::Network::Localhost),
+            docker: true,
+            grant: Some(grant.into()),
+            ..l.executor.unwrap()
+        });
+        l
+    };
+    host(&a, Some(("box", box_key.clone())))
+        .record_results(&lines(&[
+            under("a:test", "sb1:g1"),
+            under("b:test", "sb1:g2"),
+            under("c:test", "sb1:g1"),
+        ]))
+        .unwrap();
+    let signed = a.git(&[
+        "-C",
+        bare.path().to_str().unwrap(),
+        "ls-tree",
+        "-r",
+        "--name-only",
+        "refs/sluice/runs/box",
+    ]);
+    assert_eq!(signed.lines().count(), 2, "{signed}");
+
+    let signers = BTreeMap::from([("box".into(), allowed("box", &box_key))]);
+    let read: Vec<ResultLine> =
+        parse_lines(&host(&b, None).results_with(&signers).unwrap()).unwrap();
+    let mut held: Vec<(String, Option<sluice_seams::Network>, bool, Option<String>)> = read
+        .into_iter()
+        .map(|l| {
+            let e = l.executor.unwrap();
+            (l.task, e.network, e.docker, e.grant)
+        })
+        .collect();
+    held.sort_by(|x, y| x.0.cmp(&y.0));
+    let localhost = Some(sluice_seams::Network::Localhost);
+    assert_eq!(
+        held,
+        [
+            ("a:test".into(), localhost, true, Some("sb1:g1".into())),
+            ("b:test".into(), localhost, true, Some("sb1:g2".into())),
+            ("c:test".into(), localhost, true, Some("sb1:g1".into())),
+        ]
+    );
 }
 
 /// 78, rule core.22: a statement verified with one branch's key for a
