@@ -43,8 +43,8 @@ use sluice_core::overview::{in_queue, BranchView, CandidateView, Held};
 use sluice_core::records::{Beside, BranchHold, CopyBehind, Event, FailedTask, State, Submission};
 use sluice_core::{
     Accepted, AmendRefusal, Clock, Collect, CopyDiffers, Forecast, Forecasted, GroupRequest,
-    Lookup, Owed, Requester, Seams, Serves, Sluice, Status, Step, SubmitHead, SubmitRefusal,
-    SubmitRequest, Unread, WithdrawRefusal, Withdrew,
+    Lookup, Owed, Requester, Seams, Serves, Several, Sluice, Status, Step, SubmitHead,
+    SubmitRefusal, SubmitRequest, Unread, WithdrawRefusal, Withdrew,
 };
 use sluice_seams::{Decided, Outcome, Rev, SessionPlace, Submitter};
 use told::Kind;
@@ -1782,6 +1782,10 @@ pub fn run(
                         return Ok(FAILED);
                     }
                     Lookup::Unfound(unread) => return unfound(id, &unread, json, out),
+                    // A wait's 2 is a conflict: the refusal exits 64.
+                    Lookup::Several(several) => {
+                        return refuse_several(id, "sluice wait", &several, json, USAGE, out)
+                    }
                 },
                 Err(_) if takes_pulls(&s, &target)? => {
                     let mode = PullMode::Wait { deadline };
@@ -1917,6 +1921,9 @@ pub fn run(
                     Ok(1)
                 }
                 Lookup::Unfound(unread) => unfound(id, &unread, json, out),
+                Lookup::Several(several) => {
+                    refuse_several(id, "sluice status", &several, json, 2, out)
+                }
                 Lookup::Found(sub) if json => {
                     let mut doc = with_waiting(&s, &sub, decided_document(&sub, None)?);
                     // 51, D13: a decided submission's delivery.
@@ -2074,9 +2081,12 @@ pub fn run(
             Err(AmendRefusal::NoSuchSubmission(unread)) if !unread.is_empty() => {
                 unfound(id, &unread, json, out)
             }
+            Err(AmendRefusal::Several(several)) => {
+                refuse_several(id, "sluice amend", &several, json, 2, out)
+            }
             Err(r) => {
                 let (why, next) = match r {
-                    AmendRefusal::NoSuchSubmission(_) => {
+                    AmendRefusal::NoSuchSubmission(_) | AmendRefusal::Several(_) => {
                         (no_submission(id), vec!["sluice overview".into()])
                     }
                     AmendRefusal::NotYours => (
@@ -2132,9 +2142,12 @@ pub fn run(
             Err(WithdrawRefusal::NoSuchSubmission(unread)) if !unread.is_empty() => {
                 unfound(id, &unread, json, out)
             }
+            Err(WithdrawRefusal::Several(several)) => {
+                refuse_several(id, "sluice withdraw", &several, json, 2, out)
+            }
             Err(r) => {
                 let (why, next) = match r {
-                    WithdrawRefusal::NoSuchSubmission(_) => {
+                    WithdrawRefusal::NoSuchSubmission(_) | WithdrawRefusal::Several(_) => {
                         (no_submission(id), vec!["sluice overview".into()])
                     }
                     WithdrawRefusal::NotYours => (
@@ -3914,6 +3927,10 @@ fn record(s: &Sluice<'_>, id: u64, branch: &str) -> Result<Submission> {
         Lookup::Unfound(unread) => {
             Err(anyhow::anyhow!("{}", unfound_lines(id, &unread).join("; ")))
         }
+        Lookup::Several(several) => Err(anyhow::anyhow!(
+            "{}",
+            several_lines(id, "sluice wait", &several).join("; ")
+        )),
     }
 }
 
@@ -4712,6 +4729,52 @@ fn unfound(id: u64, unread: &[Unread], json: bool, out: &mut dyn Write) -> Resul
     let next = ["sluice overview".to_string()];
     told::tell(out, json, Kind::Internal, &text, &next)?;
     Ok(INTERNAL)
+}
+
+/// 26, record 0114: the words for submission `id` on more than one
+/// branch, which names none of them alone: the refusal naming each branch
+/// that holds it, in the records' order, and the command `ask` with
+/// `--branch` for the first, then each branch that could not be read with
+/// the words it was refused with, as [`unfound_lines`] words them.
+fn several_lines(id: u64, ask: &str, several: &Several) -> Vec<String> {
+    let first = several.branches.first().map_or("", String::as_str);
+    std::iter::once(format!(
+        "refused: submission {id} is on more than one branch: {}; name one with --branch, \
+         as {ask} {id} --branch {first}",
+        several.branches.join(", ")
+    ))
+    .chain(
+        several
+            .unread
+            .iter()
+            .map(|u| format!("{} could not be read: {}", u.branch, u.error)),
+    )
+    .collect()
+}
+
+/// 26, record 0114: refuse submission `id`, which more than one branch
+/// holds, naming each and each branch that could not be read; exit
+/// `code`, `2` as every refusal of `status`, `amend` and `withdraw`, and
+/// [`USAGE`] for a wait, whose `2` is a conflict. Under `--json`, the
+/// refused document, its message the lines joined by `; `, and next
+/// `ask` with `--branch` once for each branch that holds it.
+fn refuse_several(
+    id: u64,
+    ask: &str,
+    several: &Several,
+    json: bool,
+    code: i32,
+    out: &mut dyn Write,
+) -> Result<i32> {
+    let lines = several_lines(id, ask, several);
+    let text = lines.join(if json { "; " } else { "\n" });
+    let next: Vec<String> = several
+        .branches
+        .iter()
+        .map(|b| format!("{ask} {id} --branch {b}"))
+        .collect();
+    told::tell(out, json, Kind::Refused, &text, &next)?;
+    Ok(code)
 }
 
 /// The commands a refusal for another's submission `id` moves on with:
