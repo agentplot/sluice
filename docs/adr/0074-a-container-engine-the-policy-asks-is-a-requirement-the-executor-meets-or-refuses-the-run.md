@@ -14,13 +14,13 @@ Status: accepted by the user on 2026-10-30, on their card (req_d552fafa15464f188
 Amended 2026-10-30 on the user's own words, settled in their exploration session and recorded as signal 2026-10-30-madswan-planner-ff92532f/01: "sluice has no readiness probe. The ready entry leaves the policy and the code. Nothing a repository writes is run to ask whether a host is fit, before a run or after one. A check brings up what it needs (containers, Postgres, a stack) and waits for it within its own time limit. If it couldn't set up, it says so by the policy's not_run exit. What a run needs from the host (its system, its limits, a container engine) is a requirement the executor reads from the host itself." With docker = true, a host whose engine does not answer turns the run down before taking it and leaves it for another host; after a run in which a check failed, the executor looks at the engine again, and if it has gone the run has no outcome and nobody is blamed; a pass always stands; and a new requirement is added only where the executor can see it on the host for itself and a check cannot bring it up on its own. The amendment is accepted on those words and asks no card.
 
 Deciders: madswan-design, on swancloud-planner's and swancloud-ops's reading of 2026-10-30 (swancloud signal 2026-10-30-swancloud-planner-425be3b2/01): mac-studio's gate runs sluice as its own user, which has no container engine it can reach, OrbStack running only under the person's login session, while sluice's own policy says `[executor] docker = true` for its stack test; madswan-planner proposed keeping the stack test off that host by a named system, which the statement's definition of a system rules out. The user accepted it on this record's card on 2026-10-30.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` definitions (system), clauses 66, 83, 84, 85, 86, 87, 139, the C.3 sandbox row; `crates/sluice/src/profiles/checks.rs` on origin/main at 2026-10-30 (`docker_sockets`, `sandbox_profile`: `docker = true` opens the engine's socket paths in the profile and checks for no engine); records 0016, 0072; rules core.34, core.35.
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` definitions (system), clauses 66, 83, 84, 85, 86, 87, 139, the C.3 sandbox row; `crates/sluice/src/profiles/checks.rs` on origin/main at 2026-10-30 (`docker_sockets`, `sandbox_profile`: `docker = true` opens the engine's socket paths in the profile and checks for no engine); records 0016, 0072; rules core.34, core.35.
 
 ## Context and problem statement
 
 A policy may say `[executor] docker = true`: the run may reach a container engine (record 0016), and the sandbox opens the engine's usual sockets to it. Nothing asks whether the executing host has an engine. A host that has none runs the checks anyway; the stack test fails as a check, the candidate is blamed, and nothing tells that failure from the code's own.
 
-On 2026-10-30 mac-studio's gate, where sluice runs as a user with no login session and no engine, held agentplot/sluice main's intake. Every candidate's stack test would have failed there. The hosts that can run it, deneb among them, are the same system, macos-arm64, so no system the gate could name (86) keeps the run off the host that cannot.
+On 2026-10-30 mac-studio's gate, where sluice runs as a user with no login session and no engine, held boomdrivedev/sluice main's intake. Every candidate's stack test would have failed there. The hosts that can run it, deneb among them, are the same system, macos-arm64, so no system the gate could name (86) keeps the run off the host that cannot.
 
 ## Considered options
 
@@ -47,6 +47,6 @@ Option 2.
 
 ### Consequences
 
-- Clause 84 gains the requirement and the C.3 sandbox row names the refusal, in the statement at agentplot/blueprints; rule core.38 is added; `_open.md` names this record until it is built.
+- Clause 84 gains the requirement and the C.3 sandbox row names the refusal, in the statement at boomdrivedev/blueprints; rule core.38 is added; `_open.md` names this record until it is built.
 - One unit, citing this record as amended: an executor with no reachable container engine refuses a run whose policy asks one before claiming it, looks at the engine again after a run in which a check did not pass and makes the run one with no outcome where it has gone, a pass standing; the run stays open, and status and wait say what it waits for.
 - swancloud's gate hosts need no system declared for this; a host with an engine takes the run, one without leaves it.

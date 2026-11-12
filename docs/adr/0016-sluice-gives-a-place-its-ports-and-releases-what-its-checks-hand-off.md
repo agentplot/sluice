@@ -10,7 +10,7 @@ decision-makers:
 # sluice gives a place its ports and releases what its checks hand off
 
 Deciders: the user, preparing sluice for a repository whose checks bring up a stack, 2026-10-13.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 31 to 34, 66, 83, 84, C.1, C.2; ADRs 0010, 0013; a survey of one repository's test stack (an AWS emulator in a container, stand-ins for the forge and two outside services, API and dev servers, Playwright), and research of 2026-10-13 comparing moon 2.6, devenv and Earthly for bringing such a stack up.
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` clauses 31 to 34, 66, 83, 84, C.1, C.2; ADRs 0010, 0013; a survey of one repository's test stack (an AWS emulator in a container, stand-ins for the forge and two outside services, API and dev servers, Playwright), and research of 2026-10-13 comparing moon 2.6, devenv and Earthly for bringing such a stack up.
 
 ## Context and problem statement
 

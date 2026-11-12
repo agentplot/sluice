@@ -10,7 +10,7 @@ decision-makers:
 # The host counts its running checks once
 
 Deciders: the operator, after three repositories' queues ran on one host at once beside 44 agent sessions and its load reached 95 on 18 cores, 2026-10-23.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clause 71 and S60 as changed at `807a7e5`, clauses 83, 91, 102, 107; rules core.2, core.7, core.11, core.14, core.18; ADRs 0012, 0018, 0035; the change `the-host-counts-its-running-checks-once`.
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` clause 71 and S60 as changed at `807a7e5`, clauses 83, 91, 102, 107; rules core.2, core.7, core.11, core.14, core.18; ADRs 0012, 0018, 0035; the change `the-host-counts-its-running-checks-once`.
 
 ## Context and problem statement
 

@@ -10,7 +10,7 @@ decision-makers:
 # Status reads a branch where its records last saw it
 
 Deciders: the user, reviewing how fast sluice's reads are on a busy branch, 2026-10-16.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 26, 49, 61; ADR 0023; rules core.11, core.14, core.15.
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` clauses 26, 49, 61; ADR 0023; rules core.11, core.14, core.15.
 
 Amended 2026-11-06 by the construct stage of `change/a-quiet-branch-reads-its-remotes-policy`, below: the policy is read at the branch's revision as the host holds it.
 
@@ -42,7 +42,7 @@ Status: accepted on 2026-11-06 by the construct stage of `change/a-quiet-branch-
 
 Deciders: the construct stage of `change/a-quiet-branch-reads-its-remotes-policy`.
 
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 26, 56, 124, 129, 135 and 137, as main words them at b0df70b; record 0093; record 0069; rules core.15, core.27 and core.31; the signal `afterthought/crew-state:agentplot/main signals/2026-11-06-agentplot-ops-706fa293/01-sluice-reads-a-quiet-branchs-policy-at-its-last-round`; deneb's records of agentplot/flywheel-next's `main` in the person's copy, `~/Code/github_agentplot/flywheel-next/flywheel-next.git/sluice/main/`, and the reflog of its `refs/remotes/origin/main`; `crates/sluice-core/src/ops.rs` (`status`) and `crates/sluice-core/src/overview.rs` (`branch_view_of`, `overview`) as main held them at 0b15d250; the change `a-quiet-branch-reads-its-remotes-policy`, its design D1 to D3.
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` clauses 26, 56, 124, 129, 135 and 137, as main words them at b0df70b; record 0093; record 0069; rules core.15, core.27 and core.31; the signal `afterthought/crew-state:agentplot/main signals/2026-11-06-agentplot-ops-706fa293/01-sluice-reads-a-quiet-branchs-policy-at-its-last-round`; deneb's records of agentplot/flywheel-next's `main` in the person's copy, `~/Code/github_agentplot/flywheel-next/flywheel-next.git/sluice/main/`, and the reflog of its `refs/remotes/origin/main`; `crates/sluice-core/src/ops.rs` (`status`) and `crates/sluice-core/src/overview.rs` (`branch_view_of`, `overview`) as main held them at 0b15d250; the change `a-quiet-branch-reads-its-remotes-policy`, its design D1 to D3.
 
 ### Context
 

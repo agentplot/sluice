@@ -10,7 +10,7 @@ decision-makers:
 # The runner caps runs and the executor holds them
 
 Deciders: the user, reviewing `docs/plans/phase-1-integrations.md`, 2026-10-12.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 28, 29, 71, 83, 84 and C.8; ADRs 0005, 0010, 0011; `docs/plans/phase-1-questions.md`.
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` clauses 28, 29, 71, 83, 84 and C.8; ADRs 0005, 0010, 0011; `docs/plans/phase-1-questions.md`.
 
 ## Context and problem statement
 

@@ -12,7 +12,7 @@ decision-makers:
 Status: accepted by the user on 2026-10-24, on their card ("Approved").
 
 Deciders: madswan-design, 2026-10-24, on the question of slc-2's code stage of the chore `rustc-outputs-are-shared-across-places-with-sccache` (bolt runs-share-the-hosts-cores); the user on their card.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 34, 35, 108 and the sandbox row of C.2; rules core.10, core.12; swancloud signal 2026-10-24-crw-4-ops-45537fbd/01 (deneb's load from cold per-place Rust builds).
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` clauses 34, 35, 108 and the sandbox row of C.2; rules core.10, core.12; swancloud signal 2026-10-24-crw-4-ops-45537fbd/01 (deneb's load from cold per-place Rust builds).
 
 ## Context and problem statement
 

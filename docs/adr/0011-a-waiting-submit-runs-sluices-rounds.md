@@ -10,7 +10,7 @@ decision-makers:
 # A waiting submit runs sluice's rounds
 
 Deciders: the user, ruling on phase 1's questions, 2026-10-11.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clause 1; `docs/examples/README.md` section 6; ADRs 0002, 0005; `docs/plans/phase-1-questions.md` D1.
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` clause 1; `docs/examples/README.md` section 6; ADRs 0002, 0005; `docs/plans/phase-1-questions.md` D1.
 
 ## Context and problem statement
 

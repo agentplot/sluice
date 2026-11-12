@@ -10,7 +10,7 @@ decision-makers:
 # The overview orders branches by the default branch's policy
 
 Deciders: the operator, planning the board's and the herdr plugin's branch order, 2026-10-20.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 27, 56, C.7; rules core.1, core.15; ADRs 0007, 0046.
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` clauses 27, 56, C.7; rules core.1, core.15; ADRs 0007, 0046.
 
 ## Context and problem statement
 

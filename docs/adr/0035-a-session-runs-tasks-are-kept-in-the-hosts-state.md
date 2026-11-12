@@ -10,7 +10,7 @@ decision-makers:
 # A session run's tasks are kept in the host's state, by the run's own sluice exec
 
 Deciders: the operator, planning agents' checks in the board and the herdr plugin, 2026-10-20.
-Sources: `agentplot/blueprints:design/sluice/proposals/session-runs-1.md` clauses 89, 91, 92, 97 and its C.3 row; `design/sluice/requirements.md` clauses 16, 38, 71; rules core.7, core.9, core.11, core.18; ADRs 0018, 0027, 0028.
+Sources: `boomdrivedev/blueprints:design/sluice/proposals/session-runs-1.md` clauses 89, 91, 92, 97 and its C.3 row; `design/sluice/requirements.md` clauses 16, 38, 71; rules core.7, core.9, core.11, core.18; ADRs 0018, 0027, 0028.
 
 ## Context and problem statement
 

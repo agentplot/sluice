@@ -12,7 +12,7 @@ decision-makers:
 Status: accepted by the user on 2026-10-28, in their design session ("words: table as is").
 
 Deciders: the user, choosing the words of a table put to them in the design review of crew, flume and sluice of 2026-10-28; the table is the reviewing agent's.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clause 51, the C.5 worktrunk row and section 3, as amended at 9aedcbc; record 0068; rule core.31; `agentplot/flume` record 0014 and `afterthought/crew` record 0048, which take the same words.
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` clause 51, the C.5 worktrunk row and section 3, as amended at 9aedcbc; record 0068; rule core.31; `boomdrivedev/flume` record 0014 and `afterthought/crew` record 0048, which take the same words.
 
 ## Context and problem statement
 

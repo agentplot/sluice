@@ -9,10 +9,10 @@ decision-makers:
 
 # A landing beside the queue names its own result, passed with nothing run, and the result that covers it
 
-Status: accepted by the user on 2026-11-06, in the words "Approve: push the statement change and start its code", given on the design of the change `a-landing-beside-the-queue-names-the-verdict-that-covers-it` and the statement's amendment, now on agentplot/blueprints main at eb0d3eb (23, 140, S68). Proposed on 2026-11-05 by that change's construct stage, from its brief: the trailer's words go into every branch's history, which is never rewritten (23), so they were the user's to accept.
+Status: accepted by the user on 2026-11-06, in the words "Approve: push the statement change and start its code", given on the design of the change `a-landing-beside-the-queue-names-the-verdict-that-covers-it` and the statement's amendment, now on boomdrivedev/blueprints main at eb0d3eb (23, 140, S68). Proposed on 2026-11-05 by that change's construct stage, from its brief: the trailer's words go into every branch's history, which is never rewritten (23), so they were the user's to accept.
 
 Deciders: the user, accepting on 2026-11-06; the construct stage of `a-landing-beside-the-queue-names-the-verdict-that-covers-it`, proposing.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 15, 22, 23, 26, 70, 118, 140, S68, C.5, C.6, and 23, 140 and S68 as agentplot/blueprints main words them at eb0d3eb; the drafted landing claims, 142 to 146, proposed 2026-11-01 and not accepted, on the branch `research/sluice-signs-its-landings`; records 0006, 0044, 0075; rules core.11, core.14, core.17, core.39, core.43; `crates/sluice-core/src/text.rs` `beside_message`, `crates/sluice-core/src/step.rs` `choose_beside` and `perform_landing`, `crates/sluice/src/profiles/github/render.rs` `head` and `pulls.rs` `outcome_shown` as main held them at 3f5aed5f; afterthought/crew `plugin/lib/kit.py` `verification` and `plugin/lib/gather.py`'s read of `Sluice-Result`; afterthought/swancloud `packages/swancloud-releaser/releaser.sh`'s `case $result in passed*`; switchboard-kit's #1319 at b01e966.
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` clauses 15, 22, 23, 26, 70, 118, 140, S68, C.5, C.6, and 23, 140 and S68 as boomdrivedev/blueprints main words them at eb0d3eb; the drafted landing claims, 142 to 146, proposed 2026-11-01 and not accepted, on the branch `research/sluice-signs-its-landings`; records 0006, 0044, 0075; rules core.11, core.14, core.17, core.39, core.43; `crates/sluice-core/src/text.rs` `beside_message`, `crates/sluice-core/src/step.rs` `choose_beside` and `perform_landing`, `crates/sluice/src/profiles/github/render.rs` `head` and `pulls.rs` `outcome_shown` as main held them at 3f5aed5f; afterthought/crew `plugin/lib/kit.py` `verification` and `plugin/lib/gather.py`'s read of `Sluice-Result`; afterthought/swancloud `packages/swancloud-releaser/releaser.sh`'s `case $result in passed*`; switchboard-kit's #1319 at b01e966.
 
 ## Context and problem statement
 
@@ -64,7 +64,7 @@ Once this lands, crew reads a landing beside's trailer as green, `sluice's verdi
 
 ### Consequences
 
-- Clauses 23, 140 and S68 are amended on agentplot/blueprints main at eb0d3eb, pushed on the user's word before the code lands (core.12). Rule core.39 and its details name the landing commit's result.
+- Clauses 23, 140 and S68 are amended on boomdrivedev/blueprints main at eb0d3eb, pushed on the user's word before the code lands (core.12). Rule core.39 and its details name the landing commit's result.
 - `branch.json` gains the result covering its revision. A submission landed beside, its outbox item and its delivered outcome carry it, so the forge can show it. Each is optional and absent in state written before; an older sluice reading them passes them by.
 - On a branch whose state was written before this, the first work no required check reads after the upgrade takes the queue once. Its landing names the result every landing beside after it names.
 - A reader that looks for `landed beside the queue` at the start of the trailer no longer finds it there; the words are kept after `passed`.

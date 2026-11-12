@@ -9,10 +9,10 @@ decision-makers:
 
 # A team that lands by pull request keeps its way whole, and sluice alone lands it
 
-Status: accepted by the user on 2026-10-23, on their card: "No new mode: keep pull requests whole, minus the merge button." Clause 127 and S62 carry it (agentplot/blueprints f15ec1c). This record, written 2026-11-02, sets the decision down, and moves no clause.
+Status: accepted by the user on 2026-10-23, on their card: "No new mode: keep pull requests whole, minus the merge button." Clause 127 and S62 carry it (boomdrivedev/blueprints f15ec1c). This record, written 2026-11-02, sets the decision down, and moves no clause.
 
 Deciders: the user, on that card, from an onboarding call of 2026-10-20.
-Sources: statement clauses 113, 118, 120, 127, S62, C.4's pushed refs row, C.5's pull request row, C.7 and I1 in agentplot/blueprints `design/sluice/requirements.md`; ADRs 0021, 0052; `plugins/sluice/skills/setting-up-sluice/SKILL.md`, step 3 of its questions and "A branch the team lands by pull request".
+Sources: statement clauses 113, 118, 120, 127, S62, C.4's pushed refs row, C.5's pull request row, C.7 and I1 in boomdrivedev/blueprints `design/sluice/requirements.md`; ADRs 0021, 0052; `plugins/sluice/skills/setting-up-sluice/SKILL.md`, step 3 of its questions and "A branch the team lands by pull request".
 
 ## Context and problem statement
 

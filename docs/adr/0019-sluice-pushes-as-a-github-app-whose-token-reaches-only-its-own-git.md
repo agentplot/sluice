@@ -10,7 +10,7 @@ decision-makers:
 # sluice pushes as a GitHub App whose token reaches only its own git
 
 Deciders: the user, planning the change `github-app` and ruling on how `sluice forge check` reads a ruleset's bypass list, 2026-10-14.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clause C.4; `design/sluice/proposals/many-hosts-2.md` (C.4: "an identity no session on any host can use"); ADRs 0003, 0017.
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` clause C.4; `design/sluice/proposals/many-hosts-2.md` (C.4: "an identity no session on any host can use"); ADRs 0003, 0017.
 
 ## Context and problem statement
 

@@ -10,7 +10,7 @@ decision-makers:
 # A Rust core that is one step function, run as a loop or stepped by a driver
 
 Deciders: the user, in the requirements interview of 2026-10-08.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 26, 46, 51, 52, S10 and section 9; ADR 0003.
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` clauses 26, 46, 51, 52, S10 and section 9; ADR 0003.
 
 ## Context and problem statement
 

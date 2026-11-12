@@ -10,7 +10,7 @@ decision-makers:
 # Telemetry sends a failure's output, scrubbed, and only as asked
 
 Deciders: the user, planning sluice's logs, 2026-10-16.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 16, 20, 26, 31, 32, 38, 53, 66; rules core.1, core.2, core.9, core.10, core.11, core.14, core.19; ADRs 0010, 0014.
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` clauses 16, 20, 26, 31, 32, 38, 53, 66; rules core.1, core.2, core.9, core.10, core.11, core.14, core.19; ADRs 0010, 0014.
 
 ## Context and problem statement
 

@@ -10,7 +10,7 @@ decision-makers:
 # A pool is the check seam's launched executor, and GitHub Actions is its one profile
 
 Deciders: the operator, ratifying many-hosts-3 and ruling on the `peers` design, 2026-10-19.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 75, 77, 87, 88, 107, 111, 113, C.2, C.8; rules core.1 to core.3, core.10; ADRs 0003, 0010, 0019; the OpenSpec change `peers`, design D7.
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` clauses 75, 77, 87, 88, 107, 111, 113, C.2, C.8; rules core.1 to core.3, core.10; ADRs 0003, 0010, 0019; the OpenSpec change `peers`, design D7.
 
 ## Context and problem statement
 

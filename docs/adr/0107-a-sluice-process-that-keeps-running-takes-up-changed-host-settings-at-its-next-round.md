@@ -14,7 +14,7 @@ Status: accepted by the user on 2026-11-09 in agentplot-design's pane, for the d
 
 Deciders: the user, 2026-11-09, reading deneb's Boomdrive configuration, where a host keeps its own restart of sluice's drivers because sluice reads its settings only as it starts: "we need to externalize the things that can be and make sense to be externalized".
 
-Sources: the statement's clause 135 and principle 5; records 0093 and 0098; rules core.31 and core.51; `crates/sluice/src/instance.rs`, `Instance::read`, and `crates/sluice/src/profiles/mod.rs`, which reads it once as a process opens the host's bound; agentplot/blueprints `design/principles.md` 14 (553bb8c); agentplot/boomdrive record 0034, point 5; afterthought/swancloud `modules/sluice-driver-darwin.nix`, the restart of each running `sluice run` on a change of the file it links.
+Sources: the statement's clause 135 and principle 5; records 0093 and 0098; rules core.31 and core.51; `crates/sluice/src/instance.rs`, `Instance::read`, and `crates/sluice/src/profiles/mod.rs`, which reads it once as a process opens the host's bound; boomdrivedev/blueprints `design/principles.md` 14 (553bb8c); boomdrivedev/boomdrive record 0034, point 5; afterthought/swancloud `modules/sluice-driver-darwin.nix`, the restart of each running `sluice run` on a change of the file it links.
 
 Amended 2026-11-09 by the change `sluice-takes-up-changed-settings-between-rounds`, below: what the build of `sluice run` chose within the decision.
 
@@ -22,7 +22,7 @@ Amended 2026-11-10 by the change `a-kept-run-hands-over-what-it-cannot-take-up`,
 
 ## Context and problem statement
 
-A sluice process reads the host's own settings, `~/.config/sluice/config.toml`, once, as it starts, and keeps them until it ends (core.51 leaves that standing). A command ends in seconds. sluice's host process ends once no queue has work in play (135), but while work is in play it keeps what it read, and so do `sluice run` and a daemon an operator keeps (137). A change of the bound, the caches, the forge's app, the signer or the telemetry (record 0106) therefore waits for every such process to end. So a host that changes the file restarts sluice's processes itself: swancloud's home-manager restarts each running `sluice run` when the file changes. Boomdrive's set links the file in its activation, with no such restart, and left the restart to the host (agentplot/boomdrive record 0034, point 5). Each host that runs sluice would keep a restart of its own.
+A sluice process reads the host's own settings, `~/.config/sluice/config.toml`, once, as it starts, and keeps them until it ends (core.51 leaves that standing). A command ends in seconds. sluice's host process ends once no queue has work in play (135), but while work is in play it keeps what it read, and so do `sluice run` and a daemon an operator keeps (137). A change of the bound, the caches, the forge's app, the signer or the telemetry (record 0106) therefore waits for every such process to end. So a host that changes the file restarts sluice's processes itself: swancloud's home-manager restarts each running `sluice run` when the file changes. Boomdrive's set links the file in its activation, with no such restart, and left the restart to the host (boomdrivedev/boomdrive record 0034, point 5). Each host that runs sluice would keep a restart of its own.
 
 ## Considered options
 
@@ -39,7 +39,7 @@ Not taken: options 2 and 3, above.
 ## Consequences
 
 - The statement's clause 135 says it, and rule core.54 holds it. The unit `sluice-takes-up-changed-settings-between-rounds` builds it.
-- No host keeps a restart of sluice for its settings: swancloud's restart of its drivers, and any like it, goes once a sluice with this runs there (agentplot/boomdrive record 0034, point 5, as amended the same day).
+- No host keeps a restart of sluice for its settings: swancloud's restart of its drivers, and any like it, goes once a sluice with this runs there (boomdrivedev/boomdrive record 0034, point 5, as amended the same day).
 - The runner needs no such change: Boomdrive's set gives it its file on its command line (the bolt `the-boomdrive-flake-configures-the-whole-host`), so a changed file is a changed job, which nix-darwin and the set's activation restart.
 
 ## Amendment, 2026-11-09: what the build of `sluice run` chose
@@ -48,7 +48,7 @@ Status: accepted on 2026-11-09 as the choices of the change `sluice-takes-up-cha
 
 Deciders: the design and the code stage of the change `sluice-takes-up-changed-settings-between-rounds`.
 
-Sources: the statement's clause 135, as amended at agentplot/blueprints c619438; clauses 26, 71, 78, 87, 129 and 136; rules core.14, core.22, core.31, core.51 and core.54; the change's design D1 to D7; `crates/sluice/src/host_settings.rs`, `crates/sluice/src/instance.rs` (`Instance::changed_tables`), `crates/sluice/src/lib.rs` (`Driving`, `drive`) and `crates/sluice/src/main.rs` (`keep_running`).
+Sources: the statement's clause 135, as amended at boomdrivedev/blueprints c619438; clauses 26, 71, 78, 87, 129 and 136; rules core.14, core.22, core.31, core.51 and core.54; the change's design D1 to D7; `crates/sluice/src/host_settings.rs`, `crates/sluice/src/instance.rs` (`Instance::changed_tables`), `crates/sluice/src/lib.rs` (`Driving`, `drive`) and `crates/sluice/src/main.rs` (`keep_running`).
 
 ### Context
 
@@ -75,7 +75,7 @@ Status: accepted on 2026-11-10 as the choices of the change `a-kept-run-hands-ov
 
 Deciders: the design and the code stage of the change `a-kept-run-hands-over-what-it-cannot-take-up`.
 
-Sources: the statement's clause 135, as amended at agentplot/blueprints c619438, and 151; clauses 26, 71, 87 and 129; principles 5 and 14; records 0093 and 0106; rules core.14, core.25, core.31, core.53 and core.54; the change's design D1 to D7; `crates/sluice/src/instance.rs` (`Instance::changed_tables`, `AFRESH`), `crates/sluice/src/host_settings.rs` (`HostSettings::handed`), `crates/sluice/src/hand_over.rs`, `crates/sluice/src/reader.rs` (`Driver::hand_over`, `Driver::adopt`), `crates/sluice/src/runs.rs` (`unreaped`, `reap_handed`), `crates/sluice/src/lib.rs` (`Driving::hand_over`, `Driving::handed`) and `crates/sluice/src/main.rs` (`keep_running`).
+Sources: the statement's clause 135, as amended at boomdrivedev/blueprints c619438, and 151; clauses 26, 71, 87 and 129; principles 5 and 14; records 0093 and 0106; rules core.14, core.25, core.31, core.53 and core.54; the change's design D1 to D7; `crates/sluice/src/instance.rs` (`Instance::changed_tables`, `AFRESH`), `crates/sluice/src/host_settings.rs` (`HostSettings::handed`), `crates/sluice/src/hand_over.rs`, `crates/sluice/src/reader.rs` (`Driver::hand_over`, `Driver::adopt`), `crates/sluice/src/runs.rs` (`unreaped`, `reap_handed`), `crates/sluice/src/lib.rs` (`Driving::hand_over`, `Driving::handed`) and `crates/sluice/src/main.rs` (`keep_running`).
 
 ### Context
 

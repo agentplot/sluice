@@ -12,7 +12,7 @@ decision-makers:
 Status: accepted by the user on 2026-10-27, on their card ("Approved").
 
 Deciders: madswan-design, on swancloud-design's ruling of 2026-10-26 that sluice's half of deneb's levelling is where `sluice branch create` reads a branch's policy, and on madswan-planner's signal 2026-10-26-madswan-planner-ec418792/01; the user's yes is asked on the record's card.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 56, 104, 121, 124, C.7 pushed refs; ADRs 0017, 0026, 0053; rules core.4, core.5, core.15, core.20; `crates/sluice/src/profiles/branches.rs` `remote`, `remote_if_made_from` and `policy_of` as origin/main held them on 2026-10-26 (ef6d414b); crew's rule `plan.18`.
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` clauses 56, 104, 121, 124, C.7 pushed refs; ADRs 0017, 0026, 0053; rules core.4, core.5, core.15, core.20; `crates/sluice/src/profiles/branches.rs` `remote`, `remote_if_made_from` and `policy_of` as origin/main held them on 2026-10-26 (ef6d414b); crew's rule `plan.18`.
 
 ## Context and problem statement
 

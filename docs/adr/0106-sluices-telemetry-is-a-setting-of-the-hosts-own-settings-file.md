@@ -22,7 +22,7 @@ Amended 2026-11-09: the construct stage of the change `sluices-telemetry-is-a-ho
 - **With a table, sluice's resource is its own:** `OTEL_RESOURCE_ATTRIBUTES` and `OTEL_SERVICE_NAME` are not read (rule core.53). `host.name` is the host's own name, not `[peers] name`, which names a host among those that share a remote.
 - **`--otel` takes an optional value,** so `SLUICE_OTEL=0` or `--otel=false` turns a table's `send` off for one command.
 
-Sources: records 0014 (as amended 2026-11-08) and 0022; rule core.51 and record 0098; `crates/sluice/src/lib.rs`, the telemetry flags and their variables, and `crates/sluice/src/instance.rs`, the host's own settings; `docs/telemetry.md`; agentplot/blueprints `design/principles.md` 13 and 14 (553bb8c); agentplot/boomdrive record 0034, point 4; afterthought/swancloud `packages/sluice-telemetry`, `modules/telemetry-darwin.nix` and `lib/telemetry.nix` at its main, and its record 0061 as amended 2026-11-09.
+Sources: records 0014 (as amended 2026-11-08) and 0022; rule core.51 and record 0098; `crates/sluice/src/lib.rs`, the telemetry flags and their variables, and `crates/sluice/src/instance.rs`, the host's own settings; `docs/telemetry.md`; boomdrivedev/blueprints `design/principles.md` 13 and 14 (553bb8c); boomdrivedev/boomdrive record 0034, point 4; afterthought/swancloud `packages/sluice-telemetry`, `modules/telemetry-darwin.nix` and `lib/telemetry.nix` at its main, and its record 0061 as amended 2026-11-09.
 
 ## Context and problem statement
 
@@ -62,5 +62,5 @@ Not taken: options 2 and 3, above; a setting in a policy, since where telemetry 
 ## Consequences
 
 - The statement's clause 151 says it, and rule core.53 holds it. The unit `sluices-telemetry-is-a-host-setting` builds it, with `services.sluice.settings.telemetry` declared in the module so its options carry their descriptions.
-- A host that wraps sluice for its telemetry, swancloud's `packages/sluice-telemetry`, writes the table instead once a sluice with this runs there, and drops the wrapper. Boomdrive's set then gives such a host its own sluice (agentplot/boomdrive record 0034, point 4, as amended the same day).
+- A host that wraps sluice for its telemetry, swancloud's `packages/sluice-telemetry`, writes the table instead once a sluice with this runs there, and drops the wrapper. Boomdrive's set then gives such a host its own sluice (boomdrivedev/boomdrive record 0034, point 4, as amended the same day).
 - No other tool of the family sends telemetry today. One that comes to takes its settings from its own file the same way (principle 14), by a record of its own.

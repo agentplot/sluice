@@ -10,7 +10,7 @@ decision-makers:
 # A branch read without its last landing is held
 
 Deciders: the user, after a bolt's round formed on a remote's older copy and dropped two landings, 2026-10-23.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 10, 17, 22, 24, 26, 45, 104, 105, 121, C.4 pushed refs, C.5 branch, S8, S57; ADRs 0005, 0017, 0026, 0046; rules core.2, core.4, core.6, core.11, core.14, core.15.
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` clauses 10, 17, 22, 24, 26, 45, 104, 105, 121, C.4 pushed refs, C.5 branch, S8, S57; ADRs 0005, 0017, 0026, 0046; rules core.2, core.4, core.6, core.11, core.14, core.15.
 
 ## Context and problem statement
 

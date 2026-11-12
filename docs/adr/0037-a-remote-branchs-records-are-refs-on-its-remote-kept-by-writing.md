@@ -10,7 +10,7 @@ decision-makers:
 # A remote branch's records are refs on its remote, kept by writing them
 
 Deciders: the operator, ratifying many-hosts-3 and ruling on the `peers` design, 2026-10-19.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 58 to 63, 72 to 77, 80, 82, 109, C.6, C.8; rules core.11, core.14; ADRs 0005, 0008, 0011, 0017; the OpenSpec change `peers`, design D1 to D4 and D10.
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` clauses 58 to 63, 72 to 77, 80, 82, 109, C.6, C.8; rules core.11, core.14; ADRs 0005, 0008, 0011, 0017; the OpenSpec change `peers`, design D1 to D4 and D10.
 
 ## Context and problem statement
 

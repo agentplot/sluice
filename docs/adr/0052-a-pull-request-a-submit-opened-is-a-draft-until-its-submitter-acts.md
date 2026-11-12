@@ -10,7 +10,7 @@ decision-makers:
 # A pull request a submit opened is a draft until its submitter acts
 
 Deciders: the user, after a bolt's pull request landed on `main` without their word, 2026-10-23.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 120, 54, 67, C.5 pull request, S56; ADRs 0019, 0021; rules core.2, core.11, core.14.
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` clauses 120, 54, 67, C.5 pull request, S56; ADRs 0019, 0021; rules core.2, core.11, core.14.
 
 ## Context and problem statement
 

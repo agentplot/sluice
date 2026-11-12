@@ -10,7 +10,7 @@ decision-makers:
 # A run's output is timed as it arrives, and the text views say a combination's progress
 
 Deciders: the operator, choosing where a running task's time comes from, 2026-10-21.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 16, 26, 32, 61, 62, C.2; rules core.7, core.9, core.10, core.11, core.14; ADRs 0023, 0028.
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` clauses 16, 26, 32, 61, 62, C.2; rules core.7, core.9, core.10, core.11, core.14; ADRs 0023, 0028.
 
 ## Context and problem statement
 

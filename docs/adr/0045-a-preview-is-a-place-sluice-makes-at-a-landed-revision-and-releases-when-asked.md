@@ -10,7 +10,7 @@ decision-makers:
 # A preview is a place sluice makes at a landed revision and releases when asked
 
 Deciders: the user, exploring previews for bolt landings and building the OpenSpec change `previews`, 2026-10-14.
-Sources: `agentplot/blueprints:design/sluice/proposals/previews-1.md` clauses 98 to 103 and S30 to S35; `agentplot/blueprints:design/sluice/requirements.md` clauses 25, 31, 34, 56, 66, 71; ADRs 0010, 0016, 0018, 0020; the fleet's dev servers under portless, whose `.localhost` names an identity provider's wildcard redirect accepts.
+Sources: `boomdrivedev/blueprints:design/sluice/proposals/previews-1.md` clauses 98 to 103 and S30 to S35; `boomdrivedev/blueprints:design/sluice/requirements.md` clauses 25, 31, 34, 56, 66, 71; ADRs 0010, 0016, 0018, 0020; the fleet's dev servers under portless, whose `.localhost` names an identity provider's wildcard redirect accepts.
 
 ## Context and problem statement
 

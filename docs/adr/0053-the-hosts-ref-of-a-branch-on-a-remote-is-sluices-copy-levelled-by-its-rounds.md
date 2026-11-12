@@ -10,7 +10,7 @@ decision-makers:
 # The host's ref of a branch on a remote is sluice's copy, levelled by its rounds
 
 Deciders: the user, after a bolt's landing worktree on deneb could not submit to `main` and every fetch's packing of refs was refused there, 2026-10-23, and a fetch into a bare repository run from outside it aborted on another host, 2026-10-24.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 1, 121, 122, 124, C.4 pushed refs, S58, S64; ADRs 0017, 0024, 0048; rules core.1, core.2, core.4, core.5, core.11, core.14, core.20.
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` clauses 1, 121, 122, 124, C.4 pushed refs, S58, S64; ADRs 0017, 0024, 0048; rules core.1, core.2, core.4, core.5, core.11, core.14, core.20.
 
 ## Context and problem statement
 

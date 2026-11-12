@@ -10,7 +10,7 @@ decision-makers:
 # The records are a sixth seam, so peers and a central server are profiles
 
 Deciders: the user, in the requirements interview of 2026-10-09.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 26, 53, 57 to 63, C.6, C.8; ADRs 0003, 0005, 0007; flywheel-next clause 232.
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` clauses 26, 53, 57 to 63, C.6, C.8; ADRs 0003, 0005, 0007; flywheel-next clause 232.
 
 ## Context and problem statement
 

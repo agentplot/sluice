@@ -10,7 +10,7 @@ decision-makers:
 # A pull request's submission names the branch it was opened from
 
 Deciders: the user, reviewing sluice's command line for agents, 2026-10-16.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 3, 47; ADR 0023; rules core.1, core.11, core.14.
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` clauses 3, 47; ADR 0023; rules core.1, core.11, core.14.
 
 ## Context and problem statement
 

@@ -10,7 +10,7 @@ decision-makers:
 # One queue design, two instances, and a session only submits
 
 Deciders: the user, in the merge-queue exploration of 2026-10-08.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 1, 10, 11, 17, 18, 22, 27; `agentplot/blueprints:design/flywheel-next/requirements.md` clauses 38, 39, 42, 43, 53; Zuul's dependent pipeline manager (zuul-ci.org/docs/zuul/latest/gating.html); GitHub's merge queue (docs.github.com, "Managing a merge queue"); Uber, "Keeping Master Green at Scale", EuroSys 2019.
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` clauses 1, 10, 11, 17, 18, 22, 27; `boomdrivedev/blueprints:design/flywheel-next/requirements.md` clauses 38, 39, 42, 43, 53; Zuul's dependent pipeline manager (zuul-ci.org/docs/zuul/latest/gating.html); GitHub's merge queue (docs.github.com, "Managing a merge queue"); Uber, "Keeping Master Green at Scale", EuroSys 2019.
 
 ## Context and problem statement
 

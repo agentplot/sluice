@@ -10,7 +10,7 @@ decision-makers:
 # An agent waits on its submission with sluice wait
 
 Deciders: the operator, from a design agent's report of its submissions to a sluice-protected main, 2026-10-21.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 1, 5, 20, 26, 49 to 51, 53; rules core.4, core.14; ADRs 0011, 0023.
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` clauses 1, 5, 20, 26, 49 to 51, 53; rules core.4, core.14; ADRs 0011, 0023.
 
 ## Context and problem statement
 

@@ -10,7 +10,7 @@ decision-makers:
 # A landing is a merge commit carrying its verdict
 
 Deciders: the user, in the requirements interview of 2026-10-08.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 23, 25, 44, C.4 and C.6.
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` clauses 23, 25, 44, C.4 and C.6.
 
 ## Context and problem statement
 

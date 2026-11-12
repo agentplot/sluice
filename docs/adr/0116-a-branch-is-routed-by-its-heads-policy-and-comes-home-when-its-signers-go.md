@@ -13,7 +13,7 @@ Status: accepted on 2026-11-12 by agentplot-design. It is the design agent's own
 
 Its half on a branch coming home waits on the redesign of a queue's home that record 0117 calls for, and its unit is not built. (Record 0117, accepted by the user on 2026-11-12.)
 
-Sources: the statement's C.6, as amended on agentplot/blueprints's branch `design/sluice-a-branch-comes-home-when-its-signers-go` (`38b00d5`); record 0037; `crates/sluice/src/profiles/branches.rs` `policy_of` and `routing`, `crates/sluice/src/profiles/records.rs` `route`, `lock` and `migrate`, at `v0.78.1` and `a9edcd90`; agentplot-ops's and wldn-ops's readings of switchboard-kit on chuck-herdr-alpha, 2026-11-12.
+Sources: the statement's C.6, as amended on boomdrivedev/blueprints's branch `design/sluice-a-branch-comes-home-when-its-signers-go` (`38b00d5`); record 0037; `crates/sluice/src/profiles/branches.rs` `policy_of` and `routing`, `crates/sluice/src/profiles/records.rs` `route`, `lock` and `migrate`, at `v0.78.1` and `a9edcd90`; agentplot-ops's and wldn-ops's readings of switchboard-kit on chuck-herdr-alpha, 2026-11-12.
 
 ## Context and problem statement
 
@@ -41,4 +41,4 @@ Three things in the code meet there:
 
 - A take-main that brings a policy with no signers into a bolt brings its queue home in the same round. No submission is stranded, and none needs submitting again.
 - A long-lived process and a new one read the same route for a branch.
-- The statement's C.6 is amended on agentplot/blueprints's branch above, which the user pushes.
+- The statement's C.6 is amended on boomdrivedev/blueprints's branch above, which the user pushes.

@@ -10,7 +10,7 @@ decision-makers:
 # A submission whose gate requires a check its runner never runs is refused
 
 Deciders: the operator, planning what a submit says of a gate that can never pass, 2026-10-23.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 2, 15, 27, 56; rules core.1, core.2, core.15, core.20; ADR 0044.
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` clauses 2, 15, 27, 56; rules core.1, core.2, core.15, core.20; ADR 0044.
 
 ## Context and problem statement
 

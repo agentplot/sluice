@@ -9,8 +9,8 @@ decision-makers:
 
 # The protection reads only what guarding needs
 
-Deciders: the user, in clause 124 of the statement (agentplot/blueprints 1340786), after a host's settings gained `[runs] cores` a minute before its hooks were moved to the newer sluice, and every git ref update in every guarded repository on that host failed for that minute, 2026-10-25.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 1, 124, C.4, C.6; ADRs 0003, 0053; rules core.2, core.4.
+Deciders: the user, in clause 124 of the statement (boomdrivedev/blueprints 1340786), after a host's settings gained `[runs] cores` a minute before its hooks were moved to the newer sluice, and every git ref update in every guarded repository on that host failed for that minute, 2026-10-25.
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` clauses 1, 124, C.4, C.6; ADRs 0003, 0053; rules core.2, core.4.
 
 ## Context and problem statement
 

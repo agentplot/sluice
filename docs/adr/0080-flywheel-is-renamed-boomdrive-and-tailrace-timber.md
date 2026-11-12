@@ -42,7 +42,7 @@ Option 1, on the user's word. The names:
 
 In sluice that makes Boomdrive the driver and its effects in ADRs 0003, 0005, 0010 and 0045 and in `docs/examples/README.md`, the product whose recutils records ADR 0007 set aside, the family's name on the site's start page and in rule core.26, and `boomdrive` the string rule core.1 keeps out of the core; boomdrive-web the repository of ADR 0004's principle and of rule core.31's incident; and timber the tool of ADR 0049.
 
-One choice is this record's own. agentplot/flywheel-next, the repository whose crates and storage design ADRs 0002, 0003, 0008, 0009 and 0028 and the phase 1 plans cite, and its statement at `design/flywheel-next/requirements.md` in agentplot/blueprints, are renamed by no line of the mapping and are reached at those names today, so their citations keep them, as does ADR 0069's account of that repository's checkout on deneb. Renaming them would cite a repository and a path that do not exist. When either is renamed, the citations follow.
+One choice is this record's own. agentplot/flywheel-next, the repository whose crates and storage design ADRs 0002, 0003, 0008, 0009 and 0028 and the phase 1 plans cite, and its statement at `design/flywheel-next/requirements.md` in boomdrivedev/blueprints, are renamed by no line of the mapping and are reached at those names today, so their citations keep them, as does ADR 0069's account of that repository's checkout on deneb. Renaming them would cite a repository and a path that do not exist. When either is renamed, the citations follow.
 
 Option 2 leaves a reader of a record told of a product, a repository and a tool by names nothing answers to.
 

@@ -10,7 +10,7 @@ decision-makers:
 # A session run's last result is kept on its place
 
 Deciders: the operator, reviewing what the herdr and Claude Code plugins show of a worktree's runs, 2026-10-16.
-Sources: `agentplot/blueprints:design/sluice/proposals/session-runs-1.md` clauses 92, 93, 97 (amended); rules core.2, core.7, core.11, core.14, core.18, core.19.
+Sources: `boomdrivedev/blueprints:design/sluice/proposals/session-runs-1.md` clauses 92, 93, 97 (amended); rules core.2, core.7, core.11, core.14, core.18, core.19.
 
 ## Context and problem statement
 
