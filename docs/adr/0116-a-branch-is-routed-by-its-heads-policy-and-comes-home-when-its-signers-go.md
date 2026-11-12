@@ -11,7 +11,7 @@ decision-makers:
 
 Status: accepted on 2026-11-12 by agentplot-design. It is the design agent's own choice, decided by the statement's 26 and C.6 and record 0037. It is cheap to change and holds no choice of the user's.
 
-Its half on a branch coming home waits on the redesign of a queue's home that record 0117 calls for, and its unit is not built. (Proposed 2026-11-12, record 0117, on the user's card; accepted only on their yes.)
+Its half on a branch coming home waits on the redesign of a queue's home that record 0117 calls for, and its unit is not built. (Record 0117, accepted by the user on 2026-11-12.)
 
 Sources: the statement's C.6, as amended on agentplot/blueprints's branch `design/sluice-a-branch-comes-home-when-its-signers-go` (`38b00d5`); record 0037; `crates/sluice/src/profiles/branches.rs` `policy_of` and `routing`, `crates/sluice/src/profiles/records.rs` `route`, `lock` and `migrate`, at `v0.78.1` and `a9edcd90`; agentplot-ops's and wldn-ops's readings of switchboard-kit on chuck-herdr-alpha, 2026-11-12.
 
