@@ -226,6 +226,9 @@ pub enum AmendRefusal {
     /// On none of the branches read: the branches that could not be read,
     /// none when every branch was (26).
     NoSuchSubmission(Vec<Unread>),
+    /// On more than one branch: it names none of them alone, and nothing
+    /// is changed (26; record 0114).
+    Several(Several),
     /// A session may not change another's order (actors table).
     NotYours,
     /// Under test or judged: its order is fixed (6).
@@ -235,13 +238,15 @@ pub enum AmendRefusal {
     UnknownAfter(Vec<u64>),
 }
 
-/// What a lookup by number found (26).
+/// What a lookup by number found (26; record 0114).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Lookup {
     Found(Submission),
     /// On none of the branches read: the branches that could not be read,
     /// none when every branch was.
     Unfound(Vec<Unread>),
+    /// On more than one branch, so it names none of them alone.
+    Several(Several),
 }
 
 /// How a withdrawal went: done now, or done before (5, 48).
@@ -257,6 +262,8 @@ pub enum Withdrew {
 pub enum WithdrawRefusal {
     /// As [`AmendRefusal::NoSuchSubmission`].
     NoSuchSubmission(Vec<Unread>),
+    /// As [`AmendRefusal::Several`].
+    Several(Several),
     NotYours,
     /// Landed or landing (5).
     Final(State),
@@ -1029,7 +1036,8 @@ impl Sluice<'_> {
     }
 
     /// 47b, 3, 6: change a queued submission's `after` or priority, until
-    /// it is under test.
+    /// it is under test. A number more than one branch holds is refused,
+    /// naming each, and nothing is changed (26; record 0114).
     pub fn amend(
         &self,
         id: u64,
@@ -1037,9 +1045,37 @@ impl Sluice<'_> {
         after: Option<Vec<u64>>,
         priority: Option<i64>,
     ) -> Result<Result<(), AmendRefusal>> {
-        let branch = match self.find(id)? {
+        self.amend_in(None, id, by, after, priority)
+    }
+
+    /// [`Sluice::amend`] of `branch`'s submission `id`, reading `branch`
+    /// alone: a branch that holds no such number answers
+    /// `NoSuchSubmission(vec![])`, and one that cannot be read names
+    /// itself alone (26; record 0114).
+    pub fn amend_on(
+        &self,
+        branch: &str,
+        id: u64,
+        by: &Requester,
+        after: Option<Vec<u64>>,
+        priority: Option<i64>,
+    ) -> Result<Result<(), AmendRefusal>> {
+        self.amend_in(Some(branch), id, by, after, priority)
+    }
+
+    /// [`Sluice::amend`], on `on` alone where it is named.
+    fn amend_in(
+        &self,
+        on: Option<&str>,
+        id: u64,
+        by: &Requester,
+        after: Option<Vec<u64>>,
+        priority: Option<i64>,
+    ) -> Result<Result<(), AmendRefusal>> {
+        let branch = match self.find(id, on)? {
             Found::On(branch) => branch,
             Found::Unfound(unread) => return Ok(Err(AmendRefusal::NoSuchSubmission(unread))),
+            Found::Several(several) => return Ok(Err(AmendRefusal::Several(several))),
         };
         // Finished, it is past changing: refused as it was before it moved.
         if let Some(s) = self.only_finished(&branch, id)? {
@@ -1092,11 +1128,34 @@ impl Sluice<'_> {
     }
 
     /// 48, 5: withdraw a submission, by its submitter, its planner or the
-    /// operator.
+    /// operator. A number more than one branch holds is refused, naming
+    /// each, and nothing is withdrawn (26; record 0114).
     pub fn withdraw(&self, id: u64, by: &Requester) -> Result<Result<Withdrew, WithdrawRefusal>> {
-        let branch = match self.find(id)? {
+        self.withdraw_in(None, id, by)
+    }
+
+    /// [`Sluice::withdraw`] of `branch`'s submission `id`, reading
+    /// `branch` alone, as [`Sluice::amend_on`] reads it (26; record 0114).
+    pub fn withdraw_on(
+        &self,
+        branch: &str,
+        id: u64,
+        by: &Requester,
+    ) -> Result<Result<Withdrew, WithdrawRefusal>> {
+        self.withdraw_in(Some(branch), id, by)
+    }
+
+    /// [`Sluice::withdraw`], on `on` alone where it is named.
+    fn withdraw_in(
+        &self,
+        on: Option<&str>,
+        id: u64,
+        by: &Requester,
+    ) -> Result<Result<Withdrew, WithdrawRefusal>> {
+        let branch = match self.find(id, on)? {
             Found::On(branch) => branch,
             Found::Unfound(unread) => return Ok(Err(WithdrawRefusal::NoSuchSubmission(unread))),
+            Found::Several(several) => return Ok(Err(WithdrawRefusal::Several(several))),
         };
         // Withdrawn or landed is final (5): answered from the records, with
         // no lock taken and nothing written. One withdrawn already was asked
@@ -1150,9 +1209,22 @@ impl Sluice<'_> {
     }
 
     /// 49, 26: a submission as last written, read with no step running,
-    /// from the branches that read (rule core.11).
+    /// from the branches that read (rule core.11): none where no branch
+    /// read holds the number, or where more than one does, since such a
+    /// number names none of them alone (record 0114).
     pub fn state(&self, id: u64) -> Result<Option<Submission>> {
-        let Found::On(branch) = self.find(id)? else {
+        self.state_in(None, id)
+    }
+
+    /// [`Sluice::state`] of `branch`'s submission `id`, reading `branch`
+    /// alone, whatever other branch holds the number (26; record 0114).
+    pub fn state_on(&self, branch: &str, id: u64) -> Result<Option<Submission>> {
+        self.state_in(Some(branch), id)
+    }
+
+    /// [`Sluice::state`], on `on` alone where it is named.
+    fn state_in(&self, on: Option<&str>, id: u64) -> Result<Option<Submission>> {
+        let Found::On(branch) = self.find(id, on)? else {
             return Ok(None);
         };
         self.held_on(&branch, id)
@@ -1169,21 +1241,42 @@ impl Sluice<'_> {
 
     /// 49, 26: submission `id` as `sluice wait <n>` and `sluice status
     /// <n>` look it up: as last written, or the submission it became when
-    /// its branch's records moved to its remote (design D10). A branch
-    /// that cannot be read is passed by, and named, with the words it was
-    /// refused with, only when `id` is on none of those read (rule
-    /// core.11).
+    /// its branch's records moved to its remote (design D10). Every branch
+    /// is read. A branch that cannot be read is passed by where one branch
+    /// read holds the number; named, with the words it was refused with,
+    /// where none does (rule core.11); and named beside the branches that
+    /// hold it where more than one does, since such a number names none of
+    /// them alone (record 0114).
     pub fn lookup(&self, id: u64) -> Result<Lookup> {
-        let mut unread = match self.find(id)? {
+        self.lookup_in(None, id)
+    }
+
+    /// [`Sluice::lookup`] of `branch`'s submission `id`, reading `branch`
+    /// alone: one that holds no such number, nor a submission it became,
+    /// answers `Unfound(vec![])`, and one that cannot be read is named
+    /// alone, so no other branch is ever named (26; record 0114).
+    pub fn lookup_on(&self, branch: &str, id: u64) -> Result<Lookup> {
+        self.lookup_in(Some(branch), id)
+    }
+
+    /// [`Sluice::lookup`], on `on` alone where it is named.
+    fn lookup_in(&self, on: Option<&str>, id: u64) -> Result<Lookup> {
+        let mut unread = match self.find(id, on)? {
             Found::On(branch) => match self.held_on(&branch, id)? {
                 Some(s) => return Ok(Lookup::Found(s)),
                 None => Vec::new(),
             },
             Found::Unfound(unread) => unread,
+            Found::Several(several) => return Ok(Lookup::Several(several)),
         };
-        Ok(match self.moved(id, &mut unread)? {
-            Some(s) => Lookup::Found(s),
-            None => Lookup::Unfound(unread),
+        let mut moved = self.moved(id, on, &mut unread)?;
+        Ok(match moved.len() {
+            0 => Lookup::Unfound(unread),
+            1 => Lookup::Found(moved.remove(0)),
+            _ => Lookup::Several(Several {
+                branches: moved.into_iter().map(|s| s.branch).collect(),
+                unread,
+            }),
         })
     }
 
@@ -1191,9 +1284,22 @@ impl Sluice<'_> {
     /// is: its record's `landed_as` once it landed; or, while the records
     /// hold the landing that lands it, its commit there once the branch is
     /// at the landing's revision or past it, as a round confirms a landing
-    /// (24). Read with no step running; it writes nothing (rule core.4).
+    /// (24). None where the number is on no branch read, or on more than
+    /// one, since it then names none of them alone (26; record 0114). Read
+    /// with no step running; it writes nothing (rule core.4).
     pub fn landed_as(&self, id: u64) -> Result<Option<Rev>> {
-        let Found::On(branch) = self.find(id)? else {
+        self.landed_as_in(None, id)
+    }
+
+    /// [`Sluice::landed_as`] of `branch`'s submission `id`, reading
+    /// `branch` alone (26; record 0114).
+    pub fn landed_as_on(&self, branch: &str, id: u64) -> Result<Option<Rev>> {
+        self.landed_as_in(Some(branch), id)
+    }
+
+    /// [`Sluice::landed_as`], on `on` alone where it is named.
+    fn landed_as_in(&self, on: Option<&str>, id: u64) -> Result<Option<Rev>> {
+        let Found::On(branch) = self.find(id, on)? else {
             return Ok(None);
         };
         let line = self.read_line(&branch)?;
@@ -1221,17 +1327,32 @@ impl Sluice<'_> {
 
     /// Design D10: the submission that `old`, a submission of this host's
     /// own records, became when the branch's records moved to its remote,
-    /// from the branches that read (26).
+    /// from the branches that read (26): none where it became one on more
+    /// than one branch, since it then names none of them alone (record
+    /// 0114).
     pub fn moved_to(&self, old: u64) -> Result<Option<Submission>> {
-        self.moved(old, &mut Vec::new())
+        let mut moved = self.moved(old, None, &mut Vec::new())?;
+        Ok((moved.len() == 1).then(|| moved.remove(0)))
     }
 
-    /// [`Sluice::moved_to`], adding to `unread` each branch it passed by
-    /// that is not there yet.
-    fn moved(&self, old: u64, unread: &mut Vec<Unread>) -> Result<Option<Submission>> {
-        for b in self.seams.state.branches()? {
+    /// The submission `old` became on each branch, read from every branch,
+    /// or from `on` alone where it is named, in the records' order, adding
+    /// to `unread` each branch it passed by that is not there yet (26;
+    /// record 0114).
+    fn moved(
+        &self,
+        old: u64,
+        on: Option<&str>,
+        unread: &mut Vec<Unread>,
+    ) -> Result<Vec<Submission>> {
+        let branches = match on {
+            Some(b) => vec![b.to_string()],
+            None => self.seams.state.branches()?,
+        };
+        let mut moved = Vec::new();
+        for b in branches {
             match self.moved_on(&b, old) {
-                Ok(Some(s)) => return Ok(Some(s)),
+                Ok(Some(s)) => moved.push(s),
                 Ok(None) => {}
                 Err(e) => {
                     if !unread.iter().any(|u| u.branch == b) {
@@ -1240,7 +1361,7 @@ impl Sluice<'_> {
                 }
             }
         }
-        Ok(None)
+        Ok(moved)
     }
 
     /// The submission of `branch` that `old` became, if any.
@@ -1485,6 +1606,16 @@ impl Sluice<'_> {
 pub struct Unread {
     pub branch: String,
     pub error: String,
+}
+
+/// A number more than one branch holds: it names none of them alone, so a
+/// lookup by it is refused naming each (26; record 0114).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Several {
+    /// Each branch that holds the number, in the records' order.
+    pub branches: Vec<String>,
+    /// Each branch that could not be read, with its words.
+    pub unread: Vec<Unread>,
 }
 
 impl Unread {
