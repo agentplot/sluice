@@ -88,7 +88,7 @@ out, what it allows and the clauses and decisions it rests on.
 
 ## The gate
 
-- **[core.21](https://github.com/agentplot/sluice/blob/main/docs/architecture/core.md#details)** Every file the tree tracks is owned by a formatter the gate runs, or is excluded by name with its reason; every language with a linter is linted; every directory under `plugins/`, `site/` and the flake's `nix/` is a moon project of its own, listed in `.moon/workspace.yml` with its language declared, whose check-fast tasks validate, type-check and test it, one task per check.
+- **[core.21](https://github.com/agentplot/sluice/blob/main/docs/architecture/core.md#details)** Every file the tree tracks, Markdown aside, is owned by a formatter the gate runs, or is excluded by name with its reason; no task reads a Markdown file to format, lint, test or check it (agentplot/blueprints principle 16); every language with a linter is linted; every directory under `plugins/`, `site/` and the flake's `nix/` is a moon project of its own, listed in `.moon/workspace.yml` with its language declared, whose check-fast tasks validate, type-check and test it, one task per check.
 - **[core.24](https://github.com/agentplot/sluice/blob/main/docs/architecture/core.md#details)** Every tool a gate task runs is the version the tree pins, on every host that runs the gate, so CI and `sluice exec` hold a tree to the same rules.
 
 ## Releases
