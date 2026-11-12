@@ -356,11 +356,43 @@ mod tests {
         assert!(third.is_some());
     }
 
+    /// The variable naming the one test a run of this binary is for.
+    const ALONE: &str = "SLUICE_TEST_ALONE";
+
+    /// Whether this process runs the test `name` alone. If it does not,
+    /// the test is run again in a process of this binary's own that runs
+    /// nothing else, and fails here where it fails there: a lock let go
+    /// in a process where other tests run is held a moment longer by the
+    /// copy of its descriptor a child they spawn holds until it execs,
+    /// the copy of a hold's, a supervisor's or a read's own lock among
+    /// them, so a lock this test reads as free may read as held.
+    fn alone(name: &str) -> bool {
+        if std::env::var_os(ALONE).is_some_and(|n| n == name) {
+            return true;
+        }
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", name])
+            .env(ALONE, name)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success() && stdout.contains("test result: ok. 1 passed;"),
+            "{name}, run alone:\n{stdout}{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        false
+    }
+
     /// The spec's "A killed run frees its part of the bound": an entry
     /// whose hold and run directory nobody holds counts nothing, and the
     /// next admission removes it.
     #[test]
     fn an_entry_whose_hold_and_run_are_free_counts_nothing_and_goes() {
+        if !alone("host_count::tests::an_entry_whose_hold_and_run_are_free_counts_nothing_and_goes")
+        {
+            return;
+        }
         let s = Scratch::new("dead");
         let count = s.count();
         let (dead, next) = (s.run_dir("dead"), s.run_dir("next"));
