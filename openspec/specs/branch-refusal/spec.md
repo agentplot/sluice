@@ -9,14 +9,14 @@ and no round of any other branch stops on it (26, S64).
 
 ### Requirement: A submission is found past a branch that cannot be read
 
-A lookup of a submission by its number SHALL read every branch with
-state it can, SHALL pass by a branch whose policy, revision or state it
-cannot read, and SHALL answer for a submission on a branch it can read
-as when every branch reads, saying nothing of the branch passed by (26;
-rule core.11). This holds for `sluice wait <n>`, `sluice status <n>`,
-`sluice amend <n>`, `sluice withdraw <n>`, a waiting `sluice submit`
-reading its own submission, and a submission whose state moved to its
-remote.
+A lookup by a submission's number SHALL read every branch with state
+it can, SHALL pass by a branch whose policy, revision or state it
+cannot read, and SHALL answer for a submission one readable branch
+holds as when every branch reads, saying nothing of the branch passed
+by (26; rule core.11). This holds for `sluice wait <n>`,
+`sluice status <n>`, `sluice amend <n>`, `sluice withdraw <n>`, a
+waiting `sluice submit` reading its own submission, and a submission
+whose state moved to its remote.
 
 #### Scenario: A wait on another branch follows its submission to its verdict
 
@@ -246,3 +246,18 @@ the branch's state last saw (26, 129; record 0046).
 - **WHEN** `sluice status bolt/b --json` runs
 - **THEN** its `at` is `R1`, and `bolt/b`'s state, its version and its
   log are as they were before it ran
+
+### Requirement: A number two readable branches hold names the branch passed by
+
+Where more than one branch a lookup by number can read holds the
+number, the lookup SHALL be refused as the `number-lookup` capability
+says, and SHALL name each branch it passed by beside them, with the
+words it was refused with (26; record 0114; rule core.11).
+
+#### Scenario: Two branches that read hold the number
+
+- **GIVEN** submission `<n>` queued on `main` and on `bolt/a`, and
+  `bolt/b`'s state cannot be read
+- **WHEN** `sluice status <n>` runs
+- **THEN** it is refused naming `main` and `bolt/a`, and names `bolt/b`
+  with the words it was refused with

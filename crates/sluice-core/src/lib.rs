@@ -39,8 +39,8 @@ use crate::refused::Refusal;
 pub use notice::notice;
 pub use ops::{
     Accepted, AmendRefusal, CopyDiffers, CopyHow, Forecast, Forecasted, GroupRequest, KeptOut,
-    Lookup, Refused, Requester, Status, SubmitHead, SubmitRefusal, SubmitRequest, SubmittedHead,
-    Unread, WithdrawRefusal, Withdrew,
+    Lookup, Refused, Requester, Several, Status, SubmitHead, SubmitRefusal, SubmitRequest,
+    SubmittedHead, Unread, WithdrawRefusal, Withdrew,
 };
 pub use owed::{
     Collect, ConfirmAs, Confirmation, Confirmations, DeliveryView, Owed, OwedOutcome, OwedView,
@@ -533,15 +533,24 @@ impl<'a> Sluice<'a> {
         Ok(aside)
     }
 
-    /// The branch that holds submission `id`, from every branch with
-    /// records that reads: one whose records cannot be read, or whose
-    /// finished record of `id` cannot be, is passed by into the unread
-    /// list with the words it was refused with, and only the list of
-    /// branches failing fails the lookup (26; rule core.11).
-    pub fn find(&self, id: u64) -> Result<Found> {
+    /// The branch that holds submission `id`, live or finished. With no
+    /// branch named, every branch with records is read, in the records'
+    /// order, and none stops the reading: one whose records cannot be
+    /// read, or whose finished record of `id` cannot be, is passed by into
+    /// the unread list with the words it was refused with. A number one
+    /// branch holds is found on it; one that more than one holds names
+    /// none of them alone, and is answered with each, and each branch that
+    /// could not be read (26; record 0114; rule core.11). With `on`
+    /// named, that branch alone is read, so no other is ever named.
+    pub fn find(&self, id: u64, on: Option<&str>) -> Result<Found> {
+        let branches = match on {
+            Some(b) => vec![b.to_string()],
+            None => self.seams.state.branches()?,
+        };
+        let mut held = Vec::new();
         let mut unread = Vec::new();
-        for b in self.seams.state.branches()? {
-            let held = self.read_line(&b).and_then(|line| {
+        for b in branches {
+            let holds = self.read_line(&b).and_then(|line| {
                 if line.subs.contains_key(&id) {
                     return Ok(true);
                 }
@@ -551,24 +560,33 @@ impl<'a> Sluice<'a> {
                 }
                 Ok(false)
             });
-            match held {
-                Ok(true) => return Ok(Found::On(b)),
+            match holds {
+                Ok(true) => held.push(b),
                 Ok(false) => {}
                 Err(e) => unread.push(Unread::of(&b, &e)),
             }
         }
-        Ok(Found::Unfound(unread))
+        Ok(match held.len() {
+            0 => Found::Unfound(unread),
+            1 => Found::On(held.remove(0)),
+            _ => Found::Several(Several {
+                branches: held,
+                unread,
+            }),
+        })
     }
 }
 
-/// Where a lookup by number found a submission (26).
+/// Where a lookup by number found a submission (26; record 0114).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Found {
-    /// On this branch.
+    /// On this branch, the one of those read that holds it.
     On(String),
     /// On none of the branches read; the branches that could not be read,
     /// none when every branch was.
     Unfound(Vec<Unread>),
+    /// On more than one branch, so it names none of them alone.
+    Several(Several),
 }
 
 #[cfg(test)]
