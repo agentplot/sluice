@@ -1,5 +1,5 @@
 ---
-number: 115
+number: 116
 title: A branch is routed by its head's policy, and comes home when its signers go
 status: accepted
 date: 2026-11-12
