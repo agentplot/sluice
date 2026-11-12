@@ -1,7 +1,7 @@
 ---
 number: 119
 title: A queue's runs go to a pool, and a CodeBuild fleet runs as many at once as it holds
-status: proposed
+status: accepted
 date: 2026-11-12
 decision-makers:
 - the user
@@ -10,7 +10,7 @@ decision-makers:
 
 # A queue's runs go to a pool, and a CodeBuild fleet runs as many at once as it holds
 
-Status: proposed to the user on 2026-11-12, from their words in agentplot-design's pane; accepted on their yes.
+Status: accepted by the user on 2026-11-12, in agentplot-design's pane: "Did my AWS code build work get put in the backlog? We need to be fucking working on this shit".
 
 Sources: switchboard-kit's `.config/sluice.toml` on its main (agentplot-wldn/switchboard-kit); sluice's guide *Parallel and batch*; the statement in agentplot/blueprints, `design/sluice/requirements.md`, clauses 71, 77, 78, 79, 88, 107, 109, 141, C.3's launched executor, C.7 and C.8; the change `actions-pool` on main; record 0016; record 0117; AWS's CodeBuild guide, *Run builds on reserved capacity fleets* and *Reserved capacity fleet properties* (docs.aws.amazon.com/codebuild/latest/userguide/fleets.html, fleets.reserved-capacity-fleets.html), and CodeBuild's pricing page.
 
