@@ -1066,29 +1066,6 @@ fn a_branch_its_remote_does_not_hold_reads_no_signed_run() {
     assert_eq!(signed(&r, "main"), ["a:test"]);
 }
 
-/// 78, rule core.22: `scratch` keeps its records in the host's own files
-/// and its policy names no signer; `main` on origin names `box`. None of
-/// box's runs is read for `scratch`, whichever branch was read first.
-#[test]
-fn a_branch_in_the_hosts_own_files_reads_with_its_own_list() {
-    let ka = key();
-    let a = Repo::new("rr-own-files");
-    a.write(".config/sluice.toml", &signers_policy(&[("box", &[&ka])]));
-    a.git(&["add", "-A"]);
-    a.git(&["commit", "-q", "-m", "signers"]);
-    let _bare = a.bare_origin();
-    a.branch(
-        "scratch",
-        "main",
-        &[(".config/sluice.toml", Some("[branches.scratch]\n"))],
-    );
-    sign(&a, "box", &ka, &[passed_on("a:test", "scratch")]);
-    let r = records(&a);
-    assert_eq!(signed(&r, "main"), ["a:test"]);
-    assert!(r.route("scratch").unwrap().is_none(), "in the host's files");
-    assert!(signed(&r, "scratch").is_empty());
-}
-
 /// Rule core.14 (ADR 0028): a round of a branch whose records are on its
 /// remote keeps its run's tasks under the lock the records seam took for
 /// it, and keeps none without that lock (swb-1, 2026-11-12: every round of
@@ -1129,4 +1106,27 @@ fn a_branch_on_its_remote_keeps_its_tasks_under_the_lock_its_records_took() {
         r.put_progress("main", "c1", None).unwrap();
     }
     assert!(r.progress("main").unwrap().is_empty());
+}
+
+/// 78, rule core.22: `scratch` keeps its records in the host's own files
+/// and its policy names no signer; `main` on origin names `box`. None of
+/// box's runs is read for `scratch`, whichever branch was read first.
+#[test]
+fn a_branch_in_the_hosts_own_files_reads_with_its_own_list() {
+    let ka = key();
+    let a = Repo::new("rr-own-files");
+    a.write(".config/sluice.toml", &signers_policy(&[("box", &[&ka])]));
+    a.git(&["add", "-A"]);
+    a.git(&["commit", "-q", "-m", "signers"]);
+    let _bare = a.bare_origin();
+    a.branch(
+        "scratch",
+        "main",
+        &[(".config/sluice.toml", Some("[branches.scratch]\n"))],
+    );
+    sign(&a, "box", &ka, &[passed_on("a:test", "scratch")]);
+    let r = records(&a);
+    assert_eq!(signed(&r, "main"), ["a:test"]);
+    assert!(r.route("scratch").unwrap().is_none(), "in the host's files");
+    assert!(signed(&r, "scratch").is_empty());
 }
