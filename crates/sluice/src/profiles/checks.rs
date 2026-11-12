@@ -1980,6 +1980,12 @@ impl Tests for Checks {
         ))
     }
 
+    /// 139 (design D6): what the sandbox refused the run; nothing is read
+    /// yet.
+    fn refused(&self, _: &RunHandle) -> Result<sluice_seams::Refusals> {
+        Ok(sluice_seams::Refusals::None)
+    }
+
     fn progress(&self, run: &RunHandle) -> Result<Progress> {
         let ended = match self.runs.state(&run.0)? {
             RunState::Running => return Ok(Progress::Running),
@@ -2067,6 +2073,7 @@ impl Tests for Checks {
             dependencies,
             failed_by,
             timed_out: ended.timed_out,
+            refusals_unread: None,
         }))
     }
 

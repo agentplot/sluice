@@ -3687,6 +3687,7 @@ fn unstarted(checks: &[String], kind: &str, reason: String) -> RunReport {
         timed_out: false,
         detail: None,
         kept_out: Vec::new(),
+        refusals_unread: None,
     }
 }
 

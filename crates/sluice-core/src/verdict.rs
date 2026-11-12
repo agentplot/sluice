@@ -368,6 +368,7 @@ mod tests {
             failed_by: Vec::new(),
             timed_out: false,
             executor,
+            refusals_unread: None,
         }
     }
 

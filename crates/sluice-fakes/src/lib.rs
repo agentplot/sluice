@@ -1282,6 +1282,7 @@ impl World {
                 dependencies: Vec::new(),
                 failed_by: Vec::new(),
                 timed_out: false,
+                refusals_unread: None,
             };
         }
         let tree = inner.commits[&request.revision].tree.clone();
@@ -1324,6 +1325,7 @@ impl World {
                 dependencies: Vec::new(),
                 failed_by: Vec::new(),
                 timed_out: false,
+                refusals_unread: None,
             };
         }
         let since = request
@@ -1361,6 +1363,7 @@ impl World {
             dependencies: Vec::new(),
             failed_by: Vec::new(),
             timed_out: false,
+            refusals_unread: None,
         };
         let names: Vec<String> = wanted.iter().map(|t| t.name.clone()).collect();
         let mut seen = BTreeMap::new();
@@ -2300,6 +2303,11 @@ impl Tests for FakeTests {
             )),
             _ => None,
         })
+    }
+
+    /// 139 (design D9): the fake's executor refuses nothing for now.
+    fn refused(&self, _: &RunHandle) -> Result<sluice_seams::Refusals> {
+        Ok(sluice_seams::Refusals::None)
     }
 
     fn bound(&self) -> Result<usize> {
