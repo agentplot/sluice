@@ -301,4 +301,39 @@ answer and forward it as they do `switched`.
 
 ## What a passing run is refused
 
-Written by task 5.7.
+Run on deneb, macOS 27.0.1 (26A434), 2026-11-11, as the host's user:
+`target/debug/sluice exec bolt/a-sandboxs-refusal-blames-no-one -- moon
+run cli:test` in this change's place, at d198045d, task 5.3's code,
+under the branch's policy (`kind = "sandbox"`, `network = "localhost"`,
+`docker = true`) and the host's two `[[caches]]`, sccache's and moon's.
+The run passed, 692 tests in all, the crate's 279 unit tests among
+them. Its watch was ready, wrote nothing to `watch.err`
+and left no `watch-error`, and `watch.out` kept 35 reports of the run's
+mark, `/dev/dtracehelper` reported by none. Each refusal, once, with the
+programs that met it:
+
+| Refused | By | What it is |
+|---|---|---|
+| `file-write-create <git common dir>/moon-home/cache/shared/blobs/temp/<n>` | moon | The runner's store, the one C.2's sandbox row grants (record 0105). `sandbox_profile` already opens it to a run of the moon runner, as a `<cache>`; this run is a command's, which resolves no store, and a command's refusals are never read (record 0074, D6). Nothing to grant. |
+| `file-write-create <git common dir>/moon-outputs/<hash>.tar.gz` | moon | moon's archive of `cli:test`'s outputs, written to the place's `.moon/cache/outputs`, which this repository's shell links to a directory every worktree shares. The kernel judges the path the link resolves to, which is no path C.2 grants: neither the place, its scratch, a declared cache nor the runner's store. A failing run will read it. |
+| `file-write-data ~/.cargo/.package-cache`, `.package-cache-mutate` and `.global-cache`; `file-write-xattr` of `~/.cargo/registry` and `~/.cargo/git` | cargo | cargo's locks and marks in the user's cargo home, which cargo takes before it builds and goes on without. Not a path C.2 grants; a host that wants it granted declares it among its `[[caches]]`. A failing run will read it. |
+| `file-write-create ~/Library/Caches/BytecodeAlliance.wasmtime/modules/…` | proto, moon | wasmtime's cache of the compiled plugins proto and moon load. Not a path C.2 grants; a host may declare it. A failing run will read it. |
+| `network-outbound remote:*:53` and `/private/var/run/mDNSResponder` | moon | moon's look for an internet connection before it installs a toolchain's dependencies, which it skips ("No internet connection"). Refused as `network = "localhost"` says. A failing run will read it. |
+| `network-outbound /private/var/run/mDNSResponder` | git | Name lookups by five of the tests' git processes, each of which passes without the answer. Refused as `network = "localhost"` says. A failing run will read it. |
+
+What that costs (115). Every run of sluice's own `cli:test` under this
+policy meets refusals that do not fail it, so once this change lands
+every run of sluice's gate in which a check fails reads those checks as
+not run, naming the first three refusals, records nothing under their
+keys and blames nobody; the combination is tested again, and only after
+as many runs in a row as the deployment states is it not passed, its
+session told each check and what the sandbox refused. A fail that would
+have been blamed on the first run costs two more runs, and the person
+told of it reads a refusal that did not cause it. The same holds for any
+repository whose tools write outside the place or look up a name under
+`network = "localhost"` and go on.
+
+None of these is granted in `sandbox_profile`: the one path of the run's
+own that C.2's sandbox row grants, the runner's store, already is. None
+is silenced: D4 silences `/dev/dtracehelper` alone, and silencing any
+other, or granting any path C.2 does not name, is the user's to decide.
