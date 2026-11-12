@@ -1,7 +1,7 @@
 ---
 number: 113
 title: sluice's setup skill has the person's agent add the herdr plugin's lines to their own herdr file
-status: proposed
+status: accepted
 date: 2026-11-11
 decision-makers:
 - the user, 2026-11-11
@@ -10,7 +10,7 @@ decision-makers:
 
 # sluice's setup skill has the person's agent add the herdr plugin's lines to their own herdr file
 
-Status: proposed. The decision is the user's words of 2026-11-11, quoted below; the record is proposed until the user has seen it as a record, and accepted on their yes. The form, how the agent reads the lines, finds the file, picks keys, merges, checks and reloads, is the construct's own, each part cheap to change.
+Status: accepted by the user on 2026-11-12, on their card ("Approved"). The decision is the user's words of 2026-11-11, quoted below. The form, how the agent reads the lines, finds the file, picks keys, merges, checks and reloads, is the construct's own, each part cheap to change.
 
 Deciders: the user, 2026-11-11, declining proposal 134's print-and-compose design: "I'd rather they just be able to tell their agent to set up the plugin for me. I don't know why we have to go do extra shit."; and the construct of the change `sluices-setup-skill-adds-its-herdr-lines`, which chose the form below.
 Sources: the user's words above, which replace the units `sluices-herdr-setup-prints-what-it-needs` and `boomdrives-setup-shows-herdrs-lines-for-the-family` (crew's run records, deneb, 2026-11-11: proposals 130 and 134 dropped); agentplot/blueprints `design/principles.md` 10 (origin/main d4db801): "A tool's file is written by its own module, by hand or by a control plane's local layer, and never by another tool.", and principle 11, a step an agent now does for the person changing the instructions that have the person do it; deneb's herdr file as annotated for the group, `~/.local/state/crew/agentplot-main/reports/herdr-config-for-the-group.toml`, which binds the jump to `prefix+shift+s` since the annotation plugin's `annotate.manage` holds setup's `prefix+shift+m`, writes the tab bar as `[[ui.tab_bar_right]]` tables, puts `$sluice_q` in the first spaces row beside another plugin's token, and delivers toasts by `"system"`; herdr 0.9.5 as installed on deneb and its documentation for that version (`https://herdr.dev/llms.txt`): `herdr --help`'s `Config:` line, `herdr --default-config`, `herdr config check` (exit 1 on two `[[keys.command]]` on `prefix+m`, `config: ok` with one command on herdr's own `prefix+x`), `herdr plugin list --plugin <id> --json`, `HERDR_PLUGIN_STATE_DIR`, `ui.toast.delivery` and `[ui.sidebar.agents.rows_by_agent]`; sluice at f8c119c4: `plugins/herdr/bin/setup.sh`, `plugins/herdr/lib/common.sh`, `plugins/herdr/tests/run.sh`, `plugins/herdr/README.md`, `plugins/sluice/skills/setting-up-sluice/SKILL.md`, `site/src/content/docs/guides/herdr.md` and the herdr-status spec's requirement "Setup shows, never edits".
