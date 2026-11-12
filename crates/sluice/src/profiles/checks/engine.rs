@@ -1,11 +1,11 @@
 //! The check profile's own talk with the host's container engine, beyond
 //! record 0074's look: the containers a place left, found and removed
-//! (34; previews-1 clause 101; record 0114; rule core.10). The place
+//! (34; previews-1 clause 101; record 0119; rule core.10). The place
 //! profile is handed [`end_containers`] by the binding and never calls
 //! this profile itself (rule core.2).
 //!
 //! A container is a place's by what the engine reports of it and the
-//! place holds, and by nothing else (record 0114, decision 2): a mount
+//! place holds, and by nothing else (record 0119, decision 2): a mount
 //! within its checkout or scratch, a port of its own published on the
 //! host, or its `sluice.place` label.
 
@@ -35,7 +35,7 @@ const LIST_MOST: u64 = 16 << 20;
 /// What an answer's head may take beyond its body, over a unix socket.
 const HEAD_MOST: u64 = 64 << 10;
 
-/// 34, previews-1 clause 101, record 0114 (decisions 2, 4, 5): remove every
+/// 34, previews-1 clause 101, record 0119 (decisions 2, 4, 5): remove every
 /// container `place` left at each engine of `endpoints` that answers, as
 /// [`owned`] tells them, each with its anonymous volumes, a running one
 /// stopped. Each unix socket is asked once by the path it resolves to; one
@@ -426,7 +426,7 @@ fn tcp_call(
     Ok((status, body))
 }
 
-/// Record 0114, decision 2: whether the engine's `container`, as `GET
+/// Record 0119, decision 2: whether the engine's `container`, as `GET
 /// /containers/json` lists it, is `place`'s: a mount's `Source` is the
 /// place's checkout or scratch or lies beneath one, by whole components,
 /// each path as given and as it resolves; one of its ports is published on
@@ -503,7 +503,7 @@ mod tests {
         })
     }
 
-    /// Record 0114, decision 2: a container that mounts a file of the
+    /// Record 0119, decision 2: a container that mounts a file of the
     /// checkout, one that mounts the scratch, one that publishes the
     /// place's port, and one with its label are each the place's, the
     /// checkout's path matched as it resolves too.
@@ -542,7 +542,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// Record 0114, decision 2: a container of a sibling directory whose
+    /// Record 0119, decision 2: a container of a sibling directory whose
     /// name begins with the checkout's, one publishing another port or
     /// only privately, one labelled with another place, and one with
     /// nothing at all are left.

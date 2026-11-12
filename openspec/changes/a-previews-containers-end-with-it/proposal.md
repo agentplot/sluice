@@ -55,7 +55,7 @@ place's containers, so sluice owns this alone.
   sluice removes what the release command left, and how a container with
   no mount or port of the preview is marked with `sluice.place`.
 - The statement's clause 101 and the C.1 preview row of previews-1 say
-  the same. Record 0114 and rule core.10's details hold the decision.
+  the same. Record 0119 and rule core.10's details hold the decision.
 
 Out of scope:
 
@@ -105,7 +105,7 @@ None.
 - `crates/sluice/tests`: a fake engine that holds containers and records
   removals, and tests of the place profile and of the binary.
 - Docs: the site's previews guide, the plugins' previews references,
-  record 0114 and rule core.10's details. The statement in
+  record 0119 and rule core.10's details. The statement in
   agentplot/blueprints.
 
 ## Touches
@@ -119,7 +119,7 @@ crates/sluice/src/runs.rs
 crates/sluice/tests/support/mod.rs
 crates/sluice/tests/profiles/places.rs
 crates/sluice/tests/previews_tools.rs
-docs/adr/0114-a-previews-containers-end-with-it-found-by-its-checkout-its-ports-or-its-label.md
+docs/adr/0119-a-previews-containers-end-with-it-found-by-its-checkout-its-ports-or-its-label.md
 docs/architecture/core.md
 site/src/content/docs/guides/previews.md
 plugins/sluice/skills/using-sluice/references/previews.md

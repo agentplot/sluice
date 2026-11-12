@@ -35,7 +35,7 @@ struct Setup {
     worktrees: Scratch,
     /// The fake container engine every `sluice` here is pointed at, so a
     /// preview's release ends its containers there and never at the
-    /// host's (record 0114).
+    /// host's (record 0119).
     engine: support::Engine,
     _engine_dir: Scratch,
 }

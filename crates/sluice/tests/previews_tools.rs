@@ -20,7 +20,7 @@ struct Setup {
     config: Scratch,
     state: Scratch,
     /// The fake container engine every `sluice` here is pointed at, so no
-    /// test lists or removes a container of the host's (record 0114).
+    /// test lists or removes a container of the host's (record 0119).
     engine: support::Engine,
     /// What every `sluice` here is given as its engine's sockets.
     sockets: String,
@@ -208,7 +208,7 @@ fn a_failed_command_is_released_and_kept_listed() {
     assert_eq!(text(&s.sluice(&["previews"])), "no previews\n");
 }
 
-/// Record 0114's containers for the preview `doc`, its place's label
+/// Record 0119's containers for the preview `doc`, its place's label
 /// `place`: one mounting a file of its checkout, one publishing its `web`
 /// port, one labelled `sluice.place` with `place`, and one of another
 /// checkout that does none of these.
@@ -238,7 +238,7 @@ fn held_once_released(s: &Setup, containers: serde_json::Value) {
     });
 }
 
-/// 34, previews-1 clause 101, record 0114, the preview-release spec's
+/// 34, previews-1 clause 101, record 0119, the preview-release spec's
 /// "The release command leaves a container" and "Another checkout's
 /// container is left": `sluice release` runs the release command, then
 /// removes the container that mounts the checkout, the one that
@@ -278,7 +278,7 @@ const SCRIPTED: &str = "echo tried >> {log}; sh infra/release.sh";
 /// The script [`SCRIPTED`] runs, committed in the checkout.
 const SCRIPT: (&str, &str) = ("infra/release.sh", "echo released >> {log}\n");
 
-/// 34, 123, previews-1 clause 101, record 0114, the preview-release
+/// 34, 123, previews-1 clause 101, record 0119, the preview-release
 /// spec's "A checkout removed by hand": the next `sluice previews` runs
 /// the stored release command once in the scratch directory, where the
 /// script in the checkout cannot be found and it fails, removes the
@@ -314,7 +314,7 @@ fn a_removed_checkouts_container_ends_with_its_preview() {
     assert_eq!(std::fs::read_to_string(&s.log).unwrap(), "tried\n");
 }
 
-/// 123, previews-1 clause 101, record 0114, the preview-release spec's
+/// 123, previews-1 clause 101, record 0119, the preview-release spec's
 /// "A release failure accepted": a preview held by its failing release
 /// command keeps its container; `--accept-failure` removes the container
 /// that publishes its port, runs no release command and frees it.
@@ -344,7 +344,7 @@ fn an_accepted_previews_container_ends_with_it() {
     assert_eq!(text(&s.sluice(&["previews"])), "no previews\n");
 }
 
-/// 101, 103, record 0114, the preview-release spec's "A failed command":
+/// 101, 103, record 0119, the preview-release spec's "A failed command":
 /// a command that starts a container labelled with its `SLUICE_PLACE`
 /// and exits 1 is reported failed, its release command runs, and the
 /// container is removed.
@@ -377,7 +377,7 @@ fn a_failed_previews_labelled_container_ends_with_it() {
     assert!(s.held().is_empty());
 }
 
-/// Record 0114, the preview-release spec's "A host with no container
+/// Record 0119, the preview-release spec's "A host with no container
 /// engine": where no engine answers, a preview is released as before.
 #[test]
 fn a_preview_on_a_host_with_no_engine_is_released_as_before() {
@@ -393,7 +393,7 @@ fn a_preview_on_a_host_with_no_engine_is_released_as_before() {
     assert_eq!(s.engine.listings(), 0);
 }
 
-/// 123, record 0114, the preview-release spec's "The engine refuses a
+/// 123, record 0119, the preview-release spec's "The engine refuses a
 /// removal": `sluice release` exits 1 naming the container and the
 /// engine's words; the preview stays listed with its release's failure,
 /// its port held.
@@ -426,7 +426,7 @@ fn a_container_the_engine_will_not_remove_keeps_its_preview() {
     assert!(PathBuf::from(doc["checkout"].as_str().unwrap()).exists());
 }
 
-/// 123, record 0114, the preview-release spec's "The engine removes it
+/// 123, record 0119, the preview-release spec's "The engine removes it
 /// on a later try": a gone preview whose container the engine refuses is
 /// kept by the first `sluice previews`, which names what failed, and
 /// freed by the second; its release ran once in all.
