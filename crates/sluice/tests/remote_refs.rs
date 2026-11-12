@@ -665,7 +665,7 @@ fn a_ticks_ask_brings_the_branch_and_the_work_in_one_fetch() {
     assert!(holds(&a, &combination), "the combination b formed");
 }
 
-/// 82, C.6 (record 0117): a combination another host opened, which this
+/// 82, C.6 (record 0118): a combination another host opened, which this
 /// host lacks, is fetched by its own ref, the others left on the remote,
 /// and a claimed run's place is made at it here; a combination the
 /// remote no longer holds fetches nothing.

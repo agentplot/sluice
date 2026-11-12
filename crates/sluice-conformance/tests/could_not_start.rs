@@ -4,7 +4,7 @@
 //! combination is not passed (16, 114, 115; design D1). A run whose
 //! checkout could not be made never began, and counts toward nothing; a
 //! claimed run's checkout is made at its combination, fetched first where
-//! the host lacks it (60, 82, C.6; record 0117).
+//! the host lacks it (60, 82, C.6; record 0118).
 
 use std::time::Duration;
 
@@ -87,7 +87,7 @@ fn a_run_whose_toolchain_fails_to_enter_is_recorded_with_its_words() {
 }
 
 /// satisfies: 16, 60, 114, 18; the run-outcome spec's "The checkout
-/// cannot be made" (record 0117)
+/// cannot be made" (record 0118)
 #[test]
 fn a_run_whose_checkout_cannot_be_made_is_recorded_with_why() {
     let h = Harness::bolt();
@@ -117,7 +117,7 @@ fn a_run_whose_checkout_cannot_be_made_is_recorded_with_why() {
 }
 
 /// satisfies: 60, 114, 115; the run-outcome spec's "Checkouts that cannot
-/// be made, run after run" (record 0117)
+/// be made, run after run" (record 0118)
 #[test]
 fn checkouts_that_cannot_be_made_run_after_run_blame_no_one() {
     let h = Harness::bolt();
@@ -214,7 +214,7 @@ fn launched(h: &Harness) -> (String, String, sluice_seams::Rev) {
 }
 
 /// satisfies: 82, 88, C.6; the run-claims spec's "A pool's job on a
-/// machine that lacks the combination" (record 0117)
+/// machine that lacks the combination" (record 0118)
 #[test]
 fn a_pools_job_makes_its_place_at_a_combination_only_the_remote_holds() {
     let h = with_pool();
@@ -244,7 +244,7 @@ fn a_pools_job_makes_its_place_at_a_combination_only_the_remote_holds() {
 }
 
 /// satisfies: 60, 82, 114; the run-outcome spec's "The checkout cannot be
-/// made" (record 0117)
+/// made" (record 0118)
 #[test]
 fn a_claimed_run_whose_combination_the_remote_no_longer_holds_never_began() {
     let h = with_pool();
@@ -271,7 +271,7 @@ fn a_claimed_run_whose_combination_the_remote_no_longer_holds_never_began() {
 }
 
 /// satisfies: 82; the run-claims spec's "A host that holds the
-/// combination" (record 0117)
+/// combination" (record 0118)
 #[test]
 fn a_host_that_holds_the_combination_fetches_nothing_more() {
     let h = peers();

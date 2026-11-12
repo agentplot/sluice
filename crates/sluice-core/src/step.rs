@@ -129,7 +129,7 @@ pub enum Started {
     NotRun(String),
     /// Its place could not be made, for this reason: the run never began,
     /// so it is open again with no outcome, its record saying why, and it
-    /// counts toward no runs in a row (60, 114; record 0117).
+    /// counts toward no runs in a row (60, 114; record 0118).
     Unmade(String),
 }
 
@@ -756,7 +756,7 @@ impl Sluice<'_> {
     /// here where this host lacks it, and its tests' start; a start that
     /// fails or a host that cannot meet what the run needs recorded as a
     /// run whose tests could not run, and a checkout that cannot be made
-    /// as a run that never began (record 0117). `None` where no run of the
+    /// as a run that never began (record 0118). `None` where no run of the
     /// claim waits to start. Under the branch's lock, waited for (rule
     /// core.14).
     ///
@@ -829,7 +829,7 @@ impl Sluice<'_> {
     /// own ref first where this host lacks it, however the run's claim
     /// reached the host (82, C.6); a checkout that cannot be made is a run
     /// that never began, open again with no outcome and counting toward
-    /// nothing (60, 114; record 0117). Then the tests' start; a start
+    /// nothing (60, 114; record 0118). Then the tests' start; a start
     /// refused at the bound is open again, counting toward nothing (71),
     /// and any other start that fails, a remote's unanswered read aside,
     /// leaves each check not run with the error's words (114). Either is
@@ -998,7 +998,7 @@ impl Sluice<'_> {
     /// 82, C.6: candidate `c`'s combination, fetched by its own ref where
     /// this host lacks it, so its place is made at it however the run's
     /// claim reached the host: a round's claim after its fetch of every
-    /// candidate, the lead's own start, or a pool's job (record 0117).
+    /// candidate, the lead's own start, or a pool's job (record 0118).
     fn fetch_lacking(&self, branch: &str, c: &Candidate) -> Result<()> {
         if self.seams.branch.holds(&c.revision)? {
             return Ok(());
@@ -1006,7 +1006,7 @@ impl Sluice<'_> {
         self.seams.state.fetch_candidate(branch, &c.id)
     }
 
-    /// 60, 114 (record 0117): run `i` of candidate `c`, decided into
+    /// 60, 114 (record 0118): run `i` of candidate `c`, decided into
     /// `place`, whose place could not be made, `report` naming each check
     /// with why. The run never began: it has no outcome, counts toward no
     /// runs in a row (115) and blames no one, and it is open again for any

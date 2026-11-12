@@ -1716,7 +1716,7 @@ pub trait State {
 
     /// 82, C.6: fetch the one candidate `id` of the branch, by its own
     /// ref, so a place can be made at its revision here, however the
-    /// run's claim reached this host (record 0117).
+    /// run's claim reached this host (record 0118).
     fn fetch_candidate(&self, _branch: &str, _id: &str) -> Result<()> {
         Ok(())
     }

@@ -1,5 +1,5 @@
 ---
-number: 117
+number: 118
 title: A claimed run's checkout is made at its combination, and a checkout not made is a run that never began
 status: accepted
 date: 2026-11-12

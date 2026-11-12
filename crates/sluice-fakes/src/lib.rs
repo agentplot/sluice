@@ -199,7 +199,7 @@ struct Inner {
     /// each at its revision (82, C.6).
     candidates: BTreeMap<(String, String), Rev>,
     /// Every fetch of one candidate by its own ref, by the host that
-    /// fetched it, its branch and its id, in order (record 0117).
+    /// fetched it, its branch and its id, in order (record 0118).
     candidate_fetches: Vec<(String, String, String)>,
     took: BTreeMap<String, (u64, u32)>,
     /// Checks a run leaves not run, with why (could-not-run-1 114).
@@ -783,7 +783,7 @@ impl World {
     }
 
     /// Every fetch of one candidate by its own ref, by the host that
-    /// fetched it, its branch and its id, in order (record 0117).
+    /// fetched it, its branch and its id, in order (record 0118).
     pub fn candidate_fetches(&self) -> Vec<(String, String, String)> {
         self.0.borrow().candidate_fetches.clone()
     }
