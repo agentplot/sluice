@@ -895,7 +895,7 @@ pub fn s27_a_sessions_place_stays_until_it_is_released(h: &impl Rig) {
     assert_eq!(
         s.seams()
             .checkout
-            .release_session(&adopted.name, Some(&release))
+            .release_session(&adopted.name, Some(&release), 3)
             .unwrap(),
         Released::Policy
     );
@@ -903,7 +903,7 @@ pub fn s27_a_sessions_place_stays_until_it_is_released(h: &impl Rig) {
     assert_eq!(
         s.seams()
             .checkout
-            .release_session(&adopted.name, Some(&release))
+            .release_session(&adopted.name, Some(&release), 3)
             .unwrap(),
         Released::Nothing
     );
@@ -1025,7 +1025,7 @@ pub fn a_session_runs_last_result_says_whether_it_was_recorded(h: &impl Rig) {
     let name = held(h, "unit/a").expect("held").name;
     s.seams()
         .checkout
-        .release_session(&name, None)
+        .release_session(&name, None, 3)
         .expect("the release runs");
     assert_eq!(held(h, "unit/a"), None);
     // A result kept after the release is kept nowhere.

@@ -866,12 +866,14 @@ impl Places {
     /// as its record `made` says: every run in it ended, the release
     /// command run once, as `policy` states it or, given none, as its last
     /// run carried it, then its scratch, ports and record let go. A release
-    /// that fails keeps the place, held (123).
+    /// that fails keeps the place with one more try, held once its tries
+    /// pass `retries`, whoever asked (123; record 0116).
     fn release_held(
         &self,
         name: &str,
         made: &Made,
         policy: Option<&ReleasePolicy>,
+        retries: u32,
     ) -> Result<Released> {
         if made.kind != Kind::Session {
             bail!("place {name} is a candidate's, not a session's");
@@ -892,9 +894,10 @@ impl Places {
             self.let_go(name, Some(made))?;
             Ok(released)
         })();
-        // 123: held at once: no round releases a session's place (25).
+        // 123, record 0116: no round releases a session's place (25), so
+        // its tries are its callers' asks, held once they pass the bound.
         if let Err(e) = &released {
-            self.keep_failure(name, e, |_| true);
+            self.keep_failure(name, e, |tries| tries > retries);
         }
         released
     }
@@ -910,7 +913,7 @@ impl Places {
     /// asked again runs again. A policy that names no release command, a
     /// folder that has gone and one that is no worktree of the repository,
     /// another repository's among them, have nothing to release.
-    fn release_unheld(&self, name: &str, policy: &ReleasePolicy) -> Result<Released> {
+    fn release_unheld(&self, name: &str, policy: &ReleasePolicy, retries: u32) -> Result<Released> {
         let Some(folder) = name.strip_prefix(SESSION) else {
             return Ok(Released::Nothing);
         };
@@ -925,7 +928,7 @@ impl Places {
             if let Some(made) = self.read_record(name)? {
                 // Adopted meanwhile: held now, and released as held.
                 drop(lock);
-                return self.release_held(name, &made, Some(policy));
+                return self.release_held(name, &made, Some(policy), retries);
             }
             let made = Made {
                 branch: Some(policy.branch.clone()),
@@ -1613,7 +1616,9 @@ impl Checkout for Places {
 
     fn release(&self, name: &str) -> Result<()> {
         if crate::runs::is_session(name) {
-            self.release_session(name, None)?;
+            // No round names a session's place (rule core.16), so no
+            // branch's bound is read: one that fails here is held at once.
+            self.release_session(name, None, 0)?;
             return Ok(());
         }
         if name.starts_with(PREVIEW) {
@@ -1711,7 +1716,12 @@ impl Checkout for Places {
         })
     }
 
-    fn release_session(&self, name: &str, policy: Option<&ReleasePolicy>) -> Result<Released> {
+    fn release_session(
+        &self,
+        name: &str,
+        policy: Option<&ReleasePolicy>,
+        retries: u32,
+    ) -> Result<Released> {
         let Some(made) = self.read_record(name)? else {
             // A stop part way may have left its runs: end them all the same.
             if crate::runs::is_session(name) {
@@ -1720,11 +1730,11 @@ impl Checkout for Places {
             // Record 0112: a worktree sluice holds nothing for is released
             // by the policy's release command all the same.
             return match policy {
-                Some(p) => self.release_unheld(name, p),
+                Some(p) => self.release_unheld(name, p, retries),
                 None => Ok(Released::Nothing),
             };
         };
-        self.release_held(name, &made, policy)
+        self.release_held(name, &made, policy, retries)
     }
 
     fn session_places(&self) -> Result<Vec<SessionPlace>> {

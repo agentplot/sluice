@@ -384,7 +384,10 @@ pub trait Checkout {
     /// command once, as `policy` states it or, given none, as its last run
     /// carried it, remove its scratch directory and let its ports go. The
     /// worktree is left as it is (25, rule core.16). A release that fails
-    /// keeps the place with what failed, held: no round releases it (123).
+    /// keeps the place with what failed and counts the try, whoever asked,
+    /// and holds it once it has been tried more than `retries` times, the
+    /// bound the core read for its branch: no round releases it (123;
+    /// record 0116).
     ///
     /// A name with no record, given a policy, whose folder is the
     /// repository's main worktree or a linked worktree git lists, detached
@@ -395,7 +398,12 @@ pub trait Checkout {
     /// kept for the worktree (95; rule core.10; record 0112). Given no
     /// policy, or a folder that is no worktree of the repository, such a
     /// name has nothing to release.
-    fn release_session(&self, name: &str, policy: Option<&ReleasePolicy>) -> Result<Released>;
+    fn release_session(
+        &self,
+        name: &str,
+        policy: Option<&ReleasePolicy>,
+        retries: u32,
+    ) -> Result<Released>;
 
     /// Session-runs-1 clause 97: every session's place the repository
     /// holds, each with whether its worktree still exists and how its last

@@ -1974,7 +1974,7 @@ mod tests {
             unreachable!("a submit reads no place")
         }
 
-        fn release_session(&self, _: &str, _: Option<&ReleasePolicy>) -> Result<Released> {
+        fn release_session(&self, _: &str, _: Option<&ReleasePolicy>, _: u32) -> Result<Released> {
             unreachable!("a submit releases no place")
         }
 

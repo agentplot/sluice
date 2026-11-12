@@ -7108,7 +7108,7 @@ fn status_marks_a_worktree_whose_release_failed() {
     let doc = json(&out);
     let failed = &doc["worktrees"][0]["release_failed"];
     assert_eq!(failed["tries"], 1, "{doc}");
-    assert_eq!(failed["stopped"], true, "{doc}");
+    assert_eq!(failed["stopped"], false, "{doc}");
 }
 
 /// The lines of `text` from the one that starts with `head` on.

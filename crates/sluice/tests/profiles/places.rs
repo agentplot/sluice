@@ -718,7 +718,7 @@ fn a_sessions_place_is_released_under_the_policy_read_now() {
     let port = place.env["SLUICE_PORT_WEB"].clone();
     let canon = place.path.display().to_string();
     assert_eq!(
-        p.release_session(&place.name, Some(&policy(&release("new"))))
+        p.release_session(&place.name, Some(&policy(&release("new"))), 3)
             .unwrap(),
         Released::Policy
     );
@@ -737,7 +737,7 @@ fn a_sessions_place_is_released_under_the_policy_read_now() {
         Some("bolt/x".to_string())
     );
     assert_eq!(
-        p.release_session(&place.name, None).unwrap(),
+        p.release_session(&place.name, None, 3).unwrap(),
         Released::LastRun
     );
     let port = place.env["SLUICE_PORT_WEB"].clone();
@@ -745,7 +745,7 @@ fn a_sessions_place_is_released_under_the_policy_read_now() {
         .unwrap()
         .ends_with(&format!("last {port} {canon}\n")));
     assert_eq!(
-        p.release_session(&place.name, None).unwrap(),
+        p.release_session(&place.name, None, 3).unwrap(),
         Released::Nothing
     );
     assert!(session.join("work").exists());
@@ -1226,11 +1226,12 @@ fn freeing_a_sessions_place_leaves_its_worktree() {
     p.release(&next.name).unwrap();
 }
 
-/// 123: a session's place whose release command fails keeps its record,
-/// held at once, with what failed and its tries, its ports and its scratch
-/// directory; freed, it is gone.
+/// 123, record 0116: a session's place whose release command fails keeps
+/// its record with what failed and its tries, its ports and its scratch
+/// directory, held once tried more than the retries it was given; freed,
+/// it is gone and its worktree stays.
 #[test]
-fn a_failed_session_release_keeps_its_place_with_what_failed() {
+fn a_failed_session_release_is_held_once_its_retries_are_spent() {
     let _ports = ports_lock();
     let (repo, _) = scratch("places-session-failed");
     let blocks = support::Scratch::new("places-session-failed-blocks");
@@ -1248,32 +1249,33 @@ fn a_failed_session_release_keeps_its_place_with_what_failed() {
     let run = r.next_run(&place.name).unwrap();
     ended_run(&r, &run, &place, "echo usage: scripts/preview up; exit 2");
 
-    let e = p.release_session(&place.name, None).unwrap_err();
+    let e = p.release_session(&place.name, None, 1).unwrap_err();
     assert!(
         format!("{e:#}").contains("usage: scripts/preview up"),
         "{e:#}"
     );
-    let held = p.session_places().unwrap();
-    assert_eq!(held.len(), 1);
-    let failure = held[0].release_failed.clone().expect("what failed is kept");
+    let kept = p.session_places().unwrap();
+    assert_eq!(kept.len(), 1);
+    let failure = kept[0].release_failed.clone().expect("what failed is kept");
     assert!(
         failure.failed.contains("usage: scripts/preview up"),
         "{failure:?}"
     );
-    assert_eq!((failure.tries, failure.stopped), (1, true));
+    assert_eq!((failure.tries, failure.stopped), (1, false));
     assert_eq!(
-        held[0].ports.get("SLUICE_PORT_WEB"),
+        kept[0].ports.get("SLUICE_PORT_WEB"),
         place.env.get("SLUICE_PORT_WEB"),
         "its ports are kept"
     );
     assert!(place.tmp.exists());
 
-    p.release_session(&place.name, None).unwrap_err();
+    p.release_session(&place.name, None, 1).unwrap_err();
     let again = p.session_places().unwrap()[0]
         .release_failed
         .clone()
         .unwrap();
-    assert_eq!(again.tries, 2);
+    assert_eq!((again.tries, again.stopped), (2, true));
+    assert!(place.tmp.exists());
 
     p.free(&place.name).unwrap();
     assert!(p.session_places().unwrap().is_empty());
@@ -1899,7 +1901,7 @@ fn a_place_with_a_run_going_keeps_its_former_scratch_for_it() {
     assert!(short_scratch(&repo, &next.tmp), "{}", next.tmp.display());
     assert!(next.tmp.join("kept").exists(), "its scratch was emptied");
     assert!(!kept.exists(), "{} left", kept.display());
-    p.release_session(&name, None).unwrap();
+    p.release_session(&name, None, 3).unwrap();
 }
 
 /// 35 as amended, rule core.30 (record 0063 as amended 2026-11-05): a

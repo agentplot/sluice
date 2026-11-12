@@ -2650,7 +2650,12 @@ impl Checkout for FakeCheckout {
         }))
     }
 
-    fn release_session(&self, name: &str, policy: Option<&ReleasePolicy>) -> Result<Released> {
+    fn release_session(
+        &self,
+        name: &str,
+        policy: Option<&ReleasePolicy>,
+        retries: u32,
+    ) -> Result<Released> {
         let release = policy.and_then(|p| match p.tests.get("release") {
             Some(sluice_seams::Setting::Text(t)) => Some(t.clone()),
             _ => None,
@@ -2674,10 +2679,13 @@ impl Checkout for FakeCheckout {
             return Ok(Released::Policy);
         }
         if let Err(e) = self.attempt(name) {
-            // 123: kept, held: no round releases a session's place.
+            // 123, record 0116: kept with one more try, whoever asked,
+            // held once its tries pass the bound: no round releases it.
             let at = self.now();
             let mut inner = self.0 .0.borrow_mut();
-            let failure = failed_again(inner.session_release_failed.get(name), &e, at, |_| true);
+            let failure = failed_again(inner.session_release_failed.get(name), &e, at, |t| {
+                t > retries
+            });
             inner.session_release_failed.insert(name.into(), failure);
             return Err(e);
         }
@@ -3818,7 +3826,7 @@ mod tests {
             f.checkout.session_places().unwrap()[0].last_result,
             Some(last(Fail))
         );
-        f.checkout.release_session(&place.name, None).unwrap();
+        f.checkout.release_session(&place.name, None, 3).unwrap();
         assert!(f.checkout.session_places().unwrap().is_empty());
         f.checkout.ran(&place.name, &last(Pass)).unwrap();
         assert!(f.checkout.session_places().unwrap().is_empty());

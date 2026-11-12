@@ -83,8 +83,10 @@ impl Sluice<'_> {
     }
 
     /// How many more times a failed release of a place on `branch` is
-    /// tried (123).
-    pub(crate) fn release_retries(&self, branch: &str) -> u32 {
+    /// tried, read from the branch's current revision, or the default bound
+    /// where it names none or cannot be read: a checkout's by its rounds, a
+    /// preview's and a worktree's by whoever asks (123; record 0116).
+    pub fn release_retries(&self, branch: &str) -> u32 {
         self.release_rules(branch).0
     }
 

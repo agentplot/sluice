@@ -708,7 +708,9 @@ pub fn release(
             failed: Some(failed),
         })
     };
-    let (name, policy) = match &adopted {
+    // 123, record 0116: the branch's bound on a failing release's tries,
+    // read as its policy is, whoever asks.
+    let (name, policy, retries) = match &adopted {
         Some(adopted) => {
             if accept {
                 let freed = s.accept_session(&worktree)?;
@@ -743,7 +745,7 @@ pub fn release(
                     None
                 }
             };
-            (adopted.name.clone(), policy)
+            (adopted.name.clone(), policy, s.release_retries(branch))
         }
         // `--accept-failure` frees a hold, and sluice holds nothing here.
         None if accept => return nothing(out, &worktree),
@@ -761,7 +763,11 @@ pub fn release(
             };
             let branch = default.branch;
             match s.release_policy(&branch) {
-                Ok(p) => (format!("{}{worktree}", crate::runs::SESSION), Some(p)),
+                Ok(p) => (
+                    format!("{}{worktree}", crate::runs::SESSION),
+                    Some(p),
+                    s.release_retries(&branch),
+                ),
                 Err(e) => {
                     return failed(
                         out,
@@ -774,7 +780,10 @@ pub fn release(
             }
         }
     };
-    let released = match seams.checkout.release_session(&name, policy.as_ref()) {
+    let released = match seams
+        .checkout
+        .release_session(&name, policy.as_ref(), retries)
+    {
         Ok(r) => r,
         Err(e) => {
             let words = format!("{e:#}");

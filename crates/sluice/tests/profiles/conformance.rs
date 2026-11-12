@@ -136,9 +136,10 @@ impl Checkout for RecordedPlaces {
         &self,
         name: &str,
         policy: Option<&sluice_seams::ReleasePolicy>,
+        retries: u32,
     ) -> Result<sluice_seams::Released> {
         self.log.borrow_mut().asked.push(name.into());
-        self.inner.release_session(name, policy)
+        self.inner.release_session(name, policy, retries)
     }
 
     fn preview(
