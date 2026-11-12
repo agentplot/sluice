@@ -374,7 +374,11 @@ pub trait Checkout {
     /// worktree is written, moved or removed (25). Its name begins
     /// `session/`, so it is never a candidate's. `at` is when the run
     /// starts, kept as the place's last run (97); the result of the run
-    /// before is dropped, so a run that never ends shows none.
+    /// before is dropped, so a run that never ends shows none. A place held
+    /// with no ports, as a failed release of a worktree sluice held nothing
+    /// for keeps it, is given its block where `checkout` names ports, as at
+    /// a first run, and keeps what failed of its release (123; record
+    /// 0116).
     fn adopt(&self, worktree: &str, branch: &str, checkout: &Settings, at: &str) -> Result<Place>;
 
     /// The session's place sluice equips for `worktree`, if any.

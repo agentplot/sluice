@@ -1845,7 +1845,7 @@ impl Checkout for Places {
             }
             Some(_) => bail!("place {name} is a candidate's, not a session's"),
             None => {
-                let mut made = Made {
+                let made = Made {
                     branch: Some(branch.into()),
                     path: Some(path.clone()),
                     scratch: Some(self.new_scratch(&name)?),
@@ -1855,19 +1855,26 @@ impl Checkout for Places {
                 // that exists, and a stop between leaves a record release
                 // reads.
                 self.write_record(&name, &made)?;
-                if let Some(ports) = Ports::read(checkout)? {
-                    let n = hold_block(&self.blocks()?, &ports, &record)?;
-                    made.block = Some(n);
-                    let first = ports.first(n).expect("a held block fits");
-                    for (i, p) in ports.names.iter().enumerate() {
-                        made.ports
-                            .insert(env_name(p), (first + i as u16).to_string());
-                    }
-                    self.write_record(&name, &made)?;
-                }
                 (made, None)
             }
         };
+        // Session-runs-1 clause 90: a place that holds no block, made now or
+        // kept by a failed release of a worktree sluice held nothing for
+        // (record 0116), is given one where the settings name ports; one
+        // that holds a block keeps it, whatever the policy now lists. What
+        // failed of its release stays on the record.
+        if made.block.is_none() {
+            if let Some(ports) = Ports::read(checkout)? {
+                let n = hold_block(&self.blocks()?, &ports, &record)?;
+                made.block = Some(n);
+                let first = ports.first(n).expect("a held block fits");
+                for (i, p) in ports.names.iter().enumerate() {
+                    made.ports
+                        .insert(env_name(p), (first + i as u16).to_string());
+                }
+                self.write_record(&name, &made)?;
+            }
+        }
         // 35 as amended, rule core.30: a place made before takes the short
         // path, its record naming it before its former scratch is moved.
         if former.is_some() {

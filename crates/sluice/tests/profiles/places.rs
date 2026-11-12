@@ -1355,6 +1355,52 @@ fn an_unheld_worktrees_failed_release_keeps_its_place() {
     assert!(!tmp.exists());
 }
 
+/// Session-runs-1 clause 90, record 0116: a worktree's place held with no
+/// ports, as a failed release of a worktree sluice held nothing for leaves
+/// it, is given a block at its next run where the settings name ports, as
+/// at a first run, and keeps what failed of its release.
+#[test]
+fn a_worktrees_place_without_ports_is_given_them_at_its_next_run() {
+    let _ports = ports_lock();
+    let (repo, _) = scratch("places-portless");
+    let blocks = support::Scratch::new("places-portless-blocks");
+    let p = releasing(&repo).with_blocks(blocks.path().to_path_buf());
+    let session = repo.dir().with_extension("session");
+    let name = adopted_name(&session);
+    p.release_session(
+        &name,
+        Some(&release_policy("main", "echo still up; exit 3")),
+        3,
+    )
+    .unwrap_err();
+    assert!(record_of(&repo, &name)["block"].is_null());
+
+    let place = p
+        .adopt(
+            session.to_str().unwrap(),
+            "main",
+            &ported(&["web"], &ports(1).to_string()),
+            "2026-11-11T09:00:00Z",
+        )
+        .unwrap();
+    let web = port(&place, "SLUICE_PORT_WEB");
+    let record = record_of(&repo, &name);
+    assert!(record["block"].is_u64(), "{record}");
+    assert_eq!(
+        record["ports"]["SLUICE_PORT_WEB"],
+        web.to_string(),
+        "{record}"
+    );
+    let kept = p.session_places().unwrap();
+    assert_eq!(kept[0].ports["SLUICE_PORT_WEB"], web.to_string());
+    let failure = kept[0].release_failed.clone().expect("what failed is kept");
+    assert_eq!(failure.tries, 1);
+    assert!(failure.failed.contains("still up"), "{failure:?}");
+
+    p.free(&name).unwrap();
+    assert!(p.session_places().unwrap().is_empty());
+}
+
 /// 123: a preview whose release command fails keeps its record with what
 /// failed, held once tried more than the retries it was given; freed, its
 /// checkout and record go with nothing run.
