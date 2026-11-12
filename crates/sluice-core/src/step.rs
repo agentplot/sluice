@@ -383,8 +383,13 @@ impl Sluice<'_> {
     /// once a round: a place tried already in this round, held, or made
     /// by another host is passed over. A held place of this host's whose
     /// working copy has gone since is released once, as any gone place is.
+    /// 81: then each place this host made for the branch that no claim of
+    /// its own holds, so the lead releases what it left as every other
+    /// instance does, after a landing left unfinished is settled and
+    /// before the round claims ([`Sluice::release_left`]).
     fn perform_releases(&self, branch: &str, releases: &mut Vec<ReleaseOutcome>) -> Result<()> {
-        let doc = self.read_line(branch)?.doc;
+        let line = self.read_line(branch)?;
+        let doc = &line.doc;
         let elsewhere = |f: &crate::records::FailedRelease| {
             f.host.as_deref().is_some_and(|h| h != self.peer.name)
         };
@@ -402,6 +407,44 @@ impl Sluice<'_> {
                 continue;
             }
             let outcome = self.release_made(branch, place)?;
+            if outcome.how != Releasing::Released {
+                releases.push(outcome);
+            }
+        }
+        self.release_left(&line, releases)
+    }
+
+    /// 81, 123: on every round of this host, the lead's and any other's,
+    /// before it claims: each place it made for the branch of `line`, the
+    /// branch's records as the round read them, that no claim of its own
+    /// holds, its candidate's verdict read, the candidate obsolete or the
+    /// claim lapsed, is released. A place whose release stopped is held
+    /// and passed over while its working copy is there, as is a place
+    /// tried already this round: a held place bars no claim.
+    fn release_left(&self, line: &Line, releases: &mut Vec<ReleaseOutcome>) -> Result<()> {
+        let branch = &line.branch;
+        let held: BTreeSet<&str> = line
+            .doc
+            .candidates
+            .iter()
+            .flat_map(|c| &c.runs)
+            .filter(|r| self.mine(r) && r.state.held())
+            .filter_map(|r| r.place.as_deref())
+            .collect();
+        let prefix = format!("sluice/try/{branch}/");
+        for p in self.seams.checkout.made()? {
+            if !p.starts_with(&prefix) || held.contains(p.as_str()) {
+                continue;
+            }
+            let stopped = line
+                .doc
+                .failed_releases
+                .iter()
+                .any(|f| f.place == p && f.stopped);
+            if (stopped && !self.held_gone(&p)) || releases.iter().any(|o| o.place == p) {
+                continue;
+            }
+            let outcome = self.release_made(branch, &p)?;
             if outcome.how != Releasing::Released {
                 releases.push(outcome);
             }
@@ -3166,7 +3209,8 @@ impl Sluice<'_> {
 
     /// 75, 77, 81: what an instance that does not keep `branch` does for
     /// it: shows it is alive, releases the places it made that no claim of
-    /// its own holds, reports its runs that ended, and claims open runs it
+    /// its own holds ([`Sluice::release_left`], as the lead does too),
+    /// reports its runs that ended, and claims open runs it
     /// may take, earliest first, up to its bound, then starts them. 81,
     /// 123: it claims once each place it left has been released, gone or
     /// held, whatever their releases did: a held place bars no claim, and
@@ -3208,33 +3252,7 @@ impl Sluice<'_> {
             }
         }
 
-        // 81: a place made here that no claim of this host's holds.
-        let held: BTreeSet<String> = line
-            .doc
-            .candidates
-            .iter()
-            .flat_map(|c| &c.runs)
-            .filter(|r| r.host.as_deref() == Some(me.as_str()) && r.state.held())
-            .filter_map(|r| r.place.clone())
-            .collect();
-        let prefix = format!("sluice/try/{branch}/");
-        for p in self.seams.checkout.made()? {
-            if !p.starts_with(&prefix) || held.contains(&p) {
-                continue;
-            }
-            let stopped = line
-                .doc
-                .failed_releases
-                .iter()
-                .any(|f| f.place == p && f.stopped);
-            if (stopped && !self.held_gone(&p)) || releases.iter().any(|o| o.place == p) {
-                continue;
-            }
-            let outcome = self.release_made(branch, &p)?;
-            if outcome.how != Releasing::Released {
-                releases.push(outcome);
-            }
-        }
+        self.release_left(&line, releases)?;
 
         // This host's runs that ended, reported while its claim holds.
         let mine: Vec<(Candidate, usize)> = line
