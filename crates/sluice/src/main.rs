@@ -108,13 +108,19 @@ fn main() {
             });
         std::process::exit(code);
     }
-    // Every ref update in every worktree runs the hook: leave at once
-    // unless git asks for the decision.
+    // Every ref update in every worktree runs the hook: decide nothing
+    // unless git asks for the decision. Whatever the hook decides, it
+    // reads the whole transaction first: git runs it with SIGPIPE
+    // ignored, so a writer that met the pipe closed, the shim's `printf`
+    // among them, would say so on the caller's terminal (124).
     if let Some(Command::Hook { state, .. }) = &cli.command {
-        if state != "prepared" {
-            return;
-        }
-        std::process::exit(hook(cli, retry));
+        let code = if state == "prepared" {
+            hook(cli, retry)
+        } else {
+            0
+        };
+        let _ = std::io::copy(&mut std::io::stdin().lock(), &mut std::io::sink());
+        std::process::exit(code);
     }
     // The host's own settings, read once: telemetry starts from them before
     // the bound opens on them and before the interrupt handler is set, so

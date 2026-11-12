@@ -54,8 +54,9 @@ mod docs {
 pub struct Records {
     local: LocalFiles,
     /// The locks of the branches routed to a remote: one host's steps,
-    /// one at a time (core.14).
-    locks: LocalFiles,
+    /// one at a time (core.14). Each remote's profile shares them, so a
+    /// round keeps its tasks under the lock it took.
+    locks: Rc<LocalFiles>,
     branches: Branches,
     common: PathBuf,
     signing: Option<instance::Signing>,
@@ -88,7 +89,7 @@ impl Records {
     pub fn new(common: &Path, branches: Branches, signing: Option<instance::Signing>) -> Self {
         Records {
             local: LocalFiles::new(common),
-            locks: LocalFiles::at(common.join("sluice-remote").join("locks")),
+            locks: Rc::new(LocalFiles::at(common.join("sluice-remote").join("locks"))),
             branches,
             common: common.to_path_buf(),
             signing,
@@ -205,11 +206,10 @@ impl Records {
             }),
             None => None,
         };
-        let r = Rc::new(RemoteRefs::new(
-            &self.common,
-            self.branches.pushed_refs(remote)?,
-            signing,
-        ));
+        let r = Rc::new(
+            RemoteRefs::new(&self.common, self.branches.pushed_refs(remote)?, signing)
+                .sharing_locks(self.locks.clone()),
+        );
         self.remotes.borrow_mut().insert(remote.into(), r.clone());
         Ok(r)
     }

@@ -39,12 +39,17 @@ use support::{Repo, Scratch};
 
 /// The check every project's test runs: it fails when a rule in the rig's
 /// rules file names it and the file the rule names holds its content, and
-/// goes on until it is ended when a rule names it with the path `-`.
+/// goes on until it is ended when a rule names it with the path `-`, or
+/// with the content `-` and a file the place holds.
 const CHECK: &str = r#"# $1: the task.
 tab=$(printf '\t')
 while IFS="$tab" read -r task path content; do
   if [ "$task" = "$1" ] && [ "$path" = "-" ]; then
     echo "$1: hangs"
+    exec sleep 600
+  fi
+  if [ "$task" = "$1" ] && [ "$content" = "-" ] && [ -f "$path" ]; then
+    echo "$1: $path is there, and it hangs"
     exec sleep 600
   fi
   if [ "$task" = "$1" ] && [ -f "$path" ] && [ "$(cat "$path")" = "$content" ]; then
@@ -534,6 +539,21 @@ impl Real {
         }
     }
 
+    /// `task` runs past any time limit on a combination whose tree holds
+    /// `path`, and as before on any other.
+    fn hangs_with(&self, task: &str, path: &str) {
+        self.fails_with(task, path, "-");
+    }
+
+    /// Until `run` has finished, with no round reading it.
+    fn finished(&self, run: &RunHandle) {
+        let until = Instant::now() + Duration::from_secs(300);
+        while matches!(self.tests.progress(run).unwrap(), Progress::Running) {
+            assert!(Instant::now() < until, "{} never ended", run.0);
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
     /// Commit `changes` in the place `dir`; returns its head.
     fn commit(&self, dir: &Path, changes: &[(&str, Option<&str>)]) -> Rev {
         for (path, content) in changes {
@@ -980,6 +1000,68 @@ fn peers_read_the_last_fetched_state_when_the_remote_is_unreachable() {
     std::fs::rename(&away, bare).unwrap();
     assert_eq!(status.stale.as_deref(), Some("origin"));
     assert_eq!(status.submissions.len(), landed);
+}
+
+/// Rule core.14; 25, 34 (swb-1, 2026-11-12: `sluice wait 56` exiting 3,
+/// every round refused at `keeping <branch>'s tasks without holding its
+/// lock`; breadboard-kit's tries on another host left with their places
+/// and their containers' ports, no `released` logged): with the branch's
+/// records on its remote, the round after one of the host's runs ended,
+/// while another of its runs still tests and says what its tasks are,
+/// keeps those tasks under the lock it took, writes its records, lands
+/// what passed and releases the ended run's try in that round.
+#[test]
+fn peers_a_finished_try_is_released_while_another_run_tests() {
+    use sluice_core::records::RunState;
+
+    let r = Real::peers("peers-tasks", &bolt());
+    r.hangs_with("a:test", "a/hangs");
+    r.work("unit/b", "agent-b", &[("b/lib", Some("b2"))]);
+    r.work("unit/a", "agent-a", &[("a/hangs", Some("yes"))]);
+    let b = r.submit("unit/b");
+    let a = r.submit("unit/a");
+    assert_eq!(r.step(), Step::Stepped);
+    assert_eq!(r.tested(), [vec![b], vec![b, a]]);
+    let run_of = |ids: &[u64]| {
+        let doc = r.doc();
+        let c = doc
+            .candidates
+            .iter()
+            .find(|c| c.submissions == ids)
+            .expect("the combination is formed");
+        let run = &c.runs[0];
+        (
+            c.id.clone(),
+            run.place.clone().expect("a place"),
+            run.run.clone().expect("a run started"),
+        )
+    };
+    let (_, first, ends) = run_of(&[b]);
+    let (both, second, tests) = run_of(&[b, a]);
+    r.finished(&ends);
+    let until = Instant::now() + Duration::from_secs(300);
+    while r.tests.tasks(&tests).unwrap().is_empty() {
+        assert!(Instant::now() < until, "the run never said its tasks");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    assert_eq!(r.step(), Step::Stepped);
+    assert_eq!(r.sub(b).state, Entry::Landed);
+    assert!(!r.live_places().contains(&first), "{first} is left");
+    assert_eq!(r.releases_of(&first), 1);
+    assert!(r.live_places().contains(&second));
+    let doc = r.doc();
+    let still = doc.candidates.iter().find(|c| c.id == both).unwrap();
+    assert_eq!(still.runs[0].state, RunState::Testing);
+    let kept = sluice_seams::State::progress(&r.state, BRANCH).unwrap();
+    assert!(
+        kept.get(&both).is_some_and(|t| !t.is_empty()),
+        "{both}'s tasks are not kept: {kept:?}"
+    );
+
+    r.withdraw(a, sluice_core::Requester::Session("agent-a".into()));
+    r.step();
+    assert!(r.live_places().is_empty(), "{:?}", r.live_places());
 }
 
 /// The run-outcome spec's "The step that started it has exited" (66; rule
