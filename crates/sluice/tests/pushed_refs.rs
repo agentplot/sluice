@@ -22,7 +22,7 @@ use support::http::{
     commands, empty_repository, is_push, listing, lists_for_push, report, takes, unavailable,
     Answer, Count, Fake, Request, Silent, CUT,
 };
-use support::{Repo, Scratch};
+use support::{soon, Repo, Scratch};
 
 fn rev(s: String) -> Rev {
     Rev::new(s)
@@ -281,8 +281,14 @@ fn a_fetch_the_remote_never_answers_is_stopped_and_lets_its_lock_go() {
     );
     assert!(silent.requests().len() > 1, "tried again");
     assert!(silent.all_let_go(), "a helper outlived its try");
+    // A git another test of this binary starts meanwhile may hold the
+    // lock for a moment, until it runs its program (deneb, 2026-11-11: the
+    // lock read held at once after the read returned).
     let lock = std::fs::File::open(repo.dir().join(".git/sluice-fetch.lock")).unwrap();
-    assert!(lock.try_lock().is_ok(), "the fetch lock outlived the fetch");
+    assert!(
+        soon(|| lock.try_lock().is_ok()),
+        "the fetch lock outlived the fetch"
+    );
 }
 
 /// Rules core.28, core.29, record 0109: a fetch waits for the repository's

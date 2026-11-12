@@ -10,6 +10,7 @@ use sluice::{run, Cli, Pause, CONFLICT, FAILED, LANDED};
 use sluice_core::policy::POLICY_PATH;
 use sluice_fakes::Fakes;
 use sluice_seams::{Changes, Outcome, Rev, State};
+use support::soon;
 
 const BRANCH: &str = "bolt/concurrent-units";
 
@@ -3011,26 +3012,6 @@ fn write_as(r: &mut sluice::reader::Reader, doc: &serde_json::Value) {
     match r {
         sluice::reader::Reader::Lead(lead) => lead.write(doc).unwrap(),
         sluice::reader::Reader::Follow(_) => panic!("a follower, where it should read"),
-    }
-}
-
-/// Whether `free` holds within two seconds. A lock a process let go may
-/// still be held for a moment by a process another thread of this binary
-/// starts meanwhile, until it runs its program: a check that a lock is
-/// free allows that moment, and a check that one is held allows nothing
-/// (129). The check's own try of the lock is such a letting go, so it
-/// gives that a moment too before it answers.
-fn soon(mut free: impl FnMut() -> bool) -> bool {
-    let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
-    loop {
-        if free() {
-            std::thread::sleep(std::time::Duration::from_millis(10));
-            return true;
-        }
-        if std::time::Instant::now() >= until {
-            return false;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(20));
     }
 }
 
