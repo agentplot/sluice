@@ -20,7 +20,7 @@ core.30.
 ## 1. The decision recorded
 
 - [x] 1.1 Write the record of design D8 in `docs/adr/`, as Task notes 1.1 gives it, numbered 0116 or the next free number where 0116 is taken on main or this bolt. Add its "Amended in part" line to record 0112. True when `sluice exec bolt/what-a-place-starts-ends-with-it -- moon run root:adrs` passes.
-- [ ] 1.2 In `docs/architecture/core.md`, amend core.16's and core.30's details as Task notes 1.2 words them, each citing the record, and rewrite `site/src/content/docs/architecture/rules.md` with `node site/scripts/rules.mjs`. True when `sluice exec bolt/what-a-place-starts-ends-with-it -- moon run site:rules` passes.
+- [x] 1.2 In `docs/architecture/core.md`, amend core.16's and core.30's details as Task notes 1.2 words them, each citing the record, and rewrite `site/src/content/docs/architecture/rules.md` with `node site/scripts/rules.mjs`. True when `sluice exec bolt/what-a-place-starts-ends-with-it -- moon run site:rules` passes.
 
 ## 2. One bound, whoever asks
 
