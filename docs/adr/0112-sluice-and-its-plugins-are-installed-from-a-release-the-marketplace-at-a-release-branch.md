@@ -60,3 +60,12 @@ Not taken:
 - Bad: a ruleset added later over every branch, or over `release`, would refuse the forced push, and the atomic push would then move nothing, the tag included; such a ruleset needs `release` left out, or the job's identity let through.
 - timber's installs differ until timber's own change.
 - Rule core.55's details take `release`, and rule core.56 says every install command names a release. Record 0111 carries an amendment naming this record.
+
+## Amendment, 2026-11-12: no task checks the install commands, and the flake gives the plugins with the CLI
+
+Status: accepted on 2026-11-12 by agentplot-design, under two rulings of the user's. The first is principle 16 of the family's design (agentplot/blueprints `design/principles.md`), from their words of 2026-11-11 on this record's `root:installs`: "I don't want fucking checks on instructions. That has got to fucking stop. That is my biggest pet peeve. We do not fucking write code tests against Markdown files." The second is their words of 2026-11-12 on a tool's plugins, given on the proposal `timbers-plugins-install-from-its-release`: "This is only acceptable if it means the flake is pinning the plugin to the same version of the CLI that's being installed." That ruling is drafted as principle 17 on agentplot/blueprints' branch `design/a-tools-plugins-come-with-its-cli`. How sluice meets both is agentplot-design's.
+
+- **`root:installs` and `check-installs.sh` go.** No task reads a README, a skill or a site page. Rule core.56 stays, and its writers and reviewers keep it: every install command a page gives names a release.
+- **sluice's flake gives its plugins with its CLI.** The flake exports the herdr plugin and the Claude Code plugin, each built from the same revision as the `sluice` it exports. Wherever a flake installs sluice, the plugins come from that same pin, so a plugin's version is its CLI's with nothing matched by hand. Boomdrive's set takes them from its `sluice` input. The install lines at `v<version>` and the marketplace at `release` stay the way in without Nix.
+
+The decision outcome's bullet on `root:installs` and the last two of its *Not taken* bullets no longer hold.
