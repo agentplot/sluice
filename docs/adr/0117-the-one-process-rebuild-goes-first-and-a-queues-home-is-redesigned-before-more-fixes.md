@@ -1,7 +1,7 @@
 ---
 number: 117
 title: The one-process rebuild goes first, and a queue's home is redesigned before more fixes
-status: proposed
+status: accepted
 date: 2026-11-12
 decision-makers:
 - the user
@@ -9,7 +9,7 @@ decision-makers:
 
 # The one-process rebuild goes first, and a queue's home is redesigned before more fixes
 
-Status: proposed to the user on 2026-11-12, as `briefs.15` has it; accepted only on their yes.
+Status: accepted by the user on 2026-11-12, on their card ("Approved").
 
 Sources: the design review of sluice's main at `045cb7d0`, 2026-11-12 (https://claude.ai/artifact/Vz3Q9zgdTaxmxnZJ7pjF5D), which four reviewers wrote without having made any fix it judged, and which agentplot-design checked against the code; record 0093; record 0116; `bolt/sluice-runs-one-host-process` at `e61acba0`.
 
