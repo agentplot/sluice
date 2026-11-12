@@ -266,6 +266,14 @@ pub fn could_not_run(task: &str, why: &str) -> String {
     format!("{task} could not run: {why}")
 }
 
+/// C.6, 20 (design D5 of the change
+/// `a-signed-run-without-a-sandbox-proves-its-passes`): a check failed
+/// under a key the combination's tree does not bear out, with the check
+/// profile's words for why.
+pub fn not_borne_out(task: &str, why: &str) -> String {
+    format!("{task}: the combination's tree does not bear its key out: {why}")
+}
+
 /// 149: a required check its runner skipped for the tasks `by` it depends
 /// on, which ran and failed; the tasks joined with `, ` and the last with
 /// ` and `.
@@ -317,6 +325,17 @@ pub fn kept_out_refusal(branch: &str, worktree: &str, kept: &[KeptOut]) -> Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The pass-proof spec's "The words" (design D5 of the change
+    /// `a-signed-run-without-a-sandbox-proves-its-passes`).
+    #[test]
+    fn a_key_not_borne_out_is_said_with_why() {
+        assert_eq!(
+            not_borne_out("a:test", "a:test: a/x is not in the tree"),
+            "a:test: the combination's tree does not bear its key out: \
+             a:test: a/x is not in the tree"
+        );
+    }
 
     fn kept(task: &str, line: usize) -> KeptOut {
         KeptOut {

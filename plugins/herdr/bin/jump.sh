@@ -22,9 +22,12 @@ if [ -z "$newest" ] || [ "$newest" = null ]; then
 fi
 k=$(printf '%s' "$newest" | jq -r .key)
 id=$(printf '%s' "$newest" | jq -r .id)
+# The branch the event is on: another branch may hold its number too, so
+# sluice is asked of that branch alone (record 0114).
+branch=$(printf '%s' "$newest" | jq -r .branch)
 path=$(jq -r --arg i "$id" '.[$i].path // empty' "$state/docs/$k.paths" 2>/dev/null)
 if [ -z "$path" ] && [ -f "$state/docs/$k.dir" ]; then
-  path=$(cd "$(cat "$state/docs/$k.dir")" && sluice status "$id" --json 2>/dev/null | jq -r '.from.path // empty')
+  path=$(cd "$(cat "$state/docs/$k.dir")" && sluice status "$id" --branch "$branch" --json 2>/dev/null | jq -r '.from.path // empty')
 fi
 pane=
 [ -n "$path" ] && pane=$(panes_json "$server" | jq -r --arg p "$path" '[.[] | select(.top == $p)] | first // empty | [.pane_id, .tab_id, .workspace_id] | @tsv')

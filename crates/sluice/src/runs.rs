@@ -6,7 +6,8 @@
 //! A step holds nothing between steps (rule core.14) and exits while a run
 //! takes minutes, so the step does not wait for the run. [`Runs::start`]
 //! spawns `sluice supervise <run dir>`, which outlives the step, runs the
-//! command as the leader of a new process group, ends the group when the
+//! command as the leader of a new process group, ends the group, by
+//! weir-bounded's `end_group` (record 0109 as amended 2026-11-11), when the
 //! command exits or its time runs out, and writes `result.json` last.
 //! [`Runs::state`] reads what it wrote.
 //!
@@ -54,9 +55,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use nix::errno::Errno;
-use nix::sys::signal::{killpg, Signal};
 use nix::unistd::Pid;
 use serde::{Deserialize, Serialize};
+use weir_bounded::end_group;
 
 /// What a supervisor runs: `request.json`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -113,8 +114,8 @@ impl Ended {
 pub enum RunState {
     Running,
     Finished(Ended),
-    /// The supervisor stopped without a result; its group has been ended
-    /// (60).
+    /// The supervisor stopped without a result, its group ended, or the
+    /// run's directory is gone (60).
     Lost,
 }
 
@@ -348,11 +349,15 @@ impl Runs {
             .with_context(|| format!("removing the old run {}", dir.display()))
     }
 
-    /// The run of the place `name`.
+    /// The run of the place `name`. One whose directory holds no request,
+    /// its place released or the directory gone, stopped before it
+    /// reported: it is lost, as one whose supervisor stopped is (60), and
+    /// no one reading it fails for it. [`Runs::start`] writes the request
+    /// first, so a run started reads as going until it ends.
     pub fn state(&self, name: &str) -> Result<RunState> {
         let dir = self.dir(name);
         if !dir.join("request.json").exists() {
-            bail!("no run for place {name}");
+            return Ok(RunState::Lost);
         }
         if let Some(ended) = read_ended(&dir)? {
             return Ok(RunState::Finished(ended));
@@ -701,33 +706,6 @@ fn log_end(path: &Path) -> String {
     let text = std::fs::read(path).unwrap_or_default();
     let text = String::from_utf8_lossy(&text[text.len().saturating_sub(2000)..]).into_owned();
     text.trim().to_string()
-}
-
-/// Ask the group `pgid` to end, give it `grace`, then kill what is left.
-/// `reap` reaps the leader when the caller is its parent, since a zombie
-/// leader keeps its group alive; it returns whether the leader is reaped.
-pub fn end_group(pgid: i32, grace: Duration, reap: &mut dyn FnMut() -> bool) {
-    let group = Pid::from_raw(pgid);
-    let alive = |reap: &mut dyn FnMut() -> bool| {
-        reap();
-        killpg(group, None) != Err(Errno::ESRCH)
-    };
-    if !alive(reap) {
-        return;
-    }
-    let _ = killpg(group, Signal::SIGTERM);
-    let until = Instant::now() + grace;
-    while Instant::now() < until {
-        if !alive(reap) {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    let _ = killpg(group, Signal::SIGKILL);
-    let until = Instant::now() + Duration::from_secs(5);
-    while alive(reap) && Instant::now() < until {
-        std::thread::sleep(Duration::from_millis(20));
-    }
 }
 
 /// Which release command a session's place is released with.

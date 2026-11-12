@@ -1643,19 +1643,24 @@ impl OnGitHub {
 /// needing a review says it waits to be taken in on `b`, and for what.
 /// Once the second round has posted the first as under test and the
 /// forecast behind both, a round where neither moved posts nothing on
-/// either; the first's check takes five seconds, so nothing lands
-/// between them (D1; rule core.32).
+/// either; the first's check goes on until the test ends it, so nothing
+/// lands between them however long a round takes on a loaded host (D1;
+/// rule core.32). A check of five seconds left room for one: deneb,
+/// 2026-11-12, the third round posting the second's check again as
+/// `queued: next on main`.
 #[test]
 fn the_check_names_its_host_and_queue() {
     let g = OnGitHub::checked("pr-host-queue", "reviews = 1", "1m", "parallel = 1\n");
     g.named("b", "");
-    let (a, a_head) = g.by_hand("unit/ahead", &[("slow", Some("s\n"))], false);
+    let hang = Hang::in_repo(&g);
+    let (a, a_head) = g.by_hand("unit/ahead", &[("hang", Some(&hang.file()))], false);
     let (b, b_head) = g.by_hand("unit/behind", &[("b.txt", Some("b\n"))], false);
     let (_, c_head) = g.by_hand("unit/unreviewed", &[("c.txt", Some("c\n"))], false);
     for (n, head) in [(a, &a_head), (b, &b_head)] {
         g.gh.forge.review(n, "reviewer", "APPROVED", head).unwrap();
     }
     g.step();
+    started(&hang.pid);
     let (ahead, behind) = (id_of(&g.of(a)), id_of(&g.of(b)));
 
     let (status, title, summary) = g.posted(&b_head).unwrap();
@@ -1694,16 +1699,46 @@ fn the_check_names_its_host_and_queue() {
     assert_eq!(g.posts_on(&c_head), on_c, "{:?}", g.posted(&c_head));
 }
 
+/// A check that goes on until the test ends it, the first time it runs:
+/// `file` is the `hang` file's content, naming `pid`, where the check
+/// writes its process. Dropped, it ends that process, passed or failed,
+/// so no check a test started outlives it.
+struct Hang {
+    pid: PathBuf,
+}
+
+impl Hang {
+    fn in_repo(g: &OnGitHub) -> Hang {
+        Hang {
+            pid: g.repo.dir().join(".git/hang.pid"),
+        }
+    }
+
+    fn file(&self) -> String {
+        format!("{}\n", self.pid.display())
+    }
+}
+
+impl Drop for Hang {
+    fn drop(&mut self) {
+        if let Ok(process) = std::fs::read_to_string(&self.pid) {
+            let _ = Command::new("kill").arg(process.trim()).status();
+        }
+    }
+}
+
 /// pull-request-status, "The queue ahead moves": once the submission ahead
 /// lands, host `b` posts the check of the one behind it again, the same
-/// submission with nothing ahead of it. Its own check takes five seconds,
-/// so the round after the landing posts it before it could land (D1).
+/// submission with nothing ahead of it. Its own check goes on until the
+/// test ends it, so the round after the landing posts it before it could
+/// land, however long a round takes on a loaded host (D1).
 #[test]
 fn the_queue_block_moves_with_the_queue_ahead() {
     let g = OnGitHub::checked("pr-host-queue-moves", "", "1m", "parallel = 1\n");
     g.named("b", "");
+    let hang = Hang::in_repo(&g);
     let (a, _) = g.by_hand("unit/first", &[("f.txt", Some("f\n"))], false);
-    let (b, b_head) = g.by_hand("unit/second", &[("slow", Some("s\n"))], false);
+    let (b, b_head) = g.by_hand("unit/second", &[("hang", Some(&hang.file()))], false);
     g.step();
     let (ahead, behind) = (id_of(&g.of(a)), id_of(&g.of(b)));
     let before = block(&g.posted(&b_head).unwrap().2);

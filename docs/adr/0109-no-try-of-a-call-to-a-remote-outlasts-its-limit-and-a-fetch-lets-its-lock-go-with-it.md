@@ -6,14 +6,15 @@ date: 2026-11-10
 decision-makers:
 - the code stage of fix/main--a-hung-fetch-holds-no-lock
 - the code stage of change/no-try-of-a-call-to-a-remote-outlasts-its-limit
+- the code stage of chore/sluice-takes-weir-bounded
 ---
 
 # No try of a call to a remote outlasts its limit, and a fetch lets its lock go with it
 
 Status: accepted. This is the code stage's own decision under clause 134 as written and rules core.28 and core.29, which it keeps. It is cheap to change later.
 
-Deciders: the code stage of `fix/main--a-hung-fetch-holds-no-lock`, which decided it on main at 69bc9934, and the code stage of `change/no-try-of-a-call-to-a-remote-outlasts-its-limit`, which built it on main beside record 0110.
-Sources: agentplot-ops's signal `2026-11-10-agentplot-ops-e19d134d/01`; `agentplot/blueprints:design/sluice/requirements.md` clauses 122, 133 and 134 at 60c25ef; the `remote-retry` spec's "The policy's time is set by what called it" and "One fetch at a time in a repository", and the OpenSpec change `no-try-of-a-call-to-a-remote-outlasts-its-limit`, which carries its delta; rules core.10, core.28, core.29; records 0017, 0062, 0086, 0108, 0110; `crates/sluice/src/profiles/pushed_refs.rs` `call`, `fetching`, `git_as` and `under_own_fetch`, `crates/sluice/src/retry.rs` `Policy::run`, and `crates/sluice/src/identity.rs` `CredentialCommand`, as main held them at 5554f215, once record 0110 had landed.
+Deciders: the code stage of `fix/main--a-hung-fetch-holds-no-lock`, which decided it on main at 69bc9934, and the code stage of `change/no-try-of-a-call-to-a-remote-outlasts-its-limit`, which built it on main beside record 0110. The amendment of 2026-11-11: agentplot-design's ruling of 2026-11-10 for its direction, and the code stage of `chore/sluice-takes-weir-bounded` for the choices within it.
+Sources: agentplot-ops's signal `2026-11-10-agentplot-ops-e19d134d/01`; `agentplot/blueprints:design/sluice/requirements.md` clauses 122, 133 and 134 at 60c25ef; the `remote-retry` spec's "The policy's time is set by what called it" and "One fetch at a time in a repository", and the OpenSpec change `no-try-of-a-call-to-a-remote-outlasts-its-limit`, which carries its delta; rules core.10, core.28, core.29; records 0017, 0062, 0086, 0108, 0110; `crates/sluice/src/profiles/pushed_refs.rs` `call`, `fetching`, `git_as` and `under_own_fetch`, `crates/sluice/src/retry.rs` `Policy::run`, and `crates/sluice/src/identity.rs` `CredentialCommand`, as main held them at 5554f215, once record 0110 had landed. The amendment of 2026-11-11: `agentplot/blueprints:design/weir/requirements.md` C.3 and section 9 as amended at ad3a1ae; agentplot/weir record 0008 and its crate `weir-bounded` at weir 9cba691; `crates/sluice/src/bounded.rs`, `runs::end_group` and `identity.rs` `CredentialCommand::spawn`, as the bolt `sluice-takes-weirs-bounded-calls` held them at 47fa1fcc.
 
 ## Context and problem statement
 
@@ -57,3 +58,19 @@ Option 1.
 - A wait stops up to thirty seconds after Ctrl-C when a try is in flight. Before, it stopped at once, since git took the Ctrl-C too.
 - A transfer that takes longer than thirty seconds is stopped too. The largest repository on deneb is 21 MiB, and sluice's fetches are incremental. A host whose fetches need longer raises `TRY_FOR`, one value for every call.
 - Flume and the Boomdrive runner run their own git fetches with no limit: Flume's `fetch_branch` in `crates/flume/src/git.rs`, and the runner's in `crates/boomdrive/src/clone.rs`. Neither holds a lock that a sluice read waits on. Neither is changed here. The family has no shared owner of a git call's limit to cite, so this is told to the orchestrator.
+
+## Amendment, 2026-11-11: the limit is weir-bounded's
+
+agentplot-design ruled on 2026-11-10 that weir owns the code of a call's limit, since sluice, Flume and Boomdrive already take weir's crates. weir's statement, section 9 as amended at agentplot/blueprints ad3a1ae, has each of them take `weir-bounded` in place of a copy of its own, in a change of its own, and weir record 0008 built the crate from this record's, at weir 9cba691. The chore `sluice-takes-weir-bounded` takes it. The limit, its grace and a stopped call's words are as decided above. These are the code stage's own choices within the ruling, each cheap to change, with the path not taken.
+
+- **weir-bounded is the one owner.** sluice pins weir at 9cba691 and depends on `weir-bounded`, and `crates/sluice/src/bounded.rs` is gone. A git try to a remote runs through `weir_bounded::output` to the policy's `try_for`, and a stopped try fails in `weir_bounded::stopped`'s words, which are the words above. `retry::TRY_FOR` is `weir_bounded::TRY_FOR`, which the forge's API calls and a credential command's limit take through it. Not taken: `bounded.rs` kept as a wrapper over weir's, a second place to read one behaviour from.
+- **A check's group ends by the same call.** `runs::end_group`, by which a check's run, its release and `Runs::end` end a group, is gone too: they call `weir_bounded::end_group`, which weir record 0008 copied from it, asking, its grace, the kill and the five seconds after it unchanged. Not taken: keeping it for the checks, which are no call to a remote. One behaviour would again have two owners, which is this record's reason for one, and weir record 0008 names it among what sluice takes.
+- **What a try prints is read from unnamed files once it has ended, with no thread.** weir-bounded writes a try's standard output and error to unnamed temporary files, and reads them once its leader has exited and no process of its group is left. A process outside the group can no longer hold a try open by holding its pipe, since there is no pipe to hold. What is kept, and whether it is cut, are as before, so a credential command's words cut at 64 KiB still end at their last whole line (record 0108 as amended 2026-11-10).
+- **What a credential command is asked is written into a pipe before it starts.** weir-bounded starts the command itself and leaves its standard input to the caller. `CredentialCommand` writes `get`'s or `erase`'s lines into a pipe whose write end never waits, closes that end and hands the other to the command as its standard input. The lines are a few short ones, which a pipe holds whole with no reader; what it could not hold would fail before anything started. A start the system refuses because the program is still open for writing is tried again as before, each try with a pipe of its own. Not taken: an unnamed temporary file, as weir-bounded keeps what a try prints, which would put the token `erase` is told on disk, where record 0108 keeps nothing of a token. Not taken either: a thread writing the pipe as the command reads it, which weir-bounded's reason for files rules out.
+- **No call of weir-branch's is sluice's.** sluice depends on no `weir-branch`, so weir-branch's fetches and pushes, which weir-bounded bounds at 9cba691, are none of sluice's calls to a remote. Should sluice take weir-branch, its calls are bounded by the same crate.
+
+### Consequences of the amendment
+
+- sluice's calls to a remote end as before: each try within thirty seconds and its two of grace, in the same words. A test of weir-bounded's, not of sluice's, holds the group's ending, the kept part and the cut.
+- The family's owner of a call's limit is `weir-bounded`. Flume's `fetch_branch` and the runner's `boomdrive-bounded` take it in changes of their own.
+- Rule core.29's details read with it.

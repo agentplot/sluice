@@ -110,12 +110,21 @@ so nothing stale stays if the plugin stops.
 
 ## Setting it up
 
-The plugin changes none of herdr's config. Run the `setup` action
+Ask your agent to set up sluice's herdr plugin. With sluice's Claude Code
+plugin installed, its setup skill reads your `config.toml`, binds the
+popup and the jump to keys you have not bound, and adds the sidebar rows,
+the tab bar's entry and toasts to the file as you keep it. It runs
+`herdr config check` and `herdr server reload-config`, and says what it
+added. Nothing of sluice's writes the file otherwise: the plugin changes
+none of herdr's config.
+
+Or add the lines yourself. Run the `setup` action
 (`herdr plugin action invoke agentplot.sluice.setup`) to see the snippets
-with this machine's paths filled in, and add them to herdr's `config.toml`
-yourself, or to whatever generates it. The keys, `prefix+m` for the
-queue and `prefix+shift+m` for the jump, were chosen to avoid herdr's own
-default keys; if you have bound them already, pick another free key.
+with this machine's paths filled in, and add them to herdr's `config.toml`,
+or to whatever generates it, then run `herdr config check` and
+`herdr server reload-config`. The keys, `prefix+m` for the queue and
+`prefix+shift+m` for the jump, were chosen to avoid herdr's own default
+keys; if you have bound them already, pick another free key.
 
 
 ```toml

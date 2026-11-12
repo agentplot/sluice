@@ -16,8 +16,8 @@ sidebar:
 | `sluice overview` | Every branch's queue at a glance: the combinations under test, the submissions still queued, the latest landings, blames and conflicts, and the worktrees and previews held. `--json` for tools: it also gives each branch's `revision`, as the read found it, and `after_landed`, the landed submissions a queued one's `--after` names, and each combination's `on`, the branch's revision it was formed on. `--json --watch` prints it again each time it changes. A read of the queue it couldn't make is printed as one line, the error document with what it was refused. The watch reads again a second later. It ends only when it's stopped, when its repository is gone, or where the repository has no sluice: no state, and no branch here or a remote's as last fetched holding `.config/sluice.toml`. Its last line is then the overview with `"set_up": false`, and it exits `0`; nothing is fetched to tell. One process of the repository on the host reads the queue, `sluice run` where it runs and otherwise the first watch or wait, and the others follow what it read. A watch of a newer sluice takes over the reading from an older watch or wait. `sluice overview` alone always reads it itself. |
 | `sluice run` | Work every branch's queue until stopped. One runs per repository on a host: a second one runs nothing, and says so once, until the first stops. While it runs, every wait and watch of the repository on the host follows it ([below](#who-runs-the-rounds)). On a host whose config names a [`[signing]`](/sluice/reference/configuration/#signing) key, it also takes runs of the branches that trust its signer. It takes a change of [the host's config](/sluice/reference/configuration/#the-hosts-config-configsluiceconfigtoml) up before its next pass, with nothing to restart. A change of `[telemetry]` starts it afresh, in the same process, so whatever runs it keeps following it. |
 | `sluice step <branch>` | One round of a branch's work, then exit: for cron, CI or a hook. Says `led` when another host keeps the branch, and `held` when the revision it reads lacks the branch's last landing ([below](#sluice-branch)). `--json` for scripts. |
-| `sluice amend <id>` | Reorder a queued submission (`--after`, `--priority`) until it is under test. `--json` for scripts. |
-| `sluice withdraw <id>` | Take a submission out of the queue. One already withdrawn is said so, and exits `0`; one landed is refused. `--json` for scripts. |
+| `sluice amend <id>` | Reorder a queued submission (`--after`, `--priority`) until it is under test. `--branch <branch>` names the branch its number is on, where more than one branch holds it ([below](#sluice-wait)). `--json` for scripts. |
+| `sluice withdraw <id>` | Take a submission out of the queue. One already withdrawn is said so, and exits `0`; one landed is refused. `--branch <branch>` names the branch its number is on, where more than one branch holds it ([below](#sluice-wait)). `--json` for scripts. |
 | `sluice protect` | Install the branch-protection hook; `--remove` takes it out. Warns of a worktree that has checked out a protected branch. `--json` for scripts. |
 | `sluice exec <branch>` | Run the tests this worktree's head affects against the branch, in the worktree, under the host's bound, with the worktree's ports and the branch's limits. `-- <command>` runs a command instead. `--json` for scripts. |
 | `sluice equip <branch>` | Make this worktree ready for the branch's runner, as sluice makes every checkout ready before it runs anything there: the toolchain, then under moon the tool versions `.prototools` lists installed, moon's version checked and `moon setup`. It holds nothing. `--at <revision>` reads the policy at that revision; `--json` for scripts ([below](#sluice-equip)). |
@@ -1072,6 +1072,25 @@ submission 250 is on none of the branches sluice could read
 feature/cache could not be read: [checkout] declares a cache, which sluice no longer keeps: …
 ```
 
+A number names a submission only where one branch holds it. A branch
+whose state is on its remote numbers its submissions from the remote's
+count. A branch in this host's own files numbers them from the host's,
+so two branches can hold one number. A wait on such a number is refused, and
+runs no round. It names each branch that holds the number, then each
+branch it could not read, with why, and exits `64`, since its `2` is a
+conflict. `--branch <branch>` names the one meant, and the wait then
+reads that branch alone. `sluice status <id>`, `sluice amend <id>` and
+`sluice withdraw <id>` are refused the same way, exit `2`, and take
+`--branch` too. Under `--json`, the error document's `next` gives the
+command once with each branch:
+
+```console
+$ sluice withdraw 26
+refused: submission 26 is on more than one branch: feature/a, feature/b; name one with --branch, as sluice withdraw 26 --branch feature/a
+$ sluice withdraw 26 --branch feature/b
+withdrew #26
+```
+
 With `--timeout`, as `90s`, `9m` or `1h30m`, it returns once that long
 has passed and exits `5`, with the submission as it stands. The
 submission stays in the queue. An agent whose tool calls end before a
@@ -1468,7 +1487,9 @@ amend` and `sluice withdraw` find a submission by its number. Each exits
 `3` as well when the number is on none of the branches it could read
 while some branch could not be read, and names each such branch with
 why. Each says there is no such submission, exit `1`, only when every
-branch was read. `sluice run --rounds <n>` exits `3` when its last
+branch was read. Each refuses a number more than one branch holds,
+naming each branch, until `--branch <branch>` names one: `sluice wait`
+exits `64` for it, and the others `2`. `sluice run --rounds <n>` exits `3` when its last
 round passed a branch by, naming each such branch on stderr with why
 (see [Who runs the rounds](#who-runs-the-rounds)). A command exits `64` when it cannot read its
 command line: an unknown command, flag or value, or a missing argument. `64` is kept apart from

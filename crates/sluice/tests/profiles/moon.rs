@@ -14,8 +14,8 @@ use std::time::{Duration, Instant};
 use sluice::instance::{HostCache, Instance};
 use sluice::profiles::checks::Checks;
 use sluice_seams::{
-    FailedBy, Limits, Network, NotRun, Outcome, Place, Progress, Reading, Reads, Rev, RunHandle,
-    RunReport, RunRequest, Setting, Settings, Source, TaskState, Tests,
+    FailedBy, Limits, Network, NotRun, Outcome, Place, Progress, Reading, Reads, Refused, Rev,
+    RunHandle, RunReport, RunRequest, Setting, Settings, Source, TaskState, Tests,
 };
 use support::Repo;
 
@@ -1120,6 +1120,10 @@ fn a_key_is_checked_against_the_tree_without_running() {
 /// Design D9: the profile's `proven` keeps every task whose key the
 /// candidate's tree bears out, and drops one whose manifest was changed
 /// after the run, as a check that lies about its key would leave it.
+/// Design D5 of `a-signed-run-without-a-sandbox-proves-its-passes`, the
+/// pass-proof spec's "The check profile says why": the dropped task is
+/// answered among the refused with its key and the words `check_key`
+/// gave.
 #[test]
 fn proven_drops_a_key_the_tree_does_not_bear_out() {
     let repo = workspace("moon-proven");
@@ -1142,14 +1146,39 @@ fn proven_drops_a_key_the_tree_does_not_bear_out() {
         .unwrap()
         .replace("alpha/value.txt", "alpha/other.txt");
     std::fs::write(&blob, forged).unwrap();
-    assert_eq!(c.proven(&run, &report).unwrap().proven, ["beta:test"]);
+    let proof = c.proven(&run, &report).unwrap();
+    assert_eq!(proof.proven, ["beta:test"]);
+    assert_eq!(proof.unkept, []);
+    let words = sluice::profiles::moon::check_key(
+        &alpha.hash,
+        "alpha:test",
+        &|k| sluice::profiles::moon::blob_in(&repo.dir().join(".moon/cache"), k),
+        &|p| sluice::profiles::moon::file_at(repo.dir(), "HEAD", p),
+    )
+    .unwrap_err();
+    assert_eq!(
+        proof.refused,
+        [Refused {
+            task: "alpha:test".into(),
+            key: alpha.hash.clone(),
+            why: format!("{words:#}"),
+        }]
+    );
+    assert!(
+        proof.refused[0].why.starts_with("alpha:test: "),
+        "{proof:?}"
+    );
 }
 
 /// Record 0105, design D2 to D4 of the change
 /// `a-pass-nothing-proves-blames-no-one` (114): a pass whose manifest is
 /// gone from the store the profile reads is neither proven nor dropped
 /// as a key the tree does not bear out. It is unkept, saying why and
-/// naming the store, read from the file's absence alone.
+/// naming the store, read from the file's absence alone. Design D3 of
+/// `a-signed-run-without-a-sandbox-proves-its-passes`, the pass-proof
+/// spec's "A manifest gone from the store": it names the missing
+/// manifest's key, and what the store says of itself, which kept
+/// `beta:test`'s.
 #[test]
 fn a_pass_whose_manifest_is_gone_is_unkept_naming_the_store() {
     let repo = workspace("moon-unkept");
@@ -1177,9 +1206,11 @@ fn a_pass_whose_manifest_is_gone_is_unkept_naming_the_store() {
             task: "alpha:test".into(),
             reason: format!(
                 "it passed, but nothing the run kept proves it ran: \
-                 moon's manifest of it is not in {}",
+                 moon's manifest of it is not in {}, \
+                 where moon kept others of the run's manifests",
                 store.display()
             ),
+            key: Some(alpha.hash.clone()),
         }]
     );
 }
@@ -1460,6 +1491,164 @@ fn a_key_is_read_under_the_home_the_toolchain_gives_moon() {
         "no manifest in the worktree"
     );
     assert_eq!(c.proven(&run, &report).unwrap().proven, ["alpha:test"]);
+}
+
+/// C.2 moon row, the pass-proof spec's "An install and a check depending
+/// on it" (design of `a-signed-run-without-a-sandbox-proves-its-passes`,
+/// "What moon 2.6.1 does"): on the layout of
+/// `a_key_is_read_under_the_home_the_toolchain_gives_moon`, a task moon
+/// does not cache, with no outputs, and a check depending on it, run with
+/// no replay, each have their manifest in `cache/shared` under the
+/// toolchain's moon home; the check's names the uncached task `ignored`,
+/// and both are proven.
+#[test]
+fn a_task_moon_does_not_cache_and_its_dependent_are_proven() {
+    let src = workspace("moon-uncached-src");
+    change(
+        &src,
+        &[(
+            "alpha/moon.yml",
+            "tasks:\n  install:\n    command: 'true'\n    options:\n      cache: false\n  \
+             test:\n    command: 'sh test.sh'\n    inputs: ['test.sh', 'value.txt', 'notes.md']\n    \
+             deps: ['alpha:install']\n    tags: [check-fast]\n",
+        )],
+    );
+    let scratch = support::Scratch::new("moon-uncached");
+    let bare = scratch.path().join("repo.git");
+    let worktree = scratch.path().join("main");
+    let home = scratch.path().join("moon-home");
+    src.git(&["clone", "-q", "--bare", ".", bare.to_str().unwrap()]);
+    src.git(&[
+        "--git-dir",
+        bare.to_str().unwrap(),
+        "worktree",
+        "add",
+        "-q",
+        worktree.to_str().unwrap(),
+        "main",
+    ]);
+    let mut req = request(&src, "p1", &["alpha:install", "alpha:test"], None);
+    req.place.path = worktree.clone();
+    req.replay = false;
+    req.tests.insert(
+        "toolchain".into(),
+        Setting::List(vec![
+            "echo".into(),
+            format!(
+                "export MOON_HOME='{}' MOON_CACHE_SHARED_WORKTREE_CACHE=true \
+                 MOON_EXPERIMENT_CAS_OUTPUTS_CACHE=true",
+                home.display()
+            ),
+        ]),
+    );
+    let c = checks_in(&bare, Vec::new());
+    let (run, report) = finish_run(&c, &req);
+    let mut ran = tasks(&report);
+    ran.sort_by(|a, b| a.0.cmp(&b.0));
+    assert_eq!(
+        ran,
+        [
+            ("alpha:install".into(), Outcome::Pass, false),
+            ("alpha:test".into(), Outcome::Pass, false),
+        ]
+    );
+
+    let shared = home.join("cache/shared");
+    let manifest = |key: &str| -> serde_json::Value {
+        let at = shared.join("blobs").join(&key[..2]).join(&key[2..]);
+        let bytes =
+            std::fs::read(&at).unwrap_or_else(|_| panic!("no manifest at {}", at.display()));
+        serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()[0].clone()
+    };
+    let key = |task: &str| {
+        report
+            .tasks
+            .iter()
+            .find(|t| t.task == task)
+            .unwrap()
+            .hash
+            .clone()
+    };
+    assert_eq!(manifest(&key("alpha:install"))["target"], "alpha:install");
+    assert_eq!(
+        manifest(&key("alpha:test"))["deps"]["alpha:install"],
+        "ignored"
+    );
+    let mut proven = c.proven(&run, &report).unwrap().proven;
+    proven.sort();
+    assert_eq!(proven, ["alpha:install", "alpha:test"]);
+}
+
+/// Design D1 of the change `a-signed-run-without-a-sandbox-proves-its-
+/// passes` (C.2 moon row; rule core.9), the pass-proof spec's "moon kept
+/// the manifest in the checkout" and "Neither store holds it": on the
+/// layout of `a_key_is_read_under_the_home_the_toolchain_gives_moon`, a
+/// manifest moon kept in the checkout's own `.moon/cache` and not in the
+/// shared store the run's record names proves its key; one in neither is
+/// a pass the run kept no proof of, naming the shared store.
+#[test]
+fn a_manifest_moon_kept_in_the_checkout_proves_its_key() {
+    let src = workspace("moon-checkout-store-src");
+    let scratch = support::Scratch::new("moon-checkout-store");
+    let bare = scratch.path().join("repo.git");
+    let worktree = scratch.path().join("main");
+    let home = scratch.path().join("moon-home");
+    src.git(&["clone", "-q", "--bare", ".", bare.to_str().unwrap()]);
+    src.git(&[
+        "--git-dir",
+        bare.to_str().unwrap(),
+        "worktree",
+        "add",
+        "-q",
+        worktree.to_str().unwrap(),
+        "main",
+    ]);
+    let mut req = request(&src, "p1", &["alpha:test"], None);
+    req.place.path = worktree.clone();
+    req.tests.insert(
+        "toolchain".into(),
+        Setting::List(vec![
+            "echo".into(),
+            format!(
+                "export MOON_HOME='{}' MOON_CACHE_SHARED_WORKTREE_CACHE=true \
+                 MOON_EXPERIMENT_CAS_OUTPUTS_CACHE=true",
+                home.display()
+            ),
+        ]),
+    );
+    let c = checks_in(&bare, Vec::new());
+    let (run, report) = finish_run(&c, &req);
+    assert_eq!(
+        tasks(&report),
+        [("alpha:test".into(), Outcome::Pass, false)]
+    );
+
+    let key = &report.tasks[0].hash;
+    let shared = home.join("cache/shared");
+    let manifest = |root: &Path| root.join("blobs").join(&key[..2]).join(&key[2..]);
+    let own = manifest(&worktree.join(".moon/cache"));
+    std::fs::create_dir_all(own.parent().unwrap()).unwrap();
+    std::fs::rename(manifest(&shared), &own).unwrap();
+    assert!(
+        !manifest(&shared).exists(),
+        "no manifest in the shared store"
+    );
+    let proof = c.proven(&run, &report).unwrap();
+    assert_eq!(proof.proven, ["alpha:test"]);
+    assert_eq!(proof.unkept, []);
+
+    std::fs::remove_file(&own).unwrap();
+    let proof = c.proven(&run, &report).unwrap();
+    assert_eq!(proof.proven, Vec::<String>::new());
+    assert_eq!(proof.unkept.len(), 1, "{proof:?}");
+    assert_eq!(proof.unkept[0].task, "alpha:test");
+    assert!(
+        proof.unkept[0].reason.contains(&format!(
+            "moon's manifest of it is not in {}",
+            shared.display()
+        )),
+        "{proof:?}"
+    );
 }
 
 /// Record 0105 point 1 (C.2 moon and sandbox rows as amended at

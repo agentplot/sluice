@@ -31,17 +31,28 @@ and worktrees have it serve that server. It stops once none of them runs.
 
 ## Set up your keys and sidebar
 
-The plugin changes none of herdr's config. Run its setup action:
+Ask your agent to set up sluice's herdr plugin. With sluice's Claude Code
+plugin installed, its setup skill reads your `config.toml`. It binds the
+status popup and the jump to keys you have not bound, and adds the
+sidebar rows, the tab bar's queue and toasts to the file as you keep it.
+It runs `herdr config check` and `herdr server reload-config`, and says
+what it added. Nothing of sluice's writes the file otherwise.
+
+### By hand
+
+The plugin changes none of herdr's config. To add its lines yourself,
+run its setup action:
 
 ```sh
 herdr plugin action invoke agentplot.sluice.setup
 ```
 
-It shows the snippets to add to herdr's `config.toml`, with your paths
-filled in. They bind `prefix+m` to the status popup and a key to the jump.
-They add a row under each agent in the sidebar, the queue on each
-workspace's row and the queue in the tab bar, and turn `[ui.toast]` on for
-toasts. Then run `herdr server reload-config`.
+It shows the snippets to add to herdr's `config.toml`, or to whatever
+generates it, with your paths filled in. They bind `prefix+m` to the
+status popup and a key to the jump. They add a row under each agent in the
+sidebar, the queue on each workspace's row and the queue in the tab bar,
+and turn `[ui.toast]` on for toasts. Then run `herdr config check` and
+`herdr server reload-config`.
 
 The tab bar's entry names a copy of the plugin's segment script from
 `$HOME`:
@@ -49,7 +60,7 @@ The tab bar's entry names a copy of the plugin's segment script from
 ```toml
 [ui]
 tab_bar_right = [
-  { type = "command", command = 'sh "$HOME/.local/state/herdr/plugins/agentplot.sluice/segment/bin/segment.sh"', interval_seconds = 5, timeout_seconds = 2 },
+  { type = "command", command = 'sh "$HOME/.local/state/herdr/plugins/agentplot.sluice/segment/bin/segment.sh"', interval_seconds = 5, timeout_seconds = 30 },
 ]
 ```
 
@@ -57,6 +68,8 @@ herdr runs the command through `/bin/sh -lc`, which fills in each host's
 home directory. So one `config.toml` serves a Mac and a Linux box alike,
 wherever herdr keeps its state below the home directory, as it does by
 default. The setup action prints the command for the host it runs on.
+herdr clears the tab bar's queue when a run outlasts `timeout_seconds`,
+so at 30 a slow run on a loaded host is late, never blank.
 
 ## The status popup
 
