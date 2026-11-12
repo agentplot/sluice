@@ -1,3 +1,10 @@
+## Purpose
+
+A submission's number names one submission only where one branch holds
+it: a number more than one branch holds is refused naming each, and the
+command that asked takes the branch to name the one it means (26;
+record 0114).
+
 ## ADDED Requirements
 
 ### Requirement: A number more than one branch holds names none of them alone
