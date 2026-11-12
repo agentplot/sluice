@@ -113,8 +113,8 @@ impl Ended {
 pub enum RunState {
     Running,
     Finished(Ended),
-    /// The supervisor stopped without a result; its group has been ended
-    /// (60).
+    /// The supervisor stopped without a result, its group ended, or the
+    /// run's directory is gone (60).
     Lost,
 }
 
@@ -348,11 +348,15 @@ impl Runs {
             .with_context(|| format!("removing the old run {}", dir.display()))
     }
 
-    /// The run of the place `name`.
+    /// The run of the place `name`. One whose directory holds no request,
+    /// its place released or the directory gone, stopped before it
+    /// reported: it is lost, as one whose supervisor stopped is (60), and
+    /// no one reading it fails for it. [`Runs::start`] writes the request
+    /// first, so a run started reads as going until it ends.
     pub fn state(&self, name: &str) -> Result<RunState> {
         let dir = self.dir(name);
         if !dir.join("request.json").exists() {
-            bail!("no run for place {name}");
+            return Ok(RunState::Lost);
         }
         if let Some(ended) = read_ended(&dir)? {
             return Ok(RunState::Finished(ended));

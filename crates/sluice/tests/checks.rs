@@ -122,6 +122,19 @@ fn a_command_passes_or_fails_by_its_exit() {
     assert_eq!(slow.detail, None);
 }
 
+/// 60: a run whose folder is gone, its place released or the folder
+/// removed, has no outcome: its progress reads as lost, so the round runs
+/// its checks again, and never fails for it.
+#[test]
+fn a_run_whose_folder_is_gone_reads_as_lost() {
+    let repo = Repo::new("checks-gone");
+    let c = checks(&repo);
+    let (run, _) = ran(&c, &request(&repo, "p1", command("true")));
+    std::fs::remove_dir_all(c.runs().dir(&run.0)).unwrap();
+    assert!(matches!(c.progress(&run).unwrap(), Progress::Lost));
+    assert!(c.tasks(&run).unwrap().is_empty());
+}
+
 /// 66: a run over its time limit is ended and reported timed out, with no
 /// outcome observed.
 #[test]
