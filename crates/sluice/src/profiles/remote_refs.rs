@@ -13,12 +13,15 @@
 //! refs/sluice/logs/<branch>/<cand>   a failed candidate's task outputs (20)
 //! ```
 //!
-//! What a host keeps of its own, its locks, its runs' tasks (ADR 0028)
-//! and the logs it read, is in `<common>/sluice-remote/<remote>/`, a
-//! `local files` of its own. A replay is recorded there too: it is no
-//! one's observation (core.9), so no signer signs it. Beside it, what the
-//! host observed of each branch (73) and a refusal of its reads that
-//! stands (133), under `observed/` and `refused/`.
+//! What a host keeps of its own, its runs' tasks (ADR 0028) and the logs
+//! it read, is in `<common>/sluice-remote/<remote>/`, a `local files` of
+//! its own. A replay is recorded there too: it is no one's observation
+//! (core.9), so no signer signs it. Beside it, what the host observed of
+//! each branch (73) and a refusal of its reads that stands (133), under
+//! `observed/` and `refused/`. Its locks are the host's one lock of each
+//! branch on any remote, under `<common>/sluice-remote/locks/`, held by
+//! the records seam that routes the branch here, and a run's tasks are
+//! kept only while that lock is held (rule core.14).
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -123,6 +126,9 @@ struct Read {
 pub struct RemoteRefs {
     pushed: Rc<PushedRefs>,
     own: LocalFiles,
+    /// The host's locks of the branches on its remotes, one each whatever
+    /// remote holds it (rule core.14).
+    locks: Rc<LocalFiles>,
     signing: Option<Signing>,
     read: RefCell<BTreeMap<String, Read>>,
     /// The branches whose last read could not reach the remote, and why
@@ -145,15 +151,24 @@ impl RemoteRefs {
     /// [`RemoteRefs::results_with`] (78; rule core.22).
     pub fn new(common: &Path, pushed: Rc<PushedRefs>, signing: Option<Signing>) -> Self {
         let own = LocalFiles::at(common.join("sluice-remote").join(pushed.remote()));
+        let locks = Rc::new(LocalFiles::at(common.join("sluice-remote").join("locks")));
         RemoteRefs {
             pushed,
             own,
+            locks,
             signing,
             read: RefCell::default(),
             stale: RefCell::default(),
             verified: RefCell::default(),
             asked: std::cell::Cell::new(false),
         }
+    }
+
+    /// The same profile, its branches locked through `locks`, the lock the
+    /// records seam takes for every branch it routes to a remote: a round
+    /// keeps its tasks under the lock it took (rule core.14).
+    pub fn sharing_locks(self, locks: Rc<LocalFiles>) -> Self {
+        RemoteRefs { locks, ..self }
     }
 
     /// 129: a tick's ask of the remote was made: `refused` when it was
@@ -768,11 +783,11 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 impl State for RemoteRefs {
     fn lock<'a>(&'a self, branch: &str) -> Result<Option<Box<dyn Guard + 'a>>> {
-        self.own.lock(branch)
+        self.locks.lock(branch)
     }
 
     fn wait_lock<'a>(&'a self, branch: &str) -> Result<Box<dyn Guard + 'a>> {
-        self.own.wait_lock(branch)
+        self.locks.wait_lock(branch)
     }
 
     fn publish_head(&self, _branch: &str, head: &Rev) -> Result<()> {
@@ -910,6 +925,14 @@ impl State for RemoteRefs {
         let asked = format!("refs/sluice/combinations/{branch}/*");
         self.pushed
             .fetch_spec(&asked, &self.combinations_spec(branch), &["--prune"])?;
+        Ok(())
+    }
+
+    /// Into the ref the branch's fetch of every candidate fills, so the
+    /// two agree; a candidate the remote no longer holds fetches nothing.
+    fn fetch_candidate(&self, branch: &str, id: &str) -> Result<()> {
+        state_ref(branch)?;
+        self.fetch(&format!("refs/sluice/combinations/{branch}/{id}"))?;
         Ok(())
     }
 
@@ -1063,7 +1086,9 @@ impl State for RemoteRefs {
         self.remote_branches()
     }
 
-    fn allocate_id(&self) -> Result<u64> {
+    /// The remote's count, one for every branch whose records it holds,
+    /// across every host (record 0114).
+    fn allocate_id(&self, _branch: &str) -> Result<u64> {
         let name = "refs/sluice/ids";
         for _ in 0..ADD_TRIES {
             let tip = self.fetch(name)?;
@@ -1246,6 +1271,7 @@ impl State for RemoteRefs {
         candidate: &str,
         tasks: Option<&[TaskProgress]>,
     ) -> Result<()> {
-        self.own.put_progress(branch, candidate, tasks)
+        self.own
+            .put_progress_under(&self.locks, branch, candidate, tasks)
     }
 }

@@ -127,6 +127,10 @@ pub enum Started {
     /// Its tests did not run, for this reason: the run is recorded as one
     /// whose tests could not run (114, 115, 139).
     NotRun(String),
+    /// Its place could not be made, for this reason: the run never began,
+    /// so it is open again with no outcome, its record saying why, and it
+    /// counts toward no runs in a row (60, 114; record 0118).
+    Unmade(String),
 }
 
 /// What starting a branch's claimed runs reads of it, once.
@@ -383,8 +387,13 @@ impl Sluice<'_> {
     /// once a round: a place tried already in this round, held, or made
     /// by another host is passed over. A held place of this host's whose
     /// working copy has gone since is released once, as any gone place is.
+    /// 81: then each place this host made for the branch that no claim of
+    /// its own holds, so the lead releases what it left as every other
+    /// instance does, after a landing left unfinished is settled and
+    /// before the round claims ([`Sluice::release_left`]).
     fn perform_releases(&self, branch: &str, releases: &mut Vec<ReleaseOutcome>) -> Result<()> {
-        let doc = self.read_line(branch)?.doc;
+        let line = self.read_line(branch)?;
+        let doc = &line.doc;
         let elsewhere = |f: &crate::records::FailedRelease| {
             f.host.as_deref().is_some_and(|h| h != self.peer.name)
         };
@@ -402,6 +411,44 @@ impl Sluice<'_> {
                 continue;
             }
             let outcome = self.release_made(branch, place)?;
+            if outcome.how != Releasing::Released {
+                releases.push(outcome);
+            }
+        }
+        self.release_left(&line, releases)
+    }
+
+    /// 81, 123: on every round of this host, the lead's and any other's,
+    /// before it claims: each place it made for the branch of `line`, the
+    /// branch's records as the round read them, that no claim of its own
+    /// holds, its candidate's verdict read, the candidate obsolete or the
+    /// claim lapsed, is released. A place whose release stopped is held
+    /// and passed over while its working copy is there, as is a place
+    /// tried already this round: a held place bars no claim.
+    fn release_left(&self, line: &Line, releases: &mut Vec<ReleaseOutcome>) -> Result<()> {
+        let branch = &line.branch;
+        let held: BTreeSet<&str> = line
+            .doc
+            .candidates
+            .iter()
+            .flat_map(|c| &c.runs)
+            .filter(|r| self.mine(r) && r.state.held())
+            .filter_map(|r| r.place.as_deref())
+            .collect();
+        let prefix = format!("sluice/try/{branch}/");
+        for p in self.seams.checkout.made()? {
+            if !p.starts_with(&prefix) || held.contains(p.as_str()) {
+                continue;
+            }
+            let stopped = line
+                .doc
+                .failed_releases
+                .iter()
+                .any(|f| f.place == p && f.stopped);
+            if (stopped && !self.held_gone(&p)) || releases.iter().any(|o| o.place == p) {
+                continue;
+            }
+            let outcome = self.release_made(branch, &p)?;
             if outcome.how != Releasing::Released {
                 releases.push(outcome);
             }
@@ -748,10 +795,13 @@ impl Sluice<'_> {
 
     /// Design D4 (88, 114, 139): start the run of `branch` that `claim`
     /// holds and that waits to start, as a round starts its own: the host
-    /// read afresh first, then its checkout and its tests' start, a start
-    /// that fails or a host that cannot meet what the run needs recorded as
-    /// a run whose tests could not run. `None` where no run of the claim
-    /// waits to start. Under the branch's lock, waited for (rule core.14).
+    /// read afresh first, then its checkout, at its combination fetched
+    /// here where this host lacks it, and its tests' start; a start that
+    /// fails or a host that cannot meet what the run needs recorded as a
+    /// run whose tests could not run, and a checkout that cannot be made
+    /// as a run that never began (record 0118). `None` where no run of the
+    /// claim waits to start. Under the branch's lock, waited for (rule
+    /// core.14).
     ///
     /// The one start of a claimed run: a round's starts come through it,
     /// and `sluice job run`, of the change `actions-pool`, is to start its
@@ -818,7 +868,11 @@ impl Sluice<'_> {
     /// its place. The host is read first where `unmet` has not been this
     /// round; where it cannot meet what the run needs, no checkout is made
     /// and each check is not run with the reason, the executor's own
-    /// report (139). Then the checkout and the tests' start; a start
+    /// report (139). Then the checkout, at the combination, fetched by its
+    /// own ref first where this host lacks it, however the run's claim
+    /// reached the host (82, C.6); a checkout that cannot be made is a run
+    /// that never began, open again with no outcome and counting toward
+    /// nothing (60, 114; record 0118). Then the tests' start; a start
     /// refused at the bound is open again, counting toward nothing (71),
     /// and any other start that fails, a remote's unanswered read aside,
     /// leaves each check not run with the error's words (114). Either is
@@ -857,26 +911,37 @@ impl Sluice<'_> {
             return Ok(Started::NotRun(why));
         }
         let since = (from.verified && c.on == from.base).then(|| c.on.clone());
-        let started = self
-            .seams
-            .checkout
-            .materialize(&name, &c.revision, &from.policy.checkout)
-            .and_then(|place| {
-                self.seams.tests.start(&RunRequest {
-                    place,
-                    revision: c.revision.clone(),
-                    required: checks.clone(),
-                    since,
-                    limit: from.rules.timeout,
-                    limits: from.policy.limits.clone(),
-                    tests: from.policy.tests.clone(),
-                    command: None,
-                    // 108: the cache supplies outputs; a replay counts only
-                    // through a trusted pass recorded for its key.
-                    replay: !r.no_replay,
-                    system: r.system.clone(),
-                })
-            });
+        let place = self.fetch_lacking(branch, c).and_then(|()| {
+            self.seams
+                .checkout
+                .materialize(&name, &c.revision, &from.policy.checkout)
+        });
+        let place = match place {
+            Ok(place) => place,
+            // 133, 134: a remote that could not answer says nothing of the
+            // run; the round is refused as any such read.
+            Err(e) if sluice_seams::unanswered(&e) || read_refused(&e).is_some() => return Err(e),
+            Err(e) => {
+                let why = could_not_start(&e);
+                let report = unstarted(&checks, kind, why.clone());
+                self.unmade(branch, c, i, &name, &report, releases)?;
+                return Ok(Started::Unmade(why));
+            }
+        };
+        let started = self.seams.tests.start(&RunRequest {
+            place,
+            revision: c.revision.clone(),
+            required: checks.clone(),
+            since,
+            limit: from.rules.timeout,
+            limits: from.policy.limits.clone(),
+            tests: from.policy.tests.clone(),
+            command: None,
+            // 108: the cache supplies outputs; a replay counts only
+            // through a trusted pass recorded for its key.
+            replay: !r.no_replay,
+            system: r.system.clone(),
+        });
         let e = match started {
             Ok(run) => {
                 self.update(branch, |l| {
@@ -965,6 +1030,76 @@ impl Sluice<'_> {
                     l.doc.release.push(p);
                 }
             }
+            Ok(())
+        })?;
+        if let Some(o) = outcome.filter(|o| o.how != Releasing::Released) {
+            releases.push(o);
+        }
+        Ok(())
+    }
+
+    /// 82, C.6: candidate `c`'s combination, fetched by its own ref where
+    /// this host lacks it, so its place is made at it however the run's
+    /// claim reached the host: a round's claim after its fetch of every
+    /// candidate, the lead's own start, or a pool's job (record 0118).
+    fn fetch_lacking(&self, branch: &str, c: &Candidate) -> Result<()> {
+        if self.seams.branch.holds(&c.revision)? {
+            return Ok(());
+        }
+        self.seams.state.fetch_candidate(branch, &c.id)
+    }
+
+    /// 60, 114 (record 0118): run `i` of candidate `c`, decided into
+    /// `place`, whose place could not be made, `report` naming each check
+    /// with why. The run never began: it has no outcome, counts toward no
+    /// runs in a row (115) and blames no one, and it is open again for any
+    /// host, its record saying why (16) until its next run has a result.
+    /// Whatever of the place was made is released, a release that failed
+    /// tried again by the rounds after (123).
+    fn unmade(
+        &self,
+        branch: &str,
+        c: &Candidate,
+        i: usize,
+        place: &str,
+        report: &RunReport,
+        releases: &mut Vec<ReleaseOutcome>,
+    ) -> Result<()> {
+        let made = self.seams.checkout.made()?.iter().any(|p| p == place);
+        let outcome = match made {
+            true => Some(self.release_made(branch, place)?),
+            false => None,
+        };
+        let retry = outcome
+            .as_ref()
+            .is_some_and(|o| matches!(o.how, Releasing::Failed { .. }));
+        self.update(branch, |l| {
+            let now = self.now();
+            let Some(xr) = l.candidate_mut(&c.id).and_then(|x| x.runs.get_mut(i)) else {
+                return Ok(());
+            };
+            if xr.state != RunState::Starting || xr.place.as_deref() != Some(place) {
+                return Ok(());
+            }
+            xr.state = RunState::Open;
+            xr.place = None;
+            xr.run = None;
+            xr.host = None;
+            xr.lost = Some(LostRun {
+                host: self.peer.name.clone(),
+                system: xr.system.clone(),
+                not_run: report.not_run.clone(),
+            });
+            if retry && !l.doc.release.iter().any(|p| p == place) {
+                l.doc.release.push(place.to_string());
+            }
+            l.log(
+                &now,
+                Event::Lost {
+                    combination: c.revision.clone(),
+                    not_run: report.not_run.clone(),
+                },
+            );
             Ok(())
         })?;
         if let Some(o) = outcome.filter(|o| o.how != Releasing::Released) {
@@ -1311,7 +1446,7 @@ impl Sluice<'_> {
             if line.subs.values().any(|s| s.was == Some(old.id)) {
                 continue;
             }
-            let id = self.seams.state.allocate_id()?;
+            let id = self.seams.state.allocate_id(&line.branch)?;
             let head = old.head.clone();
             line.subs.insert(
                 id,
@@ -3181,7 +3316,8 @@ impl Sluice<'_> {
 
     /// 75, 77, 81: what an instance that does not keep `branch` does for
     /// it: shows it is alive, releases the places it made that no claim of
-    /// its own holds, reports its runs that ended, and claims open runs it
+    /// its own holds ([`Sluice::release_left`], as the lead does too),
+    /// reports its runs that ended, and claims open runs it
     /// may take, earliest first, up to its bound, then starts them. 81,
     /// 123: it claims once each place it left has been released, gone or
     /// held, whatever their releases did: a held place bars no claim, and
@@ -3223,33 +3359,7 @@ impl Sluice<'_> {
             }
         }
 
-        // 81: a place made here that no claim of this host's holds.
-        let held: BTreeSet<String> = line
-            .doc
-            .candidates
-            .iter()
-            .flat_map(|c| &c.runs)
-            .filter(|r| r.host.as_deref() == Some(me.as_str()) && r.state.held())
-            .filter_map(|r| r.place.clone())
-            .collect();
-        let prefix = format!("sluice/try/{branch}/");
-        for p in self.seams.checkout.made()? {
-            if !p.starts_with(&prefix) || held.contains(&p) {
-                continue;
-            }
-            let stopped = line
-                .doc
-                .failed_releases
-                .iter()
-                .any(|f| f.place == p && f.stopped);
-            if (stopped && !self.held_gone(&p)) || releases.iter().any(|o| o.place == p) {
-                continue;
-            }
-            let outcome = self.release_made(branch, &p)?;
-            if outcome.how != Releasing::Released {
-                releases.push(outcome);
-            }
-        }
+        self.release_left(&line, releases)?;
 
         // This host's runs that ended, reported while its claim holds.
         let mine: Vec<(Candidate, usize)> = line

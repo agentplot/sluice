@@ -1278,3 +1278,48 @@ fn a_sluice_on_the_callers_path_is_not_the_one_that_judges() {
     assert!(t.contains("bolt/x is protected by sluice"), "{t}");
     assert_eq!(repo.rev("bolt/x"), tip);
 }
+
+/// 124: the hook reads the whole transaction git hands it before it
+/// leaves, in a state it does not judge and where it cannot read the
+/// repository, so whatever writes the transaction to it, the shim's
+/// `printf` among them, never meets a closed pipe and says so on the
+/// caller's terminal. The transaction is larger than a pipe holds, so a
+/// hook that left without reading it would fail the write every time.
+#[test]
+fn the_hook_reads_its_whole_transaction_before_it_leaves() {
+    let scratch = Scratch::new("protect-hook-drains");
+    let zero = "0".repeat(40);
+    let one = "1".repeat(40);
+    let transaction: String = (0..4096)
+        .map(|n| format!("{zero} {one} refs/heads/bolt/n{n}\n"))
+        .collect();
+    assert!(transaction.len() > 256 * 1024);
+    for (state, git_dir) in [
+        ("preparing", None),
+        ("committed", None),
+        ("aborted", None),
+        ("prepared", Some(scratch.0.join("absent"))),
+    ] {
+        let mut c = Command::new(sluice());
+        support::isolated(&mut c)
+            .current_dir(&scratch.0)
+            .args(["hook", "reference-transaction", state])
+            .env("XDG_CONFIG_HOME", scratch.0.join("no-config"))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        match &git_dir {
+            Some(d) => c.env("GIT_DIR", d),
+            None => c.env_remove("GIT_DIR"),
+        };
+        let mut child = c.spawn().unwrap();
+        let wrote = {
+            use std::io::Write as _;
+            let mut stdin = child.stdin.take().unwrap();
+            stdin.write_all(transaction.as_bytes())
+        };
+        let out = child.wait_with_output().unwrap();
+        assert!(wrote.is_ok(), "{state}: {wrote:?}: {}", text(&out));
+        assert_eq!(out.status.code(), Some(0), "{state}: {}", text(&out));
+    }
+}
