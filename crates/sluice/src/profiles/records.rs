@@ -1,8 +1,10 @@
 //! The records seam as an instance binds it (C.6; ADR 0037): a branch
 //! whose policy names a `remote` and signers to `remote refs` on that
-//! remote, every other to `local files`. What names no branch, the
-//! results and the next id, goes to the remote once a branch has been
-//! routed there, so ids are numbered once across every host.
+//! remote, every other to `local files`. The results, which name no
+//! branch, go to the remote once a branch has been routed there; a
+//! branch's next number comes from the count of the records that hold
+//! it, so a remote's are numbered once across every host and the host's
+//! own once on the host (record 0114).
 
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
@@ -403,7 +405,8 @@ impl Records {
         self.put_moved(branch, &Moved { left })
     }
 
-    /// The remote whose ids every host numbers from, once one is routed.
+    /// The first remote opened, which keeps what this host has observed
+    /// of the others' signs of life.
     fn shared(&self) -> Option<Rc<RemoteRefs>> {
         self.remotes.borrow().values().next().cloned()
     }
@@ -679,10 +682,15 @@ impl State for Records {
         Ok(all)
     }
 
-    fn allocate_id(&self) -> Result<u64> {
-        match self.shared() {
-            Some(r) => r.allocate_id(),
-            None => self.local.allocate_id(),
+    /// The count of the records that hold `branch`: its remote's where it
+    /// is routed there, the host's own where its records are the host's,
+    /// whatever other remote this binding has opened, so no new number
+    /// repeats one the branch already holds (26; record 0114; rule
+    /// core.41).
+    fn allocate_id(&self, branch: &str) -> Result<u64> {
+        match self.route(branch)? {
+            Some(r) => r.allocate_id(branch),
+            None => self.local.allocate_id(branch),
         }
     }
 

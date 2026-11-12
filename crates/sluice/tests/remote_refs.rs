@@ -248,9 +248,9 @@ fn each_profile_keeps_a_refusal_beside_the_records() {
 fn ids_are_numbered_once_across_hosts() {
     let (a, _bare, b) = two_hosts("rr-ids");
     let (ha, hb) = (host(&a, None), host(&b, None));
-    assert_eq!(ha.allocate_id().unwrap(), 1);
-    assert_eq!(hb.allocate_id().unwrap(), 2);
-    assert_eq!(ha.allocate_id().unwrap(), 3);
+    assert_eq!(ha.allocate_id("main").unwrap(), 1);
+    assert_eq!(hb.allocate_id("bolt/x").unwrap(), 2);
+    assert_eq!(ha.allocate_id("main").unwrap(), 3);
 }
 
 fn ran(task: &str, outcome: Outcome) -> ResultLine {
@@ -1181,4 +1181,54 @@ fn a_branch_in_the_hosts_own_files_reads_with_its_own_list() {
     assert_eq!(signed(&r, "main"), ["a:test"]);
     assert!(r.route("scratch").unwrap().is_none(), "in the host's files");
     assert!(signed(&r, "scratch").is_empty());
+}
+
+/// Record 0114, rule core.41: with origin's records open for `main`,
+/// `scratch`, whose records are the host's own and which holds #1 to #3,
+/// takes its next number from the host's count, never origin's, and so
+/// never one it holds; `main` takes origin's (switchboard-kit's main on
+/// 2026-11-12, given #52 and #53 again from GitHub's count while the
+/// host's stood at 267).
+#[test]
+fn a_branch_in_the_hosts_own_files_numbers_from_the_hosts_count() {
+    let ka = key();
+    let a = Repo::new("rr-own-count");
+    a.write(".config/sluice.toml", &signers_policy(&[("box", &[&ka])]));
+    a.git(&["add", "-A"]);
+    a.git(&["commit", "-q", "-m", "signers"]);
+    let _bare = a.bare_origin();
+    a.branch(
+        "scratch",
+        "main",
+        &[(".config/sluice.toml", Some("[branches.scratch]\n"))],
+    );
+    let own = LocalFiles::new(&a.dir().join(".git"));
+    let held: Vec<(String, String)> = (0..3)
+        .map(|_| own.allocate_id("scratch").unwrap())
+        .map(|id| {
+            (
+                format!("submissions/{id}.json"),
+                format!(
+                    "{{\"schema\":\"sluice/submission@1\",\"id\":{id},\"branch\":\"scratch\",\"state\":\"queued\"}}\n"
+                ),
+            )
+        })
+        .collect();
+    {
+        let _g = own.lock("scratch").unwrap().unwrap();
+        let files: Vec<(&str, &str)> = held.iter().map(|(p, d)| (&p[..], &d[..])).collect();
+        own.write("scratch", 0, put(&files)).unwrap();
+    }
+
+    let r = records(&a);
+    assert!(r.route("main").unwrap().is_some(), "origin's records open");
+    assert!(r.route("scratch").unwrap().is_none(), "in the host's files");
+    let next = r.allocate_id("scratch").unwrap();
+    assert_eq!(next, 4, "the host's count");
+    let holds = r.read("scratch").unwrap();
+    assert!(!holds
+        .files
+        .contains_key(&format!("submissions/{next}.json")));
+    assert_eq!(r.allocate_id("main").unwrap(), 1, "origin's count");
+    assert_eq!(r.allocate_id("scratch").unwrap(), 5);
 }

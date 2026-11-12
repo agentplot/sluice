@@ -3341,7 +3341,7 @@ impl State for FakeState {
         Ok(())
     }
 
-    fn allocate_id(&self) -> Result<u64> {
+    fn allocate_id(&self, _branch: &str) -> Result<u64> {
         let mut inner = self.0 .0.borrow_mut();
         let id = inner.next_id;
         inner.next_id += 1;
@@ -3458,13 +3458,13 @@ mod tests {
     #[test]
     fn numbers_from_gives_the_next_number() {
         let f = Fakes::new();
-        assert_eq!(f.state.allocate_id().unwrap(), 1);
-        assert_eq!(f.state.allocate_id().unwrap(), 2);
+        assert_eq!(f.state.allocate_id("main").unwrap(), 1);
+        assert_eq!(f.state.allocate_id("main").unwrap(), 2);
         f.world.numbers_from(1);
-        assert_eq!(f.state.allocate_id().unwrap(), 1);
-        assert_eq!(f.state.allocate_id().unwrap(), 2);
+        assert_eq!(f.state.allocate_id("main").unwrap(), 1);
+        assert_eq!(f.state.allocate_id("main").unwrap(), 2);
         f.world.numbers_from(26);
-        assert_eq!(f.state.allocate_id().unwrap(), 26);
+        assert_eq!(f.state.allocate_id("main").unwrap(), 26);
     }
 
     /// 51: the driver fake delivers to the session its submitter recorded,

@@ -349,13 +349,20 @@ fn branch_names_round_trip() {
         .any(|k| k.contains("branch.json") && k != "branch.json"));
 }
 
-/// Submission numbers count across the repository.
+/// The host's count is one for every branch whose records it holds
+/// (record 0114).
 #[test]
-fn ids_count_across_the_repository() {
+fn ids_count_across_the_hosts_branches() {
     let dir = Scratch::new("ids");
     let s = LocalFiles::new(dir.path());
-    assert_eq!((s.allocate_id().unwrap(), s.allocate_id().unwrap()), (1, 2));
-    assert_eq!(LocalFiles::new(dir.path()).allocate_id().unwrap(), 3);
+    assert_eq!(
+        (
+            s.allocate_id("main").unwrap(),
+            s.allocate_id("bolt/x").unwrap()
+        ),
+        (1, 2)
+    );
+    assert_eq!(LocalFiles::new(dir.path()).allocate_id("main").unwrap(), 3);
 }
 
 /// 69: the results log appends whole lines, never one twice, and drops a

@@ -1446,7 +1446,7 @@ impl Sluice<'_> {
             if line.subs.values().any(|s| s.was == Some(old.id)) {
                 continue;
             }
-            let id = self.seams.state.allocate_id()?;
+            let id = self.seams.state.allocate_id(&line.branch)?;
             let head = old.head.clone();
             line.subs.insert(
                 id,

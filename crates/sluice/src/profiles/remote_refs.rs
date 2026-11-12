@@ -1045,7 +1045,9 @@ impl State for RemoteRefs {
         self.remote_branches()
     }
 
-    fn allocate_id(&self) -> Result<u64> {
+    /// The remote's count, one for every branch whose records it holds,
+    /// across every host (record 0114).
+    fn allocate_id(&self, _branch: &str) -> Result<u64> {
         let name = "refs/sluice/ids";
         for _ in 0..ADD_TRIES {
             let tip = self.fetch(name)?;
