@@ -20,4 +20,4 @@ part of the tree touched, citing record 0112 and rule core.56.
 
 ## 3. The specs reconcile
 
-- [ ] 3.1 Archive this change with `openspec archive sluices-install-commands-are-kept-by-their-writers --yes`. True when `sluice exec bolt/sluices-plugins-install-from-its-release -- moon run root:specs root:changes` passes.
+- [x] 3.1 Archive this change with `openspec archive sluices-install-commands-are-kept-by-their-writers --yes`. True when `sluice exec bolt/sluices-plugins-install-from-its-release -- moon run root:specs root:changes` passes.
