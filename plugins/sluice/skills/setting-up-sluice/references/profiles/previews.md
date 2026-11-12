@@ -54,4 +54,4 @@ sluice previews
 sluice release <revision>
 ```
 
-Reference: <https://agentplot.github.io/sluice/guides/previews/>.
+Reference: <https://boomdrivedev.github.io/sluice/guides/previews/>.

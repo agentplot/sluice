@@ -8,8 +8,8 @@ waits for. `parallel`, `batch`, `trust` and the rest were explained when
 they were chosen.
 
 What sluice does with each key is the configuration reference's:
-[`[tests]`](https://agentplot.github.io/sluice/reference/configuration/#tests-how-tests-run)
-and [`required`](https://agentplot.github.io/sluice/reference/configuration/#required).
+[`[tests]`](https://boomdrivedev.github.io/sluice/reference/configuration/#tests-how-tests-run)
+and [`required`](https://boomdrivedev.github.io/sluice/reference/configuration/#required).
 This page says only how to put it.
 
 ## The order

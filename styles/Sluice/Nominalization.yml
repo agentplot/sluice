@@ -1,7 +1,7 @@
 extends: existence
 message: "'%s' hides the action in a noun; make it the verb."
 description: "Williams's nominalization test: when the action is a noun ('the formation of a candidate'), the subject is an abstraction and the verb is empty. Turn it back into a verb ('sluice forms a candidate')."
-link: https://github.com/agentplot/blueprints/blob/main/books/research/2026-10-13-voice-and-style.md#2-clarity-characters-as-subjects-actions-as-verbs
+link: https://github.com/boomdrivedev/blueprints/blob/main/books/research/2026-10-13-voice-and-style.md#2-clarity-characters-as-subjects-actions-as-verbs
 level: suggestion
 ignorecase: true
 raw:

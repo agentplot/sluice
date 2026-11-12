@@ -124,7 +124,7 @@ in
     let
       evaluates = (builtins.tryEval twice.config.system.build.toplevel.drvPath).success;
       declared = builtins.length twice.options.services.sluice.enable.declarations;
-      key = "github:agentplot/sluice#nixosModules.sluice";
+      key = "github:boomdrivedev/sluice#nixosModules.sluice";
       keyOf = module: module.key or null;
     in
     t.expect (

@@ -1,5 +1,5 @@
 //! A run that did not judge its check: no outcome, nothing under its
-//! key, and the check runs again (60; could-not-run-1 in agentplot/
+//! key, and the check runs again (60; could-not-run-1 in boomdrivedev/
 //! blueprints, 114 to 116, amended 84, S43, S44).
 
 use sluice_conformance::{policy, Harness, Rig, BRANCH};

@@ -6,7 +6,7 @@ The `peers` change puts a branch's queue on its remote and lets the
 operator's own hosts claim, run and sign its checks with SSH keys. A
 submission still lands only while one of those hosts is up, and a
 check on a system no host is waits until the branch's `timeout`. The
-statement in agentplot/blueprints, `design/sluice/requirements.md`,
+statement in boomdrivedev/blueprints, `design/sluice/requirements.md`,
 has GitHub Actions as a pool after the standing executors: a job per
 run on the runner its system names, a job that advances a branch when
 no host does, and results signed keylessly by the workflow on the

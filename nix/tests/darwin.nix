@@ -121,7 +121,7 @@ in
     let
       evaluates = (builtins.tryEval twice.system.drvPath).success;
       declared = builtins.length twice.options.services.sluice.enable.declarations;
-      key = "github:agentplot/sluice#darwinModules.sluice";
+      key = "github:boomdrivedev/sluice#darwinModules.sluice";
       keyOf = module: module.key or null;
     in
     t.expect (

@@ -1,6 +1,6 @@
 ## Why
 
-Clause 120, as amended on agentplot/blueprints main at 84c7a01, says
+Clause 120, as amended on boomdrivedev/blueprints main at 84c7a01, says
 a withdrawal for a hand-over of intake (137) holds no request.
 Whichever host holds the mark takes the request in again as its
 conditions hold, at the head it holds, the host that withdrew it
@@ -28,7 +28,7 @@ What sluice does at main 526380ae:
   the request went. A wait that follows it says `withdrawn by b takes
   main's pull requests in`.
 
-agentplot/sluice pull 171 shows where deneb's records stand. #345 was
+boomdrivedev/sluice pull 171 shows where deneb's records stand. #345 was
 withdrawn at 16:18:13Z on 2026-10-30 by `mac-studio takes main's pull
 requests in`. Deneb took it in again as #347 at 16:23:16Z, by those
 words. The merge queue's App drafted it at 16:30:08Z and 16:41:49Z.

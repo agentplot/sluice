@@ -5,7 +5,7 @@ agents, one section each. Every command, API and output below was run
 on this host on 2026-10-11, against the tools as installed; captured
 output is pasted as it came, trimmed where marked `…`. Read the brief
 (`docs/plans/phase-1-core.md`), the walkthrough (`docs/examples/README.md`),
-the statement (agentplot/blueprints `design/sluice/requirements.md`) and
+the statement (boomdrivedev/blueprints `design/sluice/requirements.md`) and
 `docs/architecture/core.md` first; this document cites their clauses and
 rules and does not restate them.
 

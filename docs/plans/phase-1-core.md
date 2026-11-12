@@ -16,7 +16,7 @@ fails names the one submission that broke it and tells only that agent.
 1. `docs/examples/README.md` (this repo): what using sluice looks like. The
    config, the CLI output, the state files and the landing commit there are
    the target. Where this brief and the walkthrough differ, ask.
-2. `agentplot/blueprints:design/sluice/requirements.md` (local:
+2. `boomdrivedev/blueprints:design/sluice/requirements.md` (local:
    `~/Code/github_agentplot/blueprints/main/design/sluice/requirements.md`):
    the statement of invariants. Every behaviour you build satisfies a
    numbered clause; cite it.

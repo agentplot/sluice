@@ -4,7 +4,7 @@ Teaches Claude Code to install sluice, set a repository up for it, and land
 work through the queue instead of merging.
 
 ```
-/plugin marketplace add agentplot/sluice
+/plugin marketplace add boomdrivedev/sluice
 /plugin install sluice@sluice
 ```
 
@@ -19,7 +19,7 @@ before each shell command, a guard that refuses a push, merge or ref
 update onto one, naming `sluice submit` instead (`scripts/`, tested by
 `tests/hooks.sh`).
 
-Guide: <https://agentplot.github.io/sluice/guides/claude-code/>.
+Guide: <https://boomdrivedev.github.io/sluice/guides/claude-code/>.
 
 This directory sits outside sluice's core: no crate imports it, so it may
 name the tools it sets up (ADR 0023, rule core.1).

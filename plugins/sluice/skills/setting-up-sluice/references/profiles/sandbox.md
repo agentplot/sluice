@@ -61,4 +61,4 @@ trust = ["confined", "sandbox"]   # which results satisfy the branch
 sluice exec <branch>      # same executor and limits as the gate
 ```
 
-Reference: <https://agentplot.github.io/sluice/reference/configuration/#executor-what-the-tests-may-touch>.
+Reference: <https://boomdrivedev.github.io/sluice/reference/configuration/#executor-what-the-tests-may-touch>.

@@ -13,7 +13,7 @@ rules by id.
 ## 1. The decision recorded
 
 - [x] 1.1 Write records 0088 (D1, D3, D4) and 0089 (D2, with the amendment of 137), and rule core.33 and its details citing 122, 137 and both records; write the site's rules page with `node site/scripts/rules.mjs`. True when `sluice exec main -- moon run root:adrs root:changes site:rules` passes.
-- [x] 1.2 The amendment of 137 for a host's waits, on agentplot/blueprints main at 421c77e, approved by the user on 2026-11-06; record 0089 accepted, and rule core.33's details and this change citing that commit. True when `git -C ~/Code/github_agentplot/blueprints/main show --stat 421c77e` changes 137 alone and `sluice exec main -- moon run root:adrs root:changes site:rules` passes.
+- [x] 1.2 The amendment of 137 for a host's waits, on boomdrivedev/blueprints main at 421c77e, approved by the user on 2026-11-06; record 0089 accepted, and rule core.33's details and this change citing that commit. True when `git -C ~/Code/github_agentplot/blueprints/main show --stat 421c77e` changes 137 alone and `sluice exec main -- moon run root:adrs root:changes site:rules` passes.
 
 ## 2. A refused push is decided again
 

@@ -8,7 +8,7 @@
 # caches and state are a scratch folder's, never the host's or the home's.
 # The test also runs the activation's cases, nix/tests/activate.sh, by sh
 # in scratch folders. Each failure is one line, nix: <case>: <what>.
-# agentplot/boomdrive's nix/check.sh at 3f428cf, for sluice's inputs and
+# boomdrivedev/boomdrive's nix/check.sh at 3f428cf, for sluice's inputs and
 # store.
 set -eu
 

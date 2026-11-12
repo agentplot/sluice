@@ -12,10 +12,10 @@
 Agents submit. sluice tests each submission exactly as it would land,<br>
 names the one that broke the build, and moves the branch only to code that passed.
 
-**New to sluice?** [What it is, and what it leaves to other tools](https://agentplot.github.io/sluice/guides/new-to-sluice/).
+**New to sluice?** [What it is, and what it leaves to other tools](https://boomdrivedev.github.io/sluice/guides/new-to-sluice/).
 
-[![ci](https://github.com/agentplot/sluice/actions/workflows/ci.yml/badge.svg)](https://github.com/agentplot/sluice/actions/workflows/ci.yml)
-[![release](https://img.shields.io/github/v/release/agentplot/sluice?sort=semver)](https://github.com/agentplot/sluice/releases/latest)
+[![ci](https://github.com/boomdrivedev/sluice/actions/workflows/ci.yml/badge.svg)](https://github.com/boomdrivedev/sluice/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/boomdrivedev/sluice?sort=semver)](https://github.com/boomdrivedev/sluice/releases/latest)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 </div>
@@ -32,7 +32,7 @@ names the one that broke the build, and moves the branch only to code that passe
 **With Claude Code.** At the prompt of a Claude Code session in a terminal:
 
 ```
-/plugin marketplace add agentplot/sluice
+/plugin marketplace add boomdrivedev/sluice
 /plugin install sluice@sluice
 ```
 
@@ -44,21 +44,21 @@ names what has the folder open, carries your Claude Code sessions'
 history to the new path, and goes on in the plain clone only if you tell
 it to. Then it writes `.config/sluice.toml` for the tools you already use,
 and lands its own work through the queue from then on. [The Claude Code
-plugin](https://agentplot.github.io/sluice/guides/claude-code/#set-up-a-repository)
+plugin](https://boomdrivedev.github.io/sluice/guides/claude-code/#set-up-a-repository)
 says what it does.
 
 **With herdr.** herdr is optional for seeing the queue. The Claude Code
 board (`sluice-board`) shows it in any Claude Code session, with
 full-screen mode on or off: [the queue in your
-session](https://agentplot.github.io/sluice/guides/claude-code/#the-queue-in-your-session).
-[The herdr plugin](https://agentplot.github.io/sluice/guides/herdr/) adds a
+session](https://boomdrivedev.github.io/sluice/guides/claude-code/#the-queue-in-your-session).
+[The herdr plugin](https://boomdrivedev.github.io/sluice/guides/herdr/) adds a
 view beside your agents' panes. It is not released yet.
 
 **By hand.** Start from a repository laid out with a working copy per
 branch, as [one working copy per
-branch](https://agentplot.github.io/sluice/guides/worktrees/#one-working-copy-per-branch)
+branch](https://boomdrivedev.github.io/sluice/guides/worktrees/#one-working-copy-per-branch)
 shows. Then [install](#install) the binary and follow the
-[walkthrough](https://agentplot.github.io/sluice/guides/walkthrough/) in
+[walkthrough](https://boomdrivedev.github.io/sluice/guides/walkthrough/) in
 its `main` worktree.
 
 ## Why
@@ -100,7 +100,7 @@ combination passes.
   up on the repository's own stack, at addresses a person opens, and
   keeps it until it is released: one per landing, with nothing kept
   checked out by hand. It is a cheap environment on the tests' own fakes,
-  not a deployment ([previews](https://agentplot.github.io/sluice/guides/previews/)).
+  not a deployment ([previews](https://boomdrivedev.github.io/sluice/guides/previews/)).
 - **Nothing to install.** sluice is one binary. A `sluice submit`
   returns at once; the first command that needs a host's queues moved
   starts sluice's own host process, which moves every repository's
@@ -113,7 +113,7 @@ combination passes.
 ## Install
 
 ```sh
-nix profile install github:agentplot/sluice
+nix profile install github:boomdrivedev/sluice
 ```
 
 <details>
@@ -123,7 +123,7 @@ nix profile install github:agentplot/sluice
 ARM:
 
 ```sh
-curl -fsSL https://github.com/agentplot/sluice/releases/latest/download/sluice-aarch64-darwin.tar.gz \
+curl -fsSL https://github.com/boomdrivedev/sluice/releases/latest/download/sluice-aarch64-darwin.tar.gz \
   | tar -xz -C ~/.local/bin sluice wt-submit
 ```
 
@@ -132,24 +132,24 @@ Linux: `sluice-x86_64-linux.tar.gz` or `sluice-aarch64-linux.tar.gz`.
 **With cargo** (Rust 1.98 or later):
 
 ```sh
-cargo install --locked --git https://github.com/agentplot/sluice sluice
+cargo install --locked --git https://github.com/boomdrivedev/sluice sluice
 ```
 
 **As a flake input**, for NixOS, home-manager or a devenv shell:
 
 ```nix
-inputs.sluice.url = "github:agentplot/sluice";
+inputs.sluice.url = "github:boomdrivedev/sluice";
 # then: inputs.sluice.packages.${system}.default
 ```
 
 A build of `main` reports `0.0.0`; a release's tag, as in
-`github:agentplot/sluice/v<x.y.z>`, builds that release, which reports
+`github:boomdrivedev/sluice/v<x.y.z>`, builds that release, which reports
 its version with nothing given.
 
 Its modules, `darwinModules.sluice` and `nixosModules.sluice`, install
 the package and write the host's own settings from
 `services.sluice.settings`, each key named as the file names it
-([who writes it](https://agentplot.github.io/sluice/reference/configuration/#who-writes-it)):
+([who writes it](https://boomdrivedev.github.io/sluice/reference/configuration/#who-writes-it)):
 
 ```nix
 imports = [ inputs.sluice.nixosModules.sluice ];
@@ -189,7 +189,7 @@ branch with `batch = true` tests one run at a time.
   <img src="docs/diagrams/modes.svg" alt="Four submissions a minute apart on a 20-minute gate: with batch false, four runs at once land all four by minute 23; with batch true, two runs, one at a time, land them by minute 40" width="820">
 </p>
 
-[Parallel and batch](https://agentplot.github.io/sluice/guides/parallel-and-batch/)
+[Parallel and batch](https://boomdrivedev.github.io/sluice/guides/parallel-and-batch/)
 shows a failure in each, why a queue tests fewer at once after
 failures, and how the host's `[runs] max` caps them all.
 
@@ -238,7 +238,7 @@ policy, and the branch's queue moves to its git remote, shared by every
 host, with no server. Each host signs the results it runs; a box you keep
 running with `sluice run` takes the checks first, and an agent can submit
 and switch its machine off. [Executors and
-systems](https://agentplot.github.io/sluice/guides/executors-and-systems/)
+systems](https://boomdrivedev.github.io/sluice/guides/executors-and-systems/)
 sets it up.
 
 ## Commands
@@ -318,7 +318,7 @@ is bound by a profile, so one core works with moon or a plain command, a
 sandbox or none, local refs or a forge.
 
 The design is a statement of invariants in
-[agentplot/blueprints](https://github.com/agentplot/blueprints)
+[boomdrivedev/blueprints](https://github.com/boomdrivedev/blueprints)
 (`design/sluice/requirements.md`). This repository cites its clauses by
 number, keeps the rules a change must respect in
 [docs/architecture](docs/architecture/core.md), and records each decision
@@ -329,7 +329,7 @@ gated on every test tier in a sandbox.
 
 ## Development
 
-Developer documentation: https://agentplot.github.io/sluice (source in
+Developer documentation: https://boomdrivedev.github.io/sluice (source in
 `site/`, published by `.github/workflows/pages.yml`).
 
 ```sh

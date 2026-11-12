@@ -17,12 +17,12 @@ ever merges, and the target branch only ever moves to code that passed.
 ## 1. Install
 
 ```sh
-nix profile install github:agentplot/sluice
+nix profile install github:boomdrivedev/sluice
 ```
 
 That installs two executables: `sluice`, and `wt-submit`. worktrunk runs any
 `wt-<name>` on your `PATH` as `wt <name>`, so `wt submit` works with no
-configuration. (`cargo install --git https://github.com/agentplot/sluice
+configuration. (`cargo install --git https://github.com/boomdrivedev/sluice
 sluice` does the same without nix.)
 
 ## 2. The config: `.config/sluice.toml`

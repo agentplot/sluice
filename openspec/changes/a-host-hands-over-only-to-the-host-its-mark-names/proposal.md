@@ -81,7 +81,7 @@ after another host landed its requests would.
   pass, a file of the host's state locked while it lives. A wait that
   ends removes the mark only where no other wait of its host still
   holds one, so the last of them lets it go, whether or not it pushed
-  it. 137 says so, as amended on agentplot/blueprints main at 421c77e.
+  it. 137 says so, as amended on boomdrivedev/blueprints main at 421c77e.
 
 What the new holder does with requests already in another host's
 queue: nothing of that host's. It takes each open request in as its
@@ -115,7 +115,7 @@ None.
   in" is no longer written; a record holding it reads as before.
 - Statement: 137's "a wait that holds it lets it go when it ends"
   becomes "a host's waits hold it together, the last of them to end
-  letting it go", on agentplot/blueprints main at 421c77e, which the
+  letting it go", on boomdrivedev/blueprints main at 421c77e, which the
   user approved on 2026-11-06 (record 0089). 45, 122 and C.5 hold as
   written.
 - Records 0088 and 0089; rule core.33 and its details.

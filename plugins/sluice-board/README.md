@@ -8,7 +8,7 @@ sluice's queue inside a Claude Code session.
 </picture>
 
 ```
-/plugin marketplace add agentplot/sluice
+/plugin marketplace add boomdrivedev/sluice
 /plugin install sluice-board@sluice
 ```
 

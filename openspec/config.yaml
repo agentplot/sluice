@@ -3,7 +3,7 @@ schema: spec-driven
 context: |
   sluice is a merge queue for agents in git worktrees, written in Rust,
   with plugins in shell and TypeScript and a site in Astro.
-  The design is the statement of invariants in agentplot/blueprints,
+  The design is the statement of invariants in boomdrivedev/blueprints,
   design/sluice/requirements.md (local:
   ~/Code/github_agentplot/blueprints/main/design/sluice/requirements.md);
   proposals awaiting the operator's ruling are under

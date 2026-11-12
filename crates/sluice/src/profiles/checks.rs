@@ -1405,7 +1405,7 @@ fn given_and_resolved(path: &Path) -> Vec<PathBuf> {
 /// and scratch directory writable, each `dir` of the host's `caches`, and
 /// the runner's `store`, where moon keeps what it shares for the run,
 /// where it lies outside them (C.2 sandbox row as amended at
-/// agentplot/blueprints 0c38f24; record 0105; rule core.9); the container
+/// boomdrivedev/blueprints 0c38f24; record 0105; rule core.9); the container
 /// engine's `engines`, its sockets and its TCP addresses, reachable when
 /// `limits` allow it (ADR 0016; design D5), and each `socket` of the
 /// caches, whatever the network (35; design D4). The grant names the
@@ -2806,7 +2806,7 @@ mod tests {
 
     /// The host-caches spec's "Only the store is opened", "A store moon has
     /// not made yet" and "A store in the checkout" (C.2 sandbox row as
-    /// amended at agentplot/blueprints 0c38f24; record 0105; rules core.9,
+    /// amended at boomdrivedev/blueprints 0c38f24; record 0105; rules core.9,
     /// core.35): a store outside the checkout is opened by its path and
     /// where it resolves, and neither moon's home nor a directory beside
     /// the store is; one not made yet under a link is opened where it will

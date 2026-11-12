@@ -22,7 +22,7 @@ number and rules by id.
 
 ## 3. The records, the rule and the pages
 
-- [x] 3.1 Record 0088 cites agentplot/blueprints 84c7a01 and names the field. Rule core.33 cites 84c7a01, and its details say how a record from before is read (D2). The site's rules page is written with `node site/scripts/rules.mjs`. True when `sluice exec main -- moon run root:adrs root:changes site:rules` passes.
+- [x] 3.1 Record 0088 cites boomdrivedev/blueprints 84c7a01 and names the field. Rule core.33 cites 84c7a01, and its details say how a record from before is read (D2). The site's rules page is written with `node site/scripts/rules.mjs`. True when `sluice exec main -- moon run root:adrs root:changes site:rules` passes.
 - [x] 3.2 The pull requests guide says a hand-over marks nothing a draft and the request comes back with the mark. The state reference names `withdrawn.handed_over_to`, and the plugin's pull requests reference says a hand-over holds nothing. True when `sluice exec main -- moon run site:prose` passes.
 
 ## 4. The gate

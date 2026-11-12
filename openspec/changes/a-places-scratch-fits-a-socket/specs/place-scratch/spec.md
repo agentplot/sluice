@@ -17,7 +17,7 @@ former scratch SHALL be moved to the new path, what is in it kept. Where
 the system cannot move it, the new path SHALL be made empty and the
 former scratch removed. While a run of the worktree is going, a run
 beside it SHALL be given the former scratch (35 as amended at
-agentplot/blueprints f15896b; record 0063 as amended 2026-11-05; rule
+boomdrivedev/blueprints f15896b; record 0063 as amended 2026-11-05; rule
 core.30).
 
 #### Scenario: A worktree's checkout with no scratch on its record

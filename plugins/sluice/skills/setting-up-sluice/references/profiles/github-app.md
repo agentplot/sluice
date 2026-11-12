@@ -95,4 +95,4 @@ The key is a file the user's account may read, and agents run as that user:
 the ruleset holds because agents' git never uses the key, not because they
 cannot read it.
 
-Reference: <https://agentplot.github.io/sluice/guides/github-app/>.
+Reference: <https://boomdrivedev.github.io/sluice/guides/github-app/>.

@@ -75,4 +75,4 @@ only by the git hook `sluice protect` installs.
   `sluice overview --json` (`branches[].refused_writes`), never from the
   branch's `log.jsonl` or `branch.json`: the log says each command once.
 
-Reference: <https://agentplot.github.io/sluice/guides/github/>.
+Reference: <https://boomdrivedev.github.io/sluice/guides/github/>.

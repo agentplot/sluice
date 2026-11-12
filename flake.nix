@@ -1,4 +1,4 @@
-# sluice as a nix package, for `nix profile install github:agentplot/sluice`
+# sluice as a nix package, for `nix profile install github:boomdrivedev/sluice`
 # and for the GHA build, and services.sluice, the nix-darwin and NixOS
 # modules that write the host's own settings and install the package
 # (record 0098, core.51). The development shell is devenv's (devenv.nix);
@@ -7,7 +7,7 @@
 # compiler the checks ran with. The version is the tree's, Cargo.toml's
 # workspace version: 0.0.0 on main, and the release's in the release commit
 # its tag names (set-version.sh). A build is given nothing: `nix build
-# github:agentplot/sluice/v<x.y.z>` says that release's version (record
+# github:boomdrivedev/sluice/v<x.y.z>` says that release's version (record
 # 0111, core.55).
 {
   description = "sluice: a merge queue for agents in worktrees";
@@ -71,7 +71,7 @@
             src = self;
             cargoLock = {
               lockFile = ./Cargo.lock;
-              # agentplot/weir at the revision Cargo.toml names, which
+              # boomdrivedev/weir at the revision Cargo.toml names, which
               # moves with it (record 0102).
               outputHashes."weir-delivery-0.0.0" = "sha256-BS0qHjt+4qQMUnbOvUiQjgs33CdG91twIAOUAsUjQpc=";
             };
@@ -84,7 +84,7 @@
             doCheck = false;
             meta = {
               description = "A merge queue for agents in worktrees";
-              homepage = "https://github.com/agentplot/sluice";
+              homepage = "https://github.com/boomdrivedev/sluice";
               license = pkgs.lib.licenses.mit;
               mainProgram = "sluice";
             };
@@ -97,7 +97,7 @@
       # Boomdrive's flake, declares services.sluice once (record 0098).
       moduleOf = platform: file: {
         _file = file;
-        key = "github:agentplot/sluice#${platform}Modules.sluice";
+        key = "github:boomdrivedev/sluice#${platform}Modules.sluice";
         imports = [ (import file { inherit packages; }) ];
       };
     in

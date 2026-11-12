@@ -64,4 +64,4 @@ executor, toolchain and environment as the tests, ports included, and in an
 agent's worktree on `sluice release`. Label what tests start with
 `SLUICE_PLACE` so the release command finds exactly it.
 
-Reference: <https://agentplot.github.io/sluice/reference/configuration/#checkout-where-a-combination-is-tested>.
+Reference: <https://boomdrivedev.github.io/sluice/reference/configuration/#checkout-where-a-combination-is-tested>.

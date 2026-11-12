@@ -2,7 +2,7 @@
 
 Status: approved by the operator 2026-10-16. Part 1, finished
 submissions, is built; part 2, the log in parts, is not. The statement's
-clauses are 61 and 130 to 132 (agentplot/blueprints 53f6d44).
+clauses are 61 and 130 to 132 (boomdrivedev/blueprints 53f6d44).
 
 ## Why
 
@@ -57,7 +57,7 @@ None.
 ## What it needs from the statement
 
 A read that leaves out finished entries changes clause 61, so the
-statement changes first (rule core.12): agentplot/blueprints 53f6d44
+statement changes first (rule core.12): boomdrivedev/blueprints 53f6d44
 has 61 read the branch's live records, with read-finished and read-log
 beside it, and adds 130 (the move), 131 (reading a finished entry) and
 132 (the log in parts). 26 and 49 hold unchanged: every state and

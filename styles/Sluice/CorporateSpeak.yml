@@ -1,7 +1,7 @@
 extends: existence
 message: "'%s' is corporate speak; say the plain thing."
 description: "Taken whole from proselint. These phrases replace a statement with a gesture at one."
-link: https://github.com/agentplot/blueprints/blob/main/books/research/2026-10-13-voice-and-style.md#5-the-linters-word-lists
+link: https://github.com/boomdrivedev/blueprints/blob/main/books/research/2026-10-13-voice-and-style.md#5-the-linters-word-lists
 level: warning
 ignorecase: true
 tokens:

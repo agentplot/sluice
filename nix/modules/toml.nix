@@ -4,7 +4,7 @@
 # platform. Top-level keys come before tables, each sorted by name. A key
 # whose value is null is unset, and left out, so sluice's own default
 # holds. Any value but a string, a boolean, an integer, a list of strings,
-# a table or a list of tables fails, naming its path. agentplot/boomdrive's
+# a table or a list of tables fails, naming its path. boomdrivedev/boomdrive's
 # nix/modules/toml.nix at 3f428cf, its header and its failure naming
 # sluice's module.
 { lib }:

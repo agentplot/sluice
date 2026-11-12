@@ -3,7 +3,7 @@
 sluice 0.66.0 gave every checkout it makes or adopts a scratch under a
 short directory of the host user's own, 45 bytes on macOS, so a tool's
 sockets in a folder under `SLUICE_TMP` fit the 104 bytes macOS allows
-(35 as amended at agentplot/blueprints f15896b; record 0063). A
+(35 as amended at boomdrivedev/blueprints f15896b; record 0063). A
 worktree's checkout an older sluice had adopted kept its scratch under
 the repository's `sluice/.tmp/` until `sluice release`, and a worktree's
 checkout lives as long as its worktree. On deneb on 2026-11-05, with
@@ -17,7 +17,7 @@ landing as flaky. That repository put an exit its policy reads as not run
 on its own branch meanwhile.
 
 The user's words, 2026-11-05: "send sluice the short scratch folder as a
-fix so the tests run again". Clause 35 on agentplot/blueprints main
+fix so the tests run again". Clause 35 on boomdrivedev/blueprints main
 allows a place's scratch under no repository. Record 0063 and rule
 core.30 are amended with this change's first commit.
 
@@ -85,7 +85,7 @@ None.
   `crates/sluice/tests/exec.rs`.
 - Docs: `site/src/content/docs/reference/state.md`.
 - Records and rules: record 0063 and rule core.30 as amended 2026-11-05.
-- Sources: clauses 34, 35 (as amended at agentplot/blueprints f15896b,
+- Sources: clauses 34, 35 (as amended at boomdrivedev/blueprints f15896b,
   on main at ebfbc0d), 123, C.4 sandbox row; record 0063 as amended;
   rules core.10, core.16, core.30.
 

@@ -21,14 +21,14 @@ missing or older, install or upgrade it. Pick the first that fits:
 | the host has | install | upgrade |
 |---|---|---|
 | sluice from a flake input or home-manager (path under `/nix/store` or `/etc/profiles`) | bump the input in the user's own flake and rebuild; it is their config, so tell them, don't edit it unasked | same |
-| nix | `nix profile install github:agentplot/sluice` | `nix profile upgrade --all` (or the entry's name from `nix profile list`) |
+| nix | `nix profile install github:boomdrivedev/sluice` | `nix profile upgrade --all` (or the entry's name from `nix profile list`) |
 | neither, macOS on Apple silicon or Linux x86-64/ARM | the release tarball, below | the same command again |
-| Rust 1.98+ | `cargo install --locked --git https://github.com/agentplot/sluice sluice` | the same with `--force` |
+| Rust 1.98+ | `cargo install --locked --git https://github.com/boomdrivedev/sluice sluice` | the same with `--force` |
 
 ```sh
 # targets: aarch64-darwin, x86_64-linux, aarch64-linux
 mkdir -p ~/.local/bin
-curl -fsSL https://github.com/agentplot/sluice/releases/latest/download/sluice-aarch64-darwin.tar.gz \
+curl -fsSL https://github.com/boomdrivedev/sluice/releases/latest/download/sluice-aarch64-darwin.tar.gz \
   | tar -xz -C ~/.local/bin sluice wt-submit
 ```
 
@@ -306,7 +306,7 @@ ruleset with the button left on.
 
 The rules per branch (`required`, `parallel`, `batch`, `hold`, `flaky`,
 `timeout`, `release_retries`, `trust`) and `[landing] subject` are in the
-[configuration reference](https://agentplot.github.io/sluice/reference/configuration/#branchespattern-rules-per-target-branch).
+[configuration reference](https://boomdrivedev.github.io/sluice/reference/configuration/#branchespattern-rules-per-target-branch).
 Leave `flaky = "fail"`.
 
 ### Parallel, batch and the host's bound
@@ -364,7 +364,7 @@ After a failure sluice tests fewer at once, halving the number for each
 blamed submission and adding one back per pass; `sluice status <branch>`
 shows `testing N at once (up to M)`. A branch stuck at one is a branch whose
 submissions keep failing.
-[Parallel and batch](https://agentplot.github.io/sluice/guides/parallel-and-batch/)
+[Parallel and batch](https://boomdrivedev.github.io/sluice/guides/parallel-and-batch/)
 draws all of this.
 
 Complete starting points:
@@ -372,7 +372,7 @@ Complete starting points:
 [moon-worktrunk-github](references/examples/moon-worktrunk-github.sluice.toml),
 [moon-peers-github](references/examples/moon-peers-github.sluice.toml),
 [command-only](references/examples/command-only.sluice.toml).
-Every key: <https://agentplot.github.io/sluice/reference/configuration/>.
+Every key: <https://boomdrivedev.github.io/sluice/reference/configuration/>.
 
 ## 5. Write, read back and commit the policy
 

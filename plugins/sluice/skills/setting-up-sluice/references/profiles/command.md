@@ -41,4 +41,4 @@ timeout = "20m"
 sluice exec <branch>       # runs the command in the worktree under the branch's limits
 ```
 
-Reference: <https://agentplot.github.io/sluice/reference/configuration/#tests-how-tests-run>.
+Reference: <https://boomdrivedev.github.io/sluice/reference/configuration/#tests-how-tests-run>.

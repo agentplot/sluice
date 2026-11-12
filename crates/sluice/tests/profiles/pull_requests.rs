@@ -7485,7 +7485,7 @@ fn mark_comes_back(g: &OnGitHub) {
 /// request a session's submit opened over to B, and main's mark comes back
 /// to A. A takes it in again at the head it holds, as its conditions hold,
 /// and lands it; nothing marks it a draft, and it waits for no act of its
-/// submitter's (120, 137; agentplot/sluice pull 171, whose #345 deneb
+/// submitter's (120, 137; boomdrivedev/sluice pull 171, whose #345 deneb
 /// withdrew at the hand-over of 2026-10-30 and took in again as #347).
 #[test]
 fn the_mark_comes_back_and_its_request_is_taken_in_again() {
