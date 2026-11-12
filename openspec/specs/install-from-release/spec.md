@@ -14,14 +14,14 @@ Every command that installs sluice or one of its plugins SHALL name a
 release, and none SHALL name main. This holds in `README.md`,
 `docs/examples/README.md`, each `plugins/*/README.md`, each file under
 `plugins/*/skills/`, and each page under `site/src/content/docs/`.
-`<version>` in a command stands for a release's version, written as
-`<version>`, as digits, or as a shell variable.
+`<version>` in a command stands for a release's version. Their writers
+keep it: no task reads the files for it (core.21, core.56).
 
 #### Scenario: The tree's install commands
 
-- **WHEN** `sh check-installs.sh` reads the tree
-- **THEN** it exits 0 and prints
-  `installs: every install command names a release`
+- **WHEN** a person runs an install command one of those files gives
+- **THEN** it installs a release's tag or archive, or the `release`
+  branch, and never main
 
 ### Requirement: The marketplace is added at the release branch
 
@@ -32,9 +32,8 @@ The Claude Code marketplace SHALL be added as
 
 - **WHEN** a page under `site/src/content/docs/` gives
   `/plugin marketplace add agentplot/sluice` with no `#release`
-- **THEN** `sh check-installs.sh` exits non-zero
-- **AND** it prints a line that starts `installs: `, names the page, and
-  says the marketplace is added at `agentplot/sluice#release`
+- **THEN** the page breaks core.56, and its writer gives
+  `/plugin marketplace add agentplot/sluice#release` in its place
 
 ### Requirement: The herdr plugin is installed at a release's tag
 
@@ -43,10 +42,11 @@ The herdr plugin SHALL be installed as
 
 #### Scenario: The herdr plugin installed from main
 
-- **WHEN** `plugins/herdr/README.md` gives
+- **WHEN** `plugins/herdr/README.md` or the setup skill gives
   `herdr plugin install agentplot/sluice/plugins/herdr` with no `--ref v`
-- **THEN** `sh check-installs.sh` exits non-zero, naming the file and
-  saying the plugin is installed with `--ref v<version>`
+- **THEN** the file breaks core.56, and its writer gives
+  `herdr plugin install agentplot/sluice/plugins/herdr --ref v<version>`
+  in its place
 
 ### Requirement: sluice is installed at a release's tag or from a release's archive
 
@@ -63,45 +63,44 @@ A module's key, `github:agentplot/sluice#darwinModules.sluice` or
 - **WHEN** `README.md` gives `nix profile install github:agentplot/sluice`,
   or a flake input `"github:agentplot/sluice"`, with no `/v` after the
   repository
-- **THEN** `sh check-installs.sh` exits non-zero, naming the file and
-  saying nix takes `github:agentplot/sluice/v<version>`
+- **THEN** the README breaks core.56, and its writer names
+  `github:agentplot/sluice/v<version>` in its place
 
 #### Scenario: sluice installed by cargo from main
 
 - **WHEN** the setup skill gives
   `cargo install --locked --git https://github.com/agentplot/sluice sluice`
-- **THEN** `sh check-installs.sh` exits non-zero, naming the file and
-  saying cargo takes `--tag v<version>` after the repository
+- **THEN** the skill breaks core.56, and its writer gives
+  `--tag v<version>` after the repository
 
 #### Scenario: A command wrapped across lines
 
 - **WHEN** a page's prose wraps
   `cargo install --git https://github.com/agentplot/sluice sluice` across
   two lines
-- **THEN** `sh check-installs.sh` reads it as one command and fails as
-  for the command on one line
+- **THEN** it is one command, and breaks core.56 as on one line
 
 #### Scenario: A release's archive
 
 - **WHEN** a page gives
   `https://github.com/agentplot/sluice/releases/latest/download/sluice-aarch64-darwin.tar.gz`
   or `https://github.com/agentplot/sluice/releases/download/v<version>/sluice-aarch64-darwin.tar.gz`
-- **THEN** `sh check-installs.sh` passes it
+- **THEN** it names a release's archive, as core.56 asks
 
 #### Scenario: The releases page
 
 - **WHEN** `README.md`'s badge links to
   `https://github.com/agentplot/sluice/releases/latest`, with no
   `/download/`
-- **THEN** `sh check-installs.sh` passes it, as it installs nothing
+- **THEN** the link stays as it is, since it installs nothing
 
 #### Scenario: An archive from no release
 
 - **WHEN** a page gives a URL under
   `https://github.com/agentplot/sluice/releases/` that holds `/download/`
   but is neither `releases/latest/download/` nor `releases/download/v<version>/`
-- **THEN** `sh check-installs.sh` exits non-zero, naming the file and
-  the URL
+- **THEN** the page breaks core.56, and its writer gives a release's
+  archive in its place
 
 ### Requirement: The docs say how a release is taken
 
@@ -129,15 +128,3 @@ plugin and the binary are one release.
 - **THEN** it gives
   `herdr plugin install agentplot/sluice/plugins/herdr --ref v<version>`
 - **AND** it says `<version>` is the version `sluice --version` prints
-
-### Requirement: root:installs holds the install commands
-
-The root project's `installs` task SHALL run `sh check-installs.sh` in
-the check-fast tier, from the workspace root. Its inputs SHALL be the
-script and every file the first requirement names, so a change to any of
-them runs it again.
-
-#### Scenario: The task
-
-- **WHEN** `moon run root:installs` runs on the tree
-- **THEN** it runs `sh check-installs.sh` and passes
