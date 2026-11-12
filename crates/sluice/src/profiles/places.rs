@@ -49,6 +49,16 @@
 //! release started first, so a free that fails part way and is tried
 //! again runs nothing.
 //!
+//! A candidate's or a preview's place is gone too where git no longer
+//! lists its folder as a worktree of the repository, as git leaves a
+//! folder whose removal it stopped part way; git's list is read from the
+//! repository's files, the folder matched by what it is on disk and not
+//! by how its path is spelled, with no process started. sluice removes
+//! what is left of such a folder itself, since git refuses to; a folder
+//! git lists goes by `git worktree remove`. A session's place is gone
+//! only once its worktree is no directory (record 0115; rules core.16,
+//! core.20).
+//!
 //! A preview (previews-1 clauses 98 to 101) is a place made as a
 //! candidate's is, at a revision its branch has landed, and released only
 //! when asked, or by the core when its command failed; one whose checkout
@@ -695,17 +705,18 @@ impl Places {
         })
     }
 
-    /// A preview as its record holds it.
-    fn preview_place(&self, name: &str, made: &Made) -> PreviewPlace {
+    /// A preview as its record holds it: gone, while its command has not
+    /// failed, as a candidate's place is ([`Places::folder_gone`]).
+    fn preview_place(&self, name: &str, made: &Made) -> Result<PreviewPlace> {
         let path = made
             .path
             .clone()
             .unwrap_or_else(|| self.worktree_path(name));
-        PreviewPlace {
+        Ok(PreviewPlace {
             name: name.into(),
             branch: made.branch.clone().unwrap_or_default(),
             revision: made.revision.clone().unwrap_or_else(|| Rev::new("")),
-            gone: made.failed.is_none() && !path.is_dir(),
+            gone: made.failed.is_none() && self.folder_gone(&path)?,
             path,
             ports: made.ports.clone(),
             names: made.names.clone(),
@@ -714,7 +725,7 @@ impl Places {
             run: made.run.clone().map(RunHandle),
             failed: made.failed.clone(),
             release_failed: made.release_failed.clone(),
-        }
+        })
     }
 
     /// The place a preview's command runs in, as its record names it.
@@ -917,7 +928,7 @@ impl Places {
         let Ok((path, _)) = Places::session_name(folder) else {
             return Ok(Released::Nothing);
         };
-        if !self.is_worktree(&path)? {
+        if !self.listed(&path)? {
             return Ok(Released::Nothing);
         }
         let made = {
@@ -990,22 +1001,34 @@ impl Places {
         )
     }
 
-    /// Record 0112: whether `path`, canonical, is the repository's main
-    /// worktree or a linked worktree git lists, detached or not, read with
-    /// no process started (129).
-    fn is_worktree(&self, path: &Path) -> Result<bool> {
+    /// Records 0112 and 0115: whether git lists the folder `path` as one
+    /// of the repository's worktrees, detached or not: its main worktree
+    /// where it has one, or the folder an entry under `<common>/worktrees/`
+    /// names. Read from the repository's files as `git worktree list` reads
+    /// them, with no process started and no object read (129; rule
+    /// core.31), each folder matched by what it is on disk ([`Folder`]),
+    /// never by how its path is spelled. An entry whose `gitdir` file
+    /// cannot be read, or whose folder cannot be, names nothing; worktrees
+    /// that cannot be listed and a `path` that cannot be read are an error,
+    /// never read as unlisted.
+    fn listed(&self, path: &Path) -> Result<bool> {
+        let want = Folder::of(path).with_context(|| format!("reading {}", path.display()))?;
         let repo = self.repo()?;
-        let is = |dir: &Path| std::fs::canonicalize(dir).is_ok_and(|d| d == path);
+        let is = |dir: &Path| Folder::of(dir).is_ok_and(|f| f == want);
         if !repo.is_bare() && repo.workdir().is_some_and(is) {
             return Ok(true);
         }
         let linked = repo
             .worktrees()
             .map_err(|e| anyhow!("listing the worktrees: {e}"))?;
-        Ok(linked
-            .into_iter()
-            .filter(|w| !w.is_prunable())
-            .any(|w| w.base().is_ok_and(|b| is(&b))))
+        Ok(linked.into_iter().any(|w| w.base().is_ok_and(|b| is(&b))))
+    }
+
+    /// 123, record 0115: whether the folder `path` of a place sluice made,
+    /// a candidate's or a preview's, is gone: no directory, or one git no
+    /// longer lists as a worktree, whatever is left in it.
+    fn folder_gone(&self, path: &Path) -> Result<bool> {
+        Ok(!path.is_dir() || !self.listed(path)?)
     }
 
     /// Hold blocks of ports in `dir` rather than the host's own.
@@ -1388,9 +1411,21 @@ impl Places {
         }
     }
 
+    /// 34, record 0115: remove the folder `path` of a place sluice made, a
+    /// candidate's or a preview's, which is all it is ever given (rule
+    /// core.20). A folder git lists goes by `git worktree remove --force`,
+    /// whether or not it is still there. One git no longer lists, as git
+    /// leaves a folder whose removal it stopped part way and then refuses,
+    /// goes by sluice's own removal ([`remove_leftover`]); nothing where it
+    /// is not there either.
     fn remove_worktree(&self, path: &Path) -> Result<()> {
-        if !path.exists() && !self.registered(path)? {
-            return Ok(());
+        if !self.listed(path)? {
+            return remove_leftover(path).with_context(|| {
+                format!(
+                    "removing what is left of {}, which git no longer lists as a worktree",
+                    path.display()
+                )
+            });
         }
         let out = self.git(&[
             "worktree",
@@ -1408,18 +1443,97 @@ impl Places {
         }
         Ok(())
     }
+}
 
-    /// Whether git lists `path` as one of the repository's worktrees.
-    fn registered(&self, path: &Path) -> Result<bool> {
-        let out = self.git(&["worktree", "list", "--porcelain", "-z"])?;
-        if !out.status.success() {
-            bail!(
-                "git worktree list: {}",
-                String::from_utf8_lossy(&out.stderr).trim()
-            );
+/// A folder as it is on disk, whatever spells its path: the device and
+/// inode of the folder, or, where it no longer exists, of its nearest
+/// ancestor that does, with the rest of its path below that ancestor. So
+/// `/var/…` and `/private/var/…`, or a path spelled through a link, are
+/// one folder, and a folder deleted is still the one its entry names
+/// (record 0115).
+#[derive(Debug, PartialEq, Eq)]
+struct Folder {
+    dev: u64,
+    ino: u64,
+    rest: PathBuf,
+}
+
+impl Folder {
+    fn of(path: &Path) -> std::io::Result<Folder> {
+        use std::os::unix::fs::MetadataExt as _;
+        let mut at = path;
+        let mut rest: Vec<&std::ffi::OsStr> = Vec::new();
+        loop {
+            // The folder itself is not followed, as git never follows it; an
+            // ancestor is, since the rest of the path is reached through it.
+            let meta = if rest.is_empty() {
+                std::fs::symlink_metadata(at)
+            } else {
+                std::fs::metadata(at)
+            };
+            match meta {
+                Ok(m) => {
+                    return Ok(Folder {
+                        dev: m.dev(),
+                        ino: m.ino(),
+                        rest: rest.iter().rev().collect(),
+                    })
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    let (Some(parent), Some(name)) = (at.parent(), at.file_name()) else {
+                        return Err(e);
+                    };
+                    rest.push(name);
+                    at = if parent.as_os_str().is_empty() {
+                        Path::new(".")
+                    } else {
+                        parent
+                    };
+                }
+                Err(e) => return Err(e),
+            }
         }
-        let want = format!("worktree {}", path.display());
-        Ok(out.stdout.split(|b| *b == 0).any(|f| f == want.as_bytes()))
+    }
+}
+
+/// Record 0115: remove `path`, what is left of a folder git no longer
+/// lists, walked without following links: each directory its owner cannot
+/// write, read or search is made so first, since a check can leave a tree
+/// read-only (a copy out of the Nix store, a module cache) and git's
+/// removal and `remove_dir_all` both fail on it; then each entry is
+/// removed, and the folder. A failure names the entry and what refused it.
+/// Nothing where `path`, or an entry of it, is not there.
+fn remove_leftover(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let gone = |e: &std::io::Error| e.kind() == std::io::ErrorKind::NotFound;
+    let meta = match std::fs::symlink_metadata(path) {
+        Ok(m) => m,
+        Err(e) if gone(&e) => return Ok(()),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+    };
+    if !meta.is_dir() {
+        return match std::fs::remove_file(path) {
+            Err(e) if !gone(&e) => Err(e).with_context(|| format!("removing {}", path.display())),
+            _ => Ok(()),
+        };
+    }
+    let mode = meta.permissions().mode();
+    if mode & 0o700 != 0o700 {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode | 0o700))
+            .with_context(|| format!("making {} its owner's to write", path.display()))?;
+    }
+    let entries = match std::fs::read_dir(path) {
+        Ok(e) => e,
+        Err(e) if gone(&e) => return Ok(()),
+        Err(e) => return Err(e).with_context(|| format!("listing {}", path.display())),
+    };
+    for entry in entries {
+        let entry = entry.with_context(|| format!("listing {}", path.display()))?;
+        remove_leftover(&entry.path())?;
+    }
+    match std::fs::remove_dir(path) {
+        Err(e) if !gone(&e) => Err(e).with_context(|| format!("removing {}", path.display())),
+        _ => Ok(()),
     }
 }
 
@@ -1636,10 +1750,18 @@ impl Checkout for Places {
     }
 
     fn gone(&self, name: &str) -> Result<bool> {
-        Ok(self
-            .read_record(name)?
-            .and_then(|m| m.path)
-            .is_some_and(|p| !p.is_dir()))
+        let Some(made) = self.read_record(name)? else {
+            return Ok(false);
+        };
+        let Some(path) = made.path.as_deref() else {
+            return Ok(false);
+        };
+        match made.kind {
+            // Record 0115: a session's worktree is no place sluice made, and
+            // is gone only once it is no directory (rule core.16).
+            Kind::Session => Ok(!path.is_dir()),
+            Kind::Made | Kind::Preview => self.folder_gone(path),
+        }
     }
 
     fn free(&self, name: &str) -> Result<()> {
@@ -1907,7 +2029,7 @@ impl Checkout for Places {
             }
             return Ok((
                 self.preview_run_place(name, &made)?,
-                self.preview_place(name, &made),
+                self.preview_place(name, &made)?,
             ));
         }
         one_method(checkout)?;
@@ -1961,7 +2083,7 @@ impl Checkout for Places {
         self.write_record(name, &made)?;
         Ok((
             self.preview_run_place(name, &made)?,
-            self.preview_place(name, &made),
+            self.preview_place(name, &made)?,
         ))
     }
 
@@ -1975,11 +2097,10 @@ impl Checkout for Places {
     }
 
     fn previews(&self) -> Result<Vec<PreviewPlace>> {
-        Ok(self
-            .preview_records()?
+        self.preview_records()?
             .iter()
             .map(|(name, made)| self.preview_place(name, made))
-            .collect())
+            .collect()
     }
 
     fn release_preview(&self, name: &str, failed: Option<&str>, retries: u32) -> Result<bool> {

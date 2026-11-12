@@ -681,8 +681,9 @@ failed of its release:
 `release_failed` is logged for each try of a release that failed, with
 what failed and how many tries so far; `held` is true on the try after
 which it is tried no more. `gone` is logged when a run or round frees a
-checkout whose directory no longer exists, once it has run the release
-command its last run stored, once, from its scratch directory. `ran`
+checkout whose directory no longer exists, or that git no longer lists
+as a worktree. Before it frees one, it runs the release command the
+checkout's last run stored, once, from its scratch directory. `ran`
 says whether its runs stored one to run, and `failed` what it printed
 when it failed; the checkout is freed either way and never tried again.
 For a worktree it also names the worktree:

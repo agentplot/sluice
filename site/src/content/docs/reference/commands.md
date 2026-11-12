@@ -548,15 +548,19 @@ Once you have fixed what the release needed, `sluice release
 sluice/try/main/48` runs it once more, whatever its tries; it exits `1`
 and stays held if it fails again. `sluice release sluice/try/main/48
 --accept-failure` gives up on it: its runs end, the checkout sluice made
-is removed and its ports are free, and the release command is not run, so
-whatever it would have removed is left. A checkout is released on the
+is removed, whether or not git still lists it as a worktree, and its
+ports are free. The release command is not run, so whatever it would
+have removed is left. A checkout is released on the
 host that made it. A held checkout doesn't keep its host from claiming:
 the host claims runs of its branch as any other does, in other
 checkouts. The held one keeps its ports and disk until it is released.
 
-A checkout whose directory someone deleted, held or not, has the release
-its run stored run once from its scratch directory by the next round, is
-freed whatever that did, and is logged `gone`.
+A checkout is gone when someone deleted its directory, or when git no
+longer lists its directory as a worktree, as git leaves one whose removal
+it stopped part way. Held or not, a gone checkout has the release its run
+stored run once from its scratch directory by the next round. sluice
+removes what is left of its directory, the checkout is freed whatever the
+release did, and it is logged `gone`.
 
 A held checkout also shows wherever you watch the queue, on every host.
 [`sluice overview`](#sluice-overview) names it under its branch.
