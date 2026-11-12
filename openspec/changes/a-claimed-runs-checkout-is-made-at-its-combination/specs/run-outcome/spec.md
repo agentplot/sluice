@@ -55,10 +55,7 @@ A run whose checkout was made and whose tests could not be started SHALL
 count as a run whose tests could not run, so that when a combination's
 tests could not run in three runs in a row, whatever the causes, the
 combination SHALL be read as not passed, its newest submission blamed,
-and its session told each test that could not run and why (115). A run
-whose checkout could not be made never began: it SHALL count toward no
-runs in a row and SHALL blame no submission, however many times it is
-tried (60; record 0117).
+and its session told each test that could not run and why (115).
 
 #### Scenario: Three starts that fail
 
@@ -75,6 +72,14 @@ tried (60; record 0117).
   start
 - **THEN** the third leaves the combination not passed, each test named
   with the reason of the run that ended it
+
+## ADDED Requirements
+
+### Requirement: A run whose checkout could not be made counts toward nothing
+
+A run whose checkout could not be made never began. It SHALL count
+toward no runs in a row and SHALL blame no submission, however many
+times it is tried (60; record 0117).
 
 #### Scenario: Checkouts that cannot be made, run after run
 
