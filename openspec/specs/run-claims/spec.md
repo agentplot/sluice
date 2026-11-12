@@ -110,7 +110,7 @@ round fetched the branch's combinations, or a pool's job. Where the host
 lacks the combination, it SHALL first fetch the combination's own ref,
 `refs/sluice/combinations/<branch>/<id>`, from the branch's remote, and
 no other; a host that holds it SHALL fetch nothing for it (82, C.6;
-record 0117).
+record 0118).
 
 #### Scenario: A pool's job on a machine that lacks the combination
 

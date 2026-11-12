@@ -225,7 +225,7 @@ state saying why. The run SHALL be open again for any host (16, 114).
 - **WHEN** the checkout of a claimed run cannot be made
 - **THEN** the run is recorded with no result and the error's words,
   it is open again with no host holding it, nobody is blamed, and it
-  counts toward no runs in a row (60; record 0117)
+  counts toward no runs in a row (60; record 0118)
   (`a_run_whose_checkout_cannot_be_made_is_recorded_with_why` and
   `a_claimed_run_whose_combination_the_remote_no_longer_holds_never_began`
   in `crates/sluice-conformance/tests/could_not_start.rs`)
@@ -360,7 +360,7 @@ from that run until the run's next result.
 
 A run whose checkout could not be made never began. It SHALL count
 toward no runs in a row and SHALL blame no submission, however many
-times it is tried (60; record 0117).
+times it is tried (60; record 0118).
 
 #### Scenario: Checkouts that cannot be made, run after run
 
