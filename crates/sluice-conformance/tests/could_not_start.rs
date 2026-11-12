@@ -1,14 +1,17 @@
 //! A run whose tests could not be started: recorded with why, its
 //! checkout released, nothing under any key and nobody blamed, open again
 //! for any host, and counted toward the runs in a row after which its
-//! combination is not passed (16, 114, 115; design D1).
+//! combination is not passed (16, 114, 115; design D1). A run whose
+//! checkout could not be made never began, and counts toward nothing; a
+//! claimed run's checkout is made at its combination, fetched first where
+//! the host lacks it (60, 82, C.6; record 0117).
 
 use std::time::Duration;
 
 use sluice_conformance::{policy, Harness, Rig, BRANCH};
 use sluice_core::records::{Event, RunState, State, SystemRun};
-use sluice_core::{Peer, Sluice};
-use sluice_seams::Decided;
+use sluice_core::{Peer, Sluice, Started};
+use sluice_seams::{Decided, State as _};
 
 /// What a toolchain that fails to enter says.
 const TOOLCHAIN: &str =
@@ -83,8 +86,8 @@ fn a_run_whose_toolchain_fails_to_enter_is_recorded_with_its_words() {
     assert_eq!(h.sub(one).state, State::Landed);
 }
 
-/// satisfies: 16, 114, 18; the run-outcome spec's "The checkout cannot be
-/// made"
+/// satisfies: 16, 60, 114, 18; the run-outcome spec's "The checkout
+/// cannot be made" (record 0117)
 #[test]
 fn a_run_whose_checkout_cannot_be_made_is_recorded_with_why() {
     let h = Harness::bolt();
@@ -99,10 +102,42 @@ fn a_run_whose_checkout_cannot_be_made_is_recorded_with_why() {
     assert!(h.w().results_log().is_empty());
     assert!(h.w().delivered().is_empty(), "nobody is blamed");
     assert_ne!(h.sub(one).state, State::Failed);
+    let r = &runs(&h)[0];
+    assert_eq!(
+        (r.state, r.host.clone(), r.place.clone()),
+        (RunState::Open, None, None)
+    );
+    let lost = r.lost.as_ref().expect("its record says why");
+    assert_eq!(lost.not_run[0].reason, could_not_start(words));
+    assert_eq!(in_a_row(&h), 0, "it counts toward nothing");
 
     h.w().checkout_fails(None);
     h.settle();
     assert_eq!(h.sub(one).state, State::Landed);
+}
+
+/// satisfies: 60, 114, 115; the run-outcome spec's "Checkouts that cannot
+/// be made, run after run" (record 0117)
+#[test]
+fn checkouts_that_cannot_be_made_run_after_run_blame_no_one() {
+    let h = Harness::bolt();
+    let words = "fatal: invalid reference: 05b3ce00";
+    h.w().checkout_fails(Some(words));
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let one = h.submit("unit/a");
+    for _ in 0..5 {
+        h.step();
+    }
+    assert_eq!(not_run(&h).len(), 5, "each run that never began says why");
+    assert_eq!(in_a_row(&h), 0, "none counts toward the runs in a row");
+    assert!(h.w().delivered().is_empty(), "nobody is blamed");
+    assert_ne!(h.sub(one).state, State::Failed);
+    assert_eq!(runs(&h)[0].state, RunState::Open);
+
+    h.w().checkout_fails(None);
+    h.settle();
+    assert_eq!(h.sub(one).state, State::Landed);
+    assert_eq!(h.w().requests().len(), 1, "its tests ran once");
 }
 
 /// satisfies: 84, 114, 139; the run-outcome spec's "The executor turns
@@ -144,6 +179,110 @@ fn on<'a>(h: &'a Harness, name: &str, signer: Option<&str>) -> Sluice<'a> {
         systems: None,
         expire_after: sluice_core::EXPIRE_AFTER,
     })
+}
+
+/// The bolt policy with its records on `origin`, its runs taken by the
+/// signer `box` or launched on the forge's pool.
+fn with_pool() -> Harness {
+    let p = policy(false, "fail", 4).replace(
+        "trust = [\"open\", \"sandbox\", \"container\"]\n",
+        "trust = [\"box\", \"forge\"]\nremote = \"origin\"\nsystems = [\"linux-x64\"]\n",
+    ) + "\n[signers.box]\nssh = \"box ssh-ed25519 AAAA\"\nsystems = [\"linux-x64\"]\n\
+         \n[signers.forge]\ngithub = { workflow = \".github/workflows/sluice.yml\", ref = \"refs/heads/main\" }\n\
+         \n[pools.forge]\ngithub = { workflow = \".github/workflows/sluice.yml\" }\nsigner = \"forge\"\n\
+         runners = { linux-x64 = \"ubuntu-24.04\" }\n\
+         \n[systems]\nlinux-x64 = { os = \"linux\", arch = \"x86_64\" }\n";
+    let h = Harness::new(&p);
+    h.w().signs_as("box");
+    h
+}
+
+/// A run of `bolt/x` launched on the forge's pool by a lead that signs as
+/// no one the gate trusts, no other host live: the pool's claim, and the
+/// candidate it holds.
+fn launched(h: &Harness) -> (String, String, sluice_seams::Rev) {
+    h.w().hold_runs(true);
+    h.w().be_host("lead");
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    h.submit("unit/a");
+    on(h, "lead", None).step(BRANCH).unwrap();
+    assert_eq!(h.w().launches().len(), 1);
+    let claim = claims(h).pop().expect("the pool's claim");
+    assert!(claim.starts_with("pool/forge/"), "{claim}");
+    let c = h.doc().candidates[0].clone();
+    (claim, c.id, c.revision)
+}
+
+/// satisfies: 82, 88, C.6; the run-claims spec's "A pool's job on a
+/// machine that lacks the combination" (record 0117)
+#[test]
+fn a_pools_job_makes_its_place_at_a_combination_only_the_remote_holds() {
+    let h = with_pool();
+    let (claim, id, combination) = launched(&h);
+    h.w().be_host("pool-machine");
+    h.w().lack(&combination, true);
+    let mut releases = Vec::new();
+    let started = h
+        .sluice()
+        .start_claimed(BRANCH, &claim, &mut releases)
+        .unwrap();
+    assert!(matches!(started, Some(Started::Running(_))), "{started:?}");
+    assert_eq!(
+        h.w().candidate_fetches(),
+        [("pool-machine".to_string(), BRANCH.to_string(), id)],
+        "the combination is fetched by its own ref"
+    );
+    let asked = h.w().requests();
+    assert_eq!(asked.len(), 1);
+    assert_eq!(asked[0].revision, combination, "its place is at it");
+    let r = &runs(&h)[0];
+    assert_eq!(
+        (r.state, r.host.as_deref()),
+        (RunState::Testing, Some(claim.as_str()))
+    );
+    assert!(not_run(&h).is_empty());
+}
+
+/// satisfies: 60, 82, 114; the run-outcome spec's "The checkout cannot be
+/// made" (record 0117)
+#[test]
+fn a_claimed_run_whose_combination_the_remote_no_longer_holds_never_began() {
+    let h = with_pool();
+    let (claim, id, combination) = launched(&h);
+    h.f.state.unpublish_candidate(BRANCH, &id).unwrap();
+    h.w().be_host("pool-machine");
+    h.w().lack(&combination, true);
+    let mut releases = Vec::new();
+    let started = h
+        .sluice()
+        .start_claimed(BRANCH, &claim, &mut releases)
+        .unwrap();
+    let why = match started {
+        Some(Started::Unmade(why)) => why,
+        other => panic!("started {other:?}"),
+    };
+    assert!(why.contains("invalid reference"), "{why}");
+    assert!(h.w().requests().is_empty(), "nothing started");
+    assert_eq!(not_run(&h), [gate_not_run(&why)]);
+    assert_eq!(in_a_row(&h), 0, "it counts toward nothing");
+    assert!(h.w().delivered().is_empty(), "nobody is blamed");
+    let r = &runs(&h)[0];
+    assert_eq!((r.state, r.host.clone()), (RunState::Open, None));
+}
+
+/// satisfies: 82; the run-claims spec's "A host that holds the
+/// combination" (record 0117)
+#[test]
+fn a_host_that_holds_the_combination_fetches_nothing_more() {
+    let h = peers();
+    h.w().hold_runs(true);
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    h.submit("unit/a");
+    on(&h, "lead", None).step(BRANCH).unwrap();
+    on(&h, "a", Some("box")).step(BRANCH).unwrap();
+    assert_eq!(claims(&h), ["a"]);
+    assert_eq!(h.w().requests().len(), 1);
+    assert!(h.w().candidate_fetches().is_empty());
 }
 
 /// Each claim in the branch's log, by host.
