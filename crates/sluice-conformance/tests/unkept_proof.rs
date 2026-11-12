@@ -105,6 +105,16 @@ fn results_of(h: &Harness, task: &str) -> Vec<ResultLine> {
     h.results().into_iter().filter(|r| r.task == task).collect()
 }
 
+/// The key the run gave `task`, as the executor observed it.
+fn key_of(h: &Harness, task: &str) -> String {
+    h.w()
+        .observed()
+        .into_iter()
+        .find(|(t, _, _)| t == task)
+        .map(|(_, key, _)| key)
+        .unwrap_or_else(|| panic!("{task} ran"))
+}
+
 /// `tasks`, each could not run for [`WHY`].
 fn unkept(tasks: &[&str]) -> Vec<(String, String)> {
     tasks
@@ -155,6 +165,7 @@ fn a_pass_nothing_proves_has_no_outcome_and_runs_again() {
                 .map(|t| NotRun {
                     task: t.to_string(),
                     reason: WHY.into(),
+                    key: Some(key_of(&h, t)),
                 })
                 .collect(),
         }]
@@ -282,6 +293,80 @@ fn a_key_the_tree_does_not_bear_out_is_still_failed() {
     assert!(failed.iter().all(|f| f.not_run.is_none()), "{failed:?}");
     assert!(lost(&h).is_empty());
     assert!(missing(&h).is_empty());
+}
+
+/// satisfies: 114; record 0105; rule core.28; the pass-proof spec's "The
+/// lost line" (design D3 of the change
+/// `a-signed-run-without-a-sandbox-proves-its-passes`)
+#[test]
+fn a_lost_line_names_each_unkept_key() {
+    let h = rig();
+    h.w().keeps_no_proof(Some(STORE));
+    h.work(
+        "unit/a",
+        "agent-a",
+        &[("a/lib", Some("a2")), ("b/lib", Some("b2"))],
+    );
+    h.submit("unit/a");
+    let line = || {
+        h.events().into_iter().find_map(|e| match e {
+            Event::Lost { not_run, .. } if !not_run.is_empty() => Some(not_run),
+            _ => None,
+        })
+    };
+    for _ in 0..8 {
+        if line().is_some() {
+            break;
+        }
+        step(&h);
+    }
+    let not_run = line().expect("a lost line");
+    let named: Vec<(String, Option<String>)> = not_run
+        .iter()
+        .map(|n| (n.task.clone(), n.key.clone()))
+        .collect();
+    assert_eq!(
+        named,
+        [
+            ("a:test".to_string(), Some(key_of(&h, "a:test"))),
+            ("b:test".to_string(), Some(key_of(&h, "b:test"))),
+        ]
+    );
+    let json = serde_json::to_value(&not_run).unwrap();
+    assert_eq!(json[0]["key"], key_of(&h, "a:test"));
+    assert_eq!(json[0]["reason"], WHY);
+    assert_eq!(missing(&h), [("fake-host".to_string(), WHY.to_string())]);
+}
+
+/// satisfies: C.6, 20; the pass-proof spec's "A forged key" (design D5
+/// of the change `a-signed-run-without-a-sandbox-proves-its-passes`)
+#[test]
+fn a_key_the_tree_does_not_bear_out_is_blamed_with_why() {
+    let h = rig();
+    h.w().forges("a:test");
+    h.work(
+        "unit/a",
+        "agent-a",
+        &[("a/lib", Some("a2")), ("b/lib", Some("b2"))],
+    );
+    let one = h.submit("unit/a");
+    settle(&h);
+    assert_eq!(h.sub(one).state, State::Failed);
+    let key = key_of(&h, "a:test");
+    let failed: Vec<(String, String, Option<String>)> = h
+        .sub(one)
+        .failed
+        .iter()
+        .map(|f| (f.task.clone(), f.hash.clone(), f.unsigned.clone()))
+        .collect();
+    assert_eq!(
+        failed,
+        [(
+            "a:test".to_string(),
+            key,
+            Some("a:test: its record names an input the tree does not hold".to_string())
+        )]
+    );
 }
 
 /// satisfies: 78; record 0105; the pass-proof spec's "Its runs keep no

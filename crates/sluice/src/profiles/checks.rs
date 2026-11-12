@@ -73,6 +73,10 @@ use crate::instance::{HostCache, Instance};
 use crate::runs::{Ended, Request, RunState, Runs};
 use crate::sessions::Sessions;
 
+mod engine;
+
+pub use engine::{end_containers, PLACE_LABEL};
+
 /// What a run's place, environment and toolchain are, for a runner.
 pub struct Context<'a> {
     pub request: &'a RunRequest,
@@ -1170,14 +1174,20 @@ fn ping(socket: &Path) -> Result<(), String> {
             None if status.trim().is_empty() => Err("closed the connection unanswered".into()),
             None => Err(format!("answered {:?}", status.trim())),
         },
-        Err(e) => Err(match e.kind() {
-            std::io::ErrorKind::ConnectionRefused => "refused the connection".into(),
-            std::io::ErrorKind::PermissionDenied => "refused this user".into(),
-            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => {
-                format!("gave no answer within {wait}")
-            }
-            _ => e.to_string(),
-        }),
+        Err(e) => Err(io_words(&e, &wait)),
+    }
+}
+
+/// What a failed read or write on an engine's unix socket did, in words,
+/// an answer waited for up to `wait`.
+fn io_words(e: &std::io::Error, wait: &str) -> String {
+    match e.kind() {
+        std::io::ErrorKind::ConnectionRefused => "refused the connection".into(),
+        std::io::ErrorKind::PermissionDenied => "refused this user".into(),
+        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => {
+            format!("gave no answer within {wait}")
+        }
+        _ => e.to_string(),
     }
 }
 
@@ -1202,20 +1212,27 @@ fn ping_tcp(host: &str, port: u16, tls: Option<&EngineTls>) -> Result<(), String
     match agent.get(&format!("{scheme}://{host}:{port}/_ping")).call() {
         Ok(r) if r.status() == 200 => Ok(()),
         Ok(r) => Err(format!("answered {}", r.status())),
-        Err(e) => Err(match e {
-            ureq::Error::Io(io) if io.kind() == std::io::ErrorKind::ConnectionRefused => {
-                "refused the connection".into()
-            }
-            ureq::Error::ConnectionFailed => "refused the connection".into(),
-            ureq::Error::Timeout(ureq::Timeout::Resolve | ureq::Timeout::Connect) => {
-                format!("took no connection within {wait}")
-            }
-            ureq::Error::Timeout(_) => format!("gave no answer within {wait}"),
-            ureq::Error::HostNotFound => "names no host that resolves".into(),
-            // A TLS failure is told in TLS's own words.
-            ureq::Error::Io(io) => io.to_string(),
-            other => other.to_string(),
-        }),
+        Err(e) => Err(tcp_words(e, &wait)),
+    }
+}
+
+/// What a failed call to an engine at a TCP address did, in words, an
+/// answer waited for up to `wait` once [`ENGINE_WAIT`] gave the
+/// connection.
+fn tcp_words(e: ureq::Error, wait: &str) -> String {
+    match e {
+        ureq::Error::Io(io) if io.kind() == std::io::ErrorKind::ConnectionRefused => {
+            "refused the connection".into()
+        }
+        ureq::Error::ConnectionFailed => "refused the connection".into(),
+        ureq::Error::Timeout(ureq::Timeout::Resolve | ureq::Timeout::Connect) => {
+            format!("took no connection within {}s", ENGINE_WAIT.as_secs())
+        }
+        ureq::Error::Timeout(_) => format!("gave no answer within {wait}"),
+        ureq::Error::HostNotFound => "names no host that resolves".into(),
+        // A TLS failure is told in TLS's own words.
+        ureq::Error::Io(io) => io.to_string(),
+        other => other.to_string(),
     }
 }
 
@@ -1775,6 +1792,7 @@ impl Tests for Checks {
                     .map(|t| NotRun {
                         task: t.clone(),
                         reason: e.clone(),
+                        key: None,
                     })
                     .collect(),
             ),
@@ -1893,15 +1911,32 @@ impl Tests for Checks {
 
     /// A command runner's one key is sluice's own, so every task is
     /// proven. A moon task's key is checked against the candidate's tree
-    /// by its manifest, read in the store the run's moon kept it in
-    /// (design D9; C.2 moon row). A ran check that passed whose manifest,
-    /// or a dependency's, is missing there is unkept: the run kept no
-    /// proof of it, which says nothing of the work, so it is not warned of
-    /// and has no outcome (114; record 0105; the change
-    /// `a-pass-nothing-proves-blames-no-one`, design D2 to D4). Every
-    /// other key the check refuses is one the tree does not bear out, in
-    /// neither list and warned of. A fail, a task a check was failed by
-    /// (149) and a replay (108) are never unkept.
+    /// by its manifest, read where the run's moon kept it, in the checkout
+    /// or in the shared store moon's own settings place it (C.2 moon row;
+    /// rule core.9): each manifest the walk needs, the key's own and each
+    /// dependency's, is read in the store the run's record names and,
+    /// where that store is not the checkout's own `.moon/cache` and lacks
+    /// it, in the checkout's own, which this run's moon alone writes
+    /// (design D9; design D1 of the change
+    /// `a-signed-run-without-a-sandbox-proves-its-passes`). Either is held
+    /// to the same proof by its content.
+    ///
+    /// A ran check that passed whose manifest, or a dependency's, is
+    /// missing there is unkept: the run kept no proof of it, which says
+    /// nothing of the work, so it is not warned of and has no outcome
+    /// (114; record 0105; the change `a-pass-nothing-proves-blames-no-one`,
+    /// design D2 to D4). It names the missing manifest's key, and its
+    /// reason whose manifest is missing, the record's store and what that
+    /// store says of itself, read from the store with nothing run, never
+    /// from what moon printed (rule core.35; design D3 of
+    /// `a-signed-run-without-a-sandbox-proves-its-passes`). A fail, a task
+    /// a check was failed by (149) and a replay (108) are never unkept.
+    ///
+    /// Every other key the check refuses is one the tree does not bear
+    /// out, in neither list and warned of; one refused for a cause other
+    /// than a missing manifest is answered in `refused` with its key and
+    /// the check's words for why, so the submission blamed for it says why
+    /// (C.6, 20; design D5).
     fn proven(&self, run: &RunHandle, report: &RunReport) -> Result<Proof> {
         let meta: Meta = serde_json::from_value(self.runs.request(&run.0)?.meta)
             .with_context(|| format!("reading run {}", run.0))?;
@@ -1909,19 +1944,27 @@ impl Tests for Checks {
         if meta.runner != "moon" {
             return Ok(Proof {
                 proven: tasks.map(|t| t.task.clone()).collect(),
-                unkept: Vec::new(),
+                ..Proof::default()
             });
         }
-        let store = meta
-            .store
-            .clone()
-            .unwrap_or_else(|| meta.place.join(".moon/cache"));
-        let blob = |k: &str| super::moon::blob_in(&store, k);
+        let own = meta.place.join(".moon/cache");
+        let store = meta.store.clone().unwrap_or_else(|| own.clone());
+        let blob = |k: &str| {
+            super::moon::blob_in(&store, k).or_else(|| {
+                (store != own)
+                    .then(|| super::moon::blob_in(&own, k))
+                    .flatten()
+            })
+        };
         let tree = |p: &str| super::moon::file_at(&meta.place, &meta.revision, p);
         // A task a check was failed by is no check of the run (149).
         let checks = report.tasks.iter().map(|t| (t, true));
         let dependencies = report.dependencies.iter().map(|t| (t, false));
         let mut proof = Proof::default();
+        // Design D3 of `a-signed-run-without-a-sandbox-proves-its-passes`:
+        // how many of the run's keys moon kept a manifest of, in either
+        // store, read once a pass is found unkept.
+        let kept = std::cell::OnceCell::new();
         for (t, check) in checks.chain(dependencies) {
             let e = match super::moon::check_key(&t.hash, &t.task, &blob, &tree) {
                 Ok(()) => {
@@ -1932,16 +1975,39 @@ impl Tests for Checks {
             };
             let ran_pass =
                 check && matches!(t.source, Source::Ran { .. }) && t.outcome == Outcome::Pass;
-            if ran_pass && e.downcast_ref::<moon::NoManifest>().is_some() {
+            let missing = e.downcast_ref::<moon::NoManifest>().filter(|_| ran_pass);
+            if let Some(missing) = missing {
+                let whose = if missing.task == t.task {
+                    "it".to_string()
+                } else {
+                    format!("{}, which it depends on", missing.task)
+                };
+                let kept = *kept.get_or_init(|| {
+                    report
+                        .tasks
+                        .iter()
+                        .chain(&report.dependencies)
+                        .filter(|t| blob(&t.hash).is_some())
+                        .count()
+                });
+                let fact = super::moon::store_fact(&store, &missing.key, kept);
                 proof.unkept.push(NotRun {
                     task: t.task.clone(),
                     reason: format!(
                         "it passed, but nothing the run kept proves it ran: \
-                         moon's manifest of it is not in {}",
+                         moon's manifest of {whose} is not in {}, {fact}",
                         store.display()
                     ),
+                    key: Some(missing.key.clone()),
                 });
                 continue;
+            }
+            if e.downcast_ref::<moon::NoManifest>().is_none() {
+                proof.refused.push(sluice_seams::Refused {
+                    task: t.task.clone(),
+                    key: t.hash.clone(),
+                    why: format!("{e:#}"),
+                });
             }
             tracing::warn!(
                 sluice.task = %t.task,
@@ -2138,6 +2204,7 @@ fn command_result(meta: &Meta, ended: &Ended) -> (Vec<TaskResult>, Vec<NotRun>) 
             .map(|t| NotRun {
                 task: t.clone(),
                 reason: not_run_reason(code),
+                key: None,
             })
             .collect();
         return (Vec::new(), not_run);

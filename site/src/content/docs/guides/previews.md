@@ -126,6 +126,32 @@ portless alias --remove "$api" || true
 preview is released, with the same environment, and removes what the
 command handed off.
 
+A preview goes when its caller releases it, when its command fails, when
+someone removes its checkout by hand, or when the operator accepts its
+release's failure. Each way, sluice then asks the host's container engine
+what the release command left. Before it lets the preview's ports go, it
+removes every container that:
+
+- mounts a path in the preview's checkout or its `SLUICE_TMP`,
+- publishes one of the preview's ports on the host, or
+- carries the label `sluice.place=$SLUICE_PLACE`.
+
+It leaves every other container alone. The label is how to mark a
+container that mounts nothing of the preview's and publishes none of its
+ports, such as a database reached only on the engine's own network:
+
+```sh
+docker run -d --label "sluice.place=$SLUICE_PLACE" --network shop postgres:17
+```
+
+With Compose, give each such service the same label under `labels`.
+
+A container sluice cannot remove keeps the preview, with its checkout
+and its ports. `sluice release` exits 1, naming the container and what
+the engine said, and the preview stays listed with that failure until a
+later release removes it. A preview whose checkout is gone is tried again
+by the next `sluice previews`.
+
 Only a preview is given names. `[tests] release` is every place's
 release command, so it also runs after each candidate's checks and when
 an agent's worktree is released, where no `SLUICE_NAME_<NAME>` is set.

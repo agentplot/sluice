@@ -33,6 +33,11 @@ struct Setup {
     config: Scratch,
     state: Scratch,
     worktrees: Scratch,
+    /// The fake container engine every `sluice` here is pointed at, so a
+    /// preview's release ends its containers there and never at the
+    /// host's (record 0119).
+    engine: support::Engine,
+    _engine_dir: Scratch,
 }
 
 impl Setup {
@@ -87,12 +92,15 @@ impl Setup {
         repo.write(".prototools", "moon = \"2.6.1\"\n");
         repo.git(&["add", "-A"]);
         repo.git(&["commit", "-q", "-m", "pins and a policy"]);
+        let engine_dir = Scratch::short();
         Setup {
             repo,
             tools,
             config: Scratch::new(&format!("{name}-config")),
             state: Scratch::new(&format!("{name}-state")),
             worktrees: Scratch::new(&format!("{name}-worktrees")),
+            engine: support::containers_engine(engine_dir.path()),
+            _engine_dir: engine_dir,
         }
     }
 
@@ -120,6 +128,10 @@ impl Setup {
             .current_dir(dir)
             .env("XDG_CONFIG_HOME", self.config.path())
             .env("XDG_STATE_HOME", self.state.path())
+            .env(
+                sluice::profiles::checks::ENGINE_SOCKETS_VAR,
+                self.engine.socket(),
+            )
             .env_remove("SLUICE_AGENT")
             .env_remove("SLUICE_OTEL")
             .env_remove("GIT_DIR")
@@ -220,6 +232,7 @@ fn a_preview_is_equipped_before_its_command() {
     );
     let out = s.sluice(s.repo.dir(), &["release", doc["name"].as_str().unwrap()]);
     assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(s.engine.listings(), 1, "its release asked its own engine");
 }
 
 /// 147, S72, the command; rule core.46: `sluice equip main` in a

@@ -358,6 +358,13 @@ status_of() {
   jq -n -c --argjson id "$1" --arg p "$2" --arg s "$3" --argjson f "${4:-[]}" \
     '{schema: "sluice/submission@1", id: $id, branch: "main", from: {agent: "claude", worktree: "w", path: $p}, state: $s, failed: ($f | map({task: ., log: "/l/\(.).log"}))}' >"$FAKE/status-$1.json"
 }
+# The same, of #$1 on the branch $5, which holds a number main holds too
+# (record 0114).
+status_on() {
+  jq -n -c --argjson id "$1" --arg p "$2" --arg s "$3" --argjson f "${4:-[]}" --arg b "$5" \
+    '{schema: "sluice/submission@1", id: $id, branch: $b, from: {agent: "claude", worktree: "w", path: $p}, state: $s, failed: ($f | map({task: ., log: "/l/\(.).log"}))}' \
+    >"$FAKE/status-$1-$(printf '%s' "$5" | tr / _).json"
+}
 
 ## the manifest
 
@@ -1148,7 +1155,7 @@ status_of 9 "$work" withdrawn '["cli:test"]'
 feed "$(doc)" "$(doc '.branches[0].recent += [{schema: "sluice/log@1", at: "2026-10-16T19:44:00Z", event: "blamed", id: 9, combination: "c"}]')"
 forecast
 tokens
-if grep -v -e 'overview --' -e 'status 9 --json' -e 'submit main --check --json' "$FAKE/sluice-calls" | grep -q .; then
+if grep -v -e 'overview --' -e 'status 9 --branch main --json' -e 'submit main --check --json' "$FAKE/sluice-calls" | grep -q .; then
   fail "other sluice commands ran: $(cat "$FAKE/sluice-calls")"
 fi
 pass
@@ -1728,7 +1735,8 @@ before=$(find "$HERDR_PLUGIN_CONFIG_DIR" "$scratch/home" -type f | sort)
 # A state directory outside the home directory is named whole.
 out=$(HOME=$scratch/home sh "$plugin/bin/setup.sh" </dev/null)
 for want in 'key = "prefix+m"' 'command = "agentplot.sluice.status"' '"$sluice"' '"$sluice_q"' \
-  "sh '$HERDR_PLUGIN_STATE_DIR/segment/bin/segment.sh'" 'interval_seconds = 5, timeout_seconds = 30 }'; do
+  "sh '$HERDR_PLUGIN_STATE_DIR/segment/bin/segment.sh'" 'interval_seconds = 5, timeout_seconds = 30 }' \
+  "set up sluice's herdr plugin" 'herdr config check'; do
   printf '%s' "$out" | grep -qF -- "$want" || fail "setup does not show $want"
 done
 [ "$(find "$HERDR_PLUGIN_CONFIG_DIR" "$scratch/home" -type f | sort)" = "$before" ] || fail "setup wrote a file"
@@ -1828,6 +1836,17 @@ status_of 87 "$work" withdrawn '["tests:t-cards"]'
 feed "$(doc)" "$(doc "$blamed87")"
 has 'notification show sluice: #87 blamed on main --body tests:t-cards failed.'
 [ "$(grep -c 'notification show' "$FAKE/herdr-calls")" = 1 ] || fail "not one toast: $(calls)"
+pass
+
+fresh 'learn: a number another branch holds'
+# #87 blamed on main, its tests not in the document; feature/a holds an
+# #87 too, which failed other tests.
+status_of 87 "$work" withdrawn '["tests:t-cards"]'
+status_on 87 "$other" withdrawn '["other:test"]' feature/a
+feed "$(doc)" "$(doc "$blamed87")"
+grep -q ': status 87 --branch main --json$' "$FAKE/sluice-calls" || fail "main's #87 not asked of sluice: $(cat "$FAKE/sluice-calls")"
+has 'notification show sluice: #87 blamed on main --body tests:t-cards failed.'
+hasnt 'other:test'
 pass
 
 fresh 'toasts: watcher restarted'
@@ -1980,6 +1999,20 @@ touch "$H/no-agent"
 sh "$plugin/bin/jump.sh"
 has 'workspace focus w2'
 has 'tab focus t2'
+pass
+
+fresh 'jump: a number another branch holds'
+# #87 blamed on main, its worktree not yet learned; feature/a holds an #87
+# too, from another worktree.
+feed "$(doc)" "$(doc "$blamed87")"
+status_of 87 "$other" withdrawn '["tests:t-cards"]'
+status_on 87 "$work" queued '[]' feature/a
+: >"$FAKE/herdr-calls"
+: >"$FAKE/sluice-calls"
+sh "$plugin/bin/jump.sh"
+grep -q ': status 87 --branch main --json$' "$FAKE/sluice-calls" || fail "main's #87 not asked of sluice: $(cat "$FAKE/sluice-calls")"
+has 'agent focus p2'
+hasnt 'focus p1'
 pass
 
 fresh 'jump: no pane'

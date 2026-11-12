@@ -687,6 +687,14 @@ pub struct NotRun {
     pub task: String,
     /// Why, for the person told of it (20).
     pub reason: String,
+    /// Design D3 of the change `a-signed-run-without-a-sandbox-proves-its-
+    /// passes` (114; record 0105): for a pass the run kept no proof of, the
+    /// key of the task runner's record that is missing, the task's own or,
+    /// as its reason names, a task's it depends on. Set only where the
+    /// check profile names one; the reason carries no key, so its cause is
+    /// logged once for each host and reason (rule core.28).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
 }
 
 /// Design D1 and D3 of the change `a-pass-nothing-proves-blames-no-one`
@@ -695,10 +703,26 @@ pub struct NotRun {
 /// checks and the tasks a check was failed by alike (149). `unkept` holds
 /// each ran check that passed whose proof the run kept none of, with why:
 /// it has no outcome, never a fail. A task in neither list is no pass.
+/// `refused` holds, with why, each ran task the check profile read a
+/// record of and found its key not borne out by the tree for any cause
+/// but a missing record (C.6, 20; design D5 of the change
+/// `a-signed-run-without-a-sandbox-proves-its-passes`): it is in neither
+/// other list, and the submission blamed for it says why.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Proof {
     pub proven: Vec<String>,
     pub unkept: Vec<NotRun>,
+    pub refused: Vec<Refused>,
+}
+
+/// C.6, 20: a ran task whose key the candidate's tree does not bear out,
+/// for a cause other than a missing record. `why` is the check profile's
+/// words for it, naming the task.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Refused {
+    pub task: String,
+    pub key: String,
+    pub why: String,
 }
 
 /// 149: a required check the runner skipped because the tasks `by` it
@@ -1884,6 +1908,7 @@ mod tests {
             not_run: vec![NotRun {
                 task: "root:all".into(),
                 reason: "exited 77".into(),
+                key: None,
             }],
             ..report()
         };

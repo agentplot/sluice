@@ -33,8 +33,19 @@ case "$*" in
     printf '{"schema":"sluice/overview@1","host":"test","repository":"%s","at":"2026-10-16T19:45:10Z","branches":[],"sessions":[],"previews":[]}\n' "$PWD"
   fi
   ;;
+"status "*" --branch "*" --json")
+  # The branch named alone is read: #$2's record on it, status-$2.json, or
+  # status-$2-<branch, / as _>.json where another branch holds #$2 too;
+  # none where the record is another branch's.
+  f="$FAKE/status-$2-$(printf '%s' "$4" | tr / _).json"
+  [ -f "$f" ] || f="$FAKE/status-$2.json"
+  grep -qF "\"branch\":\"$4\"" "$f" 2>/dev/null || exit 1
+  cat "$f"
+  ;;
 "status "*" --json")
-  cat "$FAKE/status-$2.json" 2>/dev/null || exit 1
+  # A number with no branch, which sluice refuses where another branch
+  # holds it: the plugin always names the branch.
+  exit 2
   ;;
 "submit "*" --check --json")
   [ -f "$FAKE/check-sleep" ] && sleep "$(cat "$FAKE/check-sleep")"

@@ -828,6 +828,7 @@ fn read_report(
                     read.not_run.push(NotRun {
                         task: a.target.to_string(),
                         reason: not_run_reason(code),
+                        key: None,
                     });
                     continue;
                 }
@@ -883,6 +884,7 @@ fn read_report(
                     a.target,
                     not_run_reason(code)
                 ),
+                key: None,
             });
         }
     }
@@ -1080,13 +1082,26 @@ impl std::fmt::Display for NoManifest {
 
 impl std::error::Error for NoManifest {}
 
+/// The marks moon 2.6.1's `dep_hash_input` gives a dependency in a hash
+/// manifest's `deps` in place of a key: `ignored`, its default for a
+/// dependency with no outputs; `passthrough`, for an edge the graph
+/// ignores or a dependency that passed through; and `outputs` and
+/// `outputs-passthrough`, for one whose outputs are among the task's
+/// inputs, which the manifest's inputs then name (C.2 moon row, C.6).
+pub const DEPENDENCY_MARKS: [&str; 4] =
+    ["ignored", "passthrough", "outputs", "outputs-passthrough"];
+
 /// Design D9 (C.6): whether `key` is moon's key for `task` on the
 /// combination's tree, checked without running anything. moon keeps each
 /// task's hash manifest in its blob store under its key, the key the
 /// sha256 of the manifest; the manifest names the task, every input with
-/// the sha256 of its content, and each dependency's key, or `ignored`
-/// for one with no outputs. `blob` reads the store, `tree` a path of the
-/// combination's tree. A signer signs only keys this passes. Where a
+/// the sha256 of its content, and each dependency's key or one of the
+/// four marks moon 2.6.1's `dep_hash_input` writes for a dependency that
+/// gives the task no key ([`DEPENDENCY_MARKS`]), which names no manifest
+/// and is walked no further (design D2 of the change
+/// `a-signed-run-without-a-sandbox-proves-its-passes`). Any other value
+/// that is not a key is refused. `blob` reads the store, `tree` a path of
+/// the combination's tree. A signer signs only keys this passes. Where a
 /// manifest the walk needs is missing, it fails with [`NoManifest`].
 pub fn check_key(
     key: &str,
@@ -1132,7 +1147,7 @@ pub fn check_key(
         if let Some(deps) = m["deps"].as_object() {
             for (dep, k) in deps {
                 match k.as_str() {
-                    Some("ignored") => {}
+                    Some(mark) if DEPENDENCY_MARKS.contains(&mark) => {}
                     Some(k) => go(k, dep, blob, tree, depth + 1)?,
                     None => bail!("{task}: dependency {dep} has no key"),
                 }
@@ -1157,6 +1172,80 @@ pub fn blob_in(store: &Path, key: &str) -> Option<Vec<u8>> {
         return None;
     }
     std::fs::read(store.join("blobs").join(&key[..2]).join(&key[2..])).ok()
+}
+
+/// Design D3 of the change `a-signed-run-without-a-sandbox-proves-its-
+/// passes` (114; record 0105): what a store a manifest is missing from
+/// says of itself, read from the store after the run with nothing run,
+/// never from what moon printed (rule core.35). The first that holds is
+/// the one given, ordered so it names first what the host must change.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StoreFact {
+    /// The store is not a directory.
+    Absent,
+    /// The user sluice runs as cannot write the store's `blobs`, or the
+    /// store where it holds no `blobs`.
+    Unwritable { user: String },
+    /// The user sluice runs as cannot write the key's shard of `blobs`.
+    ShardUnwritable { user: String },
+    /// No key of the run's tasks and dependencies has a blob in either
+    /// store the run's moon could keep it in.
+    NoneKept,
+    /// Some key of the run's has a blob there.
+    OthersKept,
+}
+
+impl std::fmt::Display for StoreFact {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StoreFact::Absent => f.write_str("which does not exist"),
+            StoreFact::Unwritable { user } => write!(f, "which {user} cannot write"),
+            StoreFact::ShardUnwritable { user } => {
+                write!(f, "a directory of which {user} cannot write")
+            }
+            StoreFact::NoneKept => f.write_str("where moon kept none of the run's manifests"),
+            StoreFact::OthersKept => f.write_str("where moon kept others of the run's manifests"),
+        }
+    }
+}
+
+/// [`StoreFact`] of `store`, for the manifest under `key` it lacks, where
+/// `kept` of the keys of the run's tasks and dependencies have a blob in
+/// either store the run's moon could keep it in. Whether the user sluice
+/// runs as can write a directory is `access(2)`'s answer for this
+/// process, the open executor's run being its child under its user.
+pub fn store_fact(store: &Path, key: &str, kept: usize) -> StoreFact {
+    use nix::unistd::{access, AccessFlags};
+    if !store.is_dir() {
+        return StoreFact::Absent;
+    }
+    let writes = |dir: &Path| access(dir, AccessFlags::W_OK).is_ok();
+    let blobs = store.join("blobs");
+    let top = if blobs.is_dir() { &blobs } else { store };
+    if !writes(top) {
+        return StoreFact::Unwritable { user: user() };
+    }
+    if key.is_ascii() && key.len() >= 2 {
+        let shard = blobs.join(&key[..2]);
+        if shard.is_dir() && !writes(&shard) {
+            return StoreFact::ShardUnwritable { user: user() };
+        }
+    }
+    if kept == 0 {
+        StoreFact::NoneKept
+    } else {
+        StoreFact::OthersKept
+    }
+}
+
+/// The name of the user sluice runs as, as `access(2)` reads it, else its
+/// uid.
+fn user() -> String {
+    let uid = nix::unistd::getuid();
+    match nix::unistd::User::from_uid(uid) {
+        Ok(Some(u)) => u.name,
+        _ => uid.to_string(),
+    }
 }
 
 /// Design D8 (C.2 moon row, 35): where moon keeps the blobs and hash
@@ -1467,6 +1556,42 @@ mod tests {
             assert!(e.to_string().starts_with("a:test:"), "{e}");
         }
 
+        /// Design D2 of `a-signed-run-without-a-sandbox-proves-its-passes`:
+        /// a dependency moon 2.6.1 names by one of its four marks gives no
+        /// key and is walked no further, so the key is borne out walking
+        /// its keyed dependency alone; any other value that is no key is
+        /// refused as one.
+        #[test]
+        fn moons_dependency_marks_are_no_key() {
+            let mut s = Store(BTreeMap::new());
+            let a = s.manifest("a:test", &[("a/x", "1")], &[]);
+            let b = s.manifest(
+                "b:test",
+                &[("b/y", "2")],
+                &[
+                    ("a:test", &a),
+                    ("c:lint", "ignored"),
+                    ("d:gen", "passthrough"),
+                    ("e:build", "outputs"),
+                    ("f:setup", "outputs-passthrough"),
+                ],
+            );
+            let t = tree(&[("a/x", "1"), ("b/y", "2")]);
+            let walked = std::cell::RefCell::new(Vec::new());
+            let blob = |k: &str| {
+                walked.borrow_mut().push(k.to_string());
+                s.0.get(k).cloned()
+            };
+            check_key(&b, "b:test", &blob, &t).unwrap();
+            assert_eq!(*walked.borrow(), [b.clone(), a.clone()]);
+
+            let stale = s.manifest("b:test", &[("b/y", "2")], &[("c:lint", "stale")]);
+            let blob = |k: &str| s.0.get(k).cloned();
+            let e = check_key(&stale, "b:test", &blob, &t).unwrap_err();
+            assert_eq!(e.downcast_ref::<NoManifest>(), None, "{e}");
+            assert_eq!(e.to_string(), "c:lint: \"stale\" is no key");
+        }
+
         /// Design D2: a missing manifest, the key's own or a dependency's,
         /// is a proof the run did not keep, told apart by its type and
         /// naming the task whose manifest is missing; a manifest that does
@@ -1573,6 +1698,88 @@ mod tests {
         }
 
         const ON: (&str, &str) = ("MOON_CACHE_SHARED_WORKTREE_CACHE", "true");
+
+        /// Design D3 of `a-signed-run-without-a-sandbox-proves-its-passes`:
+        /// a store a manifest is missing from says, in turn, that it does
+        /// not exist, that its user cannot write it or the key's directory
+        /// of it, and whether moon kept the run's other manifests there,
+        /// each case in a directory of its own. `access(2)` refuses root
+        /// nothing, so as root the two unwritable cases are skipped.
+        #[test]
+        fn the_store_says_why_a_manifest_is_missing() {
+            use std::os::unix::fs::PermissionsExt;
+            let s = Scratch::new("facts");
+            let key = format!("ab{}", "0".repeat(62));
+            let mode = |p: &Path, m: u32| {
+                std::fs::set_permissions(p, std::fs::Permissions::from_mode(m)).unwrap()
+            };
+            let me = user();
+
+            let absent = s.0.join("absent");
+            assert_eq!(store_fact(&absent, &key, 3), StoreFact::Absent);
+            assert_eq!(
+                store_fact(&absent, &key, 3).to_string(),
+                "which does not exist"
+            );
+            let file = s.0.join("a-file");
+            std::fs::write(&file, "").unwrap();
+            assert_eq!(store_fact(&file, &key, 3), StoreFact::Absent);
+
+            let none = s.0.join("none");
+            std::fs::create_dir_all(none.join("blobs")).unwrap();
+            assert_eq!(store_fact(&none, &key, 0), StoreFact::NoneKept);
+            assert_eq!(
+                store_fact(&none, &key, 0).to_string(),
+                "where moon kept none of the run's manifests"
+            );
+
+            let others = s.0.join("others");
+            std::fs::create_dir_all(others.join("blobs/cd")).unwrap();
+            assert_eq!(store_fact(&others, &key, 2), StoreFact::OthersKept);
+            assert_eq!(
+                store_fact(&others, &key, 2).to_string(),
+                "where moon kept others of the run's manifests"
+            );
+
+            if nix::unistd::getuid().is_root() {
+                eprintln!(
+                    "skipped: as root, access(2) refuses no write, so a store \
+                     its user cannot write is not made here"
+                );
+                return;
+            }
+
+            // `blobs` its user cannot write.
+            let locked = s.0.join("locked");
+            std::fs::create_dir_all(locked.join("blobs")).unwrap();
+            mode(&locked.join("blobs"), 0o555);
+            let fact = store_fact(&locked, &key, 2);
+            mode(&locked.join("blobs"), 0o755);
+            assert_eq!(fact, StoreFact::Unwritable { user: me.clone() });
+            assert_eq!(fact.to_string(), format!("which {me} cannot write"));
+
+            // No `blobs`, and the store its user cannot write.
+            let bare = s.0.join("bare");
+            std::fs::create_dir_all(&bare).unwrap();
+            mode(&bare, 0o555);
+            let fact = store_fact(&bare, &key, 0);
+            mode(&bare, 0o755);
+            assert_eq!(fact, StoreFact::Unwritable { user: me.clone() });
+
+            // The key's directory its user cannot write.
+            let shard = s.0.join("shard");
+            std::fs::create_dir_all(shard.join("blobs/ab")).unwrap();
+            mode(&shard.join("blobs/ab"), 0o555);
+            let fact = store_fact(&shard, &key, 2);
+            let other = store_fact(&shard, &format!("cd{}", "0".repeat(62)), 2);
+            mode(&shard.join("blobs/ab"), 0o755);
+            assert_eq!(fact, StoreFact::ShardUnwritable { user: me.clone() });
+            assert_eq!(
+                fact.to_string(),
+                format!("a directory of which {me} cannot write")
+            );
+            assert_eq!(other, StoreFact::OthersKept);
+        }
 
         #[test]
         fn a_key_is_read_where_moon_keeps_it() {
@@ -2114,6 +2321,7 @@ mod tests {
                 reason: "its dependency api:integration could not run: exited 77, \
                          which [tests] not_run names: it could not run here"
                     .into(),
+                key: None,
             }]
         );
     }
