@@ -773,9 +773,11 @@ fn the_next_exec_runs_a_removed_worktrees_stored_release_once() {
 /// in a worktree where no `sluice exec` ever ran runs the release command
 /// `main`'s policy names, in the worktree, and answers as a held
 /// worktree's release does: released, exit 0, when it passed, and what it
-/// printed, exit 1, when it failed. Either way sluice holds nothing for the
-/// worktree after. A policy that cannot be read fails the release, naming
-/// `main`, with nothing run.
+/// printed, exit 1, when it failed. A release that passed keeps nothing
+/// for the worktree; one that failed keeps its place under `main`, with
+/// one failed try, which `sluice status` lists and `sluice release
+/// --accept-failure` frees (record 0116). A policy that cannot be read
+/// fails the release, naming `main`, with nothing run.
 #[test]
 fn an_unheld_worktrees_release_runs_its_release_command() {
     let s = Setup::new("exec-unheld-release");
@@ -822,12 +824,46 @@ fn an_unheld_worktrees_release_runs_its_release_command() {
         "{status}"
     );
 
-    // A failing release: exit 1 with what it printed, and nothing held.
+    // A failing release: exit 1 with what it printed, and the worktree's
+    // place kept with one failed try (record 0116).
     s.policy(&releasing(&fail));
     let out = s.sluice(&["release"]);
     assert_eq!(out.status.code(), Some(1), "{}", text(&out));
     assert!(
         text(&out).contains("emulator still answers"),
+        "{}",
+        text(&out)
+    );
+    let out = s
+        .command(&["status", "--json"])
+        .current_dir(s.repo.dir())
+        .output()
+        .unwrap();
+    let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let kept = doc["worktrees"].as_array().unwrap();
+    assert_eq!(kept.len(), 1, "{doc}");
+    assert_eq!(kept[0]["worktree"], canon.to_str().unwrap(), "{doc}");
+    assert_eq!(kept[0]["branch"], "main", "{doc}");
+    let failed = &kept[0]["release_failed"];
+    assert_eq!(failed["tries"], 1, "{doc}");
+    assert!(
+        failed["failed"]
+            .as_str()
+            .unwrap()
+            .contains("emulator still answers"),
+        "{doc}"
+    );
+    let status = held();
+    assert!(
+        status.contains(canon.to_str().unwrap()) && status.contains("its release failed"),
+        "{status}"
+    );
+
+    // Freed with nothing run: nothing held after.
+    let out = s.sluice(&["release", "--accept-failure"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert!(
+        String::from_utf8_lossy(&out.stdout).starts_with(&format!("freed {}", canon.display())),
         "{}",
         text(&out)
     );
