@@ -21,8 +21,11 @@ else
 fi
 
 cat <<EOF
-sluice for herdr: add these to herdr's config.toml yourself (or to
-whatever generates it), then run \`herdr server reload-config\`.
+sluice for herdr: the lines herdr's config.toml needs. Ask your agent
+to set up sluice's herdr plugin (with sluice's Claude Code plugin
+installed), and it adds them to your file on keys you have not bound.
+Or add them yourself, or to whatever generates the file. Then run
+\`herdr config check\` and \`herdr server reload-config\`.
 
 # The status popup on prefix+m.
 [[keys.command]]

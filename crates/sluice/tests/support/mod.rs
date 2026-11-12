@@ -81,6 +81,26 @@ fn no_credentials(dir: &Path) {
     }
 }
 
+/// Whether `free` holds within two seconds. A lock a process let go may
+/// still be held for a moment by a process another thread of this binary
+/// starts meanwhile, until it runs its program: a check that a lock is
+/// free allows that moment, and a check that one is held allows nothing
+/// (129). The check's own try of the lock is such a letting go, so it
+/// gives that a moment too before it answers.
+pub fn soon(mut free: impl FnMut() -> bool) -> bool {
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        if free() {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            return true;
+        }
+        if std::time::Instant::now() >= until {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
 /// A directory removed when the test ends.
 pub struct Scratch(pub PathBuf);
 

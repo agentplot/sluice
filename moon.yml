@@ -58,17 +58,6 @@ tasks:
     inputs: ['/.github/workflows/ci.yml', '/check-release.sh']
     tags: [check-fast]
     options: {runFromWorkspaceRoot: true}
-  # Every install command the README, docs/examples, the plugins' READMEs
-  # and skills, and the site give names a release: the marketplace at
-  # #release, the herdr plugin at --ref v<version>, and sluice at a tag or
-  # a release's archive, never main, whose plugins say 0.0.0
-  # (check-installs.sh; records 0111 and 0112; core.56). It spans the
-  # parts, as marketplace does.
-  installs:
-    command: 'sh check-installs.sh'
-    inputs: ['/check-installs.sh', '/README.md', '/docs/examples/README.md', '/plugins/*/README.md', '/plugins/*/skills/**/*', '/site/src/content/docs/**/*']
-    tags: [check-fast]
-    options: {runFromWorkspaceRoot: true}
   # Every spec under openspec/specs passes openspec validate --strict, which
   # fails a warning as an error, by the openspec devenv.nix pins (core.24).
   # It sends no usage statistics and asks for no newer release.

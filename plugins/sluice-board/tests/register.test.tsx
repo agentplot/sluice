@@ -155,7 +155,7 @@ function host(
     if (argv === INBOX || argv === INBOX_NEW) return inboxRun(e.init?.cwd, argv);
     if (argv === `tail -n 20 -- ${LOG}`)
       return { value: { exitCode: 0, stdout: "first\nlast line\n", stderr: "", ...WHOLE } };
-    if (argv === "sluice status 9 --json") {
+    if (argv === "sluice status 9 --branch main --json") {
       return {
         value: {
           exitCode: 0,
@@ -181,7 +181,7 @@ function host(
     }
     if (argv === "git rev-parse --show-toplevel")
       return { value: { exitCode: 0, stdout: `${ROOT}\n`, stderr: "", ...WHOLE } };
-    if (argv === "sluice status 13 --json") {
+    if (argv === "sluice status 13 --branch main --json") {
       return {
         value: {
           exitCode: 0,
@@ -449,6 +449,30 @@ test("a blamed pull request is linked beside its row, which still opens its test
   expect(JSON.stringify(button?.children)).not.toContain("PR");
   await pane.press({ key: "blamed-main-9-2026-10-16T19:42:00Z" });
   await pane.redraw();
+  expect(await pane.find({ type: "Text", text: "last line" })).toBeDefined();
+  await pane.unmount();
+});
+
+test("a blame whose number another branch holds opens its own branch's tests", async ($, on) => {
+  // #9 blamed on main, and another #9 queued on feature/a (record 0114).
+  const d = overview();
+  const other = JSON.parse(JSON.stringify(d.branches[0]!)) as Overview["branches"][number];
+  other.branch = "feature/a";
+  other.candidates = [];
+  other.recent = [];
+  other.depth = 1;
+  other.submissions = [{ id: 9, state: "queued", from: { agent: "claude", worktree: "unit/a" } }];
+  d.branches.push(other);
+  const pane = await paneOf($, on, d, {
+    "sluice status 9 --branch feature/a --json": JSON.stringify({
+      id: 9,
+      failed: [{ task: "other:test", log: OTHER }],
+    }),
+  });
+  ran.length = 0;
+  await pane.press({ key: "blamed-main-9-2026-10-16T19:42:00Z" });
+  await pane.redraw();
+  expect(ran).toEqual(["sluice status 9 --branch main --json", `tail -n 20 -- ${LOG}`]);
   expect(await pane.find({ type: "Text", text: "last line" })).toBeDefined();
   await pane.unmount();
 });
@@ -956,7 +980,7 @@ test("a blame of this session's submission is a toast, and one turn in sluice's 
   // #13 for the turn.
   expect(inbox.ranIn).toEqual([ROOT, ROOT]);
   expect(inbox.ran).toEqual([INBOX, INBOX_NEW]);
-  expect(ran).not.toContain("sluice status 13 --json");
+  expect(ran).not.toContain("sluice status 13 --branch main --json");
 });
 
 test("under a multiplexer the notice has come: a toast, and no turn", async ($, on) => {
@@ -2056,7 +2080,7 @@ test("a failure opens in place, folds, and moves no one", async ($, on) => {
   await pane.redraw();
   expect(await pane.find({ type: "Text", text: "last line" })).toBeUndefined();
   // Nothing but sluice's own record and the log was read: no pane moved.
-  expect(ran).toEqual(["sluice status 9 --json", `tail -n 20 -- ${LOG}`]);
+  expect(ran).toEqual(["sluice status 9 --branch main --json", `tail -n 20 -- ${LOG}`]);
   await pane.unmount();
 });
 
@@ -2107,7 +2131,7 @@ test("a flaky failure opens to this run and the run it contradicts, each with it
     nothingSeen(),
     {},
     {
-      "sluice status 9 --json": JSON.stringify(status),
+      "sluice status 9 --branch main --json": JSON.stringify(status),
       [`tail -n 20 -- ${OTHER}`]: "other first\nother last\n",
     },
   );
@@ -2143,7 +2167,7 @@ test("a flaky failure opens to this run and the run it contradicts, each with it
   await pane.redraw();
   expect((await openedTexts(pane)).slice(0, both.length)).toEqual(both);
   expect(ran).toEqual([
-    "sluice status 9 --json",
+    "sluice status 9 --branch main --json",
     `tail -n 20 -- ${LOG}`,
     `tail -n 20 -- ${OTHER}`,
     `tail -n 20 -- ${LOG}`,
@@ -2348,7 +2372,7 @@ test("a press only reads", async ($, on) => {
     nothingSeen(),
     {},
     {
-      "sluice status 9 --json": JSON.stringify(status),
+      "sluice status 9 --branch main --json": JSON.stringify(status),
       [`tail -n 20 -- ${OTHER}`]: "other first\nother last\n",
       "git rev-parse HEAD": "h1\n",
       "git rev-list --count 9ecc34a1b2..HEAD": "4\n",
@@ -2388,7 +2412,7 @@ test("a press only reads", async ($, on) => {
   // Only sluice's record of the blamed submission and the logs' last lines
   // were read, by the blame and the `log of` row; the rest ran nothing.
   expect(ran).toEqual([
-    "sluice status 9 --json",
+    "sluice status 9 --branch main --json",
     `tail -n 20 -- ${LOG}`,
     `tail -n 20 -- ${OTHER}`,
     `tail -n 20 -- ${LOG}`,

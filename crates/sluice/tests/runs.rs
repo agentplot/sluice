@@ -159,6 +159,22 @@ fn a_run_whose_supervisor_died_is_lost_and_ended() {
     assert!(group_gone(number(&run.join("pgid"))));
 }
 
+/// 60: a run whose directory is gone, its place released or the folder
+/// removed, stopped before it reported: it reads as lost, never as an
+/// error that fails whoever reads it (chuck-sluice-alpha, 2026-11-12: `no
+/// run for place sluice/try/bolt/a-person-without-the-app-is-told-why/12`
+/// passing the bolt by every round).
+#[test]
+fn a_run_whose_folder_is_gone_is_lost() {
+    let dir = Scratch::new("runs-gone");
+    let r = runs(dir.path());
+    assert_eq!(r.state("never").unwrap(), RunState::Lost);
+    r.start("p1", &request(dir.path(), "true", None)).unwrap();
+    assert!(matches!(wait(&r, "p1"), RunState::Finished(_)));
+    std::fs::remove_dir_all(r.dir("p1")).unwrap();
+    assert_eq!(r.state("p1").unwrap(), RunState::Lost);
+}
+
 /// 34: removing a place's run ends its group first.
 #[test]
 fn removing_a_run_in_progress_ends_it() {

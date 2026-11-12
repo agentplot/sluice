@@ -17,15 +17,14 @@
 //! amended 2026-11-10; rule core.28).
 
 use std::io::{BufRead, Write};
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::time::Duration;
-
-use crate::bounded::{self, span, Ended};
 
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
+use nix::fcntl::{fcntl, FcntlArg, OFlag};
+use weir_bounded::{output_kept, span, Ended};
 
 /// What git is given to authenticate one call.
 pub struct Credentials {
@@ -183,7 +182,7 @@ impl CredentialCommand {
     /// limit fails, its failure naming the command and giving its standard
     /// error, never its standard output, which may hold a token; at the
     /// limit its process group is asked to end and then killed
-    /// ([`bounded::finish`]), so a child holding its pipes open ends with
+    /// ([`weir_bounded::output_kept`]), so a child it started ends with
     /// it. The standard error is given as the scrub leaves
     /// it, every string shaped as a secret it knows replaced by
     /// `[redacted]` before any failure is made, so the failure, and every
@@ -194,11 +193,6 @@ impl CredentialCommand {
             "protocol={}\nhost={}\npath={}\n\n",
             asked.protocol, asked.host, asked.path
         );
-        let mut child = self.spawn("get", true)?;
-        if let Some(mut stdin) = child.stdin.take() {
-            // A command that reads nothing may have ended already.
-            let _ = stdin.write_all(input.as_bytes());
-        }
         let Ended {
             status,
             stopped,
@@ -206,7 +200,7 @@ impl CredentialCommand {
             stderr: err,
             stderr_cut,
             ..
-        } = bounded::finish(&mut child, self.limit, OUTPUT_LIMIT)?;
+        } = self.run("get", &input, OUTPUT_LIMIT)?;
         let text = String::from_utf8_lossy(&err);
         let text = if stderr_cut {
             text.rfind('\n').map_or("", |end| &text[..end])
@@ -279,46 +273,48 @@ impl CredentialCommand {
             "protocol={}\nhost={}\npath={}\nusername={username}\npassword={password}\n\n",
             asked.protocol, asked.host, asked.path
         );
-        let mut child = match self.spawn("erase", false) {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::warn!("{e:#}");
-                return;
-            }
-        };
-        if let Some(mut stdin) = child.stdin.take() {
-            let _ = stdin.write_all(input.as_bytes());
+        if let Err(e) = self.run("erase", &input, 0) {
+            tracing::warn!("{e:#}");
         }
-        let _ = bounded::finish(&mut child, self.limit, 0);
     }
 
-    /// The command started for `operation`, its standard input piped, and
-    /// its standard output and error piped where they are `read`. Started
-    /// again for a moment while the system calls the program busy, as it
-    /// does while another process still holds it open for writing.
-    fn spawn(&self, operation: &str, read: bool) -> Result<Child> {
-        let out = || if read { Stdio::piped() } else { Stdio::null() };
+    /// The command run for `operation` to its limit, in a process group of
+    /// its own, `input` on its standard input and the first `kept` bytes of
+    /// its standard output and error kept (record 0109 as amended
+    /// 2026-11-11). Its input is written whole into a pipe before it
+    /// starts, so a command that reads none of it, or ends first, holds
+    /// nothing up, and a token it carries touches no file. Started again
+    /// for a moment while the system calls the program busy, as it does
+    /// while another process still holds it open for writing.
+    fn run(&self, operation: &str, input: &str, kept: u64) -> Result<Ended> {
+        let failed =
+            |e: std::io::Error| anyhow!("[forge] credential {self} could not be started: {e}");
         let mut tries = 0;
         loop {
-            let started = Command::new(&self.program)
-                .args(&self.args)
-                .arg(operation)
-                .stdin(Stdio::piped())
-                .stdout(out())
-                .stderr(out())
-                .process_group(0)
-                .spawn();
-            match started {
+            let (asked, mut asking) = std::io::pipe().map_err(failed)?;
+            // What is asked is a few short lines, which a pipe holds whole
+            // with no reader. Its write never waits: what the pipe cannot
+            // hold fails here, before anything is started.
+            fcntl(&asking, FcntlArg::F_SETFL(OFlag::O_NONBLOCK))
+                .map_err(std::io::Error::from)
+                .and_then(|_| asking.write_all(input.as_bytes()))
+                .map_err(failed)?;
+            drop(asking);
+            let ran = output_kept(
+                Command::new(&self.program)
+                    .args(&self.args)
+                    .arg(operation)
+                    .stdin(Stdio::from(asked)),
+                self.limit,
+                kept,
+            );
+            match ran {
                 Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy && tries < 20 => {
                     tries += 1;
                     std::thread::sleep(Duration::from_millis(50));
                 }
-                Err(e) => {
-                    return Err(anyhow!(
-                        "[forge] credential {self} could not be started: {e}"
-                    ))
-                }
-                Ok(c) => return Ok(c),
+                Err(e) => return Err(failed(e)),
+                Ok(ended) => return Ok(ended),
             }
         }
     }
