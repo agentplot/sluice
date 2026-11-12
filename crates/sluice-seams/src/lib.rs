@@ -1742,8 +1742,10 @@ pub trait State {
     /// Every branch with records.
     fn branches(&self) -> Result<Vec<String>>;
 
-    /// The next submission id, numbered in order across the repository.
-    fn allocate_id(&self) -> Result<u64>;
+    /// The next submission number for `branch`, from the count of the
+    /// records that hold it, so it repeats no number the branch already
+    /// holds (26; record 0114; rule core.41).
+    fn allocate_id(&self, branch: &str) -> Result<u64>;
 
     /// 69: the repository's results log, one JSON document per line, as
     /// `branch`'s gate reads it: the branch is the one whose gate, session

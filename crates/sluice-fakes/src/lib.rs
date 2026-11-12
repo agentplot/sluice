@@ -3268,7 +3268,7 @@ impl State for FakeState {
         Ok(())
     }
 
-    fn allocate_id(&self) -> Result<u64> {
+    fn allocate_id(&self, _branch: &str) -> Result<u64> {
         let mut inner = self.0 .0.borrow_mut();
         let id = inner.next_id;
         inner.next_id += 1;

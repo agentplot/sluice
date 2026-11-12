@@ -494,7 +494,9 @@ impl State for LocalFiles {
         Ok(out)
     }
 
-    fn allocate_id(&self) -> Result<u64> {
+    /// The host's count, one for every branch whose records are its own
+    /// (record 0114).
+    fn allocate_id(&self, _branch: &str) -> Result<u64> {
         let lock = open_lock(&self.root.join(".lock"))?;
         lock.lock().context("locking the repository's records")?;
         let path = self.root.join(".next-id");
