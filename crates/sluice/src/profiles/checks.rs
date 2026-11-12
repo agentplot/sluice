@@ -63,8 +63,9 @@ use anyhow::{anyhow, bail, Context as _, Result};
 use serde::{Deserialize, Serialize};
 use sluice_seams::{
     log_tail, AtBound, Enforced, Equip, EquipStep, Equipped, HostRun, KeptOutTask, Limits, Network,
-    NotRun, Outcome, Place, Progress, Proof, Reading, Reads, Rev, RunHandle, RunReport, RunRequest,
-    Running, Setting, Settings, Source, TaskLog, TaskProgress, TaskResult, Tests, Through,
+    NotRun, Outcome, Place, Progress, Proof, Reading, Reads, Refusals, Rev, RunHandle, RunReport,
+    RunRequest, Running, Setting, Settings, Source, TaskLog, TaskProgress, TaskResult, Tests,
+    Through,
 };
 
 use super::moon::{self, Moon};
@@ -1980,10 +1981,36 @@ impl Tests for Checks {
         ))
     }
 
-    /// 139 (design D6): what the sandbox refused the run; nothing is read
-    /// yet.
-    fn refused(&self, _: &RunHandle) -> Result<sluice_seams::Refusals> {
-        Ok(sluice_seams::Refusals::None)
+    /// 139, record 0072 (design D6): what the sandbox refused the run,
+    /// read from the reports of the run's mark its watch kept, and from
+    /// nothing a check printed (rule core.35). An open run, and a run an
+    /// older sluice started, which carry no mark, answer `None`; a watch
+    /// that was not ready, or a report that cannot be read, `Unread` with
+    /// its words. It runs nothing, so reading a run again reads the same.
+    fn refused(&self, run: &RunHandle) -> Result<Refusals> {
+        let request = self.runs.request(&run.0)?;
+        let meta: Meta = serde_json::from_value(request.meta.clone())
+            .with_context(|| format!("reading run {}", run.0))?;
+        let Some(mark) = meta.mark else {
+            return Ok(Refusals::None);
+        };
+        let dir = self.runs.dir(&run.0);
+        let said = dir.join("watch-error");
+        match std::fs::read_to_string(&said) {
+            Ok(words) => return Ok(Refusals::Unread(words.trim().to_string())),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Ok(Refusals::Unread(format!("reading {}: {e}", said.display()))),
+        }
+        let path = dir.join("watch.out");
+        let kept = match std::fs::read(&path) {
+            Ok(k) => String::from_utf8_lossy(&k).into_owned(),
+            Err(e) => return Ok(Refusals::Unread(format!("reading {}: {e}", path.display()))),
+        };
+        let refusals = super::refusals::read(&kept, &mark);
+        Ok(match refusals.is_empty() {
+            true => Refusals::None,
+            false => Refusals::Refused(super::refusals::words(&refusals)),
+        })
     }
 
     fn progress(&self, run: &RunHandle) -> Result<Progress> {
