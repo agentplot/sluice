@@ -39,3 +39,15 @@ Deciders: the user, on agentplot-design's card of 2026-11-12 (req_d4be2dcc695e41
 - Record 0116's half on a branch coming home waits on the redesign; its half on routing by the head's policy stands.
 - A defect in a frozen area stays open longer, held by a workaround.
 - The review's other findings become design records in turn: one owner of a run's state, a round's effects performed only after its write, a wait that reads recorded links, and contracts for the host and the forge.
+
+## Amendment, 2026-11-12: sluice's main takes no more fixes, and its defects go into the refactor
+
+Status: proposed to the user on 2026-11-12, from their words in agentplot-design's pane; accepted on their yes.
+
+Deciders: the user, 2026-11-12, answering agentplot-ops' card "Start two sluice fixes now for wldn's slow, stuck-looking runs, during the pause?": "I'd consider saying yes to this but we just went over the fact that all we're doing is applying band-aid patches that are making the design worse and worse. We need to do a refactor". Where each defect goes in the refactor, and the one exception below, are agentplot-design's.
+
+Sources: agentplot-ops' readings of switchboard-kit's records on chuck-herdr-alpha, 2026-11-12: twelve runs that day ended `unproven` and were opened again, and each waited for one of the host's two runs while its status read "testing 37m of 25m"; and of sluice's main at `5d571ccb`, where a run with an unproven replay is opened again whole with replays off (`crates/sluice-core/src/step.rs`, the unproven branch and the run's request) and status measures a candidate's time from its first testing line (`crates/sluice/src/progress.rs`). The statement's clauses 66, 87, 108 and S42.
+
+- **No fix of sluice's main is launched, in any area, until the refactor has landed.** A defect gets a workaround that holds, such as a restart, a resubmission, a step by hand or a change of the repository's own policy, and goes to agentplot-design, who writes it into the refactor's design. The one exception is a defect that lands a combination that has not passed, or loses a submission, since no workaround holds either; it is fixed on main as before.
+- **The refactor is the one-process rebuild, then a queue's home and a run's life redesigned on it.** The rebuild is this record's first point. The redesign is one record that writes a queue's home in its records, as this record's third point says, and a run's life as states written before anything acts on them, one owner of each run's state, as the review's findings name.
+- **The two fixes asked for are requirements of the redesign, not fixes.** A run's time limit is the run's own, from its own start: a run that waits for room is not running, is under no limit (66, 87), and reads as waiting for room since when, never as testing. A replay sluice cannot prove is run again alone: the checks that ran keep their outcomes, and only the unproven ones run, each with no replay of its own key (108, S42).
