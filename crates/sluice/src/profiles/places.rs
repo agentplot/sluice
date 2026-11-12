@@ -908,11 +908,14 @@ impl Places {
     /// takes, with a record and a scratch of the release's own, the
     /// policy's branch on it and no ports, so the scratch is named while it
     /// exists (rule core.30) and the release is given the `SLUICE_PLACE` a
-    /// run there is. Both are let go once the release ends, whether it
-    /// passed or failed, so nothing is kept for the worktree and a release
-    /// asked again runs again. A policy that names no release command, a
-    /// folder that has gone and one that is no worktree of the repository,
-    /// another repository's among them, have nothing to release.
+    /// run there is. A release that passes lets both go, so nothing is kept
+    /// for the worktree. One that fails keeps both, with what failed and one
+    /// try, held once its tries pass `retries`: from then on the worktree is
+    /// one sluice holds, its tries counted as a held place's are (123;
+    /// record 0116, amending record 0112 in part). A policy that names no
+    /// release command, a folder that has gone and one that is no worktree
+    /// of the repository, another repository's among them, have nothing to
+    /// release, and nothing is kept.
     fn release_unheld(&self, name: &str, policy: &ReleasePolicy, retries: u32) -> Result<Released> {
         let Some(folder) = name.strip_prefix(SESSION) else {
             return Ok(Released::Nothing);
@@ -949,26 +952,19 @@ impl Places {
                 .remove_all_with(name, ReleaseWith::Fresh(Some(request)))?;
             Ok(Released::Policy)
         })();
-        // Record 0112: nothing kept for it, passed or failed; a failed
-        // release's run is no hold either.
-        if released.is_err() {
-            if let Err(e) = self.runs.discard_all(name) {
-                tracing::warn!(
-                    sluice.place = name,
-                    "removing a failed release's run failed: {e:#}"
-                );
-            }
-        }
-        let freed = self.let_go(name, Some(&made));
-        match (released, freed) {
-            (Err(e), Err(f)) => {
-                tracing::warn!(
-                    sluice.place = name,
-                    "letting go of a failed release's record failed: {f:#}"
-                );
+        match released {
+            // Record 0116: a failed release keeps its record and scratch,
+            // its try counted, as a held place's failure is kept (123).
+            Err(e) => {
+                self.keep_failure(name, &e, |tries| tries > retries);
                 Err(e)
             }
-            (released, freed) => freed.and(released),
+            // Record 0112: nothing kept for a release that passed, or for
+            // a policy that names no release command.
+            Ok(released) => {
+                self.let_go(name, Some(&made))?;
+                Ok(released)
+            }
         }
     }
 

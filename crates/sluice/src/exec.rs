@@ -650,19 +650,23 @@ impl Exec<'_> {
 /// core.16). Where sluice holds a place for `dir`, the release command is
 /// the policy's, read from its branch's current revision (56); only when
 /// the branch cannot be read is it the one the last run carried, and the
-/// output says so. A release that fails leaves the place held with what
-/// failed (123); with `accept`, the place is freed with nothing run and the
-/// worktree left.
+/// output says so. A release that fails keeps the place with what failed
+/// and one more try, held once its tries pass its branch's
+/// `release_retries` (123; record 0116); with `accept`, the place is freed
+/// with nothing run and the worktree left.
 ///
 /// Where sluice holds nothing for it, the worktree released is the top of
 /// the git worktree that holds `dir`, by the same path: the release
 /// command is the one the repository's default branch's policy names at
-/// its current revision, run with no ports, and nothing is kept for the
-/// worktree once it answers, so `sluice release` runs it again when asked
-/// again (95; rule core.10; record 0112). It says `nothing to release`
-/// only where that policy names no release command, or where `dir` is in
-/// no worktree of the repository; a default branch or a policy that
-/// cannot be read fails it.
+/// its current revision, run with no ports (95; rule core.10; record
+/// 0112). A release that passes keeps nothing for the worktree, so
+/// `sluice release` runs it again when asked again; one that fails keeps
+/// the worktree's place under that branch, with no ports, what failed and
+/// one try, so its tries are counted and `--accept-failure` frees it as
+/// any held worktree's (record 0116). It says `nothing to release` only
+/// where that policy names no release command, or where `dir` is in no
+/// worktree of the repository; a default branch or a policy that cannot be
+/// read fails it.
 pub fn release(
     s: &Sluice<'_>,
     host: &dyn Host,
@@ -787,10 +791,8 @@ pub fn release(
         Ok(r) => r,
         Err(e) => {
             let words = format!("{e:#}");
-            let then = match adopted {
-                Some(_) => "it keeps its ports until `sluice release` runs again, or `sluice release --accept-failure` frees it without",
-                None => "sluice holds nothing for it: `sluice release` runs its release command again",
-            };
+            // Record 0116: held or not, a failed release keeps the place.
+            let then = "`sluice release` runs it again; `sluice release --accept-failure` frees it without";
             say(
                 out,
                 json,

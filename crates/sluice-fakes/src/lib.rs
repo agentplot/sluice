@@ -2663,14 +2663,26 @@ impl Checkout for FakeCheckout {
         if !self.0 .0.borrow().adopted.iter().any(|a| a == name) {
             // Record 0112: a worktree of the world's it holds nothing for
             // is released by the policy's release command all the same,
-            // and nothing is kept for it, passed or failed.
+            // and nothing is kept for it once it passes.
             let worktree = name.strip_prefix("session/").unwrap_or(name);
             let Some(release) =
                 release.filter(|_| self.0 .0.borrow().worktrees.contains_key(worktree))
             else {
                 return Ok(Released::Nothing);
             };
-            self.attempt(name)?;
+            if let Err(e) = self.attempt(name) {
+                // Record 0116: one that fails keeps the worktree's place,
+                // under the policy's branch with no ports, with what failed
+                // and one try, counted against the bound from then on.
+                let at = self.now();
+                let mut inner = self.0 .0.borrow_mut();
+                inner.adopted.push(name.into());
+                let branch = policy.map(|p| p.branch.clone()).unwrap_or_default();
+                inner.adopted_for.insert(name.into(), branch);
+                let failure = failed_again(None, &e, at, |t| t > retries);
+                inner.session_release_failed.insert(name.into(), failure);
+                return Err(e);
+            }
             self.0
                  .0
                 .borrow_mut()

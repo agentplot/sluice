@@ -1283,6 +1283,78 @@ fn a_failed_session_release_is_held_once_its_retries_are_spent() {
     assert!(session.exists());
 }
 
+/// A place seam whose release builder is the check seam's.
+fn releasing(repo: &Repo) -> Places {
+    places(repo).with_release(Box::new(|place, tests, limits, dir| {
+        sluice::profiles::checks::release_request(place, tests, limits, 1, &[], dir)
+    }))
+}
+
+/// A policy read from `branch` that names the release command `cmd`.
+fn release_policy(branch: &str, cmd: &str) -> sluice_seams::ReleasePolicy {
+    sluice_seams::ReleasePolicy {
+        branch: branch.into(),
+        tests: Settings::from([("release".into(), Setting::Text(cmd.into()))]),
+        limits: sluice_seams::Limits::default(),
+    }
+}
+
+/// 123, record 0116 amending record 0112: a worktree sluice holds nothing
+/// for, whose release command fails, keeps the place its release wrote,
+/// under the policy's branch with no ports, with what failed and one try,
+/// held once tried more than the retries it was given, its scratch kept; a
+/// release that passes keeps nothing.
+#[test]
+fn an_unheld_worktrees_failed_release_keeps_its_place() {
+    let _spawns = spawns();
+    let (repo, _) = scratch("places-unheld-failed");
+    let p = releasing(&repo);
+    let session = repo.dir().with_extension("session");
+    let name = adopted_name(&session);
+    assert!(p.session_places().unwrap().is_empty());
+
+    let e = p
+        .release_session(
+            &name,
+            Some(&release_policy(
+                "main",
+                "echo emulator still answers; exit 3",
+            )),
+            0,
+        )
+        .unwrap_err();
+    assert!(format!("{e:#}").contains("emulator still answers"), "{e:#}");
+    let kept = p.session_places().unwrap();
+    assert_eq!(kept.len(), 1, "{kept:?}");
+    assert_eq!(kept[0].name, name);
+    assert_eq!(kept[0].branch, "main");
+    assert!(kept[0].ports.is_empty(), "{kept:?}");
+    let failure = kept[0].release_failed.clone().expect("what failed is kept");
+    assert!(
+        failure.failed.contains("emulator still answers"),
+        "{failure:?}"
+    );
+    assert_eq!((failure.tries, failure.stopped), (1, true));
+    let tmp = PathBuf::from(record_of(&repo, &name)["scratch"].as_str().unwrap());
+    assert!(tmp.is_dir(), "{}", tmp.display());
+    assert!(session.join("work").exists());
+
+    // Another worktree, whose release passes: nothing is kept for it.
+    let other = another_session(&repo, "passes");
+    let passing = adopted_name(&other);
+    assert_eq!(
+        p.release_session(&passing, Some(&release_policy("main", "true")), 0)
+            .unwrap(),
+        sluice_seams::Released::Policy
+    );
+    assert!(!record_path(&repo, &passing).exists());
+    assert_eq!(p.session_places().unwrap().len(), 1);
+
+    p.free(&name).unwrap();
+    assert!(p.session_places().unwrap().is_empty());
+    assert!(!tmp.exists());
+}
+
 /// 123: a preview whose release command fails keeps its record with what
 /// failed, held once tried more than the retries it was given; freed, its
 /// checkout and record go with nothing run.

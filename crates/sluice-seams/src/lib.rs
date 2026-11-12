@@ -308,7 +308,8 @@ pub enum Released {
     /// Nothing to release: no such place and no policy given, a folder
     /// that is no worktree of the repository, or a policy that names no
     /// release command for a worktree sluice holds nothing for (record
-    /// 0112).
+    /// 0112). Nothing is kept for it; a release that ran and failed is an
+    /// error, and keeps the worktree's place (record 0116).
     Nothing,
     /// Under the policy given.
     Policy,
@@ -393,11 +394,13 @@ pub trait Checkout {
     /// repository's main worktree or a linked worktree git lists, detached
     /// or not, is released all the same, by the path a held place's
     /// release takes: a record and a scratch of the release's own, no
-    /// ports, the policy's release command run, and the record and scratch
-    /// let go once it ends, whether it passed or failed, so nothing is
-    /// kept for the worktree (95; rule core.10; record 0112). Given no
-    /// policy, or a folder that is no worktree of the repository, such a
-    /// name has nothing to release.
+    /// ports, and the policy's release command run (95; rule core.10;
+    /// record 0112). One that passes lets the record and scratch go, so
+    /// nothing is kept for the worktree; one that fails keeps them, with
+    /// what failed and one try, counted against `retries` from then on as
+    /// any held place's tries are (123; record 0116). Given no policy, or a
+    /// folder that is no worktree of the repository, such a name has
+    /// nothing to release, and nothing is kept.
     fn release_session(
         &self,
         name: &str,
