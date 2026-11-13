@@ -287,7 +287,7 @@ carries this change frees it and logs `gone`.
 
 ## Task notes
 
-**1.1 Record 0115.** Front matter as record 0112's: number 115, or the
+**1.1 Record 0115.** Front matter as record 0120's: number 115, or the
 next free one, title as D8, status accepted, dated the day it is
 written. Decision-makers: the planner's brief of 2026-11-11 and the
 construct of `a-place-whose-folder-is-gone-is-freed`. The status line

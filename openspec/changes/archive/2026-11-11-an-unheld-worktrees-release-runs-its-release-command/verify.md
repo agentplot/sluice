@@ -22,7 +22,7 @@ root:lint, site:prose and site:rules.
 - `cli:test` ran `release_runs_the_policys_release_command_once`, which
   passed.
 - `root:adrs` said `110 records, each with a number of its own`, record
-  0112 among them.
+  0120 among them.
 - `site:rules` said `the page matches docs/architecture/core.md`. The
   change edits only core.10's and core.46's details, which the rules page
   does not carry, so the page is unchanged.
@@ -115,13 +115,13 @@ It exited 0, and each of the three passed.
 
 All six tasks are ticked, and each holds:
 
-- 1.1: record 0112 is at
-  `docs/adr/0112-a-worktree-sluice-holds-nothing-for-is-released-by-its-policys-release-command.md`.
-  Records 0018 and 0081 each carry the "Amended in part by record 0112"
+- 1.1: record 0120 is at
+  `docs/adr/0120-a-worktree-sluice-holds-nothing-for-is-released-by-its-policys-release-command.md`.
+  Records 0018 and 0081 each carry the "Amended in part by record 0120"
   line the task notes give. root:adrs passed.
 - 1.2: core.10's details carry the incident and the new "Not ruled out",
   and core.46's carry the toolchain alone for an unheld worktree. Both
-  cite record 0112. site:rules passed.
+  cite record 0120. site:rules passed.
 - 2.1: `ReleasePolicy.branch` and its docs, filled by
   `release_policy`. The places test passed.
 - 2.2: `exec::release` takes one path, the fake seam keeps D7's

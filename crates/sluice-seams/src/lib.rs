@@ -256,7 +256,7 @@ pub struct CheckedOut {
 pub struct ReleasePolicy {
     /// The branch the policy was read from: the one a held place's runs
     /// were held to, or, for a worktree sluice holds nothing for, the
-    /// repository's default branch (record 0112).
+    /// repository's default branch (record 0120).
     pub branch: String,
     pub tests: Settings,
     pub limits: Limits,
@@ -308,7 +308,7 @@ pub enum Released {
     /// Nothing to release: no such place and no policy given, a folder
     /// that is no worktree of the repository, or a policy that names no
     /// release command for a worktree sluice holds nothing for (record
-    /// 0112).
+    /// 0120).
     Nothing,
     /// Under the policy given.
     Policy,
@@ -399,7 +399,7 @@ pub trait Checkout {
     /// release takes: a record and a scratch of the release's own, no
     /// ports, the policy's release command run, and the record and scratch
     /// let go once it ends, whether it passed or failed, so nothing is
-    /// kept for the worktree (95; rule core.10; record 0112). Given no
+    /// kept for the worktree (95; rule core.10; record 0120). Given no
     /// policy, or a folder that is no worktree of the repository, such a
     /// name has nothing to release.
     fn release_session(&self, name: &str, policy: Option<&ReleasePolicy>) -> Result<Released>;

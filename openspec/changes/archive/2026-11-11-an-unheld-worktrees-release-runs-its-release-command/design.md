@@ -276,16 +276,16 @@ changes (wldn-design's ruling). No statement clause changes: 95 and
 C.1's session worktree row already say this release runs the policy's
 release command in a session's place. Reading C.7's "branch it was
 taken off" as the default branch, where sluice holds nothing that names
-it, is this change's own reading (D2), recorded in record 0112.
+it, is this change's own reading (D2), recorded in record 0120.
 
 ### D9. The record
 
-The decision is recorded as record 0112, "A worktree sluice holds
+The decision is recorded as record 0120, "A worktree sluice holds
 nothing for is released by its policy's release command". It is
 accepted under clause 95, rule core.10 and wldn-design's ruling, and
 its choices, D2 to D6, are the construct's own and cheap to change.
-Records 0018 and 0081 gain an "Amended in part by record 0112" line.
-Rule core.10's details cite the incident and record 0112. Rule core.46's
+Records 0018 and 0081 gain an "Amended in part by record 0120" line.
+Rule core.10's details cite the incident and record 0120. Rule core.46's
 details admit the toolchain alone for an unheld worktree.
 
 ### Rules relied on
@@ -330,8 +330,8 @@ behaviour with the sluice that carries it.
 
 ## Task notes
 
-**1.1 Record 0112.** Front matter as record 0111's. Number 112, or the
-next free one where 112 is taken on main or this bolt. Title "A
+**1.1 Record 0120.** Front matter as record 0111's. Number 120, or the
+next free one where 120 is taken on main or this bolt. Title "A
 worktree sluice holds nothing for is released by its policy's release
 command". Status accepted, dated 2026-11-11. Decision-makers:
 wldn-design's ruling (switchboard-kit PR 522, d53448f57) relayed by
@@ -348,14 +348,14 @@ and that D2 to D6 are the construct's own, each cheap to change.
 - Consequences: what each caller now sees.
 
 The line for record 0018, after its status paragraph: "Amended in part
-by record 0112, 2026-11-11: in a worktree sluice holds nothing for,
+by record 0120, 2026-11-11: in a worktree sluice holds nothing for,
 `sluice release` runs the policy's release command all the same. It is
 read from the repository's default branch at its current revision, run
 with no ports and a scratch of the release's own, and keeps nothing
 once it answers. It says `nothing to release` only where that policy
 names no release command."
 
-The line for record 0081: "Amended in part by record 0112, 2026-11-11:
+The line for record 0081: "Amended in part by record 0120, 2026-11-11:
 `sluice release` after an equip finds nothing of the equip's, and runs
 the policy's release command as in any worktree sluice holds nothing
 for. It says there is nothing to release only where the policy names no
@@ -367,16 +367,16 @@ running its release command", add: "(2026-11-07 to 2026-11-09:
 answered `nothing to release`, exit 0, with no release command run,
 and a unit's emulators, started by its tests outside `sluice exec`,
 outlived the places crew's tidy removed after it, signal
-2026-11-11-agentplot-planner-b1e1f248/01; record 0112)". Add to its
+2026-11-11-agentplot-planner-b1e1f248/01; record 0120)". Add to its
 "Not ruled out": "`nothing to release` in a worktree sluice holds
 nothing for whose policy names no release command, or in a folder in no
-worktree of the repository (record 0112)". Add 0112 to its ADRs.
+worktree of the repository (record 0120)". Add 0120 to its ADRs.
 
 In core.46's details, the "Not ruled out" entry becomes: "the release
 command run under the toolchain alone, since the working copy was
 equipped by the run it releases (95), or, in a worktree sluice holds
 nothing for, by the work that started what the release ends (record
-0112), and a gone working copy's release entering none (123)". Add 0112
+0120), and a gone working copy's release entering none (123)". Add 0120
 to its records. Then `node site/scripts/rules.mjs`.
 
 **2.3 The one test.** `an_unheld_worktrees_release_runs_its_release_command`

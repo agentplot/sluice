@@ -142,7 +142,7 @@ this.
   folder git lists goes by `git worktree remove --force`, and one it
   does not goes by `remove_leftover`, which does nothing where the folder
   is not there. `registered` is gone, and `release_worktree` calls
-  `listed` where record 0112 had `is_worktree`. `free` gives
+  `listed` where record 0120 had `is_worktree`. `free` gives
   `remove_worktree` only `worktree_path(name)` of a place that is no
   session's, so rule core.20 holds.
 - **D3, what is left of the folder.** `remove_leftover` walks the folder

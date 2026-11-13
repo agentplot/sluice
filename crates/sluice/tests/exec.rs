@@ -769,7 +769,7 @@ fn the_next_exec_runs_a_removed_worktrees_stored_release_once() {
     assert_eq!(ran_in(&released), once, "its release ran again");
 }
 
-/// Session-runs-1 clause 95, rule core.10, record 0112: `sluice release`
+/// Session-runs-1 clause 95, rule core.10, record 0120: `sluice release`
 /// in a worktree where no `sluice exec` ever ran runs the release command
 /// `main`'s policy names, in the worktree, and answers as a held
 /// worktree's release does: released, exit 0, when it passed, and what it

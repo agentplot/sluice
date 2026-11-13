@@ -8,7 +8,7 @@ the bolt's revision when the gate ran, and `main` at `5cf91de`.
 Outcome: **archived.** The bolt's gate passed all 23 of its tasks.
 `cli:test` ran the tests this change adds that the gate reaches. Every
 requirement and scenario has code and a test, all 28 tasks are ticked,
-and the record is 0119 everywhere this change names it.
+and the record is 0121 everywhere this change names it.
 
 ## The whole checks
 
@@ -78,15 +78,15 @@ The branch holds the bolt at `8306248` (`c67570e8`) and `main` at
 `5cf91de` (`47f533e2`). The gate ran on both with no conflict.
 
 - **Records.** `docs/adr/` holds main's records 0114, 0116 and 0117,
-  the bolt's 0112 and 0115, and this change's 0119 (frontmatter
-  `number: 119`, status proposed, 2026-11-11). Record 0118 is on
+  the bolt's 0120 and 0115, and this change's 0121 (frontmatter
+  `number: 121`, status proposed, 2026-11-11). Record 0118 is on
   `fix/main--a-claimed-runs-place-is-made-at-its-combination`. No code,
   test, doc or change file of this change still names 0114 for its
   record; the 0114s left in `crates/sluice-fakes` and `tests/cli.rs` are
   main's record. `root:adrs` passed.
 - **Rules.** Rule core.9's and core.11's details are main's word for
   word. Rule core.10's details hold the unheld worktree's case under
-  record 0112 and this change's case under record 0119, marked
+  record 0120 and this change's case under record 0121, marked
   proposed; its source names previews-1 clause 101 as amended at
   agentplot/blueprints `0f84603` and both records. The rule's own line
   is unchanged. `site:rules` passed.
@@ -95,8 +95,8 @@ The branch holds the bolt at `8306248` (`c67570e8`) and `main` at
   the worktree
   `~/Code/github_agentplot/blueprints/design-sluice-a-previews-containers-end-with-it`,
   three commits past its base (`2d2bd69`, `e3433e8`, `0f84603`). Its last
-  subject names clause 101 and record 0119. Clause 101, the C.1 preview
-  row, the frees under 123 and S78 in `previews-1.md` cite record 0119
+  subject names clause 101 and record 0121. Clause 101, the C.1 preview
+  row, the frees under 123 and S78 in `previews-1.md` cite record 0121
   as proposed. S78 is still free on `origin/main`, the branch is 14
   commits behind it and merges with it cleanly, and it is **unpushed**:
   the orchestrator pushes it on the user's word before the code lands
@@ -134,9 +134,9 @@ Every requirement and scenario has code and a test that names it.
 All 28 tasks in `tasks.md` are ticked, and none is open.
 
 - **1.1, 1.5 and 4.12 (the statement).** The blueprints branch is at
-  `0f84603`, whose subject names clause 101 and record 0119. It is
+  `0f84603`, whose subject names clause 101 and record 0121. It is
   unpushed.
-- **1.2 and 1.4.** Record 0119 holds D1 to D5, each with its path not
+- **1.2 and 1.4.** Record 0121 holds D1 to D5, each with its path not
   taken. Its decision 4 reads a unix-socket answer to the end it gives
   itself, and reading to the close is a path not taken. `root:adrs`
   passed.
@@ -168,6 +168,6 @@ All 28 tasks in `tasks.md` are ticked, and none is open.
   `design/sluice-a-previews-containers-end-with-it` at `0f84603` is
   unpushed. The orchestrator pushes it on the user's word, before this
   change lands on main (rule core.12).
-- Record 0119 is proposed until the user has seen it as a record.
+- Record 0121 is proposed until the user has seen it as a record.
 - The `tools`-gated tests run under main's `#check-tools` when the bolt
   merges onto main.

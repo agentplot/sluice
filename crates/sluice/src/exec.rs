@@ -659,7 +659,7 @@ impl Exec<'_> {
 /// command is the one the repository's default branch's policy names at
 /// its current revision, run with no ports, and nothing is kept for the
 /// worktree once it answers, so `sluice release` runs it again when asked
-/// again (95; rule core.10; record 0112). It says `nothing to release`
+/// again (95; rule core.10; record 0120). It says `nothing to release`
 /// only where that policy names no release command, or where `dir` is in
 /// no worktree of the repository; a default branch or a policy that
 /// cannot be read fails it.
@@ -681,7 +681,7 @@ pub fn release(
             failed: None,
         })
     };
-    // A folder that has gone has nothing to release (record 0112).
+    // A folder that has gone has nothing to release (record 0120).
     let Ok(named) = host.worktree(dir) else {
         return nothing(out, dir);
     };
@@ -748,7 +748,7 @@ pub fn release(
         // `--accept-failure` frees a hold, and sluice holds nothing here.
         None if accept => return nothing(out, &worktree),
         None => {
-            // Record 0112: sluice holds nothing that names the branch the
+            // Record 0120: sluice holds nothing that names the branch the
             // worktree was taken off, so the default branch's policy
             // releases it, read at its current revision (56).
             let Some(default) = host.default_branch()? else {

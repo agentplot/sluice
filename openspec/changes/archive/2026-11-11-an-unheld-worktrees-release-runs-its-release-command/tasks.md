@@ -14,12 +14,12 @@ asks. Other tests change only where the change reverses what they
 expect, or where they build a `ReleasePolicy`.
 
 Commit by pathspec, with Conventional Commits subjects scoped to the
-part of the tree touched, citing record 0112 and rule core.10.
+part of the tree touched, citing record 0120 and rule core.10.
 
 ## 1. The decision recorded
 
-- [x] 1.1 Write `docs/adr/0112-a-worktree-sluice-holds-nothing-for-is-released-by-its-policys-release-command.md`, as design D9 and Task notes 1.1 give it, taking the next free number where 0112 is taken on main or this bolt. Add the "Amended in part by record 0112" line to record 0018 and to record 0081, as Task notes 1.1 words them. True when `sluice exec bolt/what-a-place-starts-ends-with-it -- moon run root:adrs` passes.
-- [x] 1.2 In `docs/architecture/core.md`, amend core.10's details: the incident and its "Not ruled out". Amend core.46's details: the toolchain alone for a worktree sluice holds nothing for. Each cites record 0112, as Task notes 1.2 words them. Rewrite `site/src/content/docs/architecture/rules.md` with `node site/scripts/rules.mjs`. True when `sluice exec bolt/what-a-place-starts-ends-with-it -- moon run site:rules` passes.
+- [x] 1.1 Write `docs/adr/0120-a-worktree-sluice-holds-nothing-for-is-released-by-its-policys-release-command.md`, as design D9 and Task notes 1.1 give it, taking the next free number where 0120 is taken on main or this bolt. Add the "Amended in part by record 0120" line to record 0018 and to record 0081, as Task notes 1.1 words them. True when `sluice exec bolt/what-a-place-starts-ends-with-it -- moon run root:adrs` passes.
+- [x] 1.2 In `docs/architecture/core.md`, amend core.10's details: the incident and its "Not ruled out". Amend core.46's details: the toolchain alone for a worktree sluice holds nothing for. Each cites record 0120, as Task notes 1.2 words them. Rewrite `site/src/content/docs/architecture/rules.md` with `node site/scripts/rules.mjs`. True when `sluice exec bolt/what-a-place-starts-ends-with-it -- moon run site:rules` passes.
 
 ## 2. One path through the release
 

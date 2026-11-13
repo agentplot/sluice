@@ -74,7 +74,7 @@
 //! However a preview is let go, released or freed, the containers the
 //! host's engine holds for it end between its release command, where one
 //! runs, and its checkout's removal, while it still holds its ports and
-//! names (34; previews-1 clause 101; record 0119; rule core.10): those
+//! names (34; previews-1 clause 101; record 0121; rule core.10): those
 //! that mount its checkout or scratch, publish one of its ports, or carry
 //! its `SLUICE_PLACE` as their `sluice.place` label. The end is the check
 //! seam's, a [`ContainerEnd`] the binding hands this profile. A container
@@ -132,7 +132,7 @@ use crate::runs::{dir_name, flat_name, ReleaseWith, Request, Runs, SESSION};
 pub type ReleaseBuilder = Box<dyn Fn(&Place, &Settings, &Limits, &Path) -> Result<Option<Request>>>;
 
 /// Ends what the engine holds for a place: the check seam's, handed to
-/// this profile by the binding (rule core.2; record 0119).
+/// this profile by the binding (rule core.2; record 0121).
 pub type ContainerEnd = Box<dyn Fn(&Place) -> Result<()>>;
 
 /// Whose a place is.
@@ -651,7 +651,7 @@ pub struct Places {
     scratch_root: Option<PathBuf>,
     /// How a session's place's release command is built from its policy.
     release: Option<ReleaseBuilder>,
-    /// How a preview's containers are ended (record 0119); none ended when
+    /// How a preview's containers are ended (record 0121); none ended when
     /// `None`.
     containers: Option<ContainerEnd>,
     /// The repository at its common directory, as gix reads it, once
@@ -693,13 +693,13 @@ impl Places {
     }
 
     /// End a preview's containers with `end` whenever it is let go
-    /// (record 0119).
+    /// (record 0121).
     pub fn with_containers(mut self, end: ContainerEnd) -> Self {
         self.containers = Some(end);
         self
     }
 
-    /// 34, previews-1 clause 101, record 0119: end the containers the
+    /// 34, previews-1 clause 101, record 0121: end the containers the
     /// preview `name`, as its record `made` holds it, left, by the place
     /// its command was given; nothing where no end was handed this
     /// profile.
@@ -948,7 +948,7 @@ impl Places {
         released
     }
 
-    /// Session-runs-1 clause 95, rule core.10, record 0112: release `name`,
+    /// Session-runs-1 clause 95, rule core.10, record 0120: release `name`,
     /// a session's place with no record, under `policy`, where its folder
     /// is a worktree of the repository: by the path a held place's release
     /// takes, with a record and a scratch of the release's own, the
@@ -995,7 +995,7 @@ impl Places {
                 .remove_all_with(name, ReleaseWith::Fresh(Some(request)))?;
             Ok(Released::Policy)
         })();
-        // Record 0112: nothing kept for it, passed or failed; a failed
+        // Record 0120: nothing kept for it, passed or failed; a failed
         // release's run is no hold either.
         if released.is_err() {
             if let Err(e) = self.runs.discard_all(name) {
@@ -1039,7 +1039,7 @@ impl Places {
         )
     }
 
-    /// Records 0112 and 0115: whether git lists the folder `path` as one
+    /// Records 0120 and 0115: whether git lists the folder `path` as one
     /// of the repository's worktrees, detached or not: its main worktree
     /// where it has one, or the folder an entry under `<common>/worktrees/`
     /// names. Read from the repository's files as `git worktree list` reads
@@ -1805,7 +1805,7 @@ impl Checkout for Places {
     fn free(&self, name: &str) -> Result<()> {
         let made = self.read_record(name)?;
         // 123: everything started in it ends, and nothing runs in its
-        // name: no release command. Record 0119: a preview's containers
+        // name: no release command. Record 0121: a preview's containers
         // end once its run has, while it holds its ports; one left keeps
         // the preview whole, its run's directory with it.
         if let Some(made) = made.as_ref().filter(|m| m.kind == Kind::Preview) {
@@ -1883,7 +1883,7 @@ impl Checkout for Places {
             if crate::runs::is_session(name) {
                 self.runs.remove_all_with(name, ReleaseWith::Fresh(None))?;
             }
-            // Record 0112: a worktree sluice holds nothing for is released
+            // Record 0120: a worktree sluice holds nothing for is released
             // by the policy's release command all the same.
             return match policy {
                 Some(p) => self.release_unheld(name, p),
@@ -2157,7 +2157,7 @@ impl Checkout for Places {
             bail!("place {name} is not a preview");
         }
         // 34: everything started in it ends, its release command included
-        // (ADR 0016), then the containers it left (record 0119), before its
+        // (ADR 0016), then the containers it left (record 0121), before its
         // run's directory, its checkout and its ports go; 123: a release
         // command that fails, or a container left, keeps the preview, held
         // once its tries are spent, and a later try runs no release command
