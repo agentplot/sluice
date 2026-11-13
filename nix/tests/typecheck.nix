@@ -18,7 +18,10 @@ let
 
   # The plugins the flake gives beside each system's sluice (record 0112 as
   # amended 2026-11-12; core.56).
-  plugins = [ "herdr-plugin" ];
+  plugins = [
+    "herdr-plugin"
+    "claude-plugins"
+  ];
 in
 {
   "Every system's package" =

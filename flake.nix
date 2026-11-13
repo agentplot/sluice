@@ -96,6 +96,7 @@
           # The plugins, each given the package above, whose source and
           # version it reads alone (record 0112 as amended 2026-11-12).
           herdr-plugin = pkgs.callPackage ./nix/packages/herdr-plugin.nix { inherit sluice; };
+          claude-plugins = pkgs.callPackage ./nix/packages/claude-plugins.nix { inherit sluice; };
         }
       );
 
