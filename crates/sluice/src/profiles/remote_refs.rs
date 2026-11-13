@@ -13,12 +13,15 @@
 //! refs/sluice/logs/<branch>/<cand>   a failed candidate's task outputs (20)
 //! ```
 //!
-//! What a host keeps of its own, its locks, its runs' tasks (ADR 0028)
-//! and the logs it read, is in `<common>/sluice-remote/<remote>/`, a
-//! `local files` of its own. A replay is recorded there too: it is no
-//! one's observation (core.9), so no signer signs it. Beside it, what the
-//! host observed of each branch (73) and a refusal of its reads that
-//! stands (133), under `observed/` and `refused/`.
+//! What a host keeps of its own, its runs' tasks (ADR 0028) and the logs
+//! it read, is in `<common>/sluice-remote/<remote>/`, a `local files` of
+//! its own. A replay is recorded there too: it is no one's observation
+//! (core.9), so no signer signs it. Beside it, what the host observed of
+//! each branch (73) and a refusal of its reads that stands (133), under
+//! `observed/` and `refused/`. Its locks are the host's one lock of each
+//! branch on any remote, under `<common>/sluice-remote/locks/`, held by
+//! the records seam that routes the branch here, and a run's tasks are
+//! kept only while that lock is held (rule core.14).
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -38,7 +41,7 @@ use super::local_files::LocalFiles;
 use super::pushed_refs::{command, Pushed, PushedRefs};
 use crate::signing::dsse::Envelope;
 use crate::signing::ssh;
-use crate::signing::statement::{Claims, Run, RunResult, Statement};
+use crate::signing::statement::{Claims, Held, Run, RunResult, Statement};
 
 /// Where the results set aside are kept, one file each (could-not-run-1
 /// 116).
@@ -123,6 +126,9 @@ struct Read {
 pub struct RemoteRefs {
     pushed: Rc<PushedRefs>,
     own: LocalFiles,
+    /// The host's locks of the branches on its remotes, one each whatever
+    /// remote holds it (rule core.14).
+    locks: Rc<LocalFiles>,
     signing: Option<Signing>,
     read: RefCell<BTreeMap<String, Read>>,
     /// The branches whose last read could not reach the remote, and why
@@ -145,15 +151,24 @@ impl RemoteRefs {
     /// [`RemoteRefs::results_with`] (78; rule core.22).
     pub fn new(common: &Path, pushed: Rc<PushedRefs>, signing: Option<Signing>) -> Self {
         let own = LocalFiles::at(common.join("sluice-remote").join(pushed.remote()));
+        let locks = Rc::new(LocalFiles::at(common.join("sluice-remote").join("locks")));
         RemoteRefs {
             pushed,
             own,
+            locks,
             signing,
             read: RefCell::default(),
             stale: RefCell::default(),
             verified: RefCell::default(),
             asked: std::cell::Cell::new(false),
         }
+    }
+
+    /// The same profile, its branches locked through `locks`, the lock the
+    /// records seam takes for every branch it routes to a remote: a round
+    /// keeps its tasks under the lock it took (rule core.14).
+    pub fn sharing_locks(self, locks: Rc<LocalFiles>) -> Self {
+        RemoteRefs { locks, ..self }
     }
 
     /// 129: a tick's ask of the remote was made: `refused` when it was
@@ -626,7 +641,10 @@ fn tempfile_path(git_dir: &Path, what: &str) -> Result<PathBuf> {
 
 /// A run record's lines, when `key` signed it and its statement is a
 /// run's (78, 79). The claims are kept as signed: whether they count is
-/// the gate's, by what the policy lets the signer claim.
+/// the gate's, by what the policy lets the signer claim. What the executor
+/// held the run to and its grant are read from the statement's `held`
+/// alone, and a statement with none reads with no limits and no grant
+/// (19, 138; design D3).
 fn verify(signer: &str, key: &SignerKey, bytes: &[u8]) -> Result<Vec<ResultLine>> {
     let envelope: Envelope = serde_json::from_slice(bytes).context("not a DSSE envelope")?;
     let who = match key {
@@ -637,6 +655,7 @@ fn verify(signer: &str, key: &SignerKey, bytes: &[u8]) -> Result<Vec<ResultLine>
     };
     let s = Statement::from_envelope(&envelope)?;
     let run = s.predicate;
+    let held = run.held.clone().unwrap_or_default();
     Ok(run
         .results
         .iter()
@@ -656,9 +675,10 @@ fn verify(signer: &str, key: &SignerKey, bytes: &[u8]) -> Result<Vec<ResultLine>
                 kind: run.claims.executor.clone(),
                 confined: run.claims.confined,
                 processors: None,
-                memory: None,
-                network: None,
-                docker: false,
+                memory: held.memory,
+                network: held.network,
+                docker: held.docker,
+                grant: held.grant.clone(),
             }),
             branch: run.branch.clone(),
             combination: run.combination.clone(),
@@ -672,11 +692,19 @@ fn verify(signer: &str, key: &SignerKey, bytes: &[u8]) -> Result<Vec<ResultLine>
         .collect())
 }
 
+/// What one statement's lines share: their branch, combination, executor
+/// kind, confinement, system, and what the executor held them to with its
+/// grant (design D3).
+type RunOf = (String, String, String, bool, String, Option<HeldKey>);
+
+/// A [`Held`] as a key lines are grouped by.
+type HeldKey = (Option<u64>, Option<String>, bool, Option<String>);
+
 /// The statements of `lines`, one per run: the lines of one combination
-/// on one system by one executor.
+/// on one system by one executor, held to one set of limits under one
+/// grant (19, 138; design D3).
 fn statements(lines: &[ResultLine]) -> Vec<Statement> {
-    let mut by: BTreeMap<(String, String, String, bool, String), Vec<&ResultLine>> =
-        BTreeMap::new();
+    let mut by: BTreeMap<RunOf, Vec<&ResultLine>> = BTreeMap::new();
     for l in lines {
         let e = l.executor.as_ref();
         by.entry((
@@ -685,36 +713,64 @@ fn statements(lines: &[ResultLine]) -> Vec<Statement> {
             e.map(|e| e.kind.clone()).unwrap_or_default(),
             e.is_some_and(|e| e.confined),
             l.system.clone().unwrap_or_default(),
+            e.and_then(held_key),
         ))
         .or_default()
         .push(l);
     }
     by.into_iter()
-        .map(|((branch, combination, executor, confined, system), ls)| {
-            Statement::of(Run {
-                results: ls
-                    .iter()
-                    .map(|l| RunResult {
-                        check: l.task.clone(),
-                        key: l.hash.clone(),
-                        outcome: l.outcome,
-                        replayed: l.kind == ResultKind::Replayed,
-                        took_ms: l.took_ms,
-                        attempts: l.attempts,
-                    })
-                    .collect(),
-                claims: Claims {
-                    executor,
-                    confined,
-                    system,
-                },
-                branch,
-                combination: Rev::new(combination),
-                claim: None,
-                at: ls.iter().map(|l| l.at.clone()).max().unwrap_or_default(),
-            })
-        })
+        .map(
+            |((branch, combination, executor, confined, system, _), ls)| {
+                Statement::of(Run {
+                    results: ls
+                        .iter()
+                        .map(|l| RunResult {
+                            check: l.task.clone(),
+                            key: l.hash.clone(),
+                            outcome: l.outcome,
+                            replayed: l.kind == ResultKind::Replayed,
+                            took_ms: l.took_ms,
+                            attempts: l.attempts,
+                        })
+                        .collect(),
+                    claims: Claims {
+                        executor,
+                        confined,
+                        system,
+                    },
+                    branch,
+                    combination: Rev::new(combination),
+                    claim: None,
+                    at: ls.iter().map(|l| l.at.clone()).max().unwrap_or_default(),
+                    // One held key, so the first line holds it for all.
+                    held: ls[0].executor.as_ref().and_then(held_of),
+                })
+            },
+        )
         .collect()
+}
+
+/// What `e` held a run to beyond the claims, `None` where it held nothing
+/// and named no grant (design D3).
+fn held_of(e: &Enforced) -> Option<Held> {
+    let held = Held {
+        memory: e.memory,
+        network: e.network,
+        docker: e.docker,
+        grant: e.grant.clone(),
+    };
+    (held != Held::default()).then_some(held)
+}
+
+fn held_key(e: &Enforced) -> Option<HeldKey> {
+    held_of(e).map(|h| {
+        (
+            h.memory,
+            h.network.map(|n| format!("{n:?}")),
+            h.docker,
+            h.grant,
+        )
+    })
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -727,11 +783,11 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 impl State for RemoteRefs {
     fn lock<'a>(&'a self, branch: &str) -> Result<Option<Box<dyn Guard + 'a>>> {
-        self.own.lock(branch)
+        self.locks.lock(branch)
     }
 
     fn wait_lock<'a>(&'a self, branch: &str) -> Result<Box<dyn Guard + 'a>> {
-        self.own.wait_lock(branch)
+        self.locks.wait_lock(branch)
     }
 
     fn publish_head(&self, _branch: &str, head: &Rev) -> Result<()> {
@@ -869,6 +925,14 @@ impl State for RemoteRefs {
         let asked = format!("refs/sluice/combinations/{branch}/*");
         self.pushed
             .fetch_spec(&asked, &self.combinations_spec(branch), &["--prune"])?;
+        Ok(())
+    }
+
+    /// Into the ref the branch's fetch of every candidate fills, so the
+    /// two agree; a candidate the remote no longer holds fetches nothing.
+    fn fetch_candidate(&self, branch: &str, id: &str) -> Result<()> {
+        state_ref(branch)?;
+        self.fetch(&format!("refs/sluice/combinations/{branch}/{id}"))?;
         Ok(())
     }
 
@@ -1022,7 +1086,9 @@ impl State for RemoteRefs {
         self.remote_branches()
     }
 
-    fn allocate_id(&self) -> Result<u64> {
+    /// The remote's count, one for every branch whose records it holds,
+    /// across every host (record 0114).
+    fn allocate_id(&self, _branch: &str) -> Result<u64> {
         let name = "refs/sluice/ids";
         for _ in 0..ADD_TRIES {
             let tip = self.fetch(name)?;
@@ -1205,6 +1271,7 @@ impl State for RemoteRefs {
         candidate: &str,
         tasks: Option<&[TaskProgress]>,
     ) -> Result<()> {
-        self.own.put_progress(branch, candidate, tasks)
+        self.own
+            .put_progress_under(&self.locks, branch, candidate, tasks)
     }
 }

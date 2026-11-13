@@ -39,4 +39,3 @@ Option 2.
 
 - The statement's C.5 worktrunk row says a `wt submit` run again in a place whose submission stands follows it as its waiting submit would, with `sluice wait`'s timeout and exit, and on landing releases and removes the place; `sluice wait` removes no worktree (25).
 - `wt-submit` gains the resumed wait: in a place with a standing submission and no new head, it waits rather than submitting again, under `--timeout`, exiting 5 while the submission is undecided.
-- The briefs that have an agent run `sluice wait` and then `wt remove` by hand say `wt submit` in rounds instead, once this is built; that is crew's and the fleet's to change, told by this record's acceptance.

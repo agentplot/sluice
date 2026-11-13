@@ -266,6 +266,14 @@ pub fn could_not_run(task: &str, why: &str) -> String {
     format!("{task} could not run: {why}")
 }
 
+/// 139 (design D8 of the change
+/// `a-check-its-executor-refused-has-no-outcome`): a run whose executor
+/// could not read what its sandbox refused it, which was read as refused
+/// nothing, with the words of what failed.
+pub fn refusals_unread(why: &str) -> String {
+    format!("sluice could not read what its sandbox refused the run: {why}")
+}
+
 /// C.6, 20 (design D5 of the change
 /// `a-signed-run-without-a-sandbox-proves-its-passes`): a check failed
 /// under a key the combination's tree does not bear out, with the check
@@ -325,6 +333,15 @@ pub fn kept_out_refusal(branch: &str, worktree: &str, kept: &[KeptOut]) -> Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 139, design D8 (the run-outcome spec's "The words").
+    #[test]
+    fn an_unread_report_is_said() {
+        assert_eq!(
+            refusals_unread("log: exited 1"),
+            "sluice could not read what its sandbox refused the run: log: exited 1"
+        );
+    }
 
     /// The pass-proof spec's "The words" (design D5 of the change
     /// `a-signed-run-without-a-sandbox-proves-its-passes`).

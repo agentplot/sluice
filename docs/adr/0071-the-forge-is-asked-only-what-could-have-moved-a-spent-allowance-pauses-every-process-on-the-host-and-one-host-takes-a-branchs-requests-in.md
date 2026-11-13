@@ -60,8 +60,7 @@ GitHub's ETags depend on the token the answer was made for (community discussion
 
 - Clause 134 is amended and clauses 136 and 137 are added to the statement, with the C.5 pull request row, the C.7 defaults, a C.8 row and scenario S65 (blueprints 8bdf474).
 - Rule core.29 gains the allowance's pause; rule core.31 says a reader's tick asks the forge nothing but what is due; rule core.32 binds the forge's reads; rule core.33 binds the one host that takes requests in.
+- A sluice process that restarts asks GitHub nothing the host's state shows was asked within the interval, and honours a pause another process recorded.
 - The host's state gains `forge/`: the kept answers by address, the readings of each request, each branch's last asking, the pauses per installation and allowance. None holds a token.
 - The host's `[forge]` table gains `discovery`, a duration, default `"60s"`, refused below ten seconds.
 - `refs/sluice/intake/<branch>` appears on the remote of a branch that takes requests and keeps its records in each host's files once a driver starts or a wait on a host where no driver lives takes its requests in; a branch one host reaches by waits and steps alone keeps none between them.
-- The gate agent on mac-studio, which restarts every seventeen seconds because docker is missing, is the host's to fix: it needs docker running before the agent starts, or the agent unloaded until it has it. sluice's part is that a restart now asks GitHub nothing the host's state shows was asked within the interval, and honours a pause another process recorded.
-- Whether GitHub answers 304 to an ETag another token received is checked by hand on a host with the app, since no test reaches GitHub; the answer is written here as an amendment, and the design does not change with it.
