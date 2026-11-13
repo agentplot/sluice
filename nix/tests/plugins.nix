@@ -11,7 +11,10 @@ let
   # only where it reads its version from that `sluice`.
   other = "98.76.54";
 
-  plugins = [ "herdr-plugin" ];
+  plugins = [
+    "herdr-plugin"
+    "claude-plugins"
+  ];
 
   # What fails of a system's plugin `name`.
   fails =
