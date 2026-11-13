@@ -42,9 +42,7 @@ Deciders: the user, on agentplot-design's card of 2026-11-12 (req_d4be2dcc695e41
 
 ## Amendment, 2026-11-12: sluice's main takes no more fixes, and its defects go into the refactor
 
-Status: proposed to the user on 2026-11-12, as `briefs.15` has it; accepted only on their yes.
-
-Should sluice's main stop taking fixes until the rebuild and the redesign have landed? Recommended: yes. Most of November's fixes went into code the rebuild deletes or the redesign replaces, so each one is paid for twice. Until then, a sluice problem gets a workaround that holds, such as a restart, a resubmission or a change to the repository's own settings, and its cause is written into the redesign. Work that would land untested, or a submission that would be lost, is still fixed at once. The other way is to keep fixing main as problems arrive, which delays the refactor and keeps adding to what it has to replace.
+Status: proposed to the user on 2026-11-12, as `briefs.15` has it; accepted only on their yes. Should sluice's main stop taking fixes until the rebuild and the redesign have landed? Recommended: yes. Most of November's fixes went into code the rebuild deletes or the redesign replaces, so each one is paid for twice. Until then, a sluice problem gets a workaround that holds, such as a restart, a resubmission or a change to the repository's own settings, and its cause is written into the redesign. Work that would land untested, or a submission that would be lost, is still fixed at once. The other way is to keep fixing main as problems arrive, which delays the refactor and keeps adding to what it has to replace.
 
 Deciders: the user, on their card. Where each defect goes in the refactor, and the one exception below, are agentplot-design's.
 
