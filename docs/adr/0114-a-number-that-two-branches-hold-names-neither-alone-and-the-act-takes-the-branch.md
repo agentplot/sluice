@@ -11,7 +11,7 @@ decision-makers:
 
 Status: accepted on 2026-11-12 by agentplot-design. It is the design agent's own choice, decided by the statement's 26 and rule core.11. It is cheap to change and holds no choice of the user's.
 
-Sources: the statement's 26, as amended on agentplot/blueprints's branch `design/sluice-a-number-two-branches-hold-names-neither` (`94fd86b`); `crates/sluice-core/src/lib.rs` `find`, `crates/sluice-core/src/ops.rs` `lookup` and `crates/sluice/src/profiles/records.rs` `branches` and `allocate_id`, at `v0.78.1` and `a9edcd90`; wldn-ops's readings of switchboard-kit on chuck-herdr-alpha, 2026-11-12, relayed by agentplot-operator.
+Sources: the statement's 26, as amended on boomdrivedev/blueprints's branch `design/sluice-a-number-two-branches-hold-names-neither` (`94fd86b`); `crates/sluice-core/src/lib.rs` `find`, `crates/sluice-core/src/ops.rs` `lookup` and `crates/sluice/src/profiles/records.rs` `branches` and `allocate_id`, at `v0.78.1` and `a9edcd90`; wldn-ops's readings of switchboard-kit on chuck-herdr-alpha, 2026-11-12, relayed by agentplot-operator.
 
 ## Context and problem statement
 
@@ -33,4 +33,4 @@ A branch whose records are on its remote takes its submissions' numbers from the
 ### Consequences
 
 - A session's own `wait` after its `submit` is unchanged where its number is held on one branch, which is every branch with records in one place.
-- The statement's 26 is amended on agentplot/blueprints's branch above, which the user pushes.
+- The statement's 26 is amended on boomdrivedev/blueprints's branch above, which the user pushes.

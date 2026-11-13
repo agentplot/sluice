@@ -8,7 +8,7 @@ sluice's merge queue beside your agents in [herdr](https://herdr.dev).
 </picture>
 
 ```sh
-herdr plugin install agentplot/sluice/plugins/herdr
+herdr plugin install boomdrivedev/sluice/plugins/herdr
 ```
 
 Needs herdr 0.9.3 or later, `sluice` 0.12 or later and `jq` on `PATH`, on

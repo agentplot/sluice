@@ -10,7 +10,7 @@ decision-makers:
 # A run that did not judge its check has no outcome
 
 Deciders: the operator, after a host's failure made `main`'s keys unpassable and agents stopped running `sluice exec` on sluice, 2026-10-19.
-Sources: could-not-run-1 in agentplot/blueprints (114 to 116, amended 84; unratified); clauses 16, 19, 38, 60, 69; rule core.7; the OpenSpec change `could-not-run`.
+Sources: could-not-run-1 in boomdrivedev/blueprints (114 to 116, amended 84; unratified); clauses 16, 19, 38, 60, 69; rule core.7; the OpenSpec change `could-not-run`.
 
 ## Context and problem statement
 

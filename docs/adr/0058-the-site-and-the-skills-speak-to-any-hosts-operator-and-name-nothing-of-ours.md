@@ -12,7 +12,7 @@ decision-makers:
 Status: accepted by the user in madswan-design's pane on 2026-10-26 ("People aren't going to know what the word "keeper" means or anything about SwanCloud machine configuration. This needs to be presented in a more generic way").
 
 Deciders: the user, on a documentation chore whose words said "the keeper" and "swancloud's machine configuration", in madswan-design's pane on 2026-10-26, as quoted above; the record's other words are madswan-design's.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 35, 71 (which coin "the keeper"), and its givens ("sluice is free and open source"); rules core.1, core.13; the setting-up skill's step 6; `site/src/content/docs`.
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` clauses 35, 71 (which coin "the keeper"), and its givens ("sluice is free and open source"); rules core.1, core.13; the setting-up skill's step 6; `site/src/content/docs`.
 
 ## Context and problem statement
 

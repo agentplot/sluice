@@ -2,7 +2,7 @@
 
 ## Context
 
-The rule: clauses 120 and 137 as amended on agentplot/blueprints main
+The rule: clauses 120 and 137 as amended on boomdrivedev/blueprints main
 at 84c7a01, record 0088 as amended and rule core.33. A withdrawal for a
 hand-over holds no request. Whichever host holds the mark takes it in
 again at the head it holds, as its conditions hold, the host that
@@ -29,7 +29,7 @@ Each reader of a withdrawal at main 526380ae:
 | `sluice overview --json` | its branches' submissions in a chain, recent landings, blames, conflicts | nothing needed: it lists no withdrawal |
 | `status --json`, `status <branch> --all --json`, `wait --json` | the record whole | whatever the record holds |
 
-What agentplot/sluice pull 171's records on deneb say about 2026-10-30.
+What boomdrivedev/sluice pull 171's records on deneb say about 2026-10-30.
 `sluice/main/log.jsonl` and `.finished/345.json`, `347.json` and
 `348.json` in `~/Code/github_agentplot/sluice/sluice.git`:
 

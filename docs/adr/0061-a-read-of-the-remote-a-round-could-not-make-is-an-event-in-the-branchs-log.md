@@ -12,7 +12,7 @@ decision-makers:
 Status: accepted by the user on 2026-10-27, on their card.
 
 Deciders: madswan-design, on swancloud-design's ask of 2026-10-26, relayed by madswan-planner as signal 2026-10-26-madswan-planner-c13058ca/01; the user's yes is asked on the record's card.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 16, 61, 73, 121, 124, 128, 132, 133, C.7 pushed refs; ADRs 0017, 0053; rules core.11, core.14; `crates/sluice-core/src/records.rs` `Event` and `crates/sluice-core/src/step.rs` `decide` as origin/main held them on 2026-10-26 (ef6d414b).
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` clauses 16, 61, 73, 121, 124, 128, 132, 133, C.7 pushed refs; ADRs 0017, 0053; rules core.11, core.14; `crates/sluice-core/src/records.rs` `Event` and `crates/sluice-core/src/step.rs` `decide` as origin/main held them on 2026-10-26 (ef6d414b).
 
 ## Context and problem statement
 

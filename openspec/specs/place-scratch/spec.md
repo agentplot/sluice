@@ -15,7 +15,7 @@ under a short directory of the host user's own, apart from every
 repository. Its path SHALL be the same length for every checkout of
 every repository on the host, and SHALL hold nothing of the checkout's
 name, its worktree's location or the repository's location (35 as
-amended at agentplot/blueprints f15896b; record 0063 as amended; rule
+amended at boomdrivedev/blueprints f15896b; record 0063 as amended; rule
 core.30).
 
 #### Scenario: A worktree at a long path
@@ -40,7 +40,7 @@ core.30).
 A checkout's scratch directory SHALL be the resolved path of `/tmp`,
 then `sluice-<uid>`, then 10 hex digits of a digest of the repository's
 git directory's path, then 10 hex digits of a digest of the checkout's
-name (35 as amended at agentplot/blueprints f15896b; record 0063 as
+name (35 as amended at boomdrivedev/blueprints f15896b; record 0063 as
 amended; rule core.30).
 
 #### Scenario: Two repositories
@@ -161,7 +161,7 @@ amended, 123; rule core.30).
   checkout's scratch and a directory no record names
 - **THEN** the stray directory is removed, the unreadable checkout's
   scratch is kept, the record is reported by its path with the reader's
-  words, and the cleanup succeeds (35 as amended at agentplot/blueprints
+  words, and the cleanup succeeds (35 as amended at boomdrivedev/blueprints
   9f35001; rule core.30 as amended at sluice 4c29e618;
   `an_unreadable_record_keeps_its_scratch` in
   `crates/sluice/tests/profiles/places.rs`)

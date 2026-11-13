@@ -10,7 +10,7 @@ decision-makers:
 # sluice starts no services, takes no operator's word, and runs no submit gate
 
 Deciders: the user, in the setup walkthrough review of 2026-10-11.
-Sources: `docs/examples/README.md`; `agentplot/blueprints:design/sluice/requirements.md` clauses 27, 31, 32, 47, 66, C.1, C.5; research of 2026-10-11 on test services (GitHub Actions and GitLab `services:`, Zuul's "the responsibility of the job itself", moon 2.6 `wait` and `cleanup` dependencies, `devenv test` and `ports.<name>.allocate`, testcontainers and Ryuk, Playwright `webServer`, Bazel's test encyclopedia).
+Sources: `docs/examples/README.md`; `boomdrivedev/blueprints:design/sluice/requirements.md` clauses 27, 31, 32, 47, 66, C.1, C.5; research of 2026-10-11 on test services (GitHub Actions and GitLab `services:`, Zuul's "the responsibility of the job itself", moon 2.6 `wait` and `cleanup` dependencies, `devenv test` and `ports.<name>.allocate`, testcontainers and Ryuk, Playwright `webServer`, Bazel's test encyclopedia).
 
 ## Context and problem statement
 

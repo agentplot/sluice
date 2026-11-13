@@ -10,7 +10,7 @@ decision-makers:
 # A landing reads its verdict from signed results, never from the state alone
 
 Deciders: the operator, ruling on the `peers` design (D8), 2026-10-19.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 1, 16, 23, 78, C.4, C.5, C.6; rules core.4, core.7; ADR 0006; the OpenSpec change `peers`, design D8.
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` clauses 1, 16, 23, 78, C.4, C.5, C.6; rules core.4, core.7; ADR 0006; the OpenSpec change `peers`, design D8.
 
 ## Context and problem statement
 

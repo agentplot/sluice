@@ -1652,7 +1652,7 @@ fn a_manifest_moon_kept_in_the_checkout_proves_its_key() {
 }
 
 /// Record 0105 point 1 (C.2 moon and sandbox rows as amended at
-/// agentplot/blueprints 0c38f24; 108; rules core.9, core.35), the
+/// boomdrivedev/blueprints 0c38f24; 108; rules core.9, core.35), the
 /// host-caches spec's "moon's home moved by the toolchain, on a host that
 /// shares moon's cache": `a_key_is_read_under_the_home_the_toolchain_gives_moon`
 /// under the sandbox, kept off the network. The host's cache, at a

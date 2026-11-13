@@ -11,8 +11,8 @@ decision-makers:
 
 Status: accepted with the change that builds it, `a-branchs-run-records-are-verified-with-the-signers-its-own-policy-names`, on 2026-10-30. It decides how the code holds clauses 78 and 87 and rule core.22, and moves no clause.
 
-Deciders: the change's design (its decisions D1 to D4), on batch 44's reviewer reading of 2026-10-28, which found the shared list in `crates/sluice/src/profiles/records.rs`, and on clause 87 as amended 2026-10-30 (agentplot/blueprints c078b45), which says what a host whose key a branch does not list takes.
-Sources: statement clauses 27, 28, 56, 66, 78, 87 (as amended 2026-10-30, agentplot/blueprints c078b45), 124 and S18 in agentplot/blueprints `design/sluice/requirements.md`; rule core.22; ADRs 0032, 0037, 0069; `crates/sluice/src/profiles/records.rs` (`route`, `open`, `signers`), `crates/sluice/src/profiles/remote_refs.rs` (`RemoteRefs::new`, `signed`, `results`), `crates/sluice-seams/src/lib.rs` (`State::results`), `crates/sluice-core/src/step.rs` (`claimable`, `counts_here`), `crates/sluice-core/src/verdict.rs` (`read`), as the bolt held them before this change.
+Deciders: the change's design (its decisions D1 to D4), on batch 44's reviewer reading of 2026-10-28, which found the shared list in `crates/sluice/src/profiles/records.rs`, and on clause 87 as amended 2026-10-30 (boomdrivedev/blueprints c078b45), which says what a host whose key a branch does not list takes.
+Sources: statement clauses 27, 28, 56, 66, 78, 87 (as amended 2026-10-30, boomdrivedev/blueprints c078b45), 124 and S18 in boomdrivedev/blueprints `design/sluice/requirements.md`; rule core.22; ADRs 0032, 0037, 0069; `crates/sluice/src/profiles/records.rs` (`route`, `open`, `signers`), `crates/sluice/src/profiles/remote_refs.rs` (`RemoteRefs::new`, `signed`, `results`), `crates/sluice-seams/src/lib.rs` (`State::results`), `crates/sluice-core/src/step.rs` (`claimable`, `counts_here`), `crates/sluice-core/src/verdict.rs` (`read`), as the bolt held them before this change.
 
 ## Context and problem statement
 

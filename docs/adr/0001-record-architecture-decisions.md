@@ -10,7 +10,7 @@ decision-makers:
 # Record architecture decisions
 
 Deciders: the user, in the merge-queue exploration of 2026-10-08.
-Sources: `agentplot/blueprints:design/sluice/requirements.md`; `agentplot/blueprints:design/requirements-style.md`; crew's `docs/adr/` as the model for the form.
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md`; `boomdrivedev/blueprints:design/requirements-style.md`; crew's `docs/adr/` as the model for the form.
 
 ## Context and problem statement
 
@@ -24,7 +24,7 @@ sluice starts with a statement of invariants and no code. The decisions that sha
 
 ## Decision outcome
 
-Option 2. The statement in blueprints says what is always true; the ADRs here say why a choice was made where the statement admits several; the rules in `docs/architecture/core.md` say what a diff must keep and cite both. Nothing commercial appears in this repository; commercial thinking belongs in agentplot/strategy.
+Option 2. The statement in blueprints says what is always true; the ADRs here say why a choice was made where the statement admits several; the rules in `docs/architecture/core.md` say what a diff must keep and cite both. Nothing commercial appears in this repository; commercial thinking belongs in boomdrivedev/strategy.
 
 ### Consequences
 

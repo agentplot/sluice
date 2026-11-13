@@ -9,9 +9,9 @@ decision-makers:
 
 # sluice's devenv declares its MCP servers, writes Claude Code's files at a place's readiness, and holds OpenSpec's files to its pin
 
-Status: accepted on 2026-11-07, the code stage's own choices under agentplot/boomdrive's record 0022, which the user accepted on 2026-11-07 and which asks each repository's change to confirm its places have their servers before their agents start. Each is cheap to change later. Amended 2026-11-11 on the user's word: the two files are copies devenv writes, not links into the store.
+Status: accepted on 2026-11-07, the code stage's own choices under boomdrivedev/boomdrive's record 0022, which the user accepted on 2026-11-07 and which asks each repository's change to confirm its places have their servers before their agents start. Each is cheap to change later. Amended 2026-11-11 on the user's word: the two files are copies devenv writes, not links into the store.
 
-Sources: agentplot/boomdrive record 0022 and its amendment of 2026-11-07, at cac1d14 on boomdrive's `bolt/boomdrive-sessions-start-their-mcp-servers`; agentplot/flume's chore of the same name at f2d4483a; devenv 2.4's `src/modules/integrations/claude.nix` and `src/modules/files.nix` (`copyMode`); OpenSpec 1.14.3's `init` and `src/core/global-config.ts`; clause 147 and rules core.21, core.24 and core.46; deneb on 2026-11-11, where Claude Code sessions in worktrees of sluice and boomdrive each held about 16 watches on `/nix/store` itself, their reads of its 101,000 paths held the store's lock, and every nix program and the nix daemon hung until those sessions were stopped.
+Sources: boomdrivedev/boomdrive record 0022 and its amendment of 2026-11-07, at cac1d14 on boomdrive's `bolt/boomdrive-sessions-start-their-mcp-servers`; boomdrivedev/flume's chore of the same name at f2d4483a; devenv 2.4's `src/modules/integrations/claude.nix` and `src/modules/files.nix` (`copyMode`); OpenSpec 1.14.3's `init` and `src/core/global-config.ts`; clause 147 and rules core.21, core.24 and core.46; deneb on 2026-11-11, where Claude Code sessions in worktrees of sluice and boomdrive each held about 16 watches on `/nix/store` itself, their reads of its 101,000 paths held the store's lock, and every nix program and the nix daemon hung until those sessions were stopped.
 
 ## Context and problem statement
 

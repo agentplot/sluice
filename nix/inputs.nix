@@ -5,7 +5,7 @@
 # the gate's sandbox, or, where `paths` names it, read where the shell
 # fetched it to, as the checks do inside it against no store. A flake's
 # node is its outputs, called with its own inputs and `follows` followed
-# from the root, as flake-compat does. agentplot/boomdrive's
+# from the root, as flake-compat does. boomdrivedev/boomdrive's
 # nix/inputs.nix at 3f428cf, its comments naming sluice's shell and checks.
 {
   lock ? builtins.fromJSON (builtins.readFile ../flake.lock),

@@ -9,10 +9,10 @@ decision-makers:
 
 # A run counts through a signer the policy names, in a signed in-toto statement
 
-Status: accepted 2026-10-19; amended 2026-11-02 by ADR 0077, under clause 141 (agentplot/blueprints cfe9e04): a run's statement is in-toto's Test Result, and the predicate of sluice's own below is read and, once the change ADR 0077 names lands, no longer written. Its signers, claims, signing and verification stand.
+Status: accepted 2026-10-19; amended 2026-11-02 by ADR 0077, under clause 141 (boomdrivedev/blueprints cfe9e04): a run's statement is in-toto's Test Result, and the predicate of sluice's own below is read and, once the change ADR 0077 names lands, no longer written. Its signers, claims, signing and verification stand.
 
 Deciders: the operator, ratifying many-hosts-3 and ruling on the `peers` design, 2026-10-19.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 27 to 29, 69, 78, 79, 85, 108, 109, C.6, C.7; rules core.1, core.7, core.9; ADRs 0004, 0015; the OpenSpec change `peers`, design D5, D6 and D9.
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` clauses 27 to 29, 69, 78, 79, 85, 108, 109, C.6, C.7; rules core.1, core.7, core.9; ADRs 0004, 0015; the OpenSpec change `peers`, design D5, D6 and D9.
 
 ## Context and problem statement
 

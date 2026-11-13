@@ -10,7 +10,7 @@ decision-makers:
 # A worktree holding a branch sluice lands on is warned of, never moved
 
 Deciders: the user, planning how the fleet's worktrees follow what sluice lands, with crew's and swancloud's plans beside this one, 2026-10-16.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 1, 2, 25, 50; ADRs 0010, 0011, 0017, 0018, 0020, 0023; rules core.4, core.14, core.15, core.16, core.20.
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` clauses 1, 2, 25, 50; ADRs 0010, 0011, 0017, 0018, 0020, 0023; rules core.4, core.14, core.15, core.16, core.20.
 
 ## Context and problem statement
 

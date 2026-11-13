@@ -12,7 +12,7 @@ decision-makers:
 Status: accepted, a decision of the code stage of `fix/a-landed-bolt-is-never-reported-withdrawn` under the statement as written (133, 134) and rules core.28 and core.29, which it keeps; cheap to change later.
 
 Deciders: the code stage of `fix/a-landed-bolt-is-never-reported-withdrawn`.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 129, 133 and 134 at c188bf3; rules core.28, core.29; records 0061, 0062; swancloud-ops's report of 2026-11-06 on landing swanclouds-bumps-of-the-5th, #23 in the runner's copy of swancloud on deneb, landed as f24499c9; that copy's `sluice/main/log.jsonl`, `read-refused` at 12:57:13Z and 13:56:33Z; `crates/sluice/src/profiles/pushed_refs.rs` `call`, `fetch_specs` and `judged` as main held them at 6d18567b.
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` clauses 129, 133 and 134 at c188bf3; rules core.28, core.29; records 0061, 0062; swancloud-ops's report of 2026-11-06 on landing swanclouds-bumps-of-the-5th, #23 in the runner's copy of swancloud on deneb, landed as f24499c9; that copy's `sluice/main/log.jsonl`, `read-refused` at 12:57:13Z and 13:56:33Z; `crates/sluice/src/profiles/pushed_refs.rs` `call`, `fetch_specs` and `judged` as main held them at 6d18567b.
 
 ## Context and problem statement
 

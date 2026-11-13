@@ -3,7 +3,7 @@
 ## Context
 
 See proposal.md for why. The blueprint is
-`agentplot/blueprints:design/sluice/proposals/session-runs-1.md`
+`boomdrivedev/blueprints:design/sluice/proposals/session-runs-1.md`
 (clauses 89 to 95 here; 96, remote, is a later change). What exists:
 
 - A place is made by `profiles::places::Places` (`Checkout::materialize`),

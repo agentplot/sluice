@@ -29,7 +29,7 @@ echo "${root:-not installed}"
   file until it is installed:
 
   ```sh
-  herdr plugin install agentplot/sluice/plugins/herdr
+  herdr plugin install boomdrivedev/sluice/plugins/herdr
   ```
 
   Then read `root` again.

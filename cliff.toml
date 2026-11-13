@@ -17,14 +17,14 @@ body = """
 {% for commit in commits %}
 - {% if commit.scope %}**{{ commit.scope }}**: {% endif %}\
 {{ commit.message | split(pat="\n") | first | trim | upper_first }} \
-([{{ commit.id | truncate(length=7, end="") }}](https://github.com/agentplot/sluice/commit/{{ commit.id }}))\
+([{{ commit.id | truncate(length=7, end="") }}](https://github.com/boomdrivedev/sluice/commit/{{ commit.id }}))\
 {% endfor %}
 {% endfor %}
 """
 footer = ""
 trim = true
 postprocessors = [
-  { pattern = '\(#([0-9]+)\)', replace = "([#${1}](https://github.com/agentplot/sluice/issues/${1}))" },
+  { pattern = '\(#([0-9]+)\)', replace = "([#${1}](https://github.com/boomdrivedev/sluice/issues/${1}))" },
 ]
 
 [git]

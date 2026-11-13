@@ -9,7 +9,7 @@ no bound on how many run at once on the host, no ports of its own, no
 limits, and nothing that ends what the run started. Several agents on
 one host collide on ports, overload the machine, and leave stacks running
 until the worktree is removed. The design for this is drafted as
-`design/sluice/proposals/session-runs-1.md` in agentplot/blueprints,
+`design/sluice/proposals/session-runs-1.md` in boomdrivedev/blueprints,
 clauses 89 to 96; this change builds the one-host part of it.
 
 ## What Changes

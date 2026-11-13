@@ -83,4 +83,4 @@ open pull requests and moves the queue. sluice starts no service itself.
 - The repository's own CI may keep running on pull requests; name its job in
   `checks` if it must pass first.
 
-Reference: <https://agentplot.github.io/sluice/guides/pull-requests/>.
+Reference: <https://boomdrivedev.github.io/sluice/guides/pull-requests/>.

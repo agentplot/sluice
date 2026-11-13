@@ -2,7 +2,7 @@
 
 Read first: this change's proposal and design;
 clauses 61 and 130 to 132 of
-`agentplot/blueprints:design/sluice/requirements.md`;
+`boomdrivedev/blueprints:design/sluice/requirements.md`;
 `docs/architecture/core.md`. Work inside `devenv shell`.
 
 ## 1. Finished submissions

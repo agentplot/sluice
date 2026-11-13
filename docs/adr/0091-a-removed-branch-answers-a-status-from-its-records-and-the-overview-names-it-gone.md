@@ -9,10 +9,10 @@ decision-makers:
 
 # A removed branch answers a status from its records, and the overview names it gone
 
-Status: accepted on the user's yes of 2026-11-06 to clause 105's amendment, on `agentplot/blueprints` main at e8225aa; proposed by the code stage of `fix/a-branch-the-overview-names-has-a-status`, under clauses 26, 61, 105 and 131 and rules core.11 and core.41, which it keeps.
+Status: accepted on the user's yes of 2026-11-06 to clause 105's amendment, on `boomdrivedev/blueprints` main at e8225aa; proposed by the code stage of `fix/a-branch-the-overview-names-has-a-status`, under clauses 26, 61, 105 and 131 and rules core.11 and core.41, which it keeps.
 
 Deciders: the code stage of `fix/a-branch-the-overview-names-has-a-status`.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 26, 61, 129 and 131 and C.6 at c94c496, and 105 as amended at e8225aa; rules core.11, core.25, core.41; record 0046; `openspec/specs/branch-lifecycle/spec.md`, "sluice deletes a branch once its work has landed"; swancloud's person's copy on deneb, `~/Code/github_afterthought/swancloud/main`, sluice 0.68.1, on 2026-11-06; Flume's `crates/flume/src/profiles/merge_queue/sluice/mod.rs`, `branches` and `read_submissions`, at its main of 2026-11-06.
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` clauses 26, 61, 129 and 131 and C.6 at c94c496, and 105 as amended at e8225aa; rules core.11, core.25, core.41; record 0046; `openspec/specs/branch-lifecycle/spec.md`, "sluice deletes a branch once its work has landed"; swancloud's person's copy on deneb, `~/Code/github_afterthought/swancloud/main`, sluice 0.68.1, on 2026-11-06; Flume's `crates/flume/src/profiles/merge_queue/sluice/mod.rs`, `branches` and `read_submissions`, at its main of 2026-11-06.
 
 ## Context and problem statement
 

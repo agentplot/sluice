@@ -10,7 +10,7 @@ decision-makers:
 # A group submit to pull requests takes its requests itself, or leaves them drafts
 
 Deciders: the user, amending clause 125 in blueprints 763d21b, and building the OpenSpec change `a-group-submit-meets-pull-requests`.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 6, 62, 67, 120, 125 and C.5 pull request; ADRs 0048, 0052; rules core.2, core.4, core.6, core.14.
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` clauses 6, 62, 67, 120, 125 and C.5 pull request; ADRs 0048, 0052; rules core.2, core.4, core.6, core.14.
 
 ## Context and problem statement
 

@@ -67,4 +67,4 @@ For a repository laid out as a bare repo with worktrees beside it
 `worktree-path` so new worktrees land beside `main`; see the `worktrees`
 skill.
 
-Reference: <https://agentplot.github.io/sluice/guides/worktrunk/>.
+Reference: <https://boomdrivedev.github.io/sluice/guides/worktrunk/>.

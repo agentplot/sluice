@@ -10,7 +10,7 @@ decision-makers:
 # A check its time limit ended has no outcome
 
 Deciders: the operator, after a bolt's head could not land on switchboard-kit because a slow host's time limit left a fail under a test's key, 2026-10-21.
-Sources: time-limit-1 in agentplot/blueprints (amends 66, S55; unratified); clauses 16, 19, 20, 60, 66, 69; could-not-run-1 114, 116; rule core.7; ADR 0031; the OpenSpec change `timeout-not-a-fail`.
+Sources: time-limit-1 in boomdrivedev/blueprints (amends 66, S55; unratified); clauses 16, 19, 20, 60, 66, 69; could-not-run-1 114, 116; rule core.7; ADR 0031; the OpenSpec change `timeout-not-a-fail`.
 
 ## Context and problem statement
 

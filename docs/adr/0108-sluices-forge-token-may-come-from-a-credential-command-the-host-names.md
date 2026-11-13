@@ -10,14 +10,14 @@ decision-makers:
 
 # sluice's forge token may come from a credential command the host names
 
-Status: accepted by the user on 2026-11-09, on agentplot-design's card: "One Boomdrive App; the runner holds its key and gives every tool its tokens". How sluice takes the token is agentplot-design's own choice, made on record 0019, the statement and agentplot/boomdrive's record 0007 as amended that day, and cheap to change.
+Status: accepted by the user on 2026-11-09, on agentplot-design's card: "One Boomdrive App; the runner holds its key and gives every tool its tokens". How sluice takes the token is agentplot-design's own choice, made on record 0019, the statement and boomdrivedev/boomdrive's record 0007 as amended that day, and cheap to change.
 
 Deciders: the user, 2026-11-09, who asked in agentplot-design's pane as the family moved to the boomdrivedev org: "Do we want to mimic the control plane cloud concept here and have a Boomdrive GitHub app that passes the credentials through from the cloud down to Sluice?", and chose the option above on its card.
-Sources: record 0019; the statement's clause 134 and C.8's row of who holds the branch's credential; agentplot/boomdrive record 0007 as amended on 2026-11-09, and its rule core.33; agentplot/blueprints `design/principles.md` 6 and 14; git's credential-helper protocol (`gitcredentials(7)`, `git-credential(1)`).
+Sources: record 0019; the statement's clause 134 and C.8's row of who holds the branch's credential; boomdrivedev/boomdrive record 0007 as amended on 2026-11-09, and its rule core.33; boomdrivedev/blueprints `design/principles.md` 6 and 14; git's credential-helper protocol (`gitcredentials(7)`, `git-credential(1)`).
 
 ## Context and problem statement
 
-sluice lands as a GitHub App. The host's `[forge]` names the App's id and the path of its key, and sluice signs a JWT with the key and buys an installation token for each repository (record 0019). On a Boomdrive host, the user chose one App for the family, whose key the runner alone holds, or the cloud on a cloud host, and every tool asks the runner for its token by `boomdrive forge-token` (agentplot/boomdrive record 0007 as amended). sluice has no way to take a token it did not mint.
+sluice lands as a GitHub App. The host's `[forge]` names the App's id and the path of its key, and sluice signs a JWT with the key and buys an installation token for each repository (record 0019). On a Boomdrive host, the user chose one App for the family, whose key the runner alone holds, or the cloud on a cloud host, and every tool asks the runner for its token by `boomdrive forge-token` (boomdrivedev/boomdrive record 0007 as amended). sluice has no way to take a token it did not mint.
 
 ## Considered options
 

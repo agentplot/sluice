@@ -2,7 +2,7 @@
 
 This change builds clauses 88, 107, 111 and 113 as they bear on GitHub
 Actions jobs, Part C's launched executor and C.8, and scenario S40 of
-the statement in agentplot/blueprints, `design/sluice/requirements.md`,
+the statement in boomdrivedev/blueprints, `design/sluice/requirements.md`,
 on top of the `peers` change, which lands first.
 
 Read first: this change's proposal, specs and design; the `peers`

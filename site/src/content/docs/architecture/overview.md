@@ -15,7 +15,7 @@ host or refs on a shared remote.
 ## The statement
 
 The design is a statement of invariants in
-[agentplot/blueprints](https://github.com/agentplot/blueprints),
+[boomdrivedev/blueprints](https://github.com/boomdrivedev/blueprints),
 `design/sluice/requirements.md`: what is always true of sluice and what
 it never does, as numbered clauses, written so that any model satisfying
 them is sluice. This repository cites its clauses by number, keeps the

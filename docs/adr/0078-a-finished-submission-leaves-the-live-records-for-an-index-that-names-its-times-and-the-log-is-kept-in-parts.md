@@ -9,10 +9,10 @@ decision-makers:
 
 # A finished submission leaves the live records for an index that names its times, and the log is kept in parts
 
-Status: accepted. The operator approved the change `finished-submissions` on 2026-10-16, and clauses 61 and 130 to 132 carry it in the statement from batch 18's rulings (agentplot/blueprints 53f6d44, 2026-10-25); clause 131 gained the index's times on 2026-10-28 (agentplot/blueprints f23cee4). This record, written 2026-11-02, sets down the decision those carry, and moves no clause.
+Status: accepted. The operator approved the change `finished-submissions` on 2026-10-16, and clauses 61 and 130 to 132 carry it in the statement from batch 18's rulings (boomdrivedev/blueprints 53f6d44, 2026-10-25); clause 131 gained the index's times on 2026-10-28 (boomdrivedev/blueprints f23cee4). This record, written 2026-11-02, sets down the decision those carry, and moves no clause.
 
 Deciders: the operator, approving the change's proposal on 2026-10-16; batch 18's rulings of 2026-10-25; for the index's times, the statement's answer of 2026-10-28 to a planner's question of which document carries a decided submission's submitted time and the start of its checks.
-Sources: statement clauses 26, 53, 61, 63, 129, 130, 131 (as amended 2026-10-28), 132 and C.6 in agentplot/blueprints `design/sluice/requirements.md`; rules core.11, core.14; the change `finished-submissions` (`openspec/changes/finished-submissions/`, its proposal and design); `crates/sluice-core/src/records.rs` (`FinishedLine`) on main at 2026-11-02.
+Sources: statement clauses 26, 53, 61, 63, 129, 130, 131 (as amended 2026-10-28), 132 and C.6 in boomdrivedev/blueprints `design/sluice/requirements.md`; rules core.11, core.14; the change `finished-submissions` (`openspec/changes/finished-submissions/`, its proposal and design); `crates/sluice-core/src/records.rs` (`FinishedLine`) on main at 2026-11-02.
 
 ## Context and problem statement
 

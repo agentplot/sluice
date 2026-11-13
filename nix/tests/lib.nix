@@ -1,6 +1,6 @@
 # What every case reads: flake.nix imported as an attribute set, and its
 # outputs called with the lock's inputs and `self` as this tree, as
-# flake-compat calls them (record 0098). agentplot/boomdrive's
+# flake-compat calls them (record 0098). boomdrivedev/boomdrive's
 # nix/tests/lib.nix at 3f428cf, for sluice's flake.
 { paths }:
 let

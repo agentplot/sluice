@@ -10,7 +10,7 @@ decision-makers:
 # Pull requests are a driver's, and wait on GitHub
 
 Deciders: the user, planning the change `pull-requests`, 2026-10-14.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 27, 47, 50, 51, 56, 64, 67, C.5; `design/sluice/proposals/pull-requests-1.md` (C.5 pull request, C.7 `pull_requests`, S21 to S24); ADRs 0003, 0010, 0017, 0019.
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` clauses 27, 47, 50, 51, 56, 64, 67, C.5; `design/sluice/proposals/pull-requests-1.md` (C.5 pull request, C.7 `pull_requests`, S21 to S24); ADRs 0003, 0010, 0017, 0019.
 
 ## Context and problem statement
 

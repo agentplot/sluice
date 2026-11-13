@@ -1,7 +1,7 @@
 # Tasks
 
 Read first: this change's proposal, specs and design;
-`agentplot/blueprints:design/sluice/proposals/session-runs-1.md`;
+`boomdrivedev/blueprints:design/sluice/proposals/session-runs-1.md`;
 `docs/architecture/core.md`; ADRs 0012, 0013, 0016. Work inside `devenv
 shell`. Fast tier: `moon run ':#check-fast'`; real tools:
 `moon run ':#check-tools'`; e2e: `moon run ':#check-e2e'`. Commit by

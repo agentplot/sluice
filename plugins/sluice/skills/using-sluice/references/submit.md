@@ -1,6 +1,6 @@
 # Submitting
 
-Full reference: <https://agentplot.github.io/sluice/reference/commands/>.
+Full reference: <https://boomdrivedev.github.io/sluice/reference/commands/>.
 
 ## Flags
 

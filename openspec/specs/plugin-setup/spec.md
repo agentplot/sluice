@@ -496,7 +496,7 @@ person's word.
 - **WHEN** `herdr plugin list --plugin agentplot.sluice --json` lists
   no plugin
 - **THEN** the skill offers `herdr plugin install
-  agentplot/sluice/plugins/herdr`, runs it only on the person's word,
+  boomdrivedev/sluice/plugins/herdr`, runs it only on the person's word,
   and writes nothing to herdr's file until the plugin is installed
 
 ### Requirement: The herdr lines are the plugin's setup's

@@ -10,7 +10,7 @@ decision-makers:
 # A git-only core with five seams, each bound by a profile
 
 Deciders: the user, in the merge-queue exploration of 2026-10-08.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` Part B and Part C, clauses 31, 32, 52, 53; `agentplot/blueprints:design/flywheel-next/requirements.md` clauses 45, 47, 183; testledger's Part B and C as the model for seams and profiles.
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` Part B and Part C, clauses 31, 32, 52, 53; `boomdrivedev/blueprints:design/flywheel-next/requirements.md` clauses 45, 47, 183; testledger's Part B and C as the model for seams and profiles.
 
 ## Context and problem statement
 

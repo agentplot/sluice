@@ -10,7 +10,7 @@ decision-makers:
 # A gate trusts the runs sluice starts, by default
 
 Deciders: the user, trying the README's quick start, 2026-10-13.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 27 to 29 and the table of who decides what; ADRs 0007, 0012.
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` clauses 27 to 29 and the table of who decides what; ADRs 0007, 0012.
 
 ## Context and problem statement
 

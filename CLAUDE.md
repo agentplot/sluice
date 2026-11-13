@@ -1,7 +1,7 @@
 # sluice
 
 A merge queue for agents in worktrees. The design is the statement of
-invariants in agentplot/blueprints, `design/sluice/requirements.md`;
+invariants in boomdrivedev/blueprints, `design/sluice/requirements.md`;
 this repository cites its clauses by number and never restates them.
 
 ## The family
@@ -9,7 +9,7 @@ this repository cites its clauses by number and never restates them.
 **The family.** This tool works with the others of the Boomdrive
 family: sluice (the merge queue), Flume (places and their agents),
 Boomdrive (the runner), timber, weir and boom. Each tool's statement is
-in agentplot/blueprints, `design/<tool>/requirements.md`. Before
+in boomdrivedev/blueprints, `design/<tool>/requirements.md`. Before
 designing or fixing a behavior here, look at how the related tools do
 the same thing, in their code and their statements: readiness,
 configuration, credentials, retries, what a place is. Where two tools do

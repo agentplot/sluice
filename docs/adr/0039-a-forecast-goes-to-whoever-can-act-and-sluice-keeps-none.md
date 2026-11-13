@@ -10,7 +10,7 @@ decision-makers:
 # A forecast goes to whoever can act on it, and sluice keeps none
 
 Deciders: the operator, after reading switchboard-kit's conflicts of 2026-10-19 to 10-21, 2026-10-20.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 12, 64, 65, 47a, 67, 104, C.5 (crew); session-runs-1 clause 92; ADRs 0010, 0023, 0024, 0028, 0035; rules core.4, core.6, core.14, core.18, core.20.
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` clauses 12, 64, 65, 47a, 67, 104, C.5 (crew); session-runs-1 clause 92; ADRs 0010, 0023, 0024, 0028, 0035; rules core.4, core.6, core.14, core.18, core.20.
 
 ## Context and problem statement
 

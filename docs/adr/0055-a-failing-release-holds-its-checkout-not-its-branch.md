@@ -10,7 +10,7 @@ decision-makers:
 # A failing release holds its checkout, not its branch
 
 Deciders: the user, through clause 123 of the statement and the design of the change `a-failing-release-holds-its-place-not-its-branch`, 2026-10-23.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` at c872766, clauses 123, 25, 34, 81, 122 and C.7; ADRs 0016, 0020, 0045; rules core.2, core.10, core.11, core.16, core.23.
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` at c872766, clauses 123, 25, 34, 81, 122 and C.7; ADRs 0016, 0020, 0045; rules core.2, core.10, core.11, core.16, core.23.
 
 ## Context and problem statement
 

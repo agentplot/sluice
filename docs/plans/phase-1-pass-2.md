@@ -42,7 +42,7 @@ never pushed). `devenv shell -- cargo-tests` runs the fast tier;
 | 13 | the culprit's failed tasks' logs | §4, §6 | **done**: `Tests::logs`, `State::keep_logs`, the candidate's `failed[].log`, `Told::Failed.logs`; `wt submit` prints each path |
 | 14 | a conventional landing subject: `[landing] subject` | §1 | **done**: `Policy::landing_subject`, `text::landing_message` |
 | 15 | the driver removes a landed session's worktree | §7 | **done**: `wt-submit` with `Submit::parse`, `--no-remove` |
-| 16 | publishing: a flake, GHA on macOS and Linux, releases, the repository public | | **done**: `flake.nix`, `.github/workflows/ci.yml` green on macOS and Linux, the README's install methods, agentplot/sluice public |
+| 16 | publishing: a flake, GHA on macOS and Linux, releases, the repository public | | **done**: `flake.nix`, `.github/workflows/ci.yml` green on macOS and Linux, the README's install methods, boomdrivedev/sluice public |
 | 17 | no tests of the repository's documents | | **done**: the citations and tool-name checks removed |
 | 18 | OpenTelemetry from sluice, and moon's inside sluice's runs | | **done**: ADR 0014, `telemetry.rs`, the core's spans and metric events, `tests/telemetry.rs`; e2e exported to a local receiver, moon's traces carrying the round's `sluice.trace_id` |
 | 20 | semantic releases with git-cliff | | **done**: `cliff.toml`, `.versionrc` (convco, the commit-msg hook and CI's check), the `version`, `binaries` and `release` jobs, `SLUICE_VERSION`, `release-preview` |
@@ -120,9 +120,9 @@ needed.
   goes too, `main` holding it.
 - **16, publishing.** A root `flake.nix` builds `sluice` and `wt-submit`
   with the Rust `.prototools` names (rust-overlay), so `nix profile
-  install github:agentplot/sluice` installs it on macOS and Linux; the
+  install github:boomdrivedev/sluice` installs it on macOS and Linux; the
   GHA workflow builds the flake on both, runs the fast tier in the devenv
-  shell with agentplot/blueprints checked out for the statement
+  shell with boomdrivedev/blueprints checked out for the statement
   (`SLUICE_STATEMENT`), and on a `v*` tag publishes each platform's
   binaries to a release. The history was checked (gitleaks, all
   commits: no leaks; no customer, pricing or employer named). Making the

@@ -10,7 +10,7 @@ decision-makers:
 # A branch on a remote is fetched and landed by a leased push
 
 Deciders: the user, planning the change `main-on-github` and ruling on how a read meets rule core.4, 2026-10-14.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 1, 24, 45, 46, 56, C.4, C.6; `design/sluice/proposals/pull-requests-1.md` (C.4 pushed refs, C.7 `remote`); ADRs 0003, 0005, 0009, 0011.
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` clauses 1, 24, 45, 46, 56, C.4, C.6; `design/sluice/proposals/pull-requests-1.md` (C.4 pushed refs, C.7 `remote`); ADRs 0003, 0005, 0009, 0011.
 
 ## Context and problem statement
 

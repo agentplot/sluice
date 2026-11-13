@@ -10,7 +10,7 @@ decision-makers:
 # sluice makes and deletes the branches it lands on
 
 Deciders: the user, settling with crew's design who writes a bolt's branch on GitHub, 2026-10-16.
-Sources: `agentplot/blueprints:design/sluice/proposals/branches-1.md` clauses 104 to 106 and its rewrite of 45; clauses 1, 23, 24, 26, 46, 56; ADRs 0009, 0017, 0019, 0024; rules core.4, core.5, core.14, core.15.
+Sources: `boomdrivedev/blueprints:design/sluice/proposals/branches-1.md` clauses 104 to 106 and its rewrite of 45; clauses 1, 23, 24, 26, 46, 56; ADRs 0009, 0017, 0019, 0024; rules core.4, core.5, core.14, core.15.
 
 ## Context and problem statement
 

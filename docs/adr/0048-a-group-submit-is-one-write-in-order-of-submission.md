@@ -10,7 +10,7 @@ decision-makers:
 # A group submit is one write, in order of submission
 
 Deciders: the user, ratifying the group submit on 2026-10-23 ("I approve your recommendation"), and building the OpenSpec change `a-group-submit-takes-all-or-none`.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 5, 6, 7, 12, 17, 18, 50, 62, 65, 67, 82, 125, 128, C.5 and S59; `agentplot/blueprints:design/sluice/proposals/batch-submit-1.md`; ADR 0021; rules core.4, core.6, core.14.
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` clauses 5, 6, 7, 12, 17, 18, 50, 62, 65, 67, 82, 125, 128, C.5 and S59; `boomdrivedev/blueprints:design/sluice/proposals/batch-submit-1.md`; ADR 0021; rules core.4, core.6, core.14.
 
 ## Context and problem statement
 

@@ -11,7 +11,7 @@
 # config.toml.before-nix is there already, it changes neither, names both
 # and fails. It makes ~/.config/sluice where it is missing and links the
 # file alone, never the folder, which holds the host's keys. It says a
-# line only where it moved or linked something. agentplot/boomdrive's
+# line only where it moved or linked something. boomdrivedev/boomdrive's
 # nix/modules/activate.sh at 3f428cf, its link alone, for sluice's path:
 # sluice has no service to restart.
 set -eu

@@ -10,7 +10,7 @@ decision-makers:
 # A place is a plain git worktree
 
 Deciders: the user, reviewing sluice's own configuration, 2026-10-13.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 32 to 35, 83, 84, C.1; ADRs 0003, 0009, 0012; `docs/plans/phase-1-integrations.md` section 5.
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` clauses 32 to 35, 83, 84, C.1; ADRs 0003, 0009, 0012; `docs/plans/phase-1-integrations.md` section 5.
 
 ## Context and problem statement
 

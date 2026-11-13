@@ -9,10 +9,10 @@ decision-makers:
 
 # A run's signed record is in-toto's Test Result, and sluice's own kind stands only for a set-aside
 
-Status: accepted on the user's approval of 2026-11-02, on their card (req_362d6fec), that clause 141 and C.6's sentence on the catalogue, added in agentplot/blueprints cfe9e04, go into this repository's rules and records, which asked this record to say which catalogued kind carries a run and where sluice's own kind stands. It amends record 0032's predicate; C.6 names the kinds as amended 2026-11-02.
+Status: accepted on the user's approval of 2026-11-02, on their card (req_362d6fec), that clause 141 and C.6's sentence on the catalogue, added in boomdrivedev/blueprints cfe9e04, go into this repository's rules and records, which asked this record to say which catalogued kind carries a run and where sluice's own kind stands. It amends record 0032's predicate; C.6 names the kinds as amended 2026-11-02.
 
-Deciders: the user, on that approval; the code stage of the chore `the-rules-and-records-match-the-statement`, for which kind and where each part of a run goes, read from in-toto's catalogue and agentplot/blueprints 7beb5fa.
-Sources: statement clauses 15, 16, 38, 75, 79, 108, 109, 116, 119, 138, 139, 141, C.2 and C.6 (141 added 2026-11-01; C.6 as amended 2026-11-01 and 2026-11-02) in agentplot/blueprints `design/sluice/requirements.md`; agentplot/blueprints 7beb5fa, which gives a test signed for a release in-toto's Test Result; rules core.9, core.22; ADR 0032; in-toto/attestation v1.2.0, `spec/predicates/test-result.md` and `spec/v1/resource_descriptor.md`; `crates/sluice/src/signing/statement.rs` (`RUN_PREDICATE`, `Run`, `Claims`) and `crates/sluice/src/profiles/remote_refs.rs` (`set_aside`) on main at 2026-11-02.
+Deciders: the user, on that approval; the code stage of the chore `the-rules-and-records-match-the-statement`, for which kind and where each part of a run goes, read from in-toto's catalogue and boomdrivedev/blueprints 7beb5fa.
+Sources: statement clauses 15, 16, 38, 75, 79, 108, 109, 116, 119, 138, 139, 141, C.2 and C.6 (141 added 2026-11-01; C.6 as amended 2026-11-01 and 2026-11-02) in boomdrivedev/blueprints `design/sluice/requirements.md`; boomdrivedev/blueprints 7beb5fa, which gives a test signed for a release in-toto's Test Result; rules core.9, core.22; ADR 0032; in-toto/attestation v1.2.0, `spec/predicates/test-result.md` and `spec/v1/resource_descriptor.md`; `crates/sluice/src/signing/statement.rs` (`RUN_PREDICATE`, `Run`, `Claims`) and `crates/sluice/src/profiles/remote_refs.rs` (`set_aside`) on main at 2026-11-02.
 
 ## Context and problem statement
 

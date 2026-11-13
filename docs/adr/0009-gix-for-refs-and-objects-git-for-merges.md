@@ -10,7 +10,7 @@ decision-makers:
 # gix for refs and objects, the git command for merges, and the checkout method as the only git setting
 
 Deciders: the user, in the setup walkthrough review of 2026-10-11.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 10, 12, 23, 24, 42 to 46, C.1, C.4; flywheel-next's `crates/flywheel-store-git` and `crates/flywheel-world-host` (gix 0.87, and twelve calls to the `git` command beside it); worktrunk's custom subcommands (worktrunk.dev/extending).
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` clauses 10, 12, 23, 24, 42 to 46, C.1, C.4; flywheel-next's `crates/flywheel-store-git` and `crates/flywheel-world-host` (gix 0.87, and twelve calls to the `git` command beside it); worktrunk's custom subcommands (worktrunk.dev/extending).
 
 ## Context and problem statement
 

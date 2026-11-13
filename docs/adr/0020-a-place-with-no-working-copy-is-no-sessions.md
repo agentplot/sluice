@@ -10,7 +10,7 @@ decision-makers:
 # A place with no working copy is no session's
 
 Deciders: the user, ruling on clause 97 of the blueprint proposal session-runs-1 and building the OpenSpec change `held-worktrees`, 2026-10-14.
-Sources: `agentplot/blueprints:design/sluice/proposals/session-runs-1.md` clauses 95 and 97; `agentplot/blueprints:design/sluice/requirements.md` clauses 25, 34; ADRs 0016, 0018; rule core.16.
+Sources: `boomdrivedev/blueprints:design/sluice/proposals/session-runs-1.md` clauses 95 and 97; `boomdrivedev/blueprints:design/sluice/requirements.md` clauses 25, 34; ADRs 0016, 0018; rule core.16.
 
 ## Context and problem statement
 

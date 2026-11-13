@@ -3,8 +3,8 @@
   "version": "0.0.0",
   "description": "Set sluice up in a repository, submit work and read verdicts, run tests and previews, and lay out a repository as a bare repo with worktrees.",
   "author": { "name": "agentplot" },
-  "homepage": "https://agentplot.github.io/sluice/guides/claude-code/",
-  "repository": "https://github.com/agentplot/sluice",
+  "homepage": "https://boomdrivedev.github.io/sluice/guides/claude-code/",
+  "repository": "https://github.com/boomdrivedev/sluice",
   "license": "MIT",
   "keywords": ["merge-queue", "worktrees", "git", "moon", "worktrunk"]
 }

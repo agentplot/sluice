@@ -16,7 +16,7 @@ sluice's flake SHALL give `darwinModules.sluice` and
 `services.sluice.enable`, `services.sluice.package` and
 `services.sluice.settings`, and `services.sluice.user` on NixOS. Each
 SHALL evaluate in a system of its platform with the module enabled and
-no other flake's module (agentplot/boomdrive record 0023; record 0098;
+no other flake's module (boomdrivedev/boomdrive record 0023; record 0098;
 rule core.51).
 
 #### Scenario: The nix-darwin module
@@ -268,8 +268,8 @@ sluice's flake's package for the host's system. A host MAY replace the
 package, or set it to null to install none. The module SHALL add no
 launchd agent or daemon, no systemd unit, no file under `/etc`, no user
 and no list of repositories. Beside the link, it SHALL write no file of
-another tool's (135; agentplot/blueprints `design/principles.md` 10;
-rules core.31, core.51).
+another tool's (135; boomdrivedev/blueprints principle 10; rules
+core.31, core.51).
 
 #### Scenario: The flake's sluice
 
@@ -312,10 +312,10 @@ rules core.31, core.51).
 ### Requirement: A module imported twice is taken once
 
 `darwinModules.sluice` and `nixosModules.sluice`, and each `default`,
-SHALL carry the key `github:agentplot/sluice#<platform>Modules.sluice`,
+SHALL carry the key `github:boomdrivedev/sluice#<platform>Modules.sluice`,
 `darwin` or `nixos`, as Flume's flake keys its own, so a system that
 imports the module twice, itself and through another flake's module,
-declares `services.sluice` once (agentplot/boomdrive record 0023;
+declares `services.sluice` once (boomdrivedev/boomdrive record 0023;
 record 0098; rule core.51).
 
 #### Scenario: The nix-darwin module imported twice
@@ -325,7 +325,7 @@ record 0098; rule core.51).
   `services.sluice.enable = true`, and imports `darwinModules.sluice`
   again under another module
 - **THEN** `darwinModules.sluice` and `darwinModules.default` each carry
-  the key `github:agentplot/sluice#darwinModules.sluice`, the system
+  the key `github:boomdrivedev/sluice#darwinModules.sluice`, the system
   evaluates to a derivation, `services.sluice.enable` is declared once,
   and the activation links the file ("The module imported twice on
   nix-darwin" in `nix/tests/darwin.nix`)
@@ -337,7 +337,7 @@ record 0098; rule core.51).
   `services.sluice.user = "alice"`, and imports `nixosModules.sluice`
   again under another module
 - **THEN** `nixosModules.sluice` and `nixosModules.default` each carry
-  the key `github:agentplot/sluice#nixosModules.sluice`, the system's
+  the key `github:boomdrivedev/sluice#nixosModules.sluice`, the system's
   toplevel evaluates to a derivation, `services.sluice.enable` is
   declared once, and alice's user activation links the file ("The
   module imported twice on NixOS" in `nix/tests/nixos.nix`)

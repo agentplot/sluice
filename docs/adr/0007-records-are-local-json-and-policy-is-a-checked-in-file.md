@@ -10,7 +10,7 @@ decision-makers:
 # Records are local JSON, and policy is a checked-in file read from the branch
 
 Deciders: the user, in the requirements interview of 2026-10-08.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 26, 27, 53, 56, C.6, C.7; ADR 0004; Boomdrive's recutils records as the form set aside.
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` clauses 26, 27, 53, 56, C.6, C.7; ADR 0004; Boomdrive's recutils records as the form set aside.
 
 ## Context and problem statement
 

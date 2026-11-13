@@ -10,7 +10,7 @@ decision-makers:
 # A run's tasks are kept beside the records, on the host that runs it
 
 Deciders: the operator, planning the board's and the herdr popup's task progress, 2026-10-18.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 16, 26, 37, 38, 61 to 63, C.2; `design/sluice/models/many-hosts-1.md` §1.2; flywheel-next `design/storage/storage.md` rule 1, decisions 2, 7 and 8; rules core.2, core.7, core.9, core.11, core.14; ADRs 0004, 0008.
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` clauses 16, 26, 37, 38, 61 to 63, C.2; `design/sluice/models/many-hosts-1.md` §1.2; flywheel-next `design/storage/storage.md` rule 1, decisions 2, 7 and 8; rules core.2, core.7, core.9, core.11, core.14; ADRs 0004, 0008.
 
 ## Context and problem statement
 

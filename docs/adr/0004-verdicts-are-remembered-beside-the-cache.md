@@ -10,7 +10,7 @@ decision-makers:
 # Verdicts are remembered beside the task runner's cache
 
 Deciders: the user, in the merge-queue exploration of 2026-10-08.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 15, 16, 19, 26; a probe of moon 1.41.7 on 2026-10-08 (a failing task writes its run record with exit code and hash, is re-executed on the next run, and gets no outputs archive; only a pass is archived); moon's `remote.cache.localReadOnly` (moonrepo.dev/docs/config/workspace); boomdrive-web's principle "never prove twice".
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` clauses 15, 16, 19, 26; a probe of moon 1.41.7 on 2026-10-08 (a failing task writes its run record with exit code and hash, is re-executed on the next run, and gets no outputs archive; only a pass is archived); moon's `remote.cache.localReadOnly` (moonrepo.dev/docs/config/workspace); boomdrive-web's principle "never prove twice".
 
 ## Context and problem statement
 

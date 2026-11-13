@@ -77,4 +77,4 @@ moon query tasks --affected      # in a worktree with a change: what sluice woul
 sluice exec <branch>             # the affected required tasks, under the branch's limits
 ```
 
-Reference: <https://agentplot.github.io/sluice/reference/configuration/#tests-how-tests-run>.
+Reference: <https://boomdrivedev.github.io/sluice/reference/configuration/#tests-how-tests-run>.

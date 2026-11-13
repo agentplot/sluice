@@ -10,7 +10,7 @@ decision-makers:
 # A request shows its verdict from the records, the same for every task runner
 
 Deciders: the operator, planning what a pull request shows of sluice's verdict, 2026-10-20.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 16, 19, 20, 26, 27, 38, 49, 53, 114 to 116, 118, 119, C.2, C.5 (many-hosts-3's addition), S50, S51; rules core.1, core.2, core.7, core.9, core.11, core.14; ADRs 0021, 0022, 0028, 0032.
+Sources: `boomdrivedev/blueprints:design/sluice/requirements.md` clauses 16, 19, 20, 26, 27, 38, 49, 53, 114 to 116, 118, 119, C.2, C.5 (many-hosts-3's addition), S50, S51; rules core.1, core.2, core.7, core.9, core.11, core.14; ADRs 0021, 0022, 0028, 0032.
 
 ## Context and problem statement
 
