@@ -42,9 +42,11 @@ Deciders: the user, on agentplot-design's card of 2026-11-12 (req_d4be2dcc695e41
 
 ## Amendment, 2026-11-12: sluice's main takes no more fixes, and its defects go into the refactor
 
-Status: proposed to the user on 2026-11-12, from their words in agentplot-design's pane; accepted on their yes.
+Status: proposed to the user on 2026-11-12, as `briefs.15` has it; accepted only on their yes.
 
-Deciders: the user, 2026-11-12, answering agentplot-ops' card "Start two sluice fixes now for wldn's slow, stuck-looking runs, during the pause?": "I'd consider saying yes to this but we just went over the fact that all we're doing is applying band-aid patches that are making the design worse and worse. We need to do a refactor". Where each defect goes in the refactor, and the one exception below, are agentplot-design's.
+Should sluice's main stop taking fixes until the rebuild and the redesign have landed? Recommended: yes. Most of November's fixes went into code the rebuild deletes or the redesign replaces, so each one is paid for twice. Until then, a sluice problem gets a workaround that holds, such as a restart, a resubmission or a change to the repository's own settings, and its cause is written into the redesign. Work that would land untested, or a submission that would be lost, is still fixed at once. The other way is to keep fixing main as problems arrive, which delays the refactor and keeps adding to what it has to replace.
+
+Deciders: the user, on their card. Where each defect goes in the refactor, and the one exception below, are agentplot-design's.
 
 Sources: agentplot-ops' readings of switchboard-kit's records on chuck-herdr-alpha, 2026-11-12: twelve runs that day ended `unproven` and were opened again, and each waited for one of the host's two runs while its status read "testing 37m of 25m"; and of sluice's main at `5d571ccb`, where a run with an unproven replay is opened again whole with replays off (`crates/sluice-core/src/step.rs`, the unproven branch and the run's request) and status measures a candidate's time from its first testing line (`crates/sluice/src/progress.rs`). The statement's clauses 66, 87, 108 and S42.
 
