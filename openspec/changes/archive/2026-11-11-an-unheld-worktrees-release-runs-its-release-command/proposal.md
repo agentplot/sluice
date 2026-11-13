@@ -56,7 +56,7 @@ exits non-zero.
   the release, exit 1, naming the branch and its refusal.
 - **Released again.** A second `sluice release` in that worktree runs
   the release command again, as the first did.
-- The decision is recorded as record 0112. Records 0018 and 0081 are
+- The decision is recorded as record 0120. Records 0018 and 0081 are
   amended in part by it. Rule core.10's and core.46's details cite it.
   The site's reference, configuration and worktrunk pages say it.
 
@@ -95,7 +95,7 @@ None.
   S27 (`crates/sluice-conformance/src/shared.rs`) and in
   `a_sessions_place_is_released_under_the_policy_read_now`
   (`crates/sluice/tests/profiles/places.rs`).
-- `docs/adr/0112-…md` (new), `docs/adr/0018-…md`, `docs/adr/0081-…md`,
+- `docs/adr/0120-…md` (new), `docs/adr/0018-…md`, `docs/adr/0081-…md`,
   `docs/architecture/core.md`,
   `site/src/content/docs/architecture/rules.md`,
   `site/src/content/docs/reference/commands.md`,

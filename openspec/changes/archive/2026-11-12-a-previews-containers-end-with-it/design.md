@@ -256,14 +256,14 @@ gains the end and its three tests, and that a preview whose container
 cannot be removed is kept. The C.1 preview row's release cell gains the
 removal between the release command and `git worktree remove`.
 "What it changes elsewhere" gains 123's two frees reaching it. One
-scenario is added. Each is marked proposed, record 0119. The orchestrator
+scenario is added. Each is marked proposed, record 0121. The orchestrator
 pushes the branch on the user's word, before the code lands (rule
 core.12).
 
-Record 0119, `docs/adr/0119-a-previews-containers-end-with-it-found-by-its-checkout-its-ports-or-its-label.md`,
+Record 0121, `docs/adr/0121-a-previews-containers-end-with-it-found-by-its-checkout-its-ports-or-its-label.md`,
 status proposed, decided by this change's construct stage within 34,
 101 and core.10. It holds D1 to D5, each with its path not taken. If
-0119 is taken when the record is written, the next free number is used,
+0121 is taken when the record is written, the next free number is used,
 everywhere this change names it.
 
 Rule core.10's details gain the case. Ruled out: a preview let go, by

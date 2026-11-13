@@ -5575,7 +5575,7 @@ fn release(f: &Fakes, args: &[&str]) -> (i32, String) {
 /// 94, 95: the worktree's runs leave its place equipped; `sluice release`
 /// releases it under the release command its branch's policy states now,
 /// and a release runs the policy's release command each time it is asked,
-/// held or not (record 0112).
+/// held or not (record 0120).
 #[test]
 fn release_runs_the_policys_release_command_once() {
     let f = setup_releasing();
@@ -5621,7 +5621,7 @@ fn release_runs_the_policys_release_command_once() {
 
     // Released again: sluice holds nothing for it now, and the release
     // command runs all the same, read from the default branch (record
-    // 0112).
+    // 0120).
     let (code, out) = release(&f, &["--worktree", "unit/a"]);
     assert_eq!(
         (code, out.as_str()),

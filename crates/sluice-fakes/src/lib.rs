@@ -2685,7 +2685,7 @@ impl Checkout for FakeCheckout {
             _ => None,
         });
         if !self.0 .0.borrow().adopted.iter().any(|a| a == name) {
-            // Record 0112: a worktree of the world's it holds nothing for
+            // Record 0120: a worktree of the world's it holds nothing for
             // is released by the policy's release command all the same,
             // and nothing is kept for it, passed or failed.
             let worktree = name.strip_prefix("session/").unwrap_or(name);

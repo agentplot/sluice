@@ -798,7 +798,7 @@ struct EngineState {
     open: bool,
 }
 
-/// A fake container engine (record 0119): `GET /_ping` answers `200`;
+/// A fake container engine (record 0121): `GET /_ping` answers `200`;
 /// `GET /containers/json?all=true` the containers it holds, less those
 /// removed; `DELETE /containers/<id>?force=true&v=true` removes one and
 /// answers `204`, `404` for one it does not hold, or [`REFUSED`] while

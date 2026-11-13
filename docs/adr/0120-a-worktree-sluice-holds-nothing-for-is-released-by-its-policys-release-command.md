@@ -1,5 +1,5 @@
 ---
-number: 112
+number: 120
 title: A worktree sluice holds nothing for is released by its policy's release command
 status: accepted
 date: 2026-11-11
