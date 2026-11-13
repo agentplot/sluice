@@ -24,7 +24,7 @@ ADR 0010 left a candidate's checks to bring up what they need, on ports they pic
 
 ## Decision outcome
 
-Option 3. `[checkout] ports` names the ports a candidate's stack uses. The place seam holds a block of ports for the place on the host, across repositories, with every port of the block checked free, and gives each name a fixed position in it: `ports_from + block × names + position`, `ports_from` 20000 by default, above `hash_port`'s range. The place carries `SLUICE_PLACE` and a `SLUICE_PORT_<NAME>` for each name into its runs. A block is never held by two places at once, so two candidates never collide, where a hash can; a name's port is the same for the place's whole life.
+Option 3. `[checkout] ports` names the ports a candidate's stack uses. The place seam holds a block of ports for the place on the host, across repositories, with every port of the block checked free, and gives each name a fixed position in it: `ports_from + block × names + position`, `ports_from` 20000 by default, above `hash_port`'s range. The place carries `SLUICE_PLACE` and a `SLUICE_PORT_<NAME>` for each name into its runs. A block is never held by two places at once, so two candidates never collide, where a hash can; a name's port is the same for the place's whole life. (Amended 2026-11-13: what a place holds is its ports themselves, below.)
 
 `[tests] release` names a command the check seam runs in the place, under the same executor, limits and environment as the checks, whenever the core releases the place: after a pass, a failure, a time limit, or a run found dead by a later round. It removes what the checks started outside their process group. It runs under the executor because it is the candidate's own code, as worktrunk's hooks were when ADR 0013 refused them.
 
@@ -38,3 +38,12 @@ Option 1 cannot wire separate systems together. Option 2 collides by chance and 
 - Supersedes ADR 0010's "on ports they pick"; its decisions on services, the operator's word and the submit gate stand.
 - A repository's stack is started by its own tools, devenv's processes with their readiness checks, from a moon task the checks depend on; sluice runs moon as before.
 - The release command runs once per place release and may run again after a crash, so it must be safe to repeat.
+
+## Amendment of 2026-11-13: a place holds its ports themselves, not a block's number
+
+agentplot-design's, drawn from clauses 31 and 32 and this record's own guarantee that two places never collide. On chuck-herdr-alpha under sluice 0.93.2, one port, 20285, went to two live places at once, a run of switchboard-kit's #2024 and the place of #2025, and 19 of 190 release tests failed with no code at fault (signal 2026-11-13-swb-2-conductor-5fe85d76/01, wldn's). The host held block numbers, one numbering for every repository and branch, while each place reckoned its block's ports from its own policy's count of names. Policies that list different numbers of ports, two revisions of one repository's or two repositories', give overlapping ranges for different numbers: at 21 names block 7 is 20147 to 20167, and at 19 names block 8 is 20152 to 20170. The check that each port is free catches the overlap only once the other place's stack is listening.
+
+- **A place holds its ports.** What the host records for a live place is each port it holds, and a new place takes the lowest run of as many ports as its policy names in which no port is held by a live place and each is free. Two live places never hold one port, whatever their policies list.
+- **Fixed when the place is made.** A place's ports are recorded with the place when it is made, and every later reading of them, its runs', its release's and a status's, reads that record and never reckons them again from a policy. A policy's change takes effect for places made after it.
+- Keeping a block numbering with one size for the whole host was the other path: every repository on the host would have to list ports within that size, and a policy listing more would be refused or overlap.
+- Rule core.10 is amended to match.
