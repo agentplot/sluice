@@ -13,7 +13,21 @@ herdr plugin install agentplot/sluice/plugins/herdr --ref v<version>
 
 Install it at the tag of the sluice you run (`sluice --version`), so the
 plugin and the binary are one release; at a new release, install it again
-at the new tag. Needs herdr 0.9.3 or later and `jq` on `PATH`, on Linux or
+at the new tag.
+
+A host that installs sluice by its flake links the flake's `herdr-plugin`
+instead, which the flake builds from the same revision as the sluice it
+gives, so one pin of the flake moves the binary and the plugin together:
+
+```sh
+herdr plugin link <path>
+```
+
+`<path>` is the store path of `packages.<system>.herdr-plugin` from the
+flake input that gives the host its sluice; link it again when that pin
+moves. Take one way: the plugin installed at a tag or the flake's linked.
+
+Needs herdr 0.9.3 or later and `jq` on `PATH`, on Linux or
 macOS. It reads everything from `sluice overview --watch --json`,
 run once in each repository with sluice's records that a pane of any of
 your herdr servers is in, and does nothing elsewhere. One watcher does
