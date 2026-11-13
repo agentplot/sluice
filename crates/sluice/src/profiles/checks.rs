@@ -74,6 +74,10 @@ use crate::instance::{HostCache, Instance};
 use crate::runs::{Ended, Request, RunState, Runs};
 use crate::sessions::Sessions;
 
+mod engine;
+
+pub use engine::{end_containers, PLACE_LABEL};
+
 /// What a run's place, environment and toolchain are, for a runner.
 pub struct Context<'a> {
     pub request: &'a RunRequest,
@@ -1304,14 +1308,20 @@ fn ping(socket: &Path) -> Result<(), String> {
             None if status.trim().is_empty() => Err("closed the connection unanswered".into()),
             None => Err(format!("answered {:?}", status.trim())),
         },
-        Err(e) => Err(match e.kind() {
-            std::io::ErrorKind::ConnectionRefused => "refused the connection".into(),
-            std::io::ErrorKind::PermissionDenied => "refused this user".into(),
-            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => {
-                format!("gave no answer within {wait}")
-            }
-            _ => e.to_string(),
-        }),
+        Err(e) => Err(io_words(&e, &wait)),
+    }
+}
+
+/// What a failed read or write on an engine's unix socket did, in words,
+/// an answer waited for up to `wait`.
+fn io_words(e: &std::io::Error, wait: &str) -> String {
+    match e.kind() {
+        std::io::ErrorKind::ConnectionRefused => "refused the connection".into(),
+        std::io::ErrorKind::PermissionDenied => "refused this user".into(),
+        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => {
+            format!("gave no answer within {wait}")
+        }
+        _ => e.to_string(),
     }
 }
 
@@ -1336,20 +1346,27 @@ fn ping_tcp(host: &str, port: u16, tls: Option<&EngineTls>) -> Result<(), String
     match agent.get(&format!("{scheme}://{host}:{port}/_ping")).call() {
         Ok(r) if r.status() == 200 => Ok(()),
         Ok(r) => Err(format!("answered {}", r.status())),
-        Err(e) => Err(match e {
-            ureq::Error::Io(io) if io.kind() == std::io::ErrorKind::ConnectionRefused => {
-                "refused the connection".into()
-            }
-            ureq::Error::ConnectionFailed => "refused the connection".into(),
-            ureq::Error::Timeout(ureq::Timeout::Resolve | ureq::Timeout::Connect) => {
-                format!("took no connection within {wait}")
-            }
-            ureq::Error::Timeout(_) => format!("gave no answer within {wait}"),
-            ureq::Error::HostNotFound => "names no host that resolves".into(),
-            // A TLS failure is told in TLS's own words.
-            ureq::Error::Io(io) => io.to_string(),
-            other => other.to_string(),
-        }),
+        Err(e) => Err(tcp_words(e, &wait)),
+    }
+}
+
+/// What a failed call to an engine at a TCP address did, in words, an
+/// answer waited for up to `wait` once [`ENGINE_WAIT`] gave the
+/// connection.
+fn tcp_words(e: ureq::Error, wait: &str) -> String {
+    match e {
+        ureq::Error::Io(io) if io.kind() == std::io::ErrorKind::ConnectionRefused => {
+            "refused the connection".into()
+        }
+        ureq::Error::ConnectionFailed => "refused the connection".into(),
+        ureq::Error::Timeout(ureq::Timeout::Resolve | ureq::Timeout::Connect) => {
+            format!("took no connection within {}s", ENGINE_WAIT.as_secs())
+        }
+        ureq::Error::Timeout(_) => format!("gave no answer within {wait}"),
+        ureq::Error::HostNotFound => "names no host that resolves".into(),
+        // A TLS failure is told in TLS's own words.
+        ureq::Error::Io(io) => io.to_string(),
+        other => other.to_string(),
     }
 }
 

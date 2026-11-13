@@ -254,6 +254,10 @@ pub struct CheckedOut {
 /// branch's current revision (56, 95).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReleasePolicy {
+    /// The branch the policy was read from: the one a held place's runs
+    /// were held to, or, for a worktree sluice holds nothing for, the
+    /// repository's default branch (record 0120).
+    pub branch: String,
     pub tests: Settings,
     pub limits: Limits,
 }
@@ -301,7 +305,10 @@ pub struct GoneRelease {
 /// How a session's place was released.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Released {
-    /// No such place: nothing to release.
+    /// Nothing to release: no such place and no policy given, a folder
+    /// that is no worktree of the repository, or a policy that names no
+    /// release command for a worktree sluice holds nothing for (record
+    /// 0120).
     Nothing,
     /// Under the policy given.
     Policy,
@@ -322,17 +329,24 @@ pub trait Checkout {
     fn release(&self, name: &str) -> Result<()>;
 
     /// 123: whether the working copy of the place `name` is gone: its
-    /// record names one, and that path is no directory. A place with no
-    /// record, or one recorded before its checkout was made, is not gone:
-    /// `release` handles it. A read: nothing is written or released.
+    /// record names one, and that path is no directory, or, for a place
+    /// sluice made, a combination's checkout or a preview, a folder git no
+    /// longer lists as a worktree of the repository, whatever is left in
+    /// it (record 0115). A session's worktree is gone only once it is no
+    /// directory (rule core.16). A place with no record, or one recorded
+    /// before its checkout was made, is not gone: `release` handles it. A
+    /// reading that fails is an error, never gone. A read: nothing is
+    /// written or released.
     fn gone(&self, name: &str) -> Result<bool>;
 
     /// 123: free what sluice itself holds for the place `name`, running
     /// nothing in its name: its runs' groups ended and their directories
-    /// removed, the checkout sluice made removed, its scratch directory,
-    /// its ports and its record let go, and a preview's names. No release
-    /// command runs; a session's worktree is left as it is (25, rule
-    /// core.16). Nothing when there is no such place.
+    /// removed, the checkout sluice made removed, by git where git lists
+    /// it, and otherwise what is left of its folder by sluice, a directory
+    /// its owner cannot write made writable first (record 0115); its
+    /// scratch directory, its ports and its record let go, and a preview's
+    /// names. No release command runs; a session's worktree is left as it
+    /// is (25, rule core.16). Nothing when there is no such place.
     fn free(&self, name: &str) -> Result<()>;
 
     /// 123: release the place `name`, whose working copy is gone, from
@@ -378,6 +392,16 @@ pub trait Checkout {
     /// carried it, remove its scratch directory and let its ports go. The
     /// worktree is left as it is (25, rule core.16). A release that fails
     /// keeps the place with what failed, held: no round releases it (123).
+    ///
+    /// A name with no record, given a policy, whose folder is the
+    /// repository's main worktree or a linked worktree git lists, detached
+    /// or not, is released all the same, by the path a held place's
+    /// release takes: a record and a scratch of the release's own, no
+    /// ports, the policy's release command run, and the record and scratch
+    /// let go once it ends, whether it passed or failed, so nothing is
+    /// kept for the worktree (95; rule core.10; record 0120). Given no
+    /// policy, or a folder that is no worktree of the repository, such a
+    /// name has nothing to release.
     fn release_session(&self, name: &str, policy: Option<&ReleasePolicy>) -> Result<Released>;
 
     /// Session-runs-1 clause 97: every session's place the repository

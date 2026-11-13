@@ -446,10 +446,12 @@ impl Sluice<'_> {
             .ok_or_else(|| anyhow!("no branch {branch}"))?;
         Ok(match self.policy_at(&rev)? {
             Some(p) => ReleasePolicy {
+                branch: branch.into(),
                 tests: p.tests,
                 limits: p.limits,
             },
             None => ReleasePolicy {
+                branch: branch.into(),
                 tests: Default::default(),
                 limits: Default::default(),
             },

@@ -84,6 +84,10 @@ fn a_preview_gets_the_hosts_cache_environment() {
         ),
     )
     .unwrap();
+    // Record 0121: its release ends its containers at this engine of its
+    // own, never the host's.
+    let engine_dir = support::Scratch::short();
+    let engine = support::containers_engine(engine_dir.path());
     let sluice = |args: &[&str]| {
         support::isolated(&mut std::process::Command::new(env!(
             "CARGO_BIN_EXE_sluice"
@@ -92,6 +96,10 @@ fn a_preview_gets_the_hosts_cache_environment() {
         .current_dir(repo.dir())
         .env("XDG_CONFIG_HOME", config.path())
         .env("XDG_STATE_HOME", state.path())
+        .env(
+            sluice::profiles::checks::ENGINE_SOCKETS_VAR,
+            engine.socket(),
+        )
         .env_remove("SLUICE_AGENT")
         .env_remove("SLUICE_OTEL")
         .env_remove("GIT_DIR")
@@ -112,9 +120,11 @@ fn a_preview_gets_the_hosts_cache_environment() {
     let out = sluice(&["release", doc["name"].as_str().unwrap()]);
     assert!(
         out.status.success(),
-        "{}",
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
+    assert_eq!(engine.listings(), 1, "its release asked its own engine");
 }
 
 /// The arguments: a branch and a revision; `previews`; `release` with a

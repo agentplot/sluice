@@ -49,6 +49,16 @@
 //! release started first, so a free that fails part way and is tried
 //! again runs nothing.
 //!
+//! A candidate's or a preview's place is gone too where git no longer
+//! lists its folder as a worktree of the repository, as git leaves a
+//! folder whose removal it stopped part way; git's list is read from the
+//! repository's files, the folder matched by what it is on disk and not
+//! by how its path is spelled, with no process started. sluice removes
+//! what is left of such a folder itself, since git refuses to; a folder
+//! git lists goes by `git worktree remove`. A session's place is gone
+//! only once its worktree is no directory (record 0115; rules core.16,
+//! core.20).
+//!
 //! A preview (previews-1 clauses 98 to 101) is a place made as a
 //! candidate's is, at a revision its branch has landed, and released only
 //! when asked, or by the core when its command failed; one whose checkout
@@ -60,6 +70,18 @@
 //! the repository's previews (99). A preview released because its
 //! command failed keeps its record, holding nothing, with what the command
 //! printed, until it is released again.
+//!
+//! However a preview is let go, released or freed, the containers the
+//! host's engine holds for it end between its release command, where one
+//! runs, and its checkout's removal, while it still holds its ports and
+//! names (34; previews-1 clause 101; record 0121; rule core.10): those
+//! that mount its checkout or scratch, publish one of its ports, or carry
+//! its `SLUICE_PLACE` as their `sluice.place` label. The end is the check
+//! seam's, a [`ContainerEnd`] the binding hands this profile. A container
+//! it cannot remove keeps the preview whole: a release keeps the failure
+//! as a failing release command's, and a free fails before it lets
+//! anything go, so a gone preview is freed only once its containers end,
+//! its stored release never run again.
 //!
 //! What made each place is recorded before the place is made, at
 //! `<common>/sluice/.places/<name>.json`, so `release` needs no policy and
@@ -108,6 +130,10 @@ use crate::runs::{dir_name, flat_name, ReleaseWith, Request, Runs, SESSION};
 /// toolchain and the executor need in the directory given: the check
 /// seam's, handed to this profile by the binding (rule core.2).
 pub type ReleaseBuilder = Box<dyn Fn(&Place, &Settings, &Limits, &Path) -> Result<Option<Request>>>;
+
+/// Ends what the engine holds for a place: the check seam's, handed to
+/// this profile by the binding (rule core.2; record 0121).
+pub type ContainerEnd = Box<dyn Fn(&Place) -> Result<()>>;
 
 /// Whose a place is.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -625,6 +651,9 @@ pub struct Places {
     scratch_root: Option<PathBuf>,
     /// How a session's place's release command is built from its policy.
     release: Option<ReleaseBuilder>,
+    /// How a preview's containers are ended (record 0121); none ended when
+    /// `None`.
+    containers: Option<ContainerEnd>,
     /// The repository at its common directory, as gix reads it, once
     /// opened: its worktrees, read with no process (129).
     repo: std::cell::OnceCell<gix::Repository>,
@@ -640,6 +669,7 @@ impl Places {
             blocks: None,
             scratch_root: None,
             release: None,
+            containers: None,
             repo: std::cell::OnceCell::new(),
             key: std::cell::OnceCell::new(),
         }
@@ -660,6 +690,24 @@ impl Places {
     pub fn with_release(mut self, builder: ReleaseBuilder) -> Self {
         self.release = Some(builder);
         self
+    }
+
+    /// End a preview's containers with `end` whenever it is let go
+    /// (record 0121).
+    pub fn with_containers(mut self, end: ContainerEnd) -> Self {
+        self.containers = Some(end);
+        self
+    }
+
+    /// 34, previews-1 clause 101, record 0121: end the containers the
+    /// preview `name`, as its record `made` holds it, left, by the place
+    /// its command was given; nothing where no end was handed this
+    /// profile.
+    fn end_containers(&self, name: &str, made: &Made) -> Result<()> {
+        match &self.containers {
+            Some(end) => end(&self.preview_run_place(name, made)?),
+            None => Ok(()),
+        }
     }
 
     /// The session's place of `worktree`: its canonical path and its name.
@@ -695,17 +743,18 @@ impl Places {
         })
     }
 
-    /// A preview as its record holds it.
-    fn preview_place(&self, name: &str, made: &Made) -> PreviewPlace {
+    /// A preview as its record holds it: gone, while its command has not
+    /// failed, as a candidate's place is ([`Places::folder_gone`]).
+    fn preview_place(&self, name: &str, made: &Made) -> Result<PreviewPlace> {
         let path = made
             .path
             .clone()
             .unwrap_or_else(|| self.worktree_path(name));
-        PreviewPlace {
+        Ok(PreviewPlace {
             name: name.into(),
             branch: made.branch.clone().unwrap_or_default(),
             revision: made.revision.clone().unwrap_or_else(|| Rev::new("")),
-            gone: made.failed.is_none() && !path.is_dir(),
+            gone: made.failed.is_none() && self.folder_gone(&path)?,
             path,
             ports: made.ports.clone(),
             names: made.names.clone(),
@@ -714,7 +763,7 @@ impl Places {
             run: made.run.clone().map(RunHandle),
             failed: made.failed.clone(),
             release_failed: made.release_failed.clone(),
-        }
+        })
     }
 
     /// The place a preview's command runs in, as its record names it.
@@ -860,6 +909,164 @@ impl Places {
                 "keeping a failed release on its place failed: {k:#}"
             );
         }
+    }
+
+    /// Session-runs-1 clause 95: release the session's place `name`, held
+    /// as its record `made` says: every run in it ended, the release
+    /// command run once, as `policy` states it or, given none, as its last
+    /// run carried it, then its scratch, ports and record let go. A release
+    /// that fails keeps the place, held (123).
+    fn release_held(
+        &self,
+        name: &str,
+        made: &Made,
+        policy: Option<&ReleasePolicy>,
+    ) -> Result<Released> {
+        if made.kind != Kind::Session {
+            bail!("place {name} is a candidate's, not a session's");
+        }
+        let released = (|| {
+            // 95: the policy's release command, built now, under the
+            // executor its runs had; the last run's only when no policy is
+            // given.
+            let (with, released) = match policy {
+                None => (ReleaseWith::LastRun, Released::LastRun),
+                Some(p) => {
+                    let place = self.session_place(name, made)?;
+                    let request = self.build_release(&place, p, name)?;
+                    (ReleaseWith::Fresh(request), Released::Policy)
+                }
+            };
+            self.runs.remove_all_with(name, with)?;
+            self.let_go(name, Some(made))?;
+            Ok(released)
+        })();
+        // 123: held at once: no round releases a session's place (25).
+        if let Err(e) = &released {
+            self.keep_failure(name, e, |_| true);
+        }
+        released
+    }
+
+    /// Session-runs-1 clause 95, rule core.10, record 0120: release `name`,
+    /// a session's place with no record, under `policy`, where its folder
+    /// is a worktree of the repository: by the path a held place's release
+    /// takes, with a record and a scratch of the release's own, the
+    /// policy's branch on it and no ports, so the scratch is named while it
+    /// exists (rule core.30) and the release is given the `SLUICE_PLACE` a
+    /// run there is. Both are let go once the release ends, whether it
+    /// passed or failed, so nothing is kept for the worktree and a release
+    /// asked again runs again. A policy that names no release command, a
+    /// folder that has gone and one that is no worktree of the repository,
+    /// another repository's among them, have nothing to release.
+    fn release_unheld(&self, name: &str, policy: &ReleasePolicy) -> Result<Released> {
+        let Some(folder) = name.strip_prefix(SESSION) else {
+            return Ok(Released::Nothing);
+        };
+        let Ok((path, _)) = Places::session_name(folder) else {
+            return Ok(Released::Nothing);
+        };
+        if !self.listed(&path)? {
+            return Ok(Released::Nothing);
+        }
+        let made = {
+            let lock = self.lock_records()?;
+            if let Some(made) = self.read_record(name)? {
+                // Adopted meanwhile: held now, and released as held.
+                drop(lock);
+                return self.release_held(name, &made, Some(policy));
+            }
+            let made = Made {
+                branch: Some(policy.branch.clone()),
+                path: Some(path),
+                scratch: Some(self.new_scratch(name)?),
+                ..Made::new(Kind::Session, "session")
+            };
+            self.write_record(name, &made)?;
+            made
+        };
+        let released = (|| {
+            self.make_scratch(&self.scratch(name, &made))?;
+            let place = self.session_place(name, &made)?;
+            let Some(request) = self.build_release(&place, policy, name)? else {
+                return Ok(Released::Nothing);
+            };
+            self.runs
+                .remove_all_with(name, ReleaseWith::Fresh(Some(request)))?;
+            Ok(Released::Policy)
+        })();
+        // Record 0120: nothing kept for it, passed or failed; a failed
+        // release's run is no hold either.
+        if released.is_err() {
+            if let Err(e) = self.runs.discard_all(name) {
+                tracing::warn!(
+                    sluice.place = name,
+                    "removing a failed release's run failed: {e:#}"
+                );
+            }
+        }
+        let freed = self.let_go(name, Some(&made));
+        match (released, freed) {
+            (Err(e), Err(f)) => {
+                tracing::warn!(
+                    sluice.place = name,
+                    "letting go of a failed release's record failed: {f:#}"
+                );
+                Err(e)
+            }
+            (released, freed) => freed.and(released),
+        }
+    }
+
+    /// 95: the release of `place`, the session's place `name`, as `policy`
+    /// states it, built by the check seam's builder; `None` where the
+    /// policy names no release command.
+    fn build_release(
+        &self,
+        place: &Place,
+        policy: &ReleasePolicy,
+        name: &str,
+    ) -> Result<Option<Request>> {
+        let build = self
+            .release
+            .as_ref()
+            .ok_or_else(|| anyhow!("no release command builder is bound"))?;
+        build(
+            place,
+            &policy.tests,
+            &policy.limits,
+            &self.runs.release_dir(name),
+        )
+    }
+
+    /// Records 0120 and 0115: whether git lists the folder `path` as one
+    /// of the repository's worktrees, detached or not: its main worktree
+    /// where it has one, or the folder an entry under `<common>/worktrees/`
+    /// names. Read from the repository's files as `git worktree list` reads
+    /// them, with no process started and no object read (129; rule
+    /// core.31), each folder matched by what it is on disk ([`Folder`]),
+    /// never by how its path is spelled. An entry whose `gitdir` file
+    /// cannot be read, or whose folder cannot be, names nothing; worktrees
+    /// that cannot be listed and a `path` that cannot be read are an error,
+    /// never read as unlisted.
+    fn listed(&self, path: &Path) -> Result<bool> {
+        let want = Folder::of(path).with_context(|| format!("reading {}", path.display()))?;
+        let repo = self.repo()?;
+        let is = |dir: &Path| Folder::of(dir).is_ok_and(|f| f == want);
+        if !repo.is_bare() && repo.workdir().is_some_and(is) {
+            return Ok(true);
+        }
+        let linked = repo
+            .worktrees()
+            .map_err(|e| anyhow!("listing the worktrees: {e}"))?;
+        Ok(linked.into_iter().any(|w| w.base().is_ok_and(|b| is(&b))))
+    }
+
+    /// 123, record 0115: whether the folder `path` of a place sluice made,
+    /// a candidate's or a preview's, is gone: no directory, or one git no
+    /// longer lists as a worktree, whatever is left in it.
+    fn folder_gone(&self, path: &Path) -> Result<bool> {
+        Ok(!path.is_dir() || !self.listed(path)?)
     }
 
     /// Hold blocks of ports in `dir` rather than the host's own.
@@ -1242,9 +1449,21 @@ impl Places {
         }
     }
 
+    /// 34, record 0115: remove the folder `path` of a place sluice made, a
+    /// candidate's or a preview's, which is all it is ever given (rule
+    /// core.20). A folder git lists goes by `git worktree remove --force`,
+    /// whether or not it is still there. One git no longer lists, as git
+    /// leaves a folder whose removal it stopped part way and then refuses,
+    /// goes by sluice's own removal ([`remove_leftover`]); nothing where it
+    /// is not there either.
     fn remove_worktree(&self, path: &Path) -> Result<()> {
-        if !path.exists() && !self.registered(path)? {
-            return Ok(());
+        if !self.listed(path)? {
+            return remove_leftover(path).with_context(|| {
+                format!(
+                    "removing what is left of {}, which git no longer lists as a worktree",
+                    path.display()
+                )
+            });
         }
         let out = self.git(&[
             "worktree",
@@ -1262,18 +1481,97 @@ impl Places {
         }
         Ok(())
     }
+}
 
-    /// Whether git lists `path` as one of the repository's worktrees.
-    fn registered(&self, path: &Path) -> Result<bool> {
-        let out = self.git(&["worktree", "list", "--porcelain", "-z"])?;
-        if !out.status.success() {
-            bail!(
-                "git worktree list: {}",
-                String::from_utf8_lossy(&out.stderr).trim()
-            );
+/// A folder as it is on disk, whatever spells its path: the device and
+/// inode of the folder, or, where it no longer exists, of its nearest
+/// ancestor that does, with the rest of its path below that ancestor. So
+/// `/var/…` and `/private/var/…`, or a path spelled through a link, are
+/// one folder, and a folder deleted is still the one its entry names
+/// (record 0115).
+#[derive(Debug, PartialEq, Eq)]
+struct Folder {
+    dev: u64,
+    ino: u64,
+    rest: PathBuf,
+}
+
+impl Folder {
+    fn of(path: &Path) -> std::io::Result<Folder> {
+        use std::os::unix::fs::MetadataExt as _;
+        let mut at = path;
+        let mut rest: Vec<&std::ffi::OsStr> = Vec::new();
+        loop {
+            // The folder itself is not followed, as git never follows it; an
+            // ancestor is, since the rest of the path is reached through it.
+            let meta = if rest.is_empty() {
+                std::fs::symlink_metadata(at)
+            } else {
+                std::fs::metadata(at)
+            };
+            match meta {
+                Ok(m) => {
+                    return Ok(Folder {
+                        dev: m.dev(),
+                        ino: m.ino(),
+                        rest: rest.iter().rev().collect(),
+                    })
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    let (Some(parent), Some(name)) = (at.parent(), at.file_name()) else {
+                        return Err(e);
+                    };
+                    rest.push(name);
+                    at = if parent.as_os_str().is_empty() {
+                        Path::new(".")
+                    } else {
+                        parent
+                    };
+                }
+                Err(e) => return Err(e),
+            }
         }
-        let want = format!("worktree {}", path.display());
-        Ok(out.stdout.split(|b| *b == 0).any(|f| f == want.as_bytes()))
+    }
+}
+
+/// Record 0115: remove `path`, what is left of a folder git no longer
+/// lists, walked without following links: each directory its owner cannot
+/// write, read or search is made so first, since a check can leave a tree
+/// read-only (a copy out of the Nix store, a module cache) and git's
+/// removal and `remove_dir_all` both fail on it; then each entry is
+/// removed, and the folder. A failure names the entry and what refused it.
+/// Nothing where `path`, or an entry of it, is not there.
+fn remove_leftover(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let gone = |e: &std::io::Error| e.kind() == std::io::ErrorKind::NotFound;
+    let meta = match std::fs::symlink_metadata(path) {
+        Ok(m) => m,
+        Err(e) if gone(&e) => return Ok(()),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+    };
+    if !meta.is_dir() {
+        return match std::fs::remove_file(path) {
+            Err(e) if !gone(&e) => Err(e).with_context(|| format!("removing {}", path.display())),
+            _ => Ok(()),
+        };
+    }
+    let mode = meta.permissions().mode();
+    if mode & 0o700 != 0o700 {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode | 0o700))
+            .with_context(|| format!("making {} its owner's to write", path.display()))?;
+    }
+    let entries = match std::fs::read_dir(path) {
+        Ok(e) => e,
+        Err(e) if gone(&e) => return Ok(()),
+        Err(e) => return Err(e).with_context(|| format!("listing {}", path.display())),
+    };
+    for entry in entries {
+        let entry = entry.with_context(|| format!("listing {}", path.display()))?;
+        remove_leftover(&entry.path())?;
+    }
+    match std::fs::remove_dir(path) {
+        Err(e) if !gone(&e) => Err(e).with_context(|| format!("removing {}", path.display())),
+        _ => Ok(()),
     }
 }
 
@@ -1490,16 +1788,30 @@ impl Checkout for Places {
     }
 
     fn gone(&self, name: &str) -> Result<bool> {
-        Ok(self
-            .read_record(name)?
-            .and_then(|m| m.path)
-            .is_some_and(|p| !p.is_dir()))
+        let Some(made) = self.read_record(name)? else {
+            return Ok(false);
+        };
+        let Some(path) = made.path.as_deref() else {
+            return Ok(false);
+        };
+        match made.kind {
+            // Record 0115: a session's worktree is no place sluice made, and
+            // is gone only once it is no directory (rule core.16).
+            Kind::Session => Ok(!path.is_dir()),
+            Kind::Made | Kind::Preview => self.folder_gone(path),
+        }
     }
 
     fn free(&self, name: &str) -> Result<()> {
         let made = self.read_record(name)?;
         // 123: everything started in it ends, and nothing runs in its
-        // name: no release command.
+        // name: no release command. Record 0121: a preview's containers
+        // end once its run has, while it holds its ports; one left keeps
+        // the preview whole, its run's directory with it.
+        if let Some(made) = made.as_ref().filter(|m| m.kind == Kind::Preview) {
+            self.runs.end_keeping(name)?;
+            self.end_containers(name, made)?;
+        }
         self.runs.discard(name)?;
         if let Some(made) = made.as_ref().filter(|m| m.kind != Kind::Session) {
             match made.method.as_str() {
@@ -1571,36 +1883,14 @@ impl Checkout for Places {
             if crate::runs::is_session(name) {
                 self.runs.remove_all_with(name, ReleaseWith::Fresh(None))?;
             }
-            return Ok(Released::Nothing);
-        };
-        if made.kind != Kind::Session {
-            bail!("place {name} is a candidate's, not a session's");
-        }
-        let released = (|| {
-            // 95: the policy's release command, built now, under the
-            // executor its runs had; the last run's only when no policy is
-            // given.
-            let (with, released) = match policy {
-                None => (ReleaseWith::LastRun, Released::LastRun),
-                Some(p) => {
-                    let build = self
-                        .release
-                        .as_ref()
-                        .ok_or_else(|| anyhow!("no release command builder is bound"))?;
-                    let place = self.session_place(name, &made)?;
-                    let request = build(&place, &p.tests, &p.limits, &self.runs.release_dir(name))?;
-                    (ReleaseWith::Fresh(request), Released::Policy)
-                }
+            // Record 0120: a worktree sluice holds nothing for is released
+            // by the policy's release command all the same.
+            return match policy {
+                Some(p) => self.release_unheld(name, p),
+                None => Ok(Released::Nothing),
             };
-            self.runs.remove_all_with(name, with)?;
-            self.let_go(name, Some(&made))?;
-            Ok(released)
-        })();
-        // 123: held at once: no round releases a session's place (25).
-        if let Err(e) = &released {
-            self.keep_failure(name, e, |_| true);
-        }
-        released
+        };
+        self.release_held(name, &made, policy)
     }
 
     fn session_places(&self) -> Result<Vec<SessionPlace>> {
@@ -1783,7 +2073,7 @@ impl Checkout for Places {
             }
             return Ok((
                 self.preview_run_place(name, &made)?,
-                self.preview_place(name, &made),
+                self.preview_place(name, &made)?,
             ));
         }
         one_method(checkout)?;
@@ -1837,7 +2127,7 @@ impl Checkout for Places {
         self.write_record(name, &made)?;
         Ok((
             self.preview_run_place(name, &made)?,
-            self.preview_place(name, &made),
+            self.preview_place(name, &made)?,
         ))
     }
 
@@ -1851,11 +2141,10 @@ impl Checkout for Places {
     }
 
     fn previews(&self) -> Result<Vec<PreviewPlace>> {
-        Ok(self
-            .preview_records()?
+        self.preview_records()?
             .iter()
             .map(|(name, made)| self.preview_place(name, made))
-            .collect())
+            .collect()
     }
 
     fn release_preview(&self, name: &str, failed: Option<&str>, retries: u32) -> Result<bool> {
@@ -1868,9 +2157,17 @@ impl Checkout for Places {
             bail!("place {name} is not a preview");
         }
         // 34: everything started in it ends, its release command included
-        // (ADR 0016), before its checkout goes; 123: a release command that
-        // fails keeps the preview, held once its tries are spent.
-        if let Err(e) = self.runs.remove(name) {
+        // (ADR 0016), then the containers it left (record 0121), before its
+        // run's directory, its checkout and its ports go; 123: a release
+        // command that fails, or a container left, keeps the preview, held
+        // once its tries are spent, and a later try runs no release command
+        // that finished.
+        if let Err(e) = self
+            .runs
+            .release_keeping(name)
+            .and_then(|()| self.end_containers(name, &made))
+            .and_then(|()| self.runs.remove(name))
+        {
             self.keep_failure(name, &e, |tries| tries > retries);
             return Err(e);
         }

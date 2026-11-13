@@ -5574,7 +5574,8 @@ fn release(f: &Fakes, args: &[&str]) -> (i32, String) {
 
 /// 94, 95: the worktree's runs leave its place equipped; `sluice release`
 /// releases it under the release command its branch's policy states now,
-/// and a second release finds nothing.
+/// and a release runs the policy's release command each time it is asked,
+/// held or not (record 0120).
 #[test]
 fn release_runs_the_policys_release_command_once() {
     let f = setup_releasing();
@@ -5618,16 +5619,40 @@ fn release_runs_the_policys_release_command_once() {
     );
     assert!(f.world.adopted_places().is_empty());
 
+    // Released again: sluice holds nothing for it now, and the release
+    // command runs all the same, read from the default branch (record
+    // 0120).
     let (code, out) = release(&f, &["--worktree", "unit/a"]);
-    assert_eq!((code, out.as_str()), (0, "nothing to release\n"));
+    assert_eq!(
+        (code, out.as_str()),
+        (
+            0,
+            "released unit/a: its runs ended, the release command run, its ports free\n"
+        )
+    );
+    assert_eq!(f.world.session_releases().len(), 2);
     let (code, out) = release(&f, &["--worktree", "unit/a", "--json"]);
     assert_eq!(code, 0);
     assert_eq!(
         json(&out),
-        serde_json::json!({"worktree": "unit/a", "released": false})
+        serde_json::json!({"worktree": "unit/a", "released": true})
     );
-    assert_eq!(f.world.session_releases().len(), 1);
-    // A worktree that never ran has nothing to release.
+    assert_eq!(
+        f.world.session_releases()[1..],
+        [
+            (
+                "session/unit/a".to_string(),
+                Some("sh teardown.sh".to_string())
+            ),
+            (
+                "session/unit/a".to_string(),
+                Some("sh teardown.sh".to_string())
+            )
+        ]
+    );
+    assert!(f.world.adopted_places().is_empty());
+    // A folder that is no worktree of the repository has nothing to
+    // release.
     let (code, out) = release(&f, &["--worktree", "unit/none"]);
     assert_eq!((code, out.as_str()), (0, "nothing to release\n"));
 }

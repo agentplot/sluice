@@ -38,7 +38,16 @@ timeout = "10m"                    # default: the branch's timeout
 
 - With no `[preview]` table at a revision, that revision cannot be previewed.
 - The release command must remove what the command handed off, routes
-  included, or released previews leave stacks behind.
+  included, or released previews leave stacks behind. After it, however the
+  preview goes, sluice removes what it left in the host's container engine
+  by three marks: a container that mounts the checkout or `SLUICE_TMP`, one
+  that publishes one of the preview's ports, and one labelled
+  `sluice.place=$SLUICE_PLACE`. A container with none of the three, one
+  reached only on the engine's own network, needs that label, or it
+  outlives a preview whose release command never ran: one whose checkout
+  was removed by hand, or whose failed release was accepted.
+- A container sluice cannot remove keeps the preview and its ports, and
+  `sluice release` names it.
 - `[tests] release` is every place's release command: it runs after each
   candidate's checks and at an agent's worktree's release too, where no
   `SLUICE_NAME_<NAME>` is set. Default each name as the command does, or under

@@ -172,12 +172,17 @@ impl Bound {
         let host = instance.peers.name.clone().unwrap_or_else(checks::hostname);
         Ok(Bound {
             // A session's place's release command is the check seam's to
-            // build; the binding hands the builder over (rule core.2).
+            // build, and the end of a preview's containers the check seam's
+            // to make, at each engine a run's is looked for at; the binding
+            // hands both over (rule core.2; record 0121).
             checkout: {
                 let places =
                     places::Places::new(&common, crate::runs::Runs::new(&common, program.clone()))
                         .with_release(Box::new(move |place, tests, limits, dir| {
                             checks::release_request(place, tests, limits, jobs, &caches, dir)
+                        }))
+                        .with_containers(Box::new(|place| {
+                            checks::end_containers(&checks::engine_endpoints(), place)
                         }));
                 // 35 as amended: the tests' directory standing for the
                 // user's, where they name one.

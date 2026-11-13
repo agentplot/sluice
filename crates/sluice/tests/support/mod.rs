@@ -774,3 +774,247 @@ pub fn tls_engine(dir: &Path) -> u16 {
     });
     port
 }
+
+/// What [`Engine::refuse`] has the fake engine answer a removal it
+/// refuses: its status and its `message`.
+pub const REFUSED: (&str, &str) = (
+    "500 Internal Server Error",
+    "could not kill the container: the fake engine refuses it",
+);
+
+/// The containers a fake [`Engine`] holds, made at each listing.
+type Held = Box<dyn Fn() -> serde_json::Value + Send>;
+
+/// What a fake [`Engine`] holds and was asked.
+struct EngineState {
+    held: Held,
+    /// The ids removed, in order: no longer listed.
+    removed: Vec<String>,
+    /// The removals still to refuse, by id.
+    refuse: std::collections::BTreeMap<String, u32>,
+    /// How many times its containers were listed.
+    listings: u32,
+    /// Whether it answers as an engine that keeps each connection open.
+    open: bool,
+}
+
+/// A fake container engine (record 0121): `GET /_ping` answers `200`;
+/// `GET /containers/json?all=true` the containers it holds, less those
+/// removed; `DELETE /containers/<id>?force=true&v=true` removes one and
+/// answers `204`, `404` for one it does not hold, or [`REFUSED`] while
+/// [`Engine::refuse`] says; any other ask a `404`, or a `400` for a
+/// removal without both of its parameters. Each connection is answered
+/// as the engine answers HTTP/1.0, then closed, unless
+/// [`Engine::keep_open`] says otherwise.
+#[derive(Clone)]
+pub struct Engine {
+    socket: Option<PathBuf>,
+    port: Option<u16>,
+    state: std::sync::Arc<std::sync::Mutex<EngineState>>,
+}
+
+impl Engine {
+    fn new() -> Engine {
+        Engine {
+            socket: None,
+            port: None,
+            state: std::sync::Arc::new(std::sync::Mutex::new(EngineState {
+                held: Box::new(|| serde_json::json!([])),
+                removed: Vec::new(),
+                refuse: Default::default(),
+                listings: 0,
+                open: false,
+            })),
+        }
+    }
+
+    /// Hold `containers`, a list as `GET /containers/json` gives one.
+    pub fn hold(&self, containers: serde_json::Value) -> &Engine {
+        self.hold_with(move || containers.clone())
+    }
+
+    /// Hold the containers `make` makes, at each listing: for those that
+    /// depend on what a run wrote.
+    pub fn hold_with(&self, make: impl Fn() -> serde_json::Value + Send + 'static) -> &Engine {
+        self.state.lock().unwrap().held = Box::new(make);
+        self
+    }
+
+    /// Answer as one host's engine answers (2026-11-11): in HTTP/1.1
+    /// whatever was asked, a listing in chunks, a removal's `204` with no
+    /// length, and each connection held open after its answer until the
+    /// asker closes it.
+    pub fn keep_open(&self) -> &Engine {
+        self.state.lock().unwrap().open = true;
+        self
+    }
+
+    /// Refuse the next `times` removals of `id` with [`REFUSED`].
+    pub fn refuse(&self, id: &str, times: u32) -> &Engine {
+        self.state
+            .lock()
+            .unwrap()
+            .refuse
+            .insert(id.to_string(), times);
+        self
+    }
+
+    /// The ids removed, in order.
+    pub fn removed(&self) -> Vec<String> {
+        self.state.lock().unwrap().removed.clone()
+    }
+
+    /// How many times its containers were listed.
+    pub fn listings(&self) -> u32 {
+        self.state.lock().unwrap().listings
+    }
+
+    /// Its unix socket's path.
+    pub fn socket(&self) -> PathBuf {
+        self.socket.clone().expect("an engine on a unix socket")
+    }
+
+    /// Its local TCP port.
+    pub fn port(&self) -> u16 {
+        self.port.expect("an engine on a TCP port")
+    }
+
+    /// Answer one connection `c`.
+    fn answer(&self, c: &mut (impl std::io::Read + std::io::Write)) {
+        let mut asked = Vec::new();
+        let mut buf = [0u8; 512];
+        while !asked.windows(4).any(|w| w == b"\r\n\r\n") {
+            match c.read(&mut buf) {
+                Ok(0) | Err(_) => return,
+                Ok(n) => asked.extend_from_slice(&buf[..n]),
+            }
+        }
+        let line = String::from_utf8_lossy(&asked);
+        let mut words = line.split_whitespace();
+        let (method, target) = (words.next().unwrap_or(""), words.next().unwrap_or(""));
+        let message = |m: &str| serde_json::json!({ "message": m }).to_string();
+        let (status, body) = match (method, target.split_once('?')) {
+            ("GET", _) if target == "/_ping" => ("200 OK".to_string(), "OK".to_string()),
+            ("GET", Some(("/containers/json", "all=true"))) => {
+                let mut s = self.state.lock().unwrap();
+                s.listings += 1;
+                let held = (s.held)();
+                let listed: Vec<_> = held
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|c| !s.removed.iter().any(|r| c["Id"] == r.as_str()))
+                    .cloned()
+                    .collect();
+                ("200 OK".into(), serde_json::Value::from(listed).to_string())
+            }
+            ("DELETE", Some((path, query))) if path.starts_with("/containers/") => {
+                let id = &path["/containers/".len()..];
+                let mut s = self.state.lock().unwrap();
+                if query != "force=true&v=true" {
+                    ("400 Bad Request".into(), message(&format!("asked {query}")))
+                } else if s.refuse.get(id).is_some_and(|n| *n > 0) {
+                    *s.refuse.get_mut(id).unwrap() -= 1;
+                    (REFUSED.0.into(), message(REFUSED.1))
+                } else {
+                    let held = (s.held)();
+                    let holds = held.as_array().into_iter().flatten().any(|c| c["Id"] == id)
+                        && !s.removed.iter().any(|r| r == id);
+                    match holds {
+                        true => {
+                            s.removed.push(id.to_string());
+                            ("204 No Content".into(), String::new())
+                        }
+                        false => (
+                            "404 Not Found".into(),
+                            message(&format!("No such container: {id}")),
+                        ),
+                    }
+                }
+            }
+            _ => ("404 Not Found".into(), message("page not found")),
+        };
+        if !self.state.lock().unwrap().open {
+            let _ = write!(
+                c,
+                "HTTP/1.0 {status}\r\nApi-Version: 1.47\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = c.flush();
+            return;
+        }
+        let head = format!("HTTP/1.1 {status}\r\nApi-Version: 1.47\r\n");
+        let _ = match status.starts_with("204 ") {
+            true => write!(c, "{head}\r\n"),
+            false => {
+                let chunks: String = body
+                    .as_bytes()
+                    .chunks(7)
+                    .map(|b| format!("{:x}\r\n{}\r\n", b.len(), String::from_utf8_lossy(b)))
+                    .collect();
+                write!(
+                    c,
+                    "{head}Content-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n{chunks}0\r\n\r\n"
+                )
+            }
+        };
+        let _ = c.flush();
+        // Held until the asker closes it.
+        while matches!(c.read(&mut buf), Ok(n) if n > 0) {}
+    }
+}
+
+/// A fake [`Engine`] at `e.sock` in `dir`. Make `dir` with
+/// [`Scratch::short`]: a socket's path is at most 104 bytes on macOS.
+pub fn containers_engine(dir: &Path) -> Engine {
+    let path = dir.join("e.sock");
+    let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+    let engine = Engine {
+        socket: Some(path),
+        ..Engine::new()
+    };
+    let serving = engine.clone();
+    std::thread::spawn(move || {
+        for conn in listener.incoming() {
+            let Ok(mut c) = conn else { continue };
+            serving.answer(&mut c);
+        }
+    });
+    engine
+}
+
+/// A fake [`Engine`] on a local TCP port.
+pub fn tcp_containers_engine() -> Engine {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let engine = Engine {
+        port: Some(listener.local_addr().unwrap().port()),
+        ..Engine::new()
+    };
+    let serving = engine.clone();
+    std::thread::spawn(move || {
+        for conn in listener.incoming() {
+            let Ok(mut c) = conn else { continue };
+            serving.answer(&mut c);
+        }
+    });
+    engine
+}
+
+/// A container as the engine lists it: `id`, named `/<id>`, mounting each
+/// of `mounts`, publishing each of `ports` on the host, and labelled with
+/// each of `labels`.
+pub fn container(
+    id: &str,
+    mounts: &[&Path],
+    ports: &[u16],
+    labels: &[(&str, &str)],
+) -> serde_json::Value {
+    serde_json::json!({
+        "Id": id,
+        "Names": [format!("/{id}")],
+        "Image": "fake",
+        "Labels": labels.iter().map(|(k, v)| (k.to_string(), serde_json::Value::from(*v))).collect::<serde_json::Map<_, _>>(),
+        "Ports": ports.iter().map(|p| serde_json::json!({"IP": "0.0.0.0", "PrivatePort": 80, "PublicPort": p, "Type": "tcp"})).collect::<Vec<_>>(),
+        "Mounts": mounts.iter().map(|m| serde_json::json!({"Type": "bind", "Source": m, "Destination": "/mnt", "RW": true})).collect::<Vec<_>>(),
+    })
+}
