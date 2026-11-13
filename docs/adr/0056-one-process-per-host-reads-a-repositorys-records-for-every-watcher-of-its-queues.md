@@ -36,6 +36,6 @@ Option 2 couples two plugins and leaves a tab outside herdr as it is. Option 3 i
 ### Consequences
 
 - Clause 129 of the statement says this (A.8 Hosts); rule core.25 is drawn from it.
-- `sluice overview --watch` and `sluice wait` gain the lease and the follower path; a one-shot `sluice overview` reads the records itself as before.
+- `sluice overview --watch` and `sluice wait` gain the lease and the follower path; a one-shot `sluice overview` reads the records itself as before. (Amended by record 0093's amendment of 2026-11-13: a one-shot status, overview or forecast is answered from the host process's last reading too.)
 - The herdr plugin's own one-watcher lease becomes redundant and stays harmless.
 - The reader's document is written whole on each change, so a follower never reads part of one, as the herdr-watch spec already requires of its state files.
