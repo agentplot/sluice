@@ -9,9 +9,9 @@ decision-makers:
 
 # A queue's home and a run's life are written in its records before anything acts on them
 
-Status: accepted, agentplot-design's, as the redesign record 0117 calls for. The user's word that sluice is refactored, not patched, is record 0117's amendment of 2026-11-12: "We need to do a refactor".
+Status: accepted, agentplot-design's.
 
-Sources: the design review of sluice's main at `045cb7d0`, 2026-11-12 (https://claude.ai/artifact/Vz3Q9zgdTaxmxnZJ7pjF5D), on a queue's home decided by each process, a run's state with no one owner, and effects performed before the write that names them; records 0037, 0093, 0114, 0116 and 0117 with its amendment; agentplot-ops' readings of switchboard-kit's records on chuck-herdr-alpha, 2026-11-12 (a second #52 and #53, a round stalled on its lock, bolts moved between the host and GitHub, twelve unproven runs opened again whole and read as "testing 37m of 25m"); sluice's main at `49527985`: `crates/sluice-core/src/records.rs` (`RunState` is open, starting, testing, passed, failed or timed out; `no_replay` reopens a whole run) and `crates/sluice-core/src/step.rs`; the statement in agentplot/blueprints, `design/sluice/requirements.md`, clauses 53, 60, 62, 66, 71, 72 to 77, 87, 88, 108, 109, 114, 129, 135 and C.6.
+Sources: the design review of sluice's main at `045cb7d0`, 2026-11-12 (https://claude.ai/artifact/Vz3Q9zgdTaxmxnZJ7pjF5D), on a queue's home decided by each process, a run's state with no one owner, and effects performed before the write that names them; records 0037, 0093, 0114 and 0116; agentplot-ops' readings of switchboard-kit's records on chuck-herdr-alpha, 2026-11-12 (a second #52 and #53, a round stalled on its lock, bolts moved between the host and GitHub, twelve unproven runs opened again whole and read as "testing 37m of 25m"); sluice's main at `49527985`: `crates/sluice-core/src/records.rs` (`RunState` is open, starting, testing, passed, failed or timed out; `no_replay` reopens a whole run) and `crates/sluice-core/src/step.rs`; the statement in agentplot/blueprints, `design/sluice/requirements.md`, clauses 53, 60, 62, 66, 71, 72 to 77, 87, 88, 108, 109, 114, 129, 135 and C.6.
 
 ## Context and problem statement
 
@@ -23,7 +23,7 @@ Most of sluice's fixes in November went into two places with no design of their 
 ## Considered options
 
 1. **Write both in the branch's records: the queue's home as a record every reader follows, and a run's life as states that are written before any act (chosen).**
-2. **Keep working them out, and fix each defect as it comes.** This is what November did; record 0117's amendment ends it.
+2. **Keep working them out, and fix each defect as it comes.** This is what November did, and each fix went into code no design described.
 3. **One coordinator process per branch that holds both in memory.** It gives one owner, but a host that stops loses the queue's state, and 111 has a submission reach its outcome with no host of its submitter running.
 
 ## Decision outcome
@@ -34,7 +34,7 @@ Most of sluice's fixes in November went into two places with no design of their 
 - **The policy says where it should live; a move takes it there.** When a round reads a policy at the branch's head whose home differs from the recorded one (record 0116's route), it writes a move in the current home and opens no new candidate. Once no run of the branch is under test, it carries every open entry to the new home with its number and its state, writes the new home's record, and closes the old home with a pointer to the new one. Each step is written before the next begins, so a round that stops halfway leaves the move written and the next round finishes it.
 - **Numbers survive a move.** An entry keeps the number it was given, which comes from its branch's own records (record 0114), and a waiter on that number finds it in the new home through the old home's pointer.
 - **A wait reads the entry where it lives.** A wait follows the entry's home, and a closed home's pointer, to the entry's recorded state. It never infers what carried the entry.
-- **The other direction is the same act.** A branch whose policy stops naming signers comes home by the same move, which is the half of record 0116 that record 0117 held.
+- **The other direction is the same act.** A branch whose policy stops naming signers comes home by the same move, which is record 0116's half on a branch coming home.
 
 ### A run's life is states written before any act
 
@@ -56,10 +56,10 @@ Most of sluice's fixes in November went into two places with no design of their 
 
 ### How it is built
 
-After the one-process rebuild (record 0093), as record 0117 orders. The statement's C.6 and the clauses of the run's life are amended to match on agentplot/blueprints. A host's queues are drained before the release that brings it, so no record of the older shape is ever read and no code maps one shape to the other (principle 12).
+It is built on record 0093's one host process. The statement's C.6 and the clauses of the run's life are amended to match on agentplot/blueprints. A host's queues are drained before the release that brings it, so no record of the older shape is ever read and no code maps one shape to the other (principle 12).
 
 ### Consequences
 
 - The November defects in these areas have nowhere to happen. Two processes can't hold two locks or two numbers for one branch, and a move can't strand an entry. A run waiting for room can't read as timed out, and an unproven replay can't cost a whole gate.
 - A move between homes waits for the branch's runs under test to end, and opens no candidate meanwhile.
-- The GitHub Actions and CodeBuild pools (record 0119) come after this, and their jobs report through the same states.
+- The GitHub Actions and CodeBuild pools' jobs (record 0119) report through the same states.
