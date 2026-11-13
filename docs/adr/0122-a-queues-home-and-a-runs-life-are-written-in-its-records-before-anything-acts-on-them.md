@@ -11,7 +11,7 @@ decision-makers:
 
 Status: accepted, agentplot-design's.
 
-Sources: the design review of sluice's main at `045cb7d0`, 2026-11-12 (https://claude.ai/artifact/Vz3Q9zgdTaxmxnZJ7pjF5D), on a queue's home decided by each process, a run's state with no one owner, and effects performed before the write that names them; records 0037, 0093, 0114 and 0116; agentplot-ops' readings of switchboard-kit's records on chuck-herdr-alpha, 2026-11-12 (a second #52 and #53, a round stalled on its lock, bolts moved between the host and GitHub, twelve unproven runs opened again whole and read as "testing 37m of 25m"); sluice's main at `49527985`: `crates/sluice-core/src/records.rs` (`RunState` is open, starting, testing, passed, failed or timed out; `no_replay` reopens a whole run) and `crates/sluice-core/src/step.rs`; the statement in agentplot/blueprints, `design/sluice/requirements.md`, clauses 53, 60, 62, 66, 71, 72 to 77, 87, 88, 108, 109, 114, 129, 135 and C.6.
+Sources: the design review of sluice's main at `045cb7d0`, 2026-11-12 (https://claude.ai/artifact/Vz3Q9zgdTaxmxnZJ7pjF5D), on a queue's home decided by each process, a run's state with no one owner, and effects performed before the write that names them; records 0037, 0093, 0114 and 0116; swb-3-ops' reading of switchboard-kit's `refs/sluice/state/bolt/a-function-that-calls-aws-is-proved-on-floci` on 2026-11-13 (the lead moving between chuck-herdr-alpha and chuck-sluice-alpha every 6 to 14 minutes, each move lapsing the other host's live claim and writing a passed run as timed out); agentplot-ops' readings of switchboard-kit's records on chuck-herdr-alpha, 2026-11-12 (a second #52 and #53, a round stalled on its lock, bolts moved between the host and GitHub, twelve unproven runs opened again whole and read as "testing 37m of 25m"); sluice's main at `49527985`: `crates/sluice-core/src/records.rs` (`RunState` is open, starting, testing, passed, failed or timed out; `no_replay` reopens a whole run) and `crates/sluice-core/src/step.rs`; the statement in agentplot/blueprints, `design/sluice/requirements.md`, clauses 53, 60, 62, 66, 71, 72 to 77, 87, 88, 108, 109, 114, 129, 135 and C.6.
 
 ## Context and problem statement
 
@@ -38,7 +38,7 @@ Most of sluice's fixes in November went into two places with no design of their 
 
 ### A run's life is states written before any act
 
-- **One owner.** A run's state is written only in its branch's home, and only by the instance whose claim holds it or the lead that opened it. Nothing acts on a run except from a state written there.
+- **One owner.** A run's state is written only in its branch's home, and only by the instance whose claim holds it or the lead that opened it. Nothing acts on a run except from a state written there. A change of lead changes no run: a claim lapses only when its own lease does, and the claim holder's report is taken whichever instance leads, so a green run is never dropped or read as timed out because the lead moved.
 - **The states.**
 
   ```
