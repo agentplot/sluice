@@ -1,5 +1,8 @@
 # sluice as a nix package, for `nix profile install github:agentplot/sluice`
-# and for the GHA build, and services.sluice, the nix-darwin and NixOS
+# and for the GHA build; its plugins, `herdr-plugin` and `claude-plugins`,
+# each built from that package, at its source and version, so one pin of
+# the flake moves the CLI and its plugins together (record 0112 as amended
+# 2026-11-12, core.56); and services.sluice, the nix-darwin and NixOS
 # modules that write the host's own settings and install the package
 # (record 0098, core.51). The development shell is devenv's (devenv.nix);
 # everything else of the flake's is under nix/, the moon project `nix`.
@@ -62,10 +65,8 @@
             cargo = rust;
             rustc = rust;
           };
-        in
-        {
           # `sluice` and `wt-submit`, which worktrunk runs as `wt submit`.
-          default = platform.buildRustPackage {
+          sluice = platform.buildRustPackage {
             pname = "sluice";
             inherit version;
             src = self;
@@ -89,6 +90,13 @@
               mainProgram = "sluice";
             };
           };
+        in
+        {
+          default = sluice;
+          # The plugins, each given the package above, whose source and
+          # version it reads alone (record 0112 as amended 2026-11-12).
+          herdr-plugin = pkgs.callPackage ./nix/packages/herdr-plugin.nix { inherit sluice; };
+          claude-plugins = pkgs.callPackage ./nix/packages/claude-plugins.nix { inherit sluice; };
         }
       );
 

@@ -30,5 +30,6 @@ in
     ./darwin.nix
     ./nixos.nix
     ./version.nix
+    ./plugins.nix
   ];
 }

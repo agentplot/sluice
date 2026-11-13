@@ -32,6 +32,21 @@ says its version. To take a new release:
 /plugin update sluice@sluice
 ```
 
+A host that installs sluice by its flake adds the flake's
+`claude-plugins` instead of `agentplot/sluice#release`. The flake builds
+the marketplace from the same revision as the sluice it gives, so one pin
+of the flake moves the binary and the plugins together:
+
+```sh
+claude plugin marketplace add <path>
+claude plugin install sluice@sluice
+```
+
+`<path>` is the store path of `packages.<system>.claude-plugins` from the
+flake input that gives the host its sluice; add it again when that pin
+moves. Take one way: both name the marketplace `sluice`, so add it from
+the `release` branch or from the flake, never both.
+
 ## Set up a repository
 
 In the repository, ask:

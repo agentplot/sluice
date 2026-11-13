@@ -4,17 +4,24 @@ t:
 let
   inherit (t) lib outputs systems;
 
-  # A system's `default`: a derivation whose path evaluates.
+  # A system's package `name`: a derivation whose path evaluates.
   evaluates =
-    system:
+    name: system:
     let
-      package = outputs.packages.${system}.default or null;
+      package = outputs.packages.${system}.${name} or null;
       drvPath = builtins.tryEval (builtins.seq package.drvPath true);
     in
     if !lib.isDerivation package then
-      [ "packages.${system}.default is not a derivation" ]
+      [ "packages.${system}.${name} is not a derivation" ]
     else
-      t.expect drvPath.success "packages.${system}.default does not evaluate to a derivation";
+      t.expect drvPath.success "packages.${system}.${name} does not evaluate to a derivation";
+
+  # The plugins the flake gives beside each system's sluice (record 0112 as
+  # amended 2026-11-12; core.56).
+  plugins = [
+    "herdr-plugin"
+    "claude-plugins"
+  ];
 in
 {
   "Every system's package" =
@@ -22,8 +29,19 @@ in
       builtins.attrNames outputs.packages == lib.sort lib.lessThan systems
     ) "packages gives ${toString (builtins.attrNames outputs.packages)}, not ${toString systems}"
     ++ lib.concatMap (
-      system: if outputs.packages ? ${system} then evaluates system else [ "packages gives no ${system}" ]
+      system:
+      if outputs.packages ? ${system} then
+        evaluates "default" system
+      else
+        [ "packages gives no ${system}" ]
     ) systems;
+
+  # Each plugin evaluates, its source the tree by its path, so nothing is
+  # copied.
+  "Every system's plugins" = lib.concatMap (
+    system:
+    if outputs.packages ? ${system} then lib.concatMap (name: evaluates name system) plugins else [ ]
+  ) systems;
 
   # The nix-darwin module in a minimal system of its platform, whose
   # derivation throws on a failed assertion.

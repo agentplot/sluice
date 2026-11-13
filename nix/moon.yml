@@ -23,7 +23,8 @@ tasks:
     options: {runFromWorkspaceRoot: true}
   # The evaluated cases under nix/tests, then the activation's. The
   # package's version is read from Cargo.toml, and its evaluation reads the
-  # lock and .prototools (nix/tests/version.nix).
+  # lock and .prototools (nix/tests/version.nix); the plugins' versions are
+  # held to the package's (nix/tests/plugins.nix).
   test:
     command: 'sh nix/check.sh test'
     inputs: ['/flake.nix', '/flake.lock', '/nix/**/*', '/devenv.nix', '/devenv.lock', '/Cargo.toml', '/Cargo.lock', '/.prototools']
