@@ -15,13 +15,37 @@ describes.
 At the prompt of a Claude Code session in a terminal:
 
 ```
-/plugin marketplace add agentplot/sluice
+/plugin marketplace add agentplot/sluice#release
 /plugin install sluice@sluice
 ```
 
 The first line adds the repository's marketplace, named `sluice`; the
 second installs the plugin from it. Choose the user scope to have it in
 every session.
+
+The marketplace is read at the `release` branch, which each release moves
+to the commit its tag names, so a plugin you install is a release's and
+says its version. To take a new release:
+
+```
+/plugin marketplace update sluice
+/plugin update sluice@sluice
+```
+
+A host that installs sluice by its flake adds the flake's
+`claude-plugins` instead of `agentplot/sluice#release`. The flake builds
+the marketplace from the same revision as the sluice it gives, so one pin
+of the flake moves the binary and the plugins together:
+
+```sh
+claude plugin marketplace add <path>
+claude plugin install sluice@sluice
+```
+
+`<path>` is the store path of `packages.<system>.claude-plugins` from the
+flake input that gives the host its sluice; add it again when that pin
+moves. Take one way: both name the marketplace `sluice`, so add it from
+the `release` branch or from the flake, never both.
 
 ## Set up a repository
 
@@ -31,11 +55,15 @@ In the repository, ask:
 set up sluice here
 ```
 
-Claude checks for the `sluice` binary first. If it is missing or older than
-the plugin needs, Claude shows how it would install it and asks first:
-through nix where nix is present, else the release binary for your platform,
-else `cargo install`. A sluice that comes from your own flake or
-home-manager is yours to update, and Claude says so rather than touching it.
+Claude checks for the `sluice` binary first, against the plugin's own
+version: the plugin and the sluice it calls are one release. If sluice is
+missing or older, Claude shows how it would install the plugin's release,
+and asks first. It takes nix where nix is present, else the release
+binary for your platform, else `cargo install` at the release's tag. If
+sluice is newer, the plugin is behind, and Claude offers to update the
+marketplace and the plugin instead. A sluice that comes from your own
+flake or Home Manager is yours to update, and Claude says so rather than
+touching it.
 
 In a plain clone, the repository's one working copy, Claude next offers
 to lay the repository out with
@@ -126,7 +154,9 @@ A second plugin, `sluice-board`, shows the queue inside the session:
 /plugin install sluice-board@sluice
 ```
 
-It needs no herdr: it shows the queue in any Claude Code session, with
+It comes from the same marketplace, at the same release; at a new one,
+`/plugin update sluice-board@sluice` takes it after the marketplace's
+update. It needs no herdr: it shows the queue in any Claude Code session, with
 full-screen mode on or off.
 
 <a class="screenshot-light" href="/sluice/screenshots/board-light.webp"><img src="/sluice/screenshots/board-light.webp" alt="Claude Code with the /sluice pane docked on the right: one combination under test at 3/5, pressed open to its tasks, three passed and two running; three submissions queued, this session's among them; a landing and a blame; an agent's check at 4/5; the band above the prompt and the status line below it." width="1248" height="754" /></a>

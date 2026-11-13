@@ -30,9 +30,13 @@ to set sluice up in your repository. It installs the `sluice` binary too,
 asking first.
 
 ```
-/plugin marketplace add agentplot/sluice
+/plugin marketplace add agentplot/sluice#release
 /plugin install sluice@sluice
 ```
+
+The marketplace is read at the `release` branch, which each release moves
+to the commit its tag names. To take a new release,
+`/plugin marketplace update sluice`, then `/plugin update sluice@sluice`.
 
 <a class="screenshot-light" href="/sluice/screenshots/board-light.webp"><img src="/sluice/screenshots/board-light.webp" alt="Claude Code with the /sluice pane docked on the right: two combinations under test at 3/5 with their tasks, one submission queued, a landing and a blame; the band above the prompt and the status line below it." width="1248" height="754" /></a>
 <a class="screenshot-dark" href="/sluice/screenshots/board-dark.webp"><img src="/sluice/screenshots/board-dark.webp" alt="Claude Code with the /sluice pane docked on the right: two combinations under test at 3/5 with their tasks, one submission queued, a landing and a blame; the band above the prompt and the status line below it." width="1248" height="754" /></a>
@@ -117,12 +121,16 @@ tool stands alone, and sluice is the one in use today.
 ## Install by hand
 
 ```sh
-nix profile install github:agentplot/sluice
+nix profile install github:agentplot/sluice/v<version>
 ```
 
-Other ways: a release binary for macOS on Apple silicon and Linux on
-x86-64 and ARM, `cargo install --locked --git https://github.com/agentplot/sluice sluice`
-with Rust 1.98 or later, or the flake as an input. Each installs two
+`<version>` is a release's, from
+[the releases page](https://github.com/agentplot/sluice/releases). Other
+ways: a release binary for macOS on Apple silicon and Linux on x86-64 and
+ARM,
+`cargo install --locked --git https://github.com/agentplot/sluice --tag v<version> sluice`
+with Rust 1.98 or later, or the flake as an input at
+`github:agentplot/sluice/v<version>`. Each installs two
 executables: `sluice`, and `wt-submit`, which
 [worktrunk](https://github.com/max-sixty/worktrunk) runs as `wt submit`.
 

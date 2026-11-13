@@ -11,26 +11,51 @@ touches GitHub settings.
 
 ## 1. The binary
 
+This plugin and the sluice it calls are one release. Read the plugin's
+version, then sluice's:
+
 ```sh
+sed -n 's/^ *"version": *"\([^"]*\)".*/\1/p' "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json"
 command -v sluice && sluice --version
 ```
 
-This plugin needs **sluice 0.12 or later** (`sluice overview`). If it is
-missing or older, install or upgrade it. Pick the first that fits:
+Where the plugin's version is a release's, anything but `0.0.0`, compare
+it with sluice's. `<version>` below is the plugin's version.
+
+- **sluice missing or older:** install the plugin's release,
+  `v<version>`, by the first way below that fits.
+- **sluice newer:** the plugin is behind. Propose
+  `/plugin marketplace update sluice` and `/plugin update sluice@sluice`,
+  and `/plugin update sluice-board@sluice` where the board is installed.
+  Install no sluice.
+- **equal:** go on to step 2.
+
+Where the plugin says `0.0.0`, it was loaded from a working copy of
+sluice's tree and is no release. Say so. Where sluice is then missing or
+older than 0.12 (`sluice overview`), take the newest release: the archive
+from `releases/latest/download/`, or, for the other ways, `<version>` the
+newest release's, which https://github.com/agentplot/sluice/releases/latest
+names.
 
 | the host has | install | upgrade |
 |---|---|---|
-| sluice from a flake input or home-manager (path under `/nix/store` or `/etc/profiles`) | bump the input in the user's own flake and rebuild; it is their config, so tell them, don't edit it unasked | same |
-| nix | `nix profile install github:agentplot/sluice` | `nix profile upgrade --all` (or the entry's name from `nix profile list`) |
-| neither, macOS on Apple silicon or Linux x86-64/ARM | the release tarball, below | the same command again |
-| Rust 1.98+ | `cargo install --locked --git https://github.com/agentplot/sluice sluice` | the same with `--force` |
+| sluice from a flake input or Home Manager (path under `/nix/store` or `/etc/profiles`) | tell the user to set the input to `github:agentplot/sluice/v<version>` and rebuild; it is their config, so don't edit it unasked | same |
+| nix | `nix profile install github:agentplot/sluice/v<version>` | `nix profile remove sluice` (or the name `nix profile list` gives it), then the install at the new tag |
+| neither, macOS on Apple silicon or Linux x86-64/ARM | the release archive at `releases/download/v<version>/`, below | the same at the new tag |
+| Rust 1.98+ | `cargo install --locked --git https://github.com/agentplot/sluice --tag v<version> sluice` | the same with `--force` |
+
+`nix profile upgrade` does not move a package installed from a tag, so an
+upgrade removes it from the profile and installs the new tag.
 
 ```sh
 # targets: aarch64-darwin, x86_64-linux, aarch64-linux
 mkdir -p ~/.local/bin
-curl -fsSL https://github.com/agentplot/sluice/releases/latest/download/sluice-aarch64-darwin.tar.gz \
+curl -fsSL https://github.com/agentplot/sluice/releases/download/v<version>/sluice-aarch64-darwin.tar.gz \
   | tar -xz -C ~/.local/bin sluice wt-submit
 ```
+
+For a plugin that says `0.0.0`, the archive is under
+`https://github.com/agentplot/sluice/releases/latest/download/`.
 
 Each way installs `sluice` and `wt-submit` (worktrunk runs it as `wt submit`).
 Check `~/.local/bin` is on `PATH`, then `sluice --version` again.

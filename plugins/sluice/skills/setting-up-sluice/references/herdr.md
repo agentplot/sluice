@@ -29,8 +29,11 @@ echo "${root:-not installed}"
   file until it is installed:
 
   ```sh
-  herdr plugin install agentplot/sluice/plugins/herdr
+  herdr plugin install agentplot/sluice/plugins/herdr --ref v<version>
   ```
+
+  `<version>` is the version `sluice --version` prints, so the plugin
+  and the sluice it calls are one release.
 
   Then read `root` again.
 

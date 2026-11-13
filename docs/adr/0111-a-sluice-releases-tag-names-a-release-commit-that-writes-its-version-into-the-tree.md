@@ -15,6 +15,8 @@ Status: accepted. agentplot/blueprints `design/principles.md` 14 and agentplot/b
 Deciders: the planner's brief of 2026-11-11, which asked that a sluice release's tag name a release commit off main that writes the release's version into the tree, so a build of the tag reports it with nothing given; and the construct of the change `a-sluice-release-reports-its-own-version`, which chose the form below.
 Sources: agentplot/blueprints `design/principles.md` 14 (origin/main ad3a1ae): "A tool that needs what another program knows reads that program's own source, never a file a host makes for it."; agentplot/boomdrive record 0023 (accepted), the set taking each tool's own package; agentplot-ops' evaluation of deneb's configuration on Boomdrive's flake bolt, 2026-11-11 (`~/.local/state/crew/agentplot-main/reports/deneb-boomdrive-572919e.nix`, its `── sluice ──` section and the herdr plugins' note); agentplot/boomdrive's `nix/packages/sluice.nix` on the bolt `the-boomdrive-flake-configures-the-whole-host`; Flume's release, its `set-version.sh`, `check-versions.sh` and CI's `version`, `binaries` and `release` jobs, and its tag v0.21.2, which names 65911c26, `chore(release): v0.21.2`; crew's `code.10` and its change `a-crew-release-reports-its-own-version`, landed as #73 at 81a883f3; sluice at 92d39e53: `Cargo.toml`, `flake.nix`, `crates/sluice/src/lib.rs` `VERSION` and `.github/workflows/ci.yml`.
 
+Amended 2026-11-11 by record 0112, below: the release job pushes the `release` branch with the tag.
+
 ## Context and problem statement
 
 A build of a sluice release's tag does not know the tag's version. Each push to main is released, and the tag names main's pushed commit, whose tree says `0.0.0`: `Cargo.toml`'s `[workspace.package]` version, which each crate takes. Only CI's release build learns the version, from the environment: the binaries job runs `SLUICE_VERSION="${TAG#v}" nix build --impure .#default`, the flake reads `builtins.getEnv "SLUICE_VERSION"` and hands it to the build, and the binary's `VERSION` is `option_env!("SLUICE_VERSION")`, else cargo's.
@@ -60,3 +62,9 @@ Not taken:
 - Bad: where `gh release create` fails after the tag is pushed, running the job again fails at the push, since the tag exists; the cure is `gh release create "$TAG" --verify-tag` by hand with the run's artifacts, as for Flume and crew.
 - Boomdrive's set keeps its override in `nix/packages/sluice.nix` until it pins a sluice release made this way; dropping it is agentplot/boomdrive's.
 - Rule core.55 says it.
+
+## Amendment, 2026-11-11: the release job moves the release branch
+
+Status: accepted, with record 0112, whose deciders and sources it takes.
+
+The release job's push is now the tag and the `release` branch in one atomic push, `git push --atomic origin "refs/tags/$TAG" "+HEAD:refs/heads/release"`. `release` is forced to the release commit the tag names, since each release commit's one parent is main's pushed commit and not the release commit before it. The tag is never forced, so a tag that exists refuses the push, and `--atomic` moves both or neither. The Claude Code marketplace is read at `release` (record 0112). Nothing is committed to main and no tag moves. `root:release` holds that push as the job's one push. The decision above stays as it was written.
