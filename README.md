@@ -149,11 +149,20 @@ cargo install --locked --git https://github.com/agentplot/sluice --tag v<version
 ```nix
 inputs.sluice.url = "github:agentplot/sluice/v<version>";
 # then: inputs.sluice.packages.${system}.default
+# and its plugins: inputs.sluice.packages.${system}.herdr-plugin
+#                  inputs.sluice.packages.${system}.claude-plugins
 ```
 
 A release's tag builds that release, which reports its version with
 nothing given. `main` is the development tree, never an install source,
 and a build of it reports `0.0.0`.
+
+`herdr-plugin` is the herdr plugin and `claude-plugins` the Claude Code
+marketplace, each built from the revision its sluice is, so one pin of
+the flake moves the three together. herdr links the first with
+`herdr plugin link <path>`, and Claude Code adds the second with
+`claude plugin marketplace add <path>`, `<path>` being the package's
+store path; the modules do neither.
 
 Its modules, `darwinModules.sluice` and `nixosModules.sluice`, install
 the package and write the host's own settings from
