@@ -74,3 +74,12 @@ Deciders: the user, 2026-11-08, in agentplot-ops's pane, as agentplot-ops relaye
    - Rules core.31 and core.33 are amended to match, each marked proposed.
    - The statement's clauses 135 and 137 and C.8's table follow, marked proposed (agentplot/blueprints, design/sluice/requirements.md).
    - Left to the build, within points 2 and 3 (agentplot-design's choice): how a machine's service manager keeps `sluice daemon` running, and what a machine whose signature a branch does not accept starts when it submits. Units are queued from this amendment.
+
+## Amendment of 2026-11-13: every read of a queue follows the host process, and a result is read once
+
+agentplot-design's, drawn from clauses 69, 109 and 129. On chuck-herdr-alpha under sluice 0.93.2, each one-shot overview fetched its repository from the remote under one lock and loaded the whole results history, about 60 MB, so waits that read it missed their 10-second bound (signal 2026-11-13-swb-7-ops-ca607be7/01, wldn's).
+
+- **Every read follows the host process.** A status, an overview and a forecast are answered from the host process's last reading, as a watch and a wait are, and fetch nothing of their own while it has read within its tick. One that finds no host process starts it and is answered from its first reading. The remote is asked once a tick for every branch the host reads there (129). Record 0056's one-shot overview, which read the records itself, is amended so.
+- **A result is read once.** The host process reads each recorded result and each signed run record once, verifying each signature once, and answers a gate or a status by the keys it asks for. No read loads or verifies the whole history again, so a read costs what it asks for, however long the history grows.
+- **No result is taken away with its branch.** A result belongs to its key and system, not to a branch (69); a signer's records are only added to (109); a landing reads its verdict again from them (C.6). A branch that lands or is removed keeps every result it recorded. Pruning a landed branch's results was the other path: it would take away passes other branches' gates count and evidence a landing names.
+- Rule core.25 is amended to match.

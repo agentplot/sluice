@@ -63,8 +63,9 @@ use anyhow::{anyhow, bail, Context as _, Result};
 use serde::{Deserialize, Serialize};
 use sluice_seams::{
     log_tail, AtBound, Enforced, Equip, EquipStep, Equipped, HostRun, KeptOutTask, Limits, Network,
-    NotRun, Outcome, Place, Progress, Proof, Reading, Reads, Rev, RunHandle, RunReport, RunRequest,
-    Running, Setting, Settings, Source, TaskLog, TaskProgress, TaskResult, Tests, Through,
+    NotRun, Outcome, Place, Progress, Proof, Reading, Reads, Refusals, Rev, RunHandle, RunReport,
+    RunRequest, Running, Setting, Settings, Source, TaskLog, TaskProgress, TaskResult, Tests,
+    Through,
 };
 
 use super::moon::{self, Moon};
@@ -204,6 +205,11 @@ struct Meta {
     /// sluice started, each read as before (D4).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     nix_system: Option<PathBuf>,
+    /// 139, design D4: the mark each refusal rule of a sandboxed run's
+    /// profile carries; none for an open run and for a run an older sluice
+    /// started, whose refusals are never read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mark: Option<String>,
 }
 
 /// A pool the binding hands this profile, to start runs on (88; ADR 0034).
@@ -236,6 +242,9 @@ pub struct Checks {
     engines: Option<Vec<Endpoint>>,
     /// The link the active system is read from, when not the host's.
     system_link: Option<PathBuf>,
+    /// The program a sandboxed run's reports are streamed with, when not
+    /// the host's.
+    log: Option<PathBuf>,
 }
 
 impl Checks {
@@ -250,6 +259,7 @@ impl Checks {
             pool: None,
             engines: None,
             system_link: None,
+            log: None,
         }
     }
 
@@ -290,6 +300,14 @@ impl Checks {
     /// `path` in place of the host's (design D8).
     pub fn with_system_link(mut self, path: PathBuf) -> Self {
         self.system_link = Some(path);
+        self
+    }
+
+    /// The same profile, streaming a sandboxed run's reports with the
+    /// program at `path` in place of the host's `log` (design D5): how a
+    /// test stands for a log that cannot be streamed.
+    pub fn with_log(mut self, path: PathBuf) -> Self {
+        self.log = Some(path);
         self
     }
 
@@ -415,64 +433,168 @@ fn choose(limits: &Limits) -> Result<Kind> {
     Ok(kind)
 }
 
-/// A Seatbelt profile: everything a user may do, but writes only to
-/// `writable`, files named in `stamps`, and the terminal and null devices,
-/// a new pseudo-terminal's included;
-/// the network as `network` says: `Denied`, none, local sockets included;
-/// `Localhost`, listening and connecting on localhost only, by address or
-/// by name, and no other connection (name lookups included); and, whatever
-/// the network, each of `sockets` and the container engine's TCP
-/// addresses `tcp`, by host and port (ADR 0016; design D5).
-fn seatbelt(
-    writable: &[PathBuf],
-    stamps: &[&str],
+/// Design D1: what a path is to a sandboxed run's profile. The grant
+/// digests the profile with each path named by its role, so places and
+/// hosts given one profile give one grant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Role {
+    /// The place's checkout.
+    Place,
+    /// The place's scratch directory.
+    Scratch,
+    /// A directory every place's runs share: a host cache's, or the
+    /// runner's store outside the place (record 0105).
+    Cache,
+    /// A host cache's socket.
+    CacheSocket,
+    /// The container engine's unix socket (ADR 0016).
+    EngineSocket,
+    /// The container engine's TCP address (design D5 of its change).
+    EngineTcp,
+    /// The user's own temporary directory.
+    UserTmp,
+}
+
+impl Role {
+    fn token(self) -> &'static str {
+        match self {
+            Role::Place => "<place>",
+            Role::Scratch => "<scratch>",
+            Role::Cache => "<cache>",
+            Role::CacheSocket => "<cache-socket>",
+            Role::EngineSocket => "<engine-socket>",
+            Role::EngineTcp => "<engine-tcp>",
+            Role::UserTmp => "<user-tmp>",
+        }
+    }
+}
+
+/// Design D1: what a sandboxed run may reach, each path with its role, as
+/// [`seatbelt`] writes its profile from.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct Reach {
+    /// What it may write: the place's checkout and scratch, then the
+    /// shared directories, each by its role.
+    writable: Vec<(Role, PathBuf)>,
+    /// Names of files the runner's tools stamp wherever they are installed.
+    stamps: Vec<String>,
     network: Option<Network>,
-    sockets: &[PathBuf],
-    tcp: &[(String, u16)],
-    user_tmp: Option<&Path>,
-) -> String {
+    /// The unix sockets it may reach whatever the network: the engine's,
+    /// then the caches'.
+    sockets: Vec<(Role, PathBuf)>,
+    /// The container engine's TCP addresses, by host and port.
+    tcp: Vec<(String, u16)>,
+    /// The user's own temporary directory, resolved.
+    user_tmp: Option<PathBuf>,
+    /// The run's own mark, which each refusal rule carries so the kernel's
+    /// report of a refusal names the run (139; design D4); `None` for a
+    /// profile no run's refusals are read from.
+    mark: Option<String>,
+}
+
+/// A sandboxed run's profile, and the grant it gives (83, 138; design D1).
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Profile {
+    /// The Seatbelt profile the run is held to.
+    text: String,
+    /// `sb1:` and the first 16 bytes of the SHA-256 of the profile with
+    /// every path named by its role, in hex.
+    grant: String,
+}
+
+impl Reach {
+    /// The profile written for the run, and its grant.
+    fn profile(&self) -> Profile {
+        use sha2::{Digest, Sha256};
+        let digest = Sha256::digest(seatbelt(self, true).as_bytes());
+        let hex: String = digest[..16].iter().map(|b| format!("{b:02x}")).collect();
+        Profile {
+            text: seatbelt(self, false),
+            grant: format!("sb1:{hex}"),
+        }
+    }
+}
+
+/// A Seatbelt profile: everything a user may do, but writes only to
+/// `reach.writable`, files named in its stamps, and the terminal and null
+/// devices, a new pseudo-terminal's included;
+/// the network as `reach.network` says: `Denied`, none, local sockets
+/// included; `Localhost`, listening and connecting on localhost only, by
+/// address or by name, and no other connection (name lookups included);
+/// and, whatever the network, each of its sockets and the container
+/// engine's TCP addresses, by host and port (ADR 0016; design D5).
+///
+/// Design D4: each refusal rule carries the run's mark, `(with message
+/// "<mark>")`, so the kernel's report of what it refused names the run;
+/// after the allowed writes, a write to `/dev/dtracehelper`, which every
+/// program's loader is refused and goes on from and no check needs, is
+/// refused with no report.
+///
+/// Design D1: with `roles`, each path is named by its role and each line
+/// is kept once, in order, so two hosts with two and three caches, or a
+/// path given and resolved, render the same; this is the text the grant
+/// digests. Stamps, literal device paths and the resolver's socket are
+/// written as they are either way, so the profile written and its grant
+/// cannot drift.
+fn seatbelt(reach: &Reach, roles: bool) -> String {
     let quote = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
+    let path = |role: Role, p: &Path| match roles {
+        true => role.token().to_string(),
+        false => quote(&p.to_string_lossy()),
+    };
     // Where Chromium keeps the socket that makes it one instance per
     // profile: the user's own temporary directory, whatever `TMPDIR` says,
     // so a browser test can start one.
-    let browser = user_tmp.map(|t| {
+    let browser = reach.user_tmp.as_ref().map(|t| {
+        let t = match roles {
+            true => Role::UserTmp.token().to_string(),
+            false => regex_quote(&t.to_string_lossy()),
+        };
         format!(
-            "(regex #\"^{}/\\.?(com\\.google\\.[Cc]hrome|org\\.chromium\\.[Cc]hromium)[.a-zA-Z]*\\.[A-Za-z0-9]+(/|$)\")",
-            regex_quote(&t.to_string_lossy())
+            "(regex #\"^{t}/\\.?(com\\.google\\.[Cc]hrome|org\\.chromium\\.[Cc]hromium)[.a-zA-Z]*\\.[A-Za-z0-9]+(/|$)\")"
         )
     });
-    let mut p =
-        String::from("(version 1)\n(allow default)\n(deny file-write*)\n(allow file-write*\n");
-    for w in writable {
-        p.push_str(&format!(
-            "  (subpath \"{}\")\n",
-            quote(&w.to_string_lossy())
-        ));
+    // Design D4: the run's mark on each refusal rule, `<mark>` by role.
+    let deny = |what: &str| match (&reach.mark, roles) {
+        (Some(_), true) => format!("(deny {what} (with message \"<mark>\"))\n"),
+        (Some(m), false) => format!("(deny {what} (with message \"{}\"))\n", quote(m)),
+        (None, _) => format!("(deny {what})\n"),
+    };
+    let mut p = String::from("(version 1)\n(allow default)\n");
+    p.push_str(&deny("file-write*"));
+    p.push_str("(allow file-write*\n");
+    for (role, w) in &reach.writable {
+        p.push_str(&format!("  (subpath \"{}\")\n", path(*role, w)));
     }
     if let Some(b) = &browser {
         p.push_str(&format!("  {b}\n"));
     }
-    for s in stamps {
+    for s in &reach.stamps {
         p.push_str(&format!("  (regex #\"/{}$\")\n", regex_escape(s)));
     }
     // C.3: the null and terminal devices, and `/dev/ptmx`, from which a
     // command opens a pseudo-terminal of its own, whose end is a `ttys`.
     p.push_str("  (literal \"/dev/null\") (literal \"/dev/tty\") (literal \"/dev/ptmx\") (regex #\"^/dev/fd/\") (regex #\"^/dev/ttys\"))\n");
-    match network {
-        Some(Network::Denied) => p.push_str("(deny network*)\n"),
-        Some(Network::Localhost) => p.push_str(
-            "(deny network*)\n\
-             (allow network-bind network-inbound (local ip \"localhost:*\"))\n\
-             (allow network-outbound (remote ip \"localhost:*\"))\n",
-        ),
+    // Design D4: refused as before, and reported by no one.
+    p.push_str("(deny file-write-data (literal \"/dev/dtracehelper\") (with no-report))\n");
+    match reach.network {
+        Some(Network::Denied) => p.push_str(&deny("network*")),
+        Some(Network::Localhost) => {
+            p.push_str(&deny("network*"));
+            p.push_str(
+                "(allow network-bind network-inbound (local ip \"localhost:*\"))\n\
+                 (allow network-outbound (remote ip \"localhost:*\"))\n",
+            );
+        }
         Some(Network::Allowed) | None => {}
     }
     // A local socket of the run's own, its browser's included, unless the
     // run may have no connection at all.
-    if network != Some(Network::Denied) {
-        let mut own: Vec<String> = writable
+    if reach.network != Some(Network::Denied) {
+        let mut own: Vec<String> = reach
+            .writable
             .iter()
-            .map(|w| format!("(subpath \"{}\")", quote(&w.to_string_lossy())))
+            .map(|(role, w)| format!("(subpath \"{}\")", path(*role, w)))
             .collect();
         own.extend(browser);
         // One rule a path: a socket filter takes one path, not a list.
@@ -483,21 +605,26 @@ fn seatbelt(
             ));
         }
     }
-    // ADR 0016: the container engine's socket, whatever the network.
-    for s in sockets {
+    // ADR 0016: the container engine's socket, whatever the network; and
+    // 35, design D4: each cache's.
+    for (role, s) in &reach.sockets {
         p.push_str(&format!(
             "(allow network-outbound (remote unix-socket (path-literal \"{}\")))\n",
-            quote(&s.to_string_lossy())
+            path(*role, s)
         ));
     }
     // Design D5: the engine's TCP address, whatever the network. Seatbelt
     // names a remote host only as `localhost` or `*`; a name is resolved
     // through mDNSResponder's socket.
-    for (host, port) in tcp {
+    for (host, port) in &reach.tcp {
         let local = matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1");
         let at = if local { "localhost" } else { "*" };
+        let address = match roles {
+            true => Role::EngineTcp.token().to_string(),
+            false => format!("{at}:{port}"),
+        };
         p.push_str(&format!(
-            "(allow network-outbound (remote tcp \"{at}:{port}\"))\n"
+            "(allow network-outbound (remote tcp \"{address}\"))\n"
         ));
         if host.parse::<std::net::IpAddr>().is_err() && !local {
             p.push_str(
@@ -505,7 +632,14 @@ fn seatbelt(
             );
         }
     }
-    p
+    if !roles {
+        return p;
+    }
+    let mut seen = std::collections::HashSet::new();
+    p.lines()
+        .filter(|l| seen.insert(*l))
+        .map(|l| format!("{l}\n"))
+        .collect()
 }
 
 /// A path as a Seatbelt regular expression matching it literally.
@@ -1284,14 +1418,17 @@ fn given_and_resolved(path: &Path) -> Vec<PathBuf> {
     paths
 }
 
-/// The Seatbelt profile of a run in `place`: its checkout and scratch
-/// directory writable, each `dir` of the host's `caches`, and the
-/// runner's `store`, where moon keeps what it shares for the run, where
-/// it lies outside them (C.2 sandbox row as amended at
+/// The Seatbelt profile of a run in `place`, and its grant: its checkout
+/// and scratch directory writable, each `dir` of the host's `caches`, and
+/// the runner's `store`, where moon keeps what it shares for the run,
+/// where it lies outside them (C.2 sandbox row as amended at
 /// agentplot/blueprints 0c38f24; record 0105; rule core.9); the container
 /// engine's `engines`, its sockets and its TCP addresses, reachable when
 /// `limits` allow it (ADR 0016; design D5), and each `socket` of the
-/// caches, whatever the network (35; design D4).
+/// caches, whatever the network (35; design D4). The grant names the
+/// store a `<cache>`, as a declared cache is (design D1). Each refusal
+/// rule carries `mark`, the run's (139; design D4 of the change
+/// `a-check-its-executor-refused-has-no-outcome`).
 fn sandbox_profile(
     place: &Place,
     limits: &Limits,
@@ -1299,43 +1436,115 @@ fn sandbox_profile(
     caches: &[HostCache],
     store: Option<&Path>,
     engines: Vec<Endpoint>,
-) -> String {
-    let mut writable = vec![resolved(&place.path), resolved(&place.tmp)];
+    mark: Option<&str>,
+) -> Profile {
+    Reach {
+        mark: mark.map(str::to_string),
+        ..sandbox_reach(place, limits, stamps, caches, store, engines, user_tmp())
+    }
+    .profile()
+}
+
+/// What [`sandbox_profile`] writes its profile from, with `user_tmp` the
+/// user's own temporary directory.
+fn sandbox_reach(
+    place: &Place,
+    limits: &Limits,
+    stamps: &[&str],
+    caches: &[HostCache],
+    store: Option<&Path>,
+    engines: Vec<Endpoint>,
+    user_tmp: Option<PathBuf>,
+) -> Reach {
+    let mut writable = vec![
+        (Role::Place, resolved(&place.path)),
+        (Role::Scratch, resolved(&place.tmp)),
+    ];
     // Record 0105: the store the run records, the one its proof is read
     // from; a store in the checkout or its scratch adds nothing, so such
     // a run's profile is the one it is given with none (rule core.34).
     if let Some(store) = store {
         let real = resolved(store);
-        if !writable.iter().any(|w| real.starts_with(w)) {
-            writable.extend(given_and_resolved(store));
+        if !writable.iter().any(|(_, w)| real.starts_with(w)) {
+            writable.extend(
+                given_and_resolved(store)
+                    .into_iter()
+                    .map(|p| (Role::Cache, p)),
+            );
         }
     }
     let engines = if limits.docker { engines } else { Vec::new() };
-    let mut sockets = Vec::new();
+    let mut engine_sockets = Vec::new();
     let mut tcp = Vec::new();
     for e in engines {
         match e {
-            Endpoint::Unix(p) => sockets.push(p),
+            Endpoint::Unix(p) => engine_sockets.push(p),
             Endpoint::Tcp { host, port, .. } => tcp.push((host, port)),
         }
     }
+    let mut cache_sockets = Vec::new();
     for cache in caches {
-        writable.extend(given_and_resolved(&cache.dir));
+        writable.extend(
+            given_and_resolved(&cache.dir)
+                .into_iter()
+                .map(|p| (Role::Cache, p)),
+        );
         if let Some(s) = &cache.socket {
-            sockets.extend(given_and_resolved(s));
+            cache_sockets.extend(given_and_resolved(s));
         }
     }
-    sockets.sort();
-    sockets.dedup();
-    seatbelt(
-        &writable,
-        stamps,
-        limits.network,
-        &sockets,
-        &tcp,
-        user_tmp().as_deref(),
-    )
+    engine_sockets.sort();
+    engine_sockets.dedup();
+    cache_sockets.sort();
+    cache_sockets.dedup();
+    cache_sockets.retain(|s| !engine_sockets.contains(s));
+    let sockets = engine_sockets
+        .into_iter()
+        .map(|p| (Role::EngineSocket, p))
+        .chain(cache_sockets.into_iter().map(|p| (Role::CacheSocket, p)))
+        .collect();
+    Reach {
+        writable,
+        stamps: stamps.iter().map(|s| s.to_string()).collect(),
+        network: limits.network,
+        sockets,
+        tcp,
+        user_tmp,
+        mark: None,
+    }
 }
+
+/// Design D4: a run's mark, `sluice-run:` and 16 hex characters of the
+/// SHA-256 of its directory and the time it started, so no two runs share
+/// one.
+fn run_mark(dir: &Path, started_ms: i64) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(dir.as_os_str().as_encoded_bytes());
+    h.update(b"\0");
+    h.update(started_ms.to_string().as_bytes());
+    let hex: String = h.finalize()[..8]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    format!("sluice-run:{hex}")
+}
+
+/// Design D5: the watch a sandboxed run's supervisor keeps its sandbox's
+/// reports with, `log` streaming every report of `mark`.
+fn watch_argv(log: &Path, mark: &str) -> Vec<String> {
+    vec![
+        log.to_string_lossy().into_owned(),
+        "stream".into(),
+        "--style".into(),
+        "ndjson".into(),
+        "--predicate".into(),
+        format!("sender == \"Sandbox\" AND eventMessage CONTAINS \"{mark}\""),
+    ]
+}
+
+/// The program a sandboxed run's reports are streamed with on the host.
+const LOG: &str = "/usr/bin/log";
 
 /// `[tests] release`: the command, or `None`.
 fn release_argv(tests: &Settings) -> Result<Option<Vec<String>>> {
@@ -1428,7 +1637,7 @@ pub fn release_request(
         std::fs::write(
             &profile,
             // A release runs no check whose proof sluice reads.
-            sandbox_profile(place, limits, &[], caches, None, engines),
+            sandbox_profile(place, limits, &[], caches, None, engines, None).text,
         )?;
         argv.splice(
             0..0,
@@ -1447,6 +1656,7 @@ pub fn release_request(
         grace: 10,
         meta: serde_json::Value::Null,
         release: Some(argv),
+        watch: None,
     }))
 }
 
@@ -1660,6 +1870,18 @@ impl Tests for Checks {
             _ => None,
         };
         let docker = request.limits.docker;
+        let started_ms = chrono::Utc::now().timestamp_millis();
+        // Design D4, D5: a sandboxed run's mark, and the watch that keeps
+        // its sandbox's reports of it.
+        let (mark, watch) = match kind {
+            Kind::Open => (None, None),
+            Kind::Sandbox => {
+                let mark = run_mark(&dir, started_ms);
+                let log = self.log.clone().unwrap_or_else(|| PathBuf::from(LOG));
+                let watch = watch_argv(&log, &mark);
+                (Some(mark), Some(watch))
+            }
+        };
         let executor = match kind {
             Kind::Open => Enforced {
                 kind: "open".into(),
@@ -1668,26 +1890,27 @@ impl Tests for Checks {
                 memory: None,
                 network: None,
                 docker,
+                // Design D1: every open run's.
+                grant: Some("open:1".into()),
             },
             Kind::Sandbox => {
                 let network = request.limits.network;
                 let profile = dir.join("sandbox.sb");
-                std::fs::write(
-                    &profile,
-                    sandbox_profile(
-                        &request.place,
-                        &request.limits,
-                        &plan.stamps,
-                        caches,
-                        // Record 0105: the store the run's record names,
-                        // and its release's, which runs under this profile.
-                        store.as_deref(),
-                        match request.limits.docker {
-                            true => self.engines(),
-                            false => Vec::new(),
-                        },
-                    ),
-                )?;
+                let written = sandbox_profile(
+                    &request.place,
+                    &request.limits,
+                    &plan.stamps,
+                    caches,
+                    // Record 0105: the store the run's record names,
+                    // and its release's, which runs under this profile.
+                    store.as_deref(),
+                    match request.limits.docker {
+                        true => self.engines(),
+                        false => Vec::new(),
+                    },
+                    mark.as_deref(),
+                );
+                std::fs::write(&profile, &written.text)?;
                 let sandbox = [
                     "/usr/bin/sandbox-exec".to_string(),
                     "-f".into(),
@@ -1706,6 +1929,8 @@ impl Tests for Checks {
                     memory: None,
                     network: network.filter(|n| *n != Network::Allowed),
                     docker,
+                    // Design D1: the profile it ran under, by role.
+                    grant: Some(written.grant),
                 }
             }
         };
@@ -1716,12 +1941,13 @@ impl Tests for Checks {
             targets: plan.targets,
             executor,
             host: hostname(),
-            started_ms: Some(chrono::Utc::now().timestamp_millis()),
+            started_ms: Some(started_ms),
             not_run,
             kept_out: plan.kept_out,
             deps: plan.deps,
             store,
             nix_system: system,
+            mark,
         };
         self.runs.start(
             name,
@@ -1734,6 +1960,7 @@ impl Tests for Checks {
                 grace: 10,
                 meta: serde_json::to_value(&meta)?,
                 release,
+                watch,
             },
         )?;
         // Its supervisor holds the run directory, which keeps it counted.
@@ -1769,6 +1996,38 @@ impl Tests for Checks {
             Some(&began),
             nix_system(&self.system_link()).as_deref(),
         ))
+    }
+
+    /// 139, record 0072 (design D6): what the sandbox refused the run,
+    /// read from the reports of the run's mark its watch kept, and from
+    /// nothing a check printed (rule core.35). An open run, and a run an
+    /// older sluice started, which carry no mark, answer `None`; a watch
+    /// that was not ready, or a report that cannot be read, `Unread` with
+    /// its words. It runs nothing, so reading a run again reads the same.
+    fn refused(&self, run: &RunHandle) -> Result<Refusals> {
+        let request = self.runs.request(&run.0)?;
+        let meta: Meta = serde_json::from_value(request.meta.clone())
+            .with_context(|| format!("reading run {}", run.0))?;
+        let Some(mark) = meta.mark else {
+            return Ok(Refusals::None);
+        };
+        let dir = self.runs.dir(&run.0);
+        let said = dir.join("watch-error");
+        match std::fs::read_to_string(&said) {
+            Ok(words) => return Ok(Refusals::Unread(words.trim().to_string())),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Ok(Refusals::Unread(format!("reading {}: {e}", said.display()))),
+        }
+        let path = dir.join("watch.out");
+        let kept = match std::fs::read(&path) {
+            Ok(k) => String::from_utf8_lossy(&k).into_owned(),
+            Err(e) => return Ok(Refusals::Unread(format!("reading {}: {e}", path.display()))),
+        };
+        let refusals = super::refusals::read(&kept, &mark);
+        Ok(match refusals.is_empty() {
+            true => Refusals::None,
+            false => Refusals::Refused(super::refusals::words(&refusals)),
+        })
     }
 
     fn progress(&self, run: &RunHandle) -> Result<Progress> {
@@ -1858,6 +2117,7 @@ impl Tests for Checks {
             dependencies,
             failed_by,
             timed_out: ended.timed_out,
+            refusals_unread: None,
         }))
     }
 
@@ -2272,6 +2532,295 @@ mod tests {
         }
     }
 
+    /// A host's paths for a sandboxed run, made under a directory of the
+    /// test's own and reached through a link, so each given path differs
+    /// from where it resolves, as `/tmp` is `/private/tmp`.
+    struct Host {
+        root: PathBuf,
+        link: PathBuf,
+    }
+
+    impl Host {
+        fn new(name: &str) -> Host {
+            let root = std::env::temp_dir().join(format!("sluice-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(root.join("real")).unwrap();
+            let link = root.join("link");
+            std::os::unix::fs::symlink(root.join("real"), &link).unwrap();
+            Host { root, link }
+        }
+
+        /// `rel` made under the host's real directory, named through the
+        /// link.
+        fn dir(&self, rel: &str) -> PathBuf {
+            std::fs::create_dir_all(self.root.join("real").join(rel)).unwrap();
+            self.link.join(rel)
+        }
+
+        fn place(&self, at: &str) -> Place {
+            Place {
+                name: "p".into(),
+                path: self.dir(&format!("{at}/checkout")),
+                tmp: self.dir(&format!("{at}/tmp")),
+                env: BTreeMap::new(),
+            }
+        }
+
+        /// `n` caches, each with a socket.
+        fn caches(&self, n: usize) -> Vec<HostCache> {
+            (0..n)
+                .map(|i| {
+                    let dir = self.dir(&format!("caches/{i}"));
+                    HostCache {
+                        socket: Some(dir.join("server.sock")),
+                        dir,
+                        env: BTreeMap::new(),
+                    }
+                })
+                .collect()
+        }
+    }
+
+    impl Drop for Host {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn sandbox(network: Option<Network>, docker: bool) -> Limits {
+        Limits {
+            executor: Some("sandbox".into()),
+            memory: None,
+            network,
+            docker,
+        }
+    }
+
+    /// 83, 138, design D1 (the check-grant spec's "The grant is the
+    /// profile the run writes"): the text a run's grant digests is the
+    /// profile it writes with each path named by its role, so each role
+    /// put back for its paths gives the written profile's rules.
+    #[test]
+    fn the_grant_renders_the_profile_the_run_writes() {
+        let host = Host::new("grant-renders");
+        let place = host.place("a");
+        let caches = host.caches(2);
+        let store = host.dir("home/.moon/cache/shared");
+        let engines = vec![
+            Endpoint::Unix(host.dir("engine").join("docker.sock")),
+            Endpoint::Tcp {
+                host: "localhost".into(),
+                port: 2375,
+                tls: None,
+            },
+            Endpoint::Tcp {
+                host: "engine.example".into(),
+                port: 2376,
+                tls: None,
+            },
+        ];
+        let reach = sandbox_reach(
+            &place,
+            &sandbox(Some(Network::Localhost), true),
+            &[".last-used"],
+            &caches,
+            Some(&store),
+            engines,
+            Some(std::fs::canonicalize(host.dir("user-tmp")).unwrap()),
+        );
+        let written = seatbelt(&reach, false);
+        let roles = seatbelt(&reach, true);
+        for path in [&place.path, &place.tmp, &caches[0].dir, &store] {
+            let real = std::fs::canonicalize(path).unwrap();
+            assert!(written.contains(&*real.to_string_lossy()), "{written}");
+            assert!(!roles.contains(&*real.to_string_lossy()), "{roles}");
+        }
+
+        let back = |role: Role| -> Vec<String> {
+            match role {
+                Role::UserTmp => reach
+                    .user_tmp
+                    .iter()
+                    .map(|t| regex_quote(&t.to_string_lossy()))
+                    .collect(),
+                Role::EngineTcp => vec!["localhost:2375".into(), "*:2376".into()],
+                _ => reach
+                    .writable
+                    .iter()
+                    .chain(&reach.sockets)
+                    .filter(|(r, _)| *r == role)
+                    .map(|(_, p)| p.to_string_lossy().into_owned())
+                    .collect(),
+            }
+        };
+        let all = [
+            Role::Place,
+            Role::Scratch,
+            Role::Cache,
+            Role::CacheSocket,
+            Role::EngineSocket,
+            Role::EngineTcp,
+            Role::UserTmp,
+        ];
+        let mut put_back = std::collections::BTreeSet::new();
+        for line in roles.lines() {
+            let named: Vec<Role> = all
+                .into_iter()
+                .filter(|r| line.contains(r.token()))
+                .collect();
+            match named.as_slice() {
+                [] => {
+                    put_back.insert(line.to_string());
+                }
+                [role] => {
+                    let paths = back(*role);
+                    assert!(!paths.is_empty(), "{role:?} names no path");
+                    for p in paths {
+                        put_back.insert(line.replace(role.token(), &p));
+                    }
+                }
+                more => panic!("{line} names {more:?}"),
+            }
+        }
+        let rules: std::collections::BTreeSet<String> =
+            written.lines().map(str::to_string).collect();
+        assert_eq!(put_back, rules);
+
+        let profile = reach.profile();
+        assert_eq!(profile.text, written);
+        use sha2::{Digest, Sha256};
+        let hex: String = Sha256::digest(roles.as_bytes())[..16]
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        assert_eq!(profile.grant, format!("sb1:{hex}"));
+        assert_eq!(profile.grant.len(), "sb1:".len() + 32);
+    }
+
+    /// 138, design D1 (the check-grant spec's "Two places, two hosts, one
+    /// profile"): two checkouts, two scratch directories, two and three
+    /// caches, each given and resolved, the runner's store under two homes
+    /// outside the checkout, and two temporary directories give one grant;
+    /// a store in the checkout gives the grant of a run given none.
+    #[test]
+    fn one_profile_gives_one_grant_wherever_it_runs() {
+        let (one, two) = (Host::new("grant-one"), Host::new("grant-two"));
+        let limits = sandbox(Some(Network::Localhost), false);
+        let grant = |host: &Host, at: &str, caches: usize, store: Option<&Path>| {
+            sandbox_reach(
+                &host.place(at),
+                &limits,
+                &[".last-used"],
+                &host.caches(caches),
+                store,
+                Vec::new(),
+                Some(std::fs::canonicalize(host.dir(&format!("{at}/user-tmp"))).unwrap()),
+            )
+            .profile()
+        };
+        let a = grant(&one, "a", 2, Some(&one.dir("home-a/.moon/cache/shared")));
+        let b = grant(&two, "b", 3, Some(&two.dir("b-home/cache/shared")));
+        assert_ne!(a.text, b.text);
+        assert_eq!(a.grant, b.grant);
+        assert!(a.grant.starts_with("sb1:"), "{}", a.grant);
+
+        let none = grant(&one, "c", 0, None);
+        let inside = grant(&two, "d", 0, Some(&two.dir("d/checkout/.moon/cache")));
+        assert_eq!(inside.grant, none.grant);
+        assert_ne!(none.grant, a.grant);
+    }
+
+    /// 138, design D1 (the check-grant spec's "A profile that reaches
+    /// more"): a run's network, whether it may reach the container engine,
+    /// and whether it is given any cache each give another grant.
+    #[test]
+    fn a_profile_that_reaches_more_gives_another_grant() {
+        let host = Host::new("grant-more");
+        let place = host.place("a");
+        let caches = host.caches(1);
+        let engines = vec![Endpoint::Unix(host.dir("engine").join("docker.sock"))];
+        let grant = |limits: Limits, caches: &[HostCache]| {
+            sandbox_reach(&place, &limits, &[], caches, None, engines.clone(), None)
+                .profile()
+                .grant
+        };
+        let networks: std::collections::BTreeSet<String> =
+            [Network::Denied, Network::Localhost, Network::Allowed]
+                .into_iter()
+                .map(|n| grant(sandbox(Some(n), false), &caches))
+                .collect();
+        assert_eq!(networks.len(), 3, "{networks:?}");
+        assert_ne!(
+            grant(sandbox(None, true), &caches),
+            grant(sandbox(None, false), &caches)
+        );
+        assert_ne!(
+            grant(sandbox(None, false), &caches),
+            grant(sandbox(None, false), &[])
+        );
+    }
+
+    /// 139, design D4 (the run-outcome spec's "Every refusal rule carries
+    /// the mark"): under each network, every refusal rule of a run's
+    /// profile carries the run's mark but the one for `/dev/dtracehelper`,
+    /// which reports nothing; two marks give one grant.
+    #[test]
+    fn each_refusal_of_the_profile_carries_the_runs_mark() {
+        let host = Host::new("grant-mark");
+        let place = host.place("a");
+        let mark = "sluice-run:0123456789abcdef";
+        for network in [
+            None,
+            Some(Network::Denied),
+            Some(Network::Localhost),
+            Some(Network::Allowed),
+        ] {
+            let reach = Reach {
+                mark: Some(mark.into()),
+                ..sandbox_reach(
+                    &place,
+                    &sandbox(network, false),
+                    &[],
+                    &host.caches(1),
+                    None,
+                    Vec::new(),
+                    None,
+                )
+            };
+            let text = reach.profile().text;
+            let denies: Vec<&str> = text.lines().filter(|l| l.starts_with("(deny")).collect();
+            let want = match network {
+                Some(Network::Denied | Network::Localhost) => 3,
+                _ => 2,
+            };
+            assert_eq!(denies.len(), want, "{network:?}: {text}");
+            for d in denies {
+                if d.contains("/dev/dtracehelper") {
+                    assert_eq!(
+                        d,
+                        "(deny file-write-data (literal \"/dev/dtracehelper\") (with no-report))"
+                    );
+                } else {
+                    assert!(
+                        d.ends_with(&format!("(with message \"{mark}\"))")),
+                        "{network:?}: {d}"
+                    );
+                }
+            }
+            assert!(seatbelt(&reach, true).contains("(with message \"<mark>\")"));
+            let other = Reach {
+                mark: Some("sluice-run:fedcba9876543210".into()),
+                ..reach.clone()
+            };
+            assert_ne!(other.profile().text, reach.profile().text);
+            assert_eq!(other.profile().grant, reach.profile().grant);
+        }
+        let dir = Path::new("/tmp/sluice/.runs/p");
+        assert_ne!(run_mark(dir, 1), run_mark(dir, 2));
+        assert!(run_mark(dir, 1).starts_with("sluice-run:"));
+        assert_eq!(run_mark(dir, 1).len(), "sluice-run:".len() + 16);
+    }
+
     /// The host-caches spec's "Only the store is opened", "A store moon has
     /// not made yet" and "A store in the checkout" (C.2 sandbox row as
     /// amended at agentplot/blueprints 0c38f24; record 0105; rules core.9,
@@ -2305,7 +2854,16 @@ mod tests {
             env: BTreeMap::new(),
         };
         let profile = |store: Option<&Path>| {
-            sandbox_profile(&place, &Limits::default(), &[], &[], store, Vec::new())
+            sandbox_profile(
+                &place,
+                &Limits::default(),
+                &[],
+                &[],
+                store,
+                Vec::new(),
+                None,
+            )
+            .text
         };
         let opened = |p: &str| -> std::collections::BTreeSet<PathBuf> {
             p.split("(subpath \"")

@@ -556,6 +556,7 @@ mod tests {
                 memory: Some(8 << 30),
                 network: None,
                 docker: false,
+                grant: None,
             }),
             took_ms: Some(18_000),
             attempts: Some(1),

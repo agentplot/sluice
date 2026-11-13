@@ -177,12 +177,34 @@ share as [`[[caches]]`](#caches). The caches an earlier sluice saved in
 | `kind` | `"open"` | The tests run as a process group, with nothing held back. |
 | | `"sandbox"` | The tests may write only their checkout, their scratch directory, the host's declared [cache directories](#caches) and where the task runner keeps what it shares for the run. They may reach the host's declared cache sockets whatever `network` says (macOS: Seatbelt; Linux: not built yet). |
 | | `"container"` | The tests run in a container from the image the policy names. Planned, for a box that runs no agents ([executors and systems](/sluice/guides/executors-and-systems/)); not built. |
-| `network` | `false`, `"localhost"`, `true` | No network; only 127.0.0.1 and ::1, for tests that start a server and talk to it; or any. |
+| `network` | `false`, `"localhost"`, `true` | No network; only 127.0.0.1 and ::1, for tests that start a server and talk to it; or any. `"localhost"` refuses a name lookup too, so a test that needs `localhost` by name reaches it and one that looks up any other name is refused. |
 | `memory` | e.g. `"8G"` | Refused where the executor cannot hold it, never run without it. |
 | `docker` | `true` | The tests may reach the host's container engine. A container may mount any path, so such a run is never counted as confined. The engine is looked for where the tests would reach it: at `DOCKER_HOST`, a unix socket or a TCP address, and at the usual sockets. A TCP address is asked plainly, or over TLS as `DOCKER_TLS_VERIFY` and `DOCKER_CERT_PATH` say, as the engine's own client does, and the sandbox lets the tests reach it whatever `network` says. An `ssh://` address and Docker contexts are not read. A host where no container engine answers runs none of the branch's tests. It leaves them for a host that can run them, and `sluice status` says what they wait for. A test that did not pass, after which the engine no longer answers, has no result, and the combination is tested again. A container sees a folder under [`SLUICE_TMP`](#environment) only where the engine's machine shares `/tmp` (`/private/tmp` on macOS) with the host. An engine whose machine shares only the user's home mounts an empty folder in its place. |
 
-Every result records which executor ran it and what it held. Some
-executors cannot hold every limit: the open executor holds no `memory`
+Every result records which executor ran it, what it held, and the
+executor's grant: what it let the run reach. The sandbox's grant is the
+profile it held the run to, with each path named for what it is: the
+checkout, its scratch directory, a cache. Checkouts and hosts given the
+same profile share one grant. The open executor's is the same for every
+run. Results under two grants are never weighed together: a test
+that failed under one and passed under another isn't flaky, and a pass
+under one proves no replay under another.
+
+A test that did not pass in a run the sandbox refused something has no
+result. sluice reads what the sandbox refused from the sandbox's own
+report, kept as the run goes, never from what the test printed or how it
+failed. The test is named with what was refused, nothing is recorded
+under its key, nobody is blamed, and the combination is tested again; a
+test that passed keeps its pass. After three such runs in a row the
+combination is not passed, each test naming what was refused. A test
+that fails in a run the sandbox refused nothing is recorded and blamed
+as ever. When sluice can't read what the sandbox refused a run, the run
+is read as refused nothing and says so:
+`sluice could not read what its sandbox refused the run: <why>`. The cure
+for a refusal is the policy, the host's [`[[caches]]`](#caches) or the
+test, since nothing was recorded to set aside.
+
+Some executors cannot hold every limit: the open executor holds no `memory`
 limit and cannot keep a run off the network, and the sandbox on macOS
 holds no `memory` limit. A host whose
 executor cannot hold the policy's limits runs none of the branch's tests
@@ -387,6 +409,12 @@ the same inputs read passed from their passes, and the same head lands.
 When the test itself is flaky, a fix to it does. A change to what the
 test reads made only to have it tested again leaves the fail under its
 key for any tree that returns to those inputs.
+
+A test's results are weighed together only under one
+[grant](#executor-what-the-tests-may-touch). A result recorded before
+sluice recorded grants is weighed only with others recorded before it,
+so each test runs once more under its first grant before a replay of it
+counts.
 
 ### `timeout`
 

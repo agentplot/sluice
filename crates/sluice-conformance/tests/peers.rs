@@ -294,6 +294,47 @@ fn s20_a_lapsed_claim_runs_again_elsewhere_and_its_late_report_is_not_written() 
     assert_eq!(h.sub(one).state, State::Landed);
 }
 
+/// satisfies: 81, 123, 72, 73; the run-claims spec's "Back after a
+/// lapse", the host back as the lead: its claim lapsed, it asks whether it
+/// keeps the branch as intake does (137), with no round, and takes the
+/// branch once the quiet lead's lease is out; that round releases the
+/// place its lapsed claim left before it claims the run again.
+#[test]
+fn a_place_left_by_a_lapsed_claim_is_released_by_its_host_as_the_lead() {
+    use sluice_core::records::RunState;
+    let h = peers();
+    opened(&h);
+    as_signer(&h, "b", Some("box")).step(BRANCH).unwrap();
+    let left = h.w().live_places();
+    assert_eq!(left.len(), 1, "{left:?}");
+    as_signer(&h, "lead", None).step(BRANCH).unwrap();
+    h.w().advance(chrono::Duration::minutes(3));
+    as_signer(&h, "lead", None).step(BRANCH).unwrap();
+    assert_eq!(runs(&h), [(None, RunState::Open)]);
+    assert!(h.w().live_places().contains(&left[0]));
+
+    assert!(!as_signer(&h, "b", Some("box")).keeps(BRANCH).unwrap());
+    h.w().advance(chrono::Duration::minutes(6));
+    assert_eq!(
+        as_signer(&h, "b", Some("box")).step(BRANCH).unwrap(),
+        Step::Stepped
+    );
+    assert_eq!(
+        took(&h).last().cloned(),
+        Some(("b".to_string(), Some("lead".to_string())))
+    );
+    assert!(
+        !h.w().live_places().contains(&left[0]),
+        "{} is left",
+        left[0]
+    );
+    assert!(h
+        .events()
+        .iter()
+        .any(|e| matches!(e, Event::Released { place, .. } if *place == left[0])));
+    assert_eq!(runs(&h), [(Some("b".into()), RunState::Testing)]);
+}
+
 /// satisfies: 74, 77; the run-claims spec's "A long run keeps its claim"
 #[test]
 fn a_long_run_keeps_its_claim_while_its_host_shows_it_is_alive() {

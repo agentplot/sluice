@@ -15,6 +15,7 @@ pub mod moon;
 pub mod places;
 pub mod pushed_refs;
 pub mod records;
+pub mod refusals;
 pub mod remote_refs;
 pub mod worktrunk;
 

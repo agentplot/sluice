@@ -1104,7 +1104,8 @@ pub enum Event {
         host: String,
     },
     /// Clause 119: what a run's runner said of it beyond
-    /// its results, and the required checks it keeps out of its CI mode.
+    /// its results, the required checks it keeps out of its CI mode, and
+    /// why its executor could not read what it refused the run (139).
     /// Shown; nothing reads a verdict from it.
     Detail {
         combination: Rev,
@@ -1114,6 +1115,12 @@ pub enum Event {
         detail: RunDetail,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         kept_out: Vec<String>,
+        /// 139 (design D8 of the change
+        /// `a-check-its-executor-refused-has-no-outcome`): why the run's
+        /// executor could not read what it refused the run, which was then
+        /// read as refused nothing.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        refusals_unread: Option<String>,
     },
     Result {
         combination: Rev,
@@ -2526,6 +2533,29 @@ mod tests {
         let read: Submission = serde_json::from_str(&before).unwrap();
         assert_eq!(read.failed[0].unsigned, None);
         assert_eq!(serde_json::to_string(&read).unwrap(), before);
+    }
+
+    /// 138 (check-grant spec, "An old line read back"): a result line
+    /// whose executor carries a grant reads back with it; one whose
+    /// executor names none, written before the grant, reads with `None`
+    /// and is written again without the key.
+    #[test]
+    fn a_result_line_with_no_grant_reads_back() {
+        let new = r#"{"schema":"sluice/result@1","at":"t","kind":"ran","task":"a:test","hash":"h","outcome":"pass","host":"h1","executor":{"kind":"sandbox","confined":false,"grant":"sb1:0123456789abcdef0123456789abcdef"},"branch":"main","combination":"c"}"#;
+        let read: ResultLine = serde_json::from_str(new).unwrap();
+        assert_eq!(
+            read.executor.as_ref().and_then(|e| e.grant.as_deref()),
+            Some("sb1:0123456789abcdef0123456789abcdef")
+        );
+        assert_eq!(serde_json::to_string(&read).unwrap(), new);
+
+        let old = r#"{"schema":"sluice/result@1","at":"t","kind":"ran","task":"a:test","hash":"h","outcome":"fail","host":"h1","executor":{"kind":"open","confined":false},"branch":"main","combination":"c"}"#;
+        let read: ResultLine = serde_json::from_str(old).unwrap();
+        let executor = read.executor.as_ref().expect("a ran line's executor");
+        assert_eq!(executor.grant, None);
+        let written = serde_json::to_string(&read).unwrap();
+        assert!(!written.contains("grant"), "{written}");
+        assert_eq!(written, old);
     }
 
     /// 149: a failed check recorded before `failed_by` reads with none,
